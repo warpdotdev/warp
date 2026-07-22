@@ -73,7 +73,7 @@ fn slash_command_menu_renders_view_logs_row() {
 }
 
 #[test]
-fn slash_command_menu_renders_fast_forward_row() {
+fn slash_command_menu_renders_auto_approve_row() {
     App::test((), |mut app| async move {
         register_tui_session_view_test_singletons(&mut app);
         app.update(|ctx| {
@@ -84,7 +84,7 @@ fn slash_command_menu_renders_fast_forward_row() {
             });
             let mixer = ctx.add_model(|_| SlashCommandMixer::new());
             let conversation_selection = add_test_conversation_selection(ctx);
-            // Source the title and description from the real `/fast-forward`
+            // Source the title and description from the real `/auto-approve`
             // static command so the snapshot tracks the registered contract.
             let model = ctx.add_model(|_| {
                 TuiSlashCommandModel::new_for_test(
@@ -93,8 +93,8 @@ fn slash_command_menu_renders_fast_forward_row() {
                     mixer,
                     conversation_selection.clone(),
                     vec![TuiSlashCommandRow {
-                        title: slash_commands::FAST_FORWARD.name.to_owned(),
-                        description: Some(slash_commands::FAST_FORWARD.description.to_owned()),
+                        title: slash_commands::AUTO_APPROVE.name.to_owned(),
+                        description: Some(slash_commands::AUTO_APPROVE.description.to_owned()),
                         action: AcceptSlashCommandOrSavedPrompt::SlashCommand {
                             id: SlashCommandId::new(),
                         },
@@ -106,11 +106,11 @@ fn slash_command_menu_renders_fast_forward_row() {
             let element = menu.render(ctx).expect("slash command menu should render");
             let lines = render_menu_lines(element, ctx);
 
-            assert!(lines.iter().any(|line| line.contains("/fast-forward")));
+            assert!(lines.iter().any(|line| line.contains("/auto-approve")));
             assert!(
                 lines
                     .iter()
-                    .any(|line| line.contains("Toggle fast forward (currently off)"))
+                    .any(|line| line.contains("Toggle auto approve (currently off)"))
             );
 
             conversation_selection.update(ctx, |selection, ctx| {
@@ -121,7 +121,7 @@ fn slash_command_menu_renders_fast_forward_row() {
             assert!(
                 lines
                     .iter()
-                    .any(|line| line.contains("Toggle fast forward (currently on)"))
+                    .any(|line| line.contains("Toggle auto approve (currently on)"))
             );
         });
     });

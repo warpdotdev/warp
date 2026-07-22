@@ -265,10 +265,10 @@ impl TuiSlashCommandModel {
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
                     description: row.description.clone(),
-                    state_suffix: (row.title == slash_commands::FAST_FORWARD.name).then(|| {
+                    state_suffix: (row.title == slash_commands::AUTO_APPROVE.name).then(|| {
                         format!(
                             "(currently {})",
-                            if self.fast_forward_enabled(ctx) {
+                            if self.auto_approve_enabled(ctx) {
                                 "on"
                             } else {
                                 "off"
@@ -286,7 +286,7 @@ impl TuiSlashCommandModel {
         })
     }
 
-    fn fast_forward_enabled(&self, ctx: &AppContext) -> bool {
+    fn auto_approve_enabled(&self, ctx: &AppContext) -> bool {
         self.conversation_selection
             .as_ref(ctx)
             .pending_query_autoexecute_override(ctx)

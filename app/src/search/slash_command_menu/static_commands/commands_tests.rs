@@ -25,12 +25,19 @@ fn view_logs_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
-fn fast_forward_command_is_local_agent_action_without_arguments() {
-    let command = COMMAND_REGISTRY
-        .get_command_with_name(FAST_FORWARD.name)
-        .expect("expected /fast-forward to be registered");
+fn auto_approve_command_is_local_agent_action_without_arguments() {
+    let tui_commands = all_commands(settings::SettingsMode::Tui);
+    let command = tui_commands
+        .iter()
+        .find(|command| command.name == AUTO_APPROVE.name)
+        .expect("expected /auto-approve to be registered in TUI mode");
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.name != AUTO_APPROVE.name)
+    );
 
-    assert_eq!(command.description, "Toggle fast forward");
+    assert_eq!(command.description, "Toggle auto approve");
     assert_eq!(command.icon_path, "bundled/svg/fast-forward.svg");
     assert!(!command.auto_enter_ai_mode);
     assert_eq!(

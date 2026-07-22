@@ -106,7 +106,7 @@ use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
-use crate::warping_indicator::{render_response_summary, render_warping_indicator};
+use crate::warping_indicator::{render_response_summary, render_warping_indicator_row};
 use crate::zero_state::render_zero_state;
 mod input_detection;
 
@@ -116,7 +116,7 @@ use self::input_detection::InputDetectionState;
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
-const FAST_FORWARD_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
+const AUTO_APPROVE_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -125,6 +125,7 @@ const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 pub(crate) const SESSION_COMPOSER_OWNS_INPUT_FLAG: &str = "TuiSessionComposerOwnsInput";
 pub(crate) const PASTE_IMAGE_BINDING_NAME: &str = "tui:session:paste_image";
+pub(crate) const AUTO_APPROVE_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_auto_approve";
 
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
@@ -368,6 +369,8 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's active-model label: toggles the inline model
     /// picker (the same menu `/model` surfaces).
     ToggleModelMenu,
+    /// Toggle per-conversation auto approve.
+    ToggleAutoApprove { show_feedback: bool },
     /// Raw user bytes to forward to the foreground PTY process.
     ForwardUserPtyBytes(Vec<u8>),
     /// Ctrl-d while the prompt is focused: exit the TUI immediately when the
@@ -443,8 +446,9 @@ pub(crate) struct TuiTerminalSessionView {
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
     /// shell submission).
     transient_hint: TransientHint,
-    fast_forward_feedback_conversation_id: Option<AIConversationId>,
-    fast_forward_feedback_timer: Option<SpawnedFutureHandle>,
+    auto_approve_feedback_conversation_id: Option<AIConversationId>,
+    auto_approve_feedback_timer: Option<SpawnedFutureHandle>,
+    auto_approve_mouse: MouseStateHandle,
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
@@ -488,6 +492,16 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP),
     ]);
     app.register_editable_bindings([
+        EditableBinding::new(
+            AUTO_APPROVE_TOGGLE_BINDING_NAME,
+            "Toggle auto approve",
+            TuiTerminalSessionAction::ToggleAutoApprove {
+                show_feedback: true,
+            },
+        )
+        .with_context_predicate(view_context.clone())
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-shift-I"),
         EditableBinding::new(
             PLAN_TOGGLE_BINDING_NAME,
             "Toggle the latest plan",
@@ -1432,8 +1446,9 @@ impl TuiTerminalSessionView {
             size_info,
             terminal_resize_tx,
             transient_hint: TransientHint::default(),
-            fast_forward_feedback_conversation_id: None,
-            fast_forward_feedback_timer: None,
+            auto_approve_feedback_conversation_id: None,
+            auto_approve_feedback_timer: None,
+            auto_approve_mouse: MouseStateHandle::default(),
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
             exit_summary,
@@ -1966,12 +1981,6 @@ impl TuiTerminalSessionView {
         ) {
             ctx.notify();
         }
-        if matches!(
-            event,
-            BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
-        ) {
-            self.show_fast_forward_feedback(ctx);
-        }
 
         if matches!(
             event,
@@ -2001,23 +2010,42 @@ impl TuiTerminalSessionView {
         }
     }
 
-    fn show_fast_forward_feedback(&mut self, ctx: &mut ViewContext<Self>) {
-        self.fast_forward_feedback_conversation_id = self
+    fn show_auto_approve_feedback(&mut self, ctx: &mut ViewContext<Self>) {
+        self.auto_approve_feedback_conversation_id = self
             .conversation_selection
             .as_ref(ctx)
             .selected_conversation_id(ctx);
         let timer = ctx.spawn(
-            Timer::after(FAST_FORWARD_FEEDBACK_DURATION),
+            Timer::after(AUTO_APPROVE_FEEDBACK_DURATION),
             |view, _, ctx| {
-                view.fast_forward_feedback_conversation_id = None;
-                view.fast_forward_feedback_timer = None;
+                view.auto_approve_feedback_conversation_id = None;
+                view.auto_approve_feedback_timer = None;
                 ctx.notify();
             },
         );
-        if let Some(previous_timer) = self.fast_forward_feedback_timer.replace(timer) {
+        if let Some(previous_timer) = self.auto_approve_feedback_timer.replace(timer) {
             previous_timer.abort();
         }
         ctx.notify();
+    }
+
+    fn clear_auto_approve_feedback(&mut self, ctx: &mut ViewContext<Self>) {
+        self.auto_approve_feedback_conversation_id = None;
+        if let Some(timer) = self.auto_approve_feedback_timer.take() {
+            timer.abort();
+        }
+        ctx.notify();
+    }
+
+    fn toggle_auto_approve(&mut self, show_feedback: bool, ctx: &mut ViewContext<Self>) {
+        self.conversation_selection.update(ctx, |selection, ctx| {
+            selection.toggle_pending_query_autoexecute(ctx);
+        });
+        if show_feedback {
+            self.show_auto_approve_feedback(ctx);
+        } else {
+            self.clear_auto_approve_feedback(ctx);
+        }
     }
 
     fn handle_pasted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
@@ -2151,6 +2179,49 @@ impl TuiTerminalSessionView {
             );
             true
         })
+    }
+
+    fn render_warping_indicator(
+        &self,
+        label: &'static str,
+        elapsed: Duration,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(ctx);
+        let is_hovered = self
+            .auto_approve_mouse
+            .lock()
+            .is_ok_and(|state| state.is_hovered());
+        let style = if is_hovered {
+            builder.primary_text_style()
+        } else if self.auto_approve_feedback_conversation_id == Some(conversation_id) {
+            builder.success_glyph_style()
+        } else {
+            builder.muted_text_style()
+        };
+        let enabled = self
+            .conversation_selection
+            .as_ref(ctx)
+            .pending_query_autoexecute_override(ctx)
+            .is_autoexecute_any_action();
+        let auto_approve = TuiHoverable::new(
+            self.auto_approve_mouse.clone(),
+            TuiText::new(format!(
+                "▶▶ Auto approve {}",
+                if enabled { "on" } else { "off" }
+            ))
+            .with_style(style)
+            .truncate()
+            .finish(),
+        )
+        .on_click(|event_ctx, _| {
+            event_ctx.dispatch_typed_action(TuiTerminalSessionAction::ToggleAutoApprove {
+                show_feedback: false,
+            });
+        })
+        .finish();
+        render_warping_indicator_row(label, elapsed, auto_approve, ctx)
     }
 
     /// Builds the status footer under the input box. The row is left-aligned:
@@ -2756,10 +2827,8 @@ impl TuiTerminalSessionView {
                     .update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            TuiSlashCommand::FastForward => {
-                self.conversation_selection.update(ctx, |selection, ctx| {
-                    selection.toggle_pending_query_autoexecute(ctx);
-                });
+            TuiSlashCommand::AutoApprove => {
+                self.toggle_auto_approve(true, ctx);
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
@@ -3180,19 +3249,11 @@ impl TuiView for TuiTerminalSessionView {
                     } else {
                         "Warping..."
                     };
-                    let fast_forward_enabled = self
-                        .conversation_selection
-                        .as_ref(ctx)
-                        .pending_query_autoexecute_override(ctx)
-                        .is_autoexecute_any_action();
-                    let highlight_fast_forward =
-                        self.fast_forward_feedback_conversation_id == Some(conversation.id());
                     content = content.child(
-                        TuiContainer::new(render_warping_indicator(
+                        TuiContainer::new(self.render_warping_indicator(
                             label,
                             elapsed,
-                            fast_forward_enabled,
-                            highlight_fast_forward,
+                            conversation.id(),
                             ctx,
                         ))
                         .with_padding_top(1)
@@ -3350,6 +3411,9 @@ impl TypedActionView for TuiTerminalSessionView {
             }
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
             TuiTerminalSessionAction::ToggleModelMenu => self.toggle_model_menu(ctx),
+            TuiTerminalSessionAction::ToggleAutoApprove { show_feedback } => {
+                self.toggle_auto_approve(*show_feedback, ctx)
+            }
             TuiTerminalSessionAction::FocusDefaultInteractionTarget => {
                 self.set_orchestration_tab_focus(false, ctx)
             }

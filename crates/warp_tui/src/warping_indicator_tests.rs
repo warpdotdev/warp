@@ -3,10 +3,10 @@ use std::time::Duration;
 use warp::appearance::Appearance;
 use warpui_core::App;
 use warpui_core::elements::shimmer_math::ShimmerConfig;
-use warpui_core::elements::tui::{Color, TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{Color, TuiBufferExt, TuiElement, TuiRect, TuiText};
 use warpui_core::presenter::tui::TuiPresenter;
 
-use super::{SPINNER_TIMELINE, render_warping_indicator};
+use super::{SPINNER_TIMELINE, render_warping_indicator_row};
 use crate::tui_builder::TuiUiBuilder;
 
 #[test]
@@ -46,8 +46,14 @@ fn renders_the_indicator_row_and_requests_a_repaint() {
             ctx.add_singleton_model(|_| Appearance::mock());
         });
         app.read(|app_ctx| {
-            let element =
-                render_warping_indicator("Warping...", Duration::ZERO, false, false, app_ctx);
+            let element = render_warping_indicator_row(
+                "Warping...",
+                Duration::ZERO,
+                TuiText::new("▶▶ Auto approve off")
+                    .with_style(TuiUiBuilder::from_app(app_ctx).muted_text_style())
+                    .finish(),
+                app_ctx,
+            );
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(element, TuiRect::new(0, 0, 80, 1), app_ctx);
 
@@ -66,7 +72,7 @@ fn renders_the_indicator_row_and_requests_a_repaint() {
                 line.contains(" Warping... (0s)"),
                 "unexpected indicator row: {line:?}"
             );
-            assert!(line.ends_with("▶▶ Fast forward off  Ctrl + C to stop"));
+            assert!(line.ends_with("▶▶ Auto approve off  Ctrl + C to stop"));
 
             // The animated row must schedule the next repaint.
             assert!(frame.repaint_at.is_some());
@@ -82,8 +88,12 @@ fn shimmer_only_applies_to_the_warping_label() {
         });
         app.read(|app_ctx| {
             let config = ShimmerConfig::default();
-            let element =
-                render_warping_indicator("Warping...", config.period / 2, false, false, app_ctx);
+            let element = render_warping_indicator_row(
+                "Warping...",
+                config.period / 2,
+                TuiText::new("▶▶ Auto approve off").finish(),
+                app_ctx,
+            );
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(element, TuiRect::new(0, 0, 20, 1), app_ctx);
 
@@ -102,11 +112,13 @@ fn renders_a_custom_progress_label() {
             ctx.add_singleton_model(|_| Appearance::mock());
         });
         app.read(|app_ctx| {
-            let element = render_warping_indicator(
+            let builder = TuiUiBuilder::from_app(app_ctx);
+            let element = render_warping_indicator_row(
                 "Summarizing conversation...",
                 Duration::ZERO,
-                true,
-                true,
+                TuiText::new("▶▶ Auto approve on")
+                    .with_style(builder.success_glyph_style())
+                    .finish(),
                 app_ctx,
             );
             let mut presenter = TuiPresenter::new();
@@ -117,11 +129,10 @@ fn renders_a_custom_progress_label() {
                 "unexpected indicator row: {:?}",
                 frame.buffer.to_lines()[0]
             );
-            assert!(frame.buffer.to_lines()[0].ends_with("▶▶ Fast forward on  Ctrl + C to stop"));
-            let builder = TuiUiBuilder::from_app(app_ctx);
+            assert!(frame.buffer.to_lines()[0].ends_with("▶▶ Auto approve on  Ctrl + C to stop"));
             let status_column = frame.buffer.to_lines()[0]
-                .find("▶▶ Fast forward on")
-                .expect("fast-forward status should render");
+                .find("▶▶ Auto approve on")
+                .expect("auto-approve status should render");
             assert_eq!(
                 frame.buffer[(u16::try_from(status_column).unwrap(), 0)].fg,
                 builder
