@@ -20,6 +20,7 @@ fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
             Some(selected_id),
             Some(selected_id),
             true,
+            false,
             Some(Harness::Oz),
             &AgentRunDisplayStatus::ConversationSucceeded,
         ),
@@ -29,6 +30,7 @@ fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
         classify_conversation_list_entry(
             None,
             Some(AIConversationId::new()),
+            false,
             false,
             Some(Harness::Oz),
             &AgentRunDisplayStatus::ConversationCancelled,
@@ -40,6 +42,7 @@ fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
             None,
             None,
             true,
+            true,
             Some(Harness::Oz),
             &AgentRunDisplayStatus::TaskInProgress,
         ),
@@ -49,6 +52,7 @@ fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
         classify_conversation_list_entry(
             None,
             None,
+            true,
             true,
             Some(Harness::Claude),
             &AgentRunDisplayStatus::TaskSucceeded,
@@ -60,10 +64,57 @@ fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
             None,
             None,
             false,
+            true,
             Some(Harness::Oz),
             &AgentRunDisplayStatus::TaskSucceeded,
         ),
         AgentConversationListEntryState::Unavailable
+    );
+}
+
+#[test]
+fn tui_list_policy_ignores_status_for_non_cloud_agent_conversations() {
+    for status in [
+        AgentRunDisplayStatus::ConversationInProgress,
+        AgentRunDisplayStatus::TaskInProgress,
+    ] {
+        assert_eq!(
+            classify_conversation_list_entry(
+                None,
+                Some(AIConversationId::new()),
+                false,
+                false,
+                Some(Harness::Oz),
+                &status,
+            ),
+            AgentConversationListEntryState::Available
+        );
+    }
+}
+
+#[test]
+fn tui_list_policy_requires_terminal_status_for_cloud_agent_runs() {
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            Some(AIConversationId::new()),
+            true,
+            true,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::TaskInProgress,
+        ),
+        AgentConversationListEntryState::Unavailable
+    );
+    assert_eq!(
+        classify_conversation_list_entry(
+            None,
+            Some(AIConversationId::new()),
+            true,
+            true,
+            Some(Harness::Oz),
+            &AgentRunDisplayStatus::TaskSucceeded,
+        ),
+        AgentConversationListEntryState::Available
     );
 }
 

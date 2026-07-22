@@ -438,4 +438,18 @@ fn non_ambient_entry_uses_display_harness() {
             is_ambient: false,
         }
     );
+    assert!(!entry.is_cloud_agent_run());
+
+    let mut cloud_agent_by_provenance = entry.clone();
+    cloud_agent_by_provenance.provenance = AgentConversationProvenance::AmbientRun;
+    assert!(cloud_agent_by_provenance.is_cloud_agent_run());
+
+    let mut cloud_agent_by_backing = entry.clone();
+    cloud_agent_by_backing.backing.has_ambient_run = true;
+    assert!(cloud_agent_by_backing.is_cloud_agent_run());
+
+    let mut cloud_agent_by_task_id = entry;
+    cloud_agent_by_task_id.identity.ambient_agent_task_id =
+        Some("00000000-0000-0000-0000-000000000001".parse().unwrap());
+    assert!(cloud_agent_by_task_id.is_cloud_agent_run());
 }

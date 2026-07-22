@@ -151,6 +151,7 @@ impl AgentConversationListPolicy for TuiConversationSelection {
             self.selected_id(),
             entry.identity.local_conversation_id,
             entry.identity.server_conversation_token.is_some(),
+            entry.is_cloud_agent_run(),
             entry.display.harness,
             &entry.display.status,
         )
@@ -161,6 +162,7 @@ fn classify_conversation_list_entry(
     selected_id: Option<AIConversationId>,
     local_conversation_id: Option<AIConversationId>,
     has_server_token: bool,
+    is_cloud_agent_run: bool,
     harness: Option<Harness>,
     status: &AgentRunDisplayStatus,
 ) -> AgentConversationListEntryState {
@@ -188,7 +190,9 @@ fn classify_conversation_list_entry(
         | AgentRunDisplayStatus::ConversationError
         | AgentRunDisplayStatus::ConversationCancelled => true,
     };
-    if has_terminal_status && (local_conversation_id.is_some() || has_server_token) {
+    if (!is_cloud_agent_run || has_terminal_status)
+        && (local_conversation_id.is_some() || has_server_token)
+    {
         AgentConversationListEntryState::Available
     } else {
         AgentConversationListEntryState::Unavailable

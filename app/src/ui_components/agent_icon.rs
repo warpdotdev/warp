@@ -13,8 +13,7 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_conversations_model::{
-    AgentConversationEntry, AgentConversationProvenance, AgentConversationsModel,
-    AgentRunDisplayStatus,
+    AgentConversationEntry, AgentConversationsModel, AgentRunDisplayStatus,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -102,13 +101,10 @@ pub(crate) fn agent_conversation_entry_icon_variant(
     entry: &AgentConversationEntry,
 ) -> IconWithStatusVariant {
     let status = entry.display.status.to_conversation_status();
-    let is_ambient = matches!(entry.provenance, AgentConversationProvenance::AmbientRun)
-        || entry.backing.has_ambient_run
-        || entry.identity.ambient_agent_task_id.is_some();
     agent_icon_variant_for_run(
         entry.display.harness.unwrap_or(Harness::Oz),
         status,
-        is_ambient,
+        entry.is_cloud_agent_run(),
     )
 }
 
