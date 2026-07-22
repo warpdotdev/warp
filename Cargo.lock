@@ -16389,6 +16389,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm_node_proto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "console_error_panic_hook",
+ "js-sys",
+ "prost",
+ "serde",
+ "serde_json",
+ "warp_multi_agent_api",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "wasmparser"
 version = "0.244.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

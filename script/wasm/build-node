@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+#
+# Builds the wasm32-unknown-unknown + Node prototype for the Oz/Warp agent MAA
+# path (REMOTE-2264). Produces a Node-loadable wasm module + generated JS loader
+# from the `wasm_node_proto` cdylib, then prints the exact run command.
+#
+# This is independent of the browser-oriented `script/wasm/bundle` (which builds
+# the GUI `warp` bin with `release_bundle,gui` and `wasm-bindgen --target web`).
+# Here we build only the headless MAA-protocol cdylib with `--target nodejs`.
+#
+# Usage:
+#   ./script/wasm/build-node
+#
+# Output:
+#   target/wasm32-unknown-unknown/<profile>/node/warp_node_proto.js   (Node loader)
+#   target/wasm32-unknown-unknown/<profile>/node/warp_node_proto_bg.wasm
+set -euo pipefail
+
+WORKSPACE_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+cd "${WORKSPACE_ROOT_DIR}"
+
+CARGO_TARGET_DIR="${WORKSPACE_ROOT_DIR}/target/wasm32-unknown-unknown"
+
+# On macOS, wasm32-unknown-unknown needs LLVM's clang.
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  LLVM_CLANG="/opt/homebrew/opt/llvm/bin/clang"
+  if [ ! -f "$LLVM_CLANG" ]; then
+    echo "Error: LLVM clang not found at $LLVM_CLANG" >&2
+    echo "Please install it with: brew install llvm" >&2
+    exit 1
+  fi
+  export CC_wasm32_unknown_unknown="$LLVM_CLANG"
+fi
+
+PROFILE="${PROFILE:-dev}"
+CARGO_PROFILE_ARGS=()
+if [[ "$PROFILE" == "release" ]]; then
+  CARGO_PROFILE_ARGS+=(--release)
+fi
+
+# 1. Build the cdylib to wasm32-unknown-unknown.
+echo "Building wasm_node_proto for wasm32-unknown-unknown (profile: $PROFILE)"
+cargo build --target wasm32-unknown-unknown -p wasm_node_proto --lib "${CARGO_PROFILE_ARGS[@]}"
+
+PROFILE_DIR="$PROFILE"
+[[ "$PROFILE" == "dev" ]] && PROFILE_DIR="debug"
+WASM_GLOB="${CARGO_TARGET_DIR}/${PROFILE_DIR}/libwasm_node_proto.wasm"
+# Some toolchains name the cdylib without the `lib` prefix on wasm; fall back.
+if [ ! -f "$WASM_GLOB" ]; then
+  WASM_GLOB="${CARGO_TARGET_DIR}/${PROFILE_DIR}/wasm_node_proto.wasm"
+fi
+if [ ! -f "$WASM_GLOB" ]; then
+  echo "Error: could not find built cdylib wasm under ${CARGO_TARGET_DIR}/${PROFILE_DIR}/" >&2
+  ls -1 "${CARGO_TARGET_DIR}/${PROFILE_DIR}/"*.wasm >&2 || true
+  exit 1
+fi
+
+OUT_DIR="${CARGO_TARGET_DIR}/${PROFILE_DIR}/node"
+mkdir -p "${OUT_DIR}"
+
+# 2. Install a wasm-bindgen-cli matching the resolved wasm-bindgen version.
+WB_VERSION="$(cargo metadata --format-version 1 | jq -rc '.packages[] | select(.name == "wasm-bindgen") | .version')"
+if ! command -v wasm-bindgen >/dev/null 2>&1; then
+  echo "Installing wasm-bindgen-cli ${WB_VERSION}"
+  cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked
+elif ! wasm-bindgen --version | grep -q "${WB_VERSION}"; then
+  echo "Installing matching wasm-bindgen-cli ${WB_VERSION}"
+  cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
+fi
+
+# 3. Generate the Node loader + wasm.
+echo "Running wasm-bindgen --target nodejs on ${WASM_GLOB}"
+wasm-bindgen \
+  --target nodejs \
+  --out-dir "${OUT_DIR}" \
+  --out-name warp_node_proto \
+  --keep-debug \
+  "${WASM_GLOB}"
+
+echo
+echo "Built wasm-node prototype to ${OUT_DIR}"
+echo
+echo "Run the manual proof:"
+echo "  node script/wasm/node-harness.mjs \\"
+echo "    --prompt hello \\"
+echo "    --api-key \"\$WARP_API_KEY\" \\"
+echo "    --server-root-url \"\$WARP_SERVER_ROOT_URL\""
