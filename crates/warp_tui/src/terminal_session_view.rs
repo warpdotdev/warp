@@ -3046,11 +3046,8 @@ impl TuiTerminalSessionView {
                 self.send_prompt(prompt, ctx);
                 record_static_slash_command_accepted(command_name, true, ctx);
             }
-            SlashCommandKind::EnableNaturalLanguageDetection => {
-                self.set_nld_enabled(true, command.name, ctx);
-            }
-            SlashCommandKind::DisableNaturalLanguageDetection => {
-                self.set_nld_enabled(false, command.name, ctx);
+            SlashCommandKind::NaturalLanguageDetection => {
+                self.toggle_nld(command.name, ctx);
             }
             SlashCommandKind::CloudAgent
             | SlashCommandKind::AddMcp
@@ -3098,17 +3095,11 @@ impl TuiTerminalSessionView {
         }
     }
 
-    /// Persists the natural-language-detection (NLD) setting to `enabled`, reports the
-    /// toggle via telemetry, and surfaces a confirmation hint. Shared by the
-    /// `/enable-natural-language-detection` and `/disable-natural-language-detection`
-    /// TUI slash commands so the two execution paths stay in sync.
-    fn set_nld_enabled(
-        &mut self,
-        enabled: bool,
-        command_name: &'static str,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    /// Toggles and persists natural-language detection (NLD), reports the change
+    /// via telemetry, and surfaces a confirmation hint.
+    fn toggle_nld(&mut self, command_name: &'static str, ctx: &mut ViewContext<Self>) {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        let enabled = !AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx);
         let result = AISettings::handle(ctx).update(ctx, |settings, ctx| {
             settings
                 .ai_autodetection_enabled_internal

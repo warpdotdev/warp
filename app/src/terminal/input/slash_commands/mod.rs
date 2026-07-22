@@ -144,8 +144,7 @@ pub fn record_static_slash_command_accepted(
 }
 
 /// Records an input auto-detection setting toggle triggered from a TUI slash
-/// command (`/enable-natural-language-detection` or
-/// `/disable-natural-language-detection`).
+/// command (`/natural-language-detection`).
 ///
 /// Mirrors the `SettingsPage` and `Banner` origins used by the GUI toggle paths,
 /// but reports the toggle as originating from a TUI slash command.
