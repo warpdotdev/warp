@@ -18,7 +18,7 @@ use crate::{LogConfig, LogDestination, LogFrontend};
 const MAX_FILES_IN_GUI_ROTATION: usize = 5;
 const MAX_FILES_IN_CLI_ROTATION: usize = 10;
 const CLI_LOG_SUBDIRECTORY: &str = "oz";
-const TUI_LOG_SUBDIRECTORY: &str = "tui";
+const TUI_LOG_SUBDIRECTORY: &str = "warp-cli";
 const TEMP_LOG_FILE_SUFFIX: &str = "old.temp";
 
 /// Runtime logging state, computed from `LogConfig` during initialization.

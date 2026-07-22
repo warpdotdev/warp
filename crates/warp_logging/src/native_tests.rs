@@ -58,7 +58,7 @@ fn frontend_directory_selection_keeps_gui_and_cli_paths_unchanged() {
     );
     assert_eq!(
         log_directory_for_frontend(base, LogFrontend::Tui),
-        PathBuf::from("/tmp/warp-logs/tui")
+        PathBuf::from("/tmp/warp-logs/warp-cli")
     );
 }
 
@@ -307,9 +307,9 @@ fn remove_nested_chunks_deletes_every_chunk_of_the_target_slot() {
 #[test]
 fn resolved_active_path_uses_tui_directory_and_mapped_name() {
     // log_file_path() = main_process_log_file_path(state.log_directory, state.logfile_name).
-    // A resolved TUI LOG_STATE (dev channel) must report <tui_dir>/warp_tui_dev.log,
+    // A resolved TUI LOG_STATE (dev channel) must report <warp_cli_dir>/warp_tui_dev.log,
     // not the GUI channel name or the legacy oz directory.
-    let tui_dir = PathBuf::from("/tmp/warp-logs/tui");
+    let tui_dir = PathBuf::from("/tmp/warp-logs/warp-cli");
     assert_eq!(
         main_process_log_file_path(&tui_dir, "warp_tui_dev.log"),
         tui_dir.join("warp_tui_dev.log")
@@ -417,7 +417,7 @@ fn on_crash_recovery_process_killed_in_removes_tui_recovery_sidecar() {
 
 #[test]
 fn crash_recovery_paths_use_resolved_frontend_name() {
-    let tui_dir = PathBuf::from("/tmp/warp-logs/tui");
+    let tui_dir = PathBuf::from("/tmp/warp-logs/warp-cli");
     assert_eq!(
         temp_log_file_path(&tui_dir, "warp_tui_dev.log"),
         tui_dir.join("warp_tui_dev.log.old.temp")
