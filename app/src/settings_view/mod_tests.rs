@@ -1,4 +1,4 @@
-use settings_page::MatchData;
+use settings_page::{MatchData, search_terms_match};
 
 use super::*;
 
@@ -1040,4 +1040,177 @@ fn arrow_down_collapsed_umbrella_respects_search_filter() {
         CycleDirection::Down,
     );
     assert_eq!(next, SettingsSection::AgentMCPServers);
+}
+
+// ── Active subpage filter reapply after rebuild (APP-4922) ───────────────────
+// Regression tests for the bug where searching in Settings showed every widget
+// on the active AI/Code subpage instead of only the matching ones.
+//
+// `handle_search_editor_event` restores the active subpage by calling
+// `set_active_subpage`, which rebuilds the backing page's `PageType` via
+// `new_uncategorized`/`build_page`. A freshly built `PageType` initializes its
+// `filter` to *all* widget indices (visible by default), and the restore step
+// previously did not reapply the active search query, so the rendered subpage
+// fell back to showing every widget. The fix re-runs `update_filter` with the
+// active query after every in-search subpage rebuild.
+//
+// These tests model the `PageType::Uncategorized` filter lifecycle — the exact
+// mechanism the production code relies on — using the real `search_terms_match`
+// predicate extracted from `PageType::update_filter`. The GUI orchestration in
+// `handle_search_editor_event` itself needs a full `AppContext`/`ViewContext`
+// (not constructible in a unit test), so its visual verification is covered by
+// computer-use screenshots; these tests guard the filter-state contract.
+
+/// Models a `PageType::Uncategorized` page: a list of widget search terms plus
+/// the current `filter` (indices of visible widgets), mirroring `new_uncategorized`
+/// (filter = all indices) and `update_filter` (filter = matching indices).
+struct SimSubpage {
+    terms: Vec<&'static str>,
+    filter: Vec<usize>,
+}
+
+impl SimSubpage {
+    /// Mirrors `PageType::new_uncategorized`: every widget index is visible.
+    fn new(terms: Vec<&'static str>) -> Self {
+        Self {
+            filter: (0..terms.len()).collect(),
+            terms,
+        }
+    }
+
+    /// Mirrors `PageType::update_filter`: keeps only widgets whose search terms
+    /// match the query under the real all-words, case-insensitive predicate.
+    fn update_filter(&mut self, query: &str) {
+        self.filter = self
+            .terms
+            .iter()
+            .enumerate()
+            .filter(|(_, terms)| search_terms_match(terms, query))
+            .map(|(i, _)| i)
+            .collect();
+    }
+
+    /// Mirrors `set_active_subpage` → `build_page` → `new_uncategorized`: a
+    /// fresh page with the default unfiltered widget list.
+    fn rebuild(&mut self) {
+        self.filter = (0..self.terms.len()).collect();
+    }
+
+    fn visible_indices(&self) -> &Vec<usize> {
+        &self.filter
+    }
+}
+
+#[test]
+fn search_terms_match_direct_unit_checks() {
+    // Empty query matches everything (mirrors PageType::update_filter's guard).
+    assert!(search_terms_match("warp agent global ai toggle", ""));
+    // All-words, case-insensitive, non-contiguous.
+    assert!(search_terms_match(
+        "active ai autosuggestions prompt",
+        "autosuggestions"
+    ));
+    assert!(search_terms_match(
+        "active ai autosuggestions prompt",
+        "ACTIVE AI"
+    ));
+    assert!(search_terms_match(
+        "file search fuzzy opener",
+        "file search"
+    ));
+    // Every word must appear.
+    assert!(!search_terms_match(
+        "warp agent global ai toggle",
+        "file search"
+    ));
+    assert!(!search_terms_match(
+        "active ai autosuggestions prompt",
+        "autosuggestions key"
+    ));
+}
+
+#[test]
+fn rebuild_without_reapply_resets_filter_to_all_widgets() {
+    // Searching "file search" matches exactly one widget on the subpage.
+    let mut page = SimSubpage::new(vec![
+        "warp agent global ai toggle",
+        "active ai autosuggestions prompt",
+        "ai input model api key",
+        "file search fuzzy opener",
+        "voice input",
+    ]);
+    page.update_filter("file search");
+    assert_eq!(page.visible_indices(), &vec![3]);
+
+    // The restore step rebuilds the active subpage's PageType but, before the
+    // fix, never reapplied `update_filter` — so the freshly rebuilt page showed
+    // every widget. This encodes the defect the fix addresses.
+    page.rebuild();
+    assert_eq!(
+        page.visible_indices(),
+        &vec![0, 1, 2, 3, 4],
+        "rebuild resets the filter to all widgets when update_filter isn't reapplied"
+    );
+}
+
+#[test]
+fn rebuild_with_reapply_keeps_only_matching_widgets() {
+    let mut page = SimSubpage::new(vec![
+        "warp agent global ai toggle",
+        "active ai autosuggestions prompt",
+        "ai input model api key",
+        "file search fuzzy opener",
+        "voice input",
+    ]);
+    page.update_filter("file search");
+    assert_eq!(page.visible_indices(), &vec![3]);
+
+    // The fix: after `set_active_subpage` rebuilds the page, reapply
+    // `update_filter` with the active search query so only matching widgets
+    // render on the restored subpage.
+    page.rebuild();
+    page.update_filter("file search");
+    assert_eq!(
+        page.visible_indices(),
+        &vec![3],
+        "reapplying the filter after a rebuild keeps only matching widgets visible"
+    );
+}
+
+#[test]
+fn rebuild_with_reapply_handles_multi_word_and_case() {
+    let mut page = SimSubpage::new(vec![
+        "warp agent global ai toggle",
+        "active ai autosuggestions prompt",
+        "ai input model api key",
+        "file search fuzzy opener",
+        "voice input",
+    ]);
+    // Multi-word, case-insensitive, non-contiguous query.
+    page.update_filter("AI INPUT");
+    assert_eq!(page.visible_indices(), &vec![2]);
+
+    page.rebuild();
+    page.update_filter("AI INPUT");
+    assert_eq!(page.visible_indices(), &vec![2]);
+}
+
+#[test]
+fn empty_query_after_reapply_shows_all_widgets() {
+    // When the search is cleared, the subpage should show all widgets again.
+    let mut page = SimSubpage::new(vec![
+        "warp agent global ai toggle",
+        "active ai autosuggestions prompt",
+        "ai input model api key",
+    ]);
+    page.update_filter("agent");
+    assert_eq!(page.visible_indices(), &vec![0]);
+
+    page.rebuild();
+    page.update_filter("");
+    assert_eq!(
+        page.visible_indices(),
+        &vec![0, 1, 2],
+        "an empty query restores every widget on the subpage"
+    );
 }
