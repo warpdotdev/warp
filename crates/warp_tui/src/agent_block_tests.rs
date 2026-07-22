@@ -544,11 +544,12 @@ fn agent_block_renders_tool_calls_in_message_order() {
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 block.render_element(app_ctx),
-                TuiRect::new(0, 0, 40, 6),
+                TuiRect::new(0, 0, 40, 5),
                 app_ctx,
             );
             // The block starts with one row of top padding, and a blank row
-            // separates adjacent sections.
+            // separates the text sections from the tool call. The next text
+            // section follows the tool-call row directly.
             assert_eq!(
                 frame
                     .buffer
@@ -556,7 +557,7 @@ fn agent_block_renders_tool_calls_in_message_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["", "before", "", "○ Init project", "", "after"],
+                vec!["", "before", "", "○ Init project", "after"],
             );
             // A pending tool call renders a dim grey glyph and a dim label.
             assert_eq!(
@@ -602,7 +603,7 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 block.render_element(app_ctx),
-                TuiRect::new(0, 0, 40, 4),
+                TuiRect::new(0, 0, 40, 3),
                 app_ctx,
             );
             assert_eq!(
@@ -612,7 +613,7 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["", "○ Init project", "", "○ Init project"],
+                vec!["", "○ Init project", "○ Init project"],
             );
         });
     });

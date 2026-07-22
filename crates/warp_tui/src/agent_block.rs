@@ -1636,9 +1636,9 @@ impl TuiAIBlock {
                 TuiAIBlockSection::UsageNotice => render_usage_notice(app),
             };
 
-            // One row of bottom padding separates sections; the last section
-            // ends flush so blocks don't stack trailing and leading spacing.
-            if index < last_index {
+            // One row of bottom padding separates non-tool-call sections; the
+            // next conversation section follows a tool-call row directly.
+            if index < last_index && !matches!(section, TuiAIBlockSection::ToolCall(_)) {
                 column.add_child(TuiContainer::new(element).with_padding_bottom(1).finish());
             } else {
                 column.add_child(element);
