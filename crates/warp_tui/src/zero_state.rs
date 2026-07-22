@@ -32,8 +32,10 @@ use crate::zero_state_animation::{StarfieldState, ZeroStateAnimationElement};
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
 
-/// Width cap on the text column so bullets wrap like the mock.
-const LEFT_COLUMN_MAX_COLS: u16 = 48;
+/// Fixed width for the text column.  Using a pinned min=max prevents the
+/// animation boundary from shifting as content loads asynchronously at startup
+/// (changelog, MCP status, project context).
+const LEFT_COLUMN_COLS: u16 = 48;
 
 /// Maximum width of the starfield animation panel.  On wide terminals the
 /// animation stays at this width and excess space becomes blank background.
@@ -120,7 +122,8 @@ impl TuiView for TuiZeroStateView {
         });
         let text_column =
             TuiConstrainedBox::new(render_left_column(cwd.as_deref(), &builder, ctx).finish())
-                .with_max_cols(LEFT_COLUMN_MAX_COLS)
+                .with_min_cols(LEFT_COLUMN_COLS)
+                .with_max_cols(LEFT_COLUMN_COLS)
                 .finish();
         let animation = TuiConstrainedBox::new(
             ZeroStateAnimationElement::new(
