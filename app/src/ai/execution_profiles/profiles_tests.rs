@@ -11,7 +11,8 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, ExecutionProfileId,
-    WriteToPtyPermission, create_default_from_legacy_settings,
+    WriteToPtyPermission, create_default_for_tui_from_legacy_settings,
+    create_default_from_legacy_settings,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::user::TEST_USER_UID;
@@ -130,6 +131,7 @@ fn tui_missing_collection_seeds_agent_decides_for_execute_commands() {
         install_singletons(&mut app, AuthStateProvider::new_for_test());
 
         let expected_legacy_seed = app.read(create_default_from_legacy_settings);
+        let expected_tui_seed = app.read(create_default_for_tui_from_legacy_settings);
         let profile_model = app.add_singleton_model(|ctx| {
             AIExecutionProfilesModel::new(
                 &LaunchMode::Tui {
@@ -143,33 +145,19 @@ fn tui_missing_collection_seeds_agent_decides_for_execute_commands() {
         profile_model.read(&app, |model, ctx| {
             let profile_info = model.default_profile(ctx);
             let profile = profile_info.data();
-            assert_eq!(
-                profile.command_allowlist,
-                expected_legacy_seed.command_allowlist
-            );
-            assert_eq!(
-                profile.command_denylist,
-                expected_legacy_seed.command_denylist
-            );
+            assert_eq!(profile, &expected_tui_seed);
             assert_eq!(
                 profile.execute_commands,
                 ActionPermission::AgentDecides,
                 "a fresh TUI profile should let the agent decide whether to execute commands"
             );
-            assert_eq!(profile.name, expected_legacy_seed.name);
             assert_eq!(
-                profile.directory_allowlist,
-                expected_legacy_seed.directory_allowlist
-            );
-            assert_eq!(profile.read_files, expected_legacy_seed.read_files);
-            assert_eq!(
-                profile.apply_code_diffs,
-                expected_legacy_seed.apply_code_diffs
-            );
-            assert_eq!(profile.write_to_pty, expected_legacy_seed.write_to_pty);
-            assert_eq!(
-                profile.mcp_permissions,
-                expected_legacy_seed.mcp_permissions
+                expected_tui_seed,
+                AIExecutionProfile {
+                    execute_commands: ActionPermission::AgentDecides,
+                    ..expected_legacy_seed
+                },
+                "the TUI default should change no other legacy-seeded fields"
             );
         });
     })

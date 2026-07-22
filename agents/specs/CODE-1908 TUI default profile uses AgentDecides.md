@@ -8,9 +8,10 @@ retain its existing `ActionPermission::AlwaysAsk` default, and any profile
 collection the user explicitly configured must remain unchanged.
 
 *Key design choices:* Keep the shared `AIExecutionProfile::default` conservative
-(`AlwaysAsk`) and apply the TUI-specific value only while seeding a missing TUI
-collection. Reuse the existing legacy-settings seed so command lists and every
-other field retain their current behavior; override only `execute_commands`.
+(`AlwaysAsk`) and define `AIExecutionProfile::default_profile_for_tui` as the
+same default with `execute_commands == AgentDecides`. Reuse that default while
+building the existing legacy-settings seed so command lists and every other
+field retain their current behavior.
 Treat an explicitly set collection as authoritative, and preserve the existing
 denylist precedence over the less restrictive profile setting.
 
@@ -81,22 +82,22 @@ cache permissions are available.
 - Change `create_default_from_legacy_settings` globally. This keeps profile
   assembly centralized, but the helper is shared by TUI, GUI legacy fallback,
   and migration, so it has the same cross-surface blast radius. Reject.
-- Add a TUI-only override at the existing missing-collection seed (implemented
-  inline or through a helper called only from that branch). Select this option:
-  it makes the launch-mode boundary explicit, reuses the existing list and
-  field initialization, preserves the shared default and GUI/migration paths,
-  and is directly testable without changing persistence semantics.
+- Add `AIExecutionProfile::default_profile_for_tui` and use it as the base for
+  the existing missing-collection seed. Select this option: it names the
+  surface-specific default, reuses the existing list and field initialization,
+  preserves the shared default and GUI/migration paths, and is directly
+  testable without changing persistence semantics.
 
-*Proposed changes:* In the TUI branch of `AIExecutionProfilesModel::new`, build
-the existing legacy-settings seed, set only its `execute_commands` field to
-`ActionPermission::AgentDecides`, and insert it under
+*Proposed changes:* Add `AIExecutionProfile::default_profile_for_tui`, built
+with struct-update syntax from `AIExecutionProfile::default` and changing only
+`execute_commands` to `ActionPermission::AgentDecides`. Build the TUI
+legacy-settings seed from that profile and insert it under
 `ExecutionProfileId::default_profile()`. Keep the
 `!is_value_explicitly_set()` guard unchanged. Do not modify
-`AIExecutionProfile::default`, the shared legacy-settings helper, GUI
-`App`/`Test` construction, CLI profile construction, cloud migration, or
-denylist evaluation. Add focused model tests beside the existing
-`profiles_tests.rs` coverage, using its singleton setup and launch-mode
-fixtures.
+`AIExecutionProfile::default`, GUI `App`/`Test` construction, CLI profile
+construction, cloud migration, or denylist evaluation. Add focused model tests
+beside the existing `profiles_tests.rs` coverage, using its singleton setup and
+launch-mode fixtures.
 
 *Open questions resolved:* The ticket explicitly scopes the behavior to the
 TUI, requires GUI `AlwaysAsk`, and requires explicit user profiles to remain
