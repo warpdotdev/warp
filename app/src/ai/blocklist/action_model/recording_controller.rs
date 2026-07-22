@@ -194,6 +194,7 @@ impl RecordingController {
                     offset: pending.start_offset,
                     finish_offset: implicit_finish,
                     labels: pending.labels,
+                    pointer_events: Vec::new(),
                 });
             }
             let start_offset = recording.started_at.elapsed();
@@ -230,6 +231,7 @@ impl RecordingController {
                 offset: pending.start_offset,
                 finish_offset,
                 labels: pending.labels,
+                pointer_events: Vec::new(),
             });
         }
     }

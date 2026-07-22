@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use crate::{Action, Key, ScrollDirection, TargetedAction};
+use crate::{Action, Key, MouseButton, ScrollDirection, TargetedAction, Vector2I};
 
 /// A group of semantic actions dispatched in one `UseComputer` call.
 ///
@@ -23,6 +23,32 @@ pub struct ActionLogEntry {
     /// sequence (and any post-action screenshot) finished.
     pub finish_offset: Duration,
     pub labels: Vec<String>,
+    /// Resolved pointer events dispatched during this group, in capture-space
+    /// pixels, used to burn in click ripples and drag trails. Empty on paths
+    /// that record no pointer geometry.
+    pub pointer_events: Vec<PointerEvent>,
+}
+
+/// A single resolved pointer event captured at dispatch time.
+///
+/// `point` is a capture-space pixel (full-screen capture: physical root/screen
+/// pixels; window capture: window-local pixels) and `offset` is measured on the
+/// same source/1x timeline as [`ActionLogEntry::offset`].
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PointerEvent {
+    pub offset: Duration,
+    pub kind: PointerEventKind,
+    /// The button for a press/release; `None` for a move.
+    pub button: Option<MouseButton>,
+    pub point: Vector2I,
+}
+
+/// Which pointer primitive a [`PointerEvent`] represents.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum PointerEventKind {
+    Down,
+    Move,
+    Up,
 }
 
 /// Returns true if a `UseComputer` action batch contains at least one real

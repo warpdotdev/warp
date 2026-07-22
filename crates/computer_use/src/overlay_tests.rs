@@ -15,6 +15,7 @@ fn entry(start_ms: u64, finish_ms: u64, labels: &[&str]) -> ActionLogEntry {
         offset: Duration::from_millis(start_ms),
         finish_offset: Duration::from_millis(finish_ms),
         labels: labels.iter().map(ToString::to_string).collect(),
+        pointer_events: Vec::new(),
     }
 }
 

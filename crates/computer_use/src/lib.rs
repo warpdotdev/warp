@@ -23,7 +23,9 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
-pub use overlay::{ActionLogEntry, is_meaningful_action_group, overlay_labels_for};
+pub use overlay::{
+    ActionLogEntry, PointerEvent, PointerEventKind, is_meaningful_action_group, overlay_labels_for,
+};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
@@ -617,6 +619,22 @@ pub struct Options {
     /// exactly like the legacy full-screen path: any window target is ignored, only the main
     /// display is captured, and no window list or captured-window metadata is returned.
     pub background_enabled: bool,
+    /// When set, a recording is active and the actor records each resolved pointer event here
+    /// (capture-space coordinate, kind, and offset from capture start) for post-stop burn-in.
+    /// `None` on non-recording, CLI, and test paths; actors without burn-in support ignore it.
+    pub pointer_sink: Option<PointerSink>,
+}
+
+/// Collects resolved pointer events during a recording so the finalize pass can burn in
+/// click/drag annotations. Only the Linux x11 actor populates it.
+pub struct PointerSink {
+    /// Capture start instant; event offsets are measured from here.
+    pub started_at: instant::Instant,
+    /// The surface being recorded, so the actor can resolve each event into the recording's
+    /// capture-space pixels.
+    pub recording_target: Target,
+    /// Events collected in dispatch order; drained by the caller after the batch completes.
+    pub events: Arc<Mutex<Vec<PointerEvent>>>,
 }
 
 /// The buttons of a mouse.
