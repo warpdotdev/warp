@@ -1036,12 +1036,13 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                 input = parse_underline(&mut state, remaining);
             }
             InlineToken::LineBreak => {
-                // Emit the break as a newline fragment. Both the paragraph and table-cell
-                // render paths turn an embedded newline into a real visual break. The
-                // fragment may later coalesce into adjacent plain text (the newline is
-                // preserved, so rendering is unaffected); serialization paths translate any
-                // embedded newline back to `<br>`. See `HARD_LINE_BREAK`.
-                state.push_closed_node(FormattedTextFragment::plain_text(HARD_LINE_BREAK));
+                // Emit the break as a newline appended to the current text run. Both the
+                // paragraph and table-cell render paths turn an embedded newline into a real
+                // visual break; serialization paths translate any embedded newline back to
+                // `<br>`. Using `push_text` reuses the open fragment rather than pushing a
+                // closed node that would only be coalesced back together later. See
+                // `HARD_LINE_BREAK`.
+                state.push_text(HARD_LINE_BREAK);
             }
         }
     }
