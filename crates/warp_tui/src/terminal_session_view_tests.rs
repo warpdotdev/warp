@@ -1023,7 +1023,7 @@ fn assert_footer_segments_absent(lines: &[String]) {
         "a replacing hint should occupy the whole row with no sections: {row}"
     );
     assert!(
-        !row.contains(" ↬ "),
+        !row.contains(" ⊢ "),
         "the cwd/branch section is absent: {row}"
     );
     assert!(
@@ -1150,7 +1150,7 @@ fn footer_renders_agent_sections_left_aligned() {
 
             assert_eq!(
                 lines,
-                vec!["TestModel /home/user/warp ↬ main • 2.5 credits • +3 -1"],
+                vec!["TestModel /home/user/warp ⊢ main • 2.5 credits • +3 -1"],
                 "agent footer is left-aligned in order model → cwd/branch → usage → diff"
             );
             assert!(
@@ -1219,7 +1219,7 @@ fn footer_renders_bash_sections_without_model_or_usage() {
 
             assert_eq!(
                 lines,
-                vec![format!("{SHELL_MODE_HINT} /home/user/warp ↬ main • +3 -1")],
+                vec![format!("{SHELL_MODE_HINT} /home/user/warp ⊢ main • +3 -1")],
                 "bash footer leads with the shell-mode indicator and hides model/usage"
             );
             assert!(
