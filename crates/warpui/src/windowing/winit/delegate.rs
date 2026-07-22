@@ -15,11 +15,13 @@ use geometry::rect::RectF;
 use itertools::Itertools;
 use parking_lot::Mutex;
 use serde::de::IntoDeserializer;
+use warp_errors::report_error;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
 #[cfg(not(target_family = "wasm"))]
 use self::global_hotkey::GlobalHotKeyHandler;
-use super::{notifications, CustomEvent};
+use super::{CustomEvent, notifications};
+use crate::Effect::Event;
 use crate::clipboard::{self, ClipboardContent, InMemoryClipboard};
 use crate::modals::{AlertDialog, ModalId};
 use crate::notification::{NotificationSendError, RequestPermissionsOutcome};
@@ -33,10 +35,9 @@ use crate::platform::{
 };
 use crate::windowing::winit::app::CustomEvent::UpdateUIApp;
 use crate::windowing::{self, WindowCallbacks, WindowManager};
-use crate::Effect::Event;
 use crate::{
-    accessibility, geometry, keymap, notification, platform, AppContext, ApplicationBundleInfo,
-    Clipboard, DisplayId, DisplayIdx, WindowId,
+    AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx, WindowId, accessibility,
+    geometry, keymap, notification, platform,
 };
 
 // No-op on WASM since the browser cannot provide this functionality.
@@ -201,7 +202,8 @@ impl AppDelegate {
                 let global_hotkey_handler = match GlobalHotKeyHandler::new(event_loop_proxy.clone()) {
                     Ok(handler) => Some(handler),
                     Err(err) => {
-                        log::error!("Error creating global hotkey handler: {err:?}");
+                        report_error!(anyhow::Error::new(err)
+                            .context("Error creating global hotkey handler"));
                         None
                     }
                 };
@@ -227,14 +229,14 @@ impl AppDelegate {
                 match super::linux::LinuxClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
-                        log::error!("Error creating Linux clipboard: {err:?}");
+                        report_error!(anyhow::Error::new(err).context("Error creating Linux clipboard"));
                     }
                 }
             } else if #[cfg(target_os = "windows")] {
                 match super::windows::WindowsClipboard::new() {
                     Ok(clipboard) => self.clipboard = Box::new(clipboard),
                     Err(err) => {
-                        log::error!("Error creating Windows clipboard: {err:?}");
+                        report_error!(anyhow::Error::new(err).context("Error creating Windows clipboard"));
                     }
                 }
             }
@@ -290,10 +292,9 @@ impl platform::Delegate for AppDelegate {
         // See https://stackoverflow.com/questions/56393880/how-do-i-detect-dark-mode-using-javascript.
         if let Ok(Some(media_query_list)) =
             gloo::utils::window().match_media("(prefers-color-scheme: dark)")
+            && media_query_list.matches()
         {
-            if media_query_list.matches() {
-                return platform::SystemTheme::Dark;
-            }
+            return platform::SystemTheme::Dark;
         }
         platform::SystemTheme::Light
     }
@@ -309,8 +310,8 @@ impl platform::Delegate for AppDelegate {
                     .arg(path)
                     .spawn();
             } else if #[cfg(target_family = "wasm")] {
-                if let Some(window) = web_sys::window() {
-                    if let Some(path) = path.to_str() {
+                if let Some(window) = web_sys::window()
+                    && let Some(path) = path.to_str() {
                         // Try to open the path via a file:// URL.
                         let url = format!("file://{path}");
                         let _ = window.open_with_url_and_target_and_features(
@@ -319,7 +320,6 @@ impl platform::Delegate for AppDelegate {
                             "noopener,noreferrer",
                         );
                     }
-                }
             } else if #[cfg(windows)] {
                 if let Err(e) = open::that_detached(path) {
                     log::warn!("Unable to open path {e:?}");
@@ -447,7 +447,9 @@ impl platform::Delegate for AppDelegate {
                     }
 
                     let file_result = file_dialog.show_save_single_file().unwrap_or_else(|err| {
-                        log::error!("unable to show save file dialog: {err:?}");
+                        report_error!(
+                            anyhow::Error::new(err).context("unable to show save file dialog")
+                        );
                         None
                     });
 

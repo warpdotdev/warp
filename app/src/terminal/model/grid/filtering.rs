@@ -3,6 +3,7 @@ use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
 use itertools::Itertools as _;
+use warp_errors::report_error;
 
 use super::GridHandler;
 use crate::terminal::model::find::RegexDFAs;
@@ -70,7 +71,7 @@ impl FilterState {
             .iter()
             .position(|m| *dirty_range.end() >= m.start().row)
         else {
-            log::error!("Could not find replacement start when updating dirty matches");
+            report_error!("Could not find replacement start when updating dirty matches");
             return;
         };
 
@@ -79,7 +80,7 @@ impl FilterState {
             .iter()
             .rposition(|m| m.end().row >= *dirty_range.start())
         else {
-            log::error!("Could not find replacement end when updating dirty matches");
+            report_error!("Could not find replacement end when updating dirty matches");
             return;
         };
 
@@ -709,13 +710,13 @@ impl GridHandler {
         let Some((replace_start_idx, replace_start)) =
             displayed_output.first_rows_greater_than_or_contained_in(*dirty_range.start())
         else {
-            log::error!("Could not find replacement start when updating dirty filtered lines.");
+            report_error!("Could not find replacement start when updating dirty filtered lines.");
             return Vec::new();
         };
         let Some((replace_end_idx, replace_end)) =
             displayed_output.last_rows_less_than_or_contained_in(*dirty_range.end())
         else {
-            log::error!("Could not find replacement end when updating dirty filtered lines.");
+            report_error!("Could not find replacement end when updating dirty filtered lines.");
             return Vec::new();
         };
 
@@ -1057,23 +1058,23 @@ fn trim_context_lines(
     left_bound: Option<usize>,
     right_bound: Option<usize>,
 ) {
-    if let Some(left_bound) = left_bound {
-        if let Some(first_rows) = displayed_rows.first_mut() {
-            if left_bound >= *first_rows.range.end() {
-                displayed_rows.remove(0);
-            } else if first_rows.range.contains(&left_bound) {
-                first_rows.range = (left_bound + 1)..=*first_rows.range.end();
-            }
+    if let Some(left_bound) = left_bound
+        && let Some(first_rows) = displayed_rows.first_mut()
+    {
+        if left_bound >= *first_rows.range.end() {
+            displayed_rows.remove(0);
+        } else if first_rows.range.contains(&left_bound) {
+            first_rows.range = (left_bound + 1)..=*first_rows.range.end();
         }
     }
 
-    if let Some(right_bound) = right_bound {
-        if let Some(last_rows) = displayed_rows.last_mut() {
-            if right_bound <= *last_rows.range.start() {
-                displayed_rows.pop();
-            } else if last_rows.range.contains(&right_bound) {
-                last_rows.range = *last_rows.range.start()..=(right_bound - 1);
-            }
+    if let Some(right_bound) = right_bound
+        && let Some(last_rows) = displayed_rows.last_mut()
+    {
+        if right_bound <= *last_rows.range.start() {
+            displayed_rows.pop();
+        } else if last_rows.range.contains(&right_bound) {
+            last_rows.range = *last_rows.range.start()..=(right_bound - 1);
         }
     }
 }

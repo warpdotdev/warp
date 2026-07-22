@@ -2,13 +2,14 @@ use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use settings::Setting as _;
 #[cfg(target_family = "wasm")]
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::{report_error, report_if_error};
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
@@ -22,9 +23,9 @@ use super::credentials::{Credentials, FirebaseToken, LoginToken};
 use super::user::User;
 use super::user_properties::UserProperties;
 use super::{AuthStateProvider, UserUid};
+use crate::ai::AIRequestUsageModel;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai::AIRequestUsageModel;
 use crate::autoupdate::AutoupdateState;
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -35,17 +36,17 @@ use crate::server::server_api::auth::{
 };
 use crate::server::server_api::{ServerApi, ServerApiProvider};
 use crate::server::telemetry::AnonymousUserSignupEntrypoint;
+use crate::settings::PrivacySettings;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings::initializer::SettingsInitializer;
-use crate::settings::PrivacySettings;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::{
-    persistence, report_error, report_if_error, send_telemetry_from_ctx,
-    send_telemetry_sync_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
+    GlobalResourceHandlesProvider, TelemetryEvent, persistence, send_telemetry_from_ctx,
+    send_telemetry_sync_from_ctx,
 };
 
 #[derive(Debug)]
@@ -114,7 +115,7 @@ impl AuthManager {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         use crate::server::server_api::ServerApiProvider;
 
@@ -393,9 +394,9 @@ impl AuthManager {
 
                 if !user.is_user_anonymous() {
                     GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(settings
-                            .did_non_anonymous_user_log_in
-                            .set_value(true, ctx));
+                        report_if_error!(
+                            settings.did_non_anonymous_user_log_in.set_value(true, ctx)
+                        );
                     });
                 }
 
@@ -414,17 +415,19 @@ impl AuthManager {
                 // Reconstruct the database if it was removed.
                 // Do nothing if the database was not removed.
                 persistence::reconstruct(&global_resource_handles.model_event_sender);
-                if let Some(model_event_sender) = &global_resource_handles.model_event_sender {
-                    if let Err(e) =
+                if let Some(model_event_sender) = &global_resource_handles.model_event_sender
+                    && let Err(e) =
                         model_event_sender.send(ModelEvent::UpsertCurrentUserInformation {
                             user_information: PersistedCurrentUserInformation {
                                 email: self.auth_state.user_email().unwrap_or_default(),
                             },
                         })
-                    {
-                        log::error!("Error persisting user information to database: {e:?}");
-                    };
-                }
+                {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Error persisting user information to database")
+                    );
+                };
 
                 // Fetch the user's privacy settings from the server if any or update the server settings.
                 let privacy_settings_handle = PrivacySettings::handle(ctx);
@@ -729,9 +732,9 @@ impl AuthManager {
                         ctx.open_url(&url);
                     }
                     Err(e) => {
-                        report_error!(anyhow!(
-                        "Failed to fetch custom token for authenticating anonymous user in browser: {e:?}"
-                    ))
+                        report_error!(anyhow::Error::new(e).context(
+                            "Failed to fetch custom token for authenticating anonymous user in browser"
+                        ))
                 }
                 };
             },

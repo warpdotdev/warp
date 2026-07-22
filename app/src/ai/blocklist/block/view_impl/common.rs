@@ -51,10 +51,10 @@ use super::{add_highlights_to_rich_text, add_highlights_to_text};
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::icons::red_stop_icon;
 use crate::ai::agent::{
-    icons, AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
-    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
-    AgentOutputTable, AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
-    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus,
+    AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType, AIAgentTextSection,
+    AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable,
+    AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
+    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus, icons,
 };
 use crate::ai::blocklist::block::find::FindState;
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarAction;
@@ -64,8 +64,8 @@ use crate::ai::blocklist::block::{
     TableSectionHandles,
 };
 use crate::ai::blocklist::code_block::{
-    render_code_block_plain, render_code_block_with_warp_text, CodeBlockOptions,
-    CodeSnippetButtonHandles,
+    CodeBlockOptions, CodeSnippetButtonHandles, render_code_block_plain,
+    render_code_block_with_warp_text,
 };
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
@@ -75,11 +75,13 @@ use crate::ai::blocklist::inline_action::inline_action_header::{
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
-use crate::ai::blocklist::secret_redaction::{redact_secrets_in_element, SecretRedactionState};
-use crate::ai::blocklist::view_util::error_color;
+use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
+use crate::ai::blocklist::view_util::{
+    FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL, error_color,
+    failed_output_presentation,
+};
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
-use crate::ai::AIRequestUsageModel;
 use crate::code::editor::view::CodeEditorView;
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
@@ -95,7 +97,8 @@ use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::link_detection::{DetectedLinksState, add_link_detection_mouse_interactions};
+use crate::util::time_format::format_elapsed_seconds;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
@@ -104,9 +107,6 @@ pub const STATUS_ICON_SIZE_DELTA: f32 = 4.;
 pub const STATUS_FOOTER_VERTICAL_PADDING: f32 = 4.;
 pub const WAITING_FOR_USER_INPUT_MESSAGE: &str = "Agent waiting for instructions...";
 const IMAGE_SOURCE_LINK_LINE_INDEX: usize = 1;
-
-const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
-const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
 
 pub const LOAD_OUTPUT_MESSAGE: &str = "Warping...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
@@ -127,7 +127,6 @@ pub const LOAD_OUTPUT_MESSAGE_FOR_WRITING_TO_COMMAND: &str = "Writing command in
 pub const LOAD_OUTPUT_MESSAGE_FOR_WAITING_FOR_COMMAND_COMPLETION: &str =
     "Waiting for command to exit...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH: &str = "Searching the web...";
-pub const LOAD_OUTPUT_MESSAGE_FOR_FETCHING_REVIEW_COMMENTS: &str = "Fetching PR comments...";
 
 #[cfg(feature = "local_fs")]
 pub(crate) type ResolvedBlocklistImageSources = HashMap<String, Option<AssetSource>>;
@@ -258,12 +257,6 @@ pub fn render_warping_indicator<V: View>(
         })
     });
 
-    let is_fetching_review_comments = props
-        .model
-        .inputs_to_render(app)
-        .iter()
-        .any(|input| matches!(input, AIAgentInput::FetchReviewComments { .. }));
-
     let summarization_type: Option<SummarizationType> =
         if FeatureFlag::SummarizationCancellationConfirmation.is_enabled() {
             output_to_render.as_ref().and_then(|output| {
@@ -326,8 +319,6 @@ pub fn render_warping_indicator<V: View>(
         LOAD_OUTPUT_MESSAGE_FOR_PREPARING_QUESTION.to_string()
     } else if is_searching_web {
         LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH.to_string()
-    } else if is_fetching_review_comments {
-        LOAD_OUTPUT_MESSAGE_FOR_FETCHING_REVIEW_COMMENTS.to_string()
     } else if is_interrupt_query_for_same_conversation
         && output_to_render
             .as_ref()
@@ -526,6 +517,23 @@ pub struct WarpingIndicatorProps {
     pub secondary_element: Option<Box<dyn Element>>,
 }
 
+/// Computes the fixed height of the warping-indicator footer.
+///
+/// The warping text occupies a single line. When a secondary element (an agent
+/// tip or fallback-model explanation) is present, it renders on a second line
+/// below the warping text, so the footer must reserve room for that extra line;
+/// otherwise the `Clipped` wrapper — which keeps action chips from overflowing
+/// narrow panes — also clips the secondary line. The extra line accounts for the
+/// secondary element's font size (`monospace_font_size - 3`, see
+/// `render_agent_tip` / `render_fallback_explanation`) plus its 1px top margin.
+fn warping_footer_height(monospace_font_size: f32, has_secondary_element: bool) -> f32 {
+    let mut height = STATUS_FOOTER_VERTICAL_PADDING * 2. + monospace_font_size;
+    if has_secondary_element {
+        height += (monospace_font_size - 3.) + 1.;
+    }
+    height
+}
+
 /// Helper function to render text in the "warping..." footer.
 /// Additional text that does not use the shimmering text animation can be passed in via
 /// `non_shimmering_text` which is useful if you want some part of the text to constantly update
@@ -543,6 +551,10 @@ pub fn render_warping_indicator_base(
         is_passive_code_diff,
         secondary_element,
     } = props;
+    // Whether a secondary element (an agent tip or fallback-model explanation)
+    // will be rendered on a second line below the warping text. Captured before
+    // `secondary_element` is consumed so the container can reserve room for it.
+    let has_secondary_element = secondary_element.is_some();
     // Unicode code point for the Warp glyph that is embedded in the version of Roboto we bundle
     // into the app. This code point MUST be rendered using Roboto (the default ui font) or else the
     // glyph may not be rendered.
@@ -646,7 +658,10 @@ pub fn render_warping_indicator_base(
     } else {
         let mut container = Container::new(
             ConstrainedBox::new(content)
-                .with_height(STATUS_FOOTER_VERTICAL_PADDING * 2. + appearance.monospace_font_size())
+                .with_height(warping_footer_height(
+                    appearance.monospace_font_size(),
+                    has_secondary_element,
+                ))
                 .finish(),
         )
         .with_padding_right(CONTENT_HORIZONTAL_PADDING);
@@ -659,16 +674,6 @@ pub fn render_warping_indicator_base(
         }
 
         container.finish()
-    }
-}
-
-/// Formats elapsed time as a human-readable string with proper singular/plural.
-pub fn format_elapsed_seconds(elapsed: std::time::Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    if total_seconds == 1 {
-        "1 second".to_string()
-    } else {
-        format!("{total_seconds} seconds")
     }
 }
 
@@ -1381,11 +1386,12 @@ fn collect_renderable_image_group<'a>(
         let (section_index, section) = indexed_sections[section_offset];
         // Skip whitespace-only plain text sections (e.g. blank lines between images)
         // so that adjacent images separated only by blank lines are grouped together.
-        if let AIAgentTextSection::PlainText { text } = section {
-            if !images.is_empty() && text.text().trim().is_empty() {
-                section_offset += 1;
-                continue;
-            }
+        if let AIAgentTextSection::PlainText { text } = section
+            && !images.is_empty()
+            && text.text().trim().is_empty()
+        {
+            section_offset += 1;
+            continue;
         }
         let AIAgentTextSection::Image { image } = section else {
             break;
@@ -1596,15 +1602,15 @@ pub(super) fn render_rich_text_output_text_section(
         }
 
         let secret_redaction = get_secret_obfuscation_mode(app);
-        if secret_redaction.should_redact_secret() {
-            if let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location) {
-                frame = redact_secrets_in_element(
-                    frame,
-                    secrets,
-                    location,
-                    secret_redaction.is_visually_obfuscated(),
-                );
-            }
+        if secret_redaction.should_redact_secret()
+            && let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location)
+        {
+            frame = redact_secrets_in_element(
+                frame,
+                secrets,
+                location,
+                secret_redaction.is_visually_obfuscated(),
+            );
         }
         frame
     });
@@ -2957,7 +2963,7 @@ pub fn get_highlight_ranges_for_find_matches(
     location: TextLocation,
     find_state: &FindState,
     find_model: &TerminalFindModel,
-) -> impl Iterator<Item = HighlightedRange> {
+) -> impl Iterator<Item = HighlightedRange> + use<> {
     let find_match_locations = find_state.matches_for_location(location);
     let focused_match_location = find_model
         .focused_rich_content_match_id()
@@ -3000,7 +3006,7 @@ pub(crate) fn resolve_absolute_file_path(
 ) -> Option<PathBuf> {
     use warp_util::path::CleanPathResult;
 
-    use crate::util::file::{absolute_path_if_valid, ShellPathType};
+    use crate::util::file::{ShellPathType, absolute_path_if_valid};
 
     let clean_path = CleanPathResult::with_line_and_column_number(&path.to_string_lossy());
 
@@ -3028,6 +3034,7 @@ pub(crate) fn resolve_absolute_file_path(
 pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
+    pub subscribe_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
@@ -3035,80 +3042,43 @@ pub struct FailedOutputProps<'a> {
 
 pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
-
-    // While an automatic retry/resume is still in flight, don't surface the underlying
-    // transport failure at all. These are typically transient and recover on their own,
-    // so showing the alarming "Warp lost connection" banner (plus debug info) for every
-    // blip is noisy and misleading. Render nothing during in-flight recovery; the full
-    // error banner is only shown once recovery has actually failed. Dogfood builds
-    // (Local/Dev) opt out so developers still see every transport failure aggressively.
-    if props.error.should_suppress_during_recovery() {
+    let Some(presentation) = failed_output_presentation(props.error, app) else {
         return Empty::new().finish();
-    }
+    };
 
-    let error_text = match props.error {
-        RenderableAIError::QuotaLimit {
-            user_display_message,
-        } => {
-            if let Some(message) = user_display_message {
-                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
-            } else {
-                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-                let formatted_next_refresh_time = ai_request_usage_model
-                    .next_refresh_time()
-                    .format("%B %d")
-                    .to_string();
-
-                format!(
-                    "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
-                )
-            }
+    let error_text = match presentation {
+        FailedOutputPresentation::Message(message) => message,
+        FailedOutputPresentation::OutOfCredits { message, .. } => {
+            return render_out_of_credits_error(
+                &message,
+                props.subscribe_button_handle,
+                props.is_ai_input_enabled,
+                props.icon_right_margin,
+                app,
+            );
         }
-        RenderableAIError::ServerOverloaded => {
-            "Warp is currently overloaded. Please try again later.".to_string()
-        }
-        RenderableAIError::InternalWarpError => {
-            format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
-        }
-        RenderableAIError::Other { error_message, .. } => {
-            // A still-recovering `Other` error is handled by the early return above; once we
-            // reach here recovery has failed, so surface the error directly.
-            format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
-        }
-        RenderableAIError::TransientNetworkError { .. } => {
-            // Recovering transient errors are handled by the early return above; once we
-            // reach here recovery has failed. These carry their own complete user-facing
-            // copy (plus debug info), so the apology prefix adds nothing.
-            props.error.to_string()
-        }
-        RenderableAIError::InvalidApiKey {
-            provider,
-            model_name,
-        } => {
+        FailedOutputPresentation::InvalidApiKey { title, detail } => {
             return render_invalid_api_key_error(
-                provider,
-                model_name,
+                title,
+                &detail,
                 props.invalid_api_key_button_handle,
                 app,
             );
         }
-        RenderableAIError::ContextWindowExceeded(error) => {
+        FailedOutputPresentation::ContextWindowExceeded { message } => {
             // This is rendered in a different way, like a failed action.
-            return RenderableAction::new(error.as_str(), app)
+            return RenderableAction::new(message.as_str(), app)
                 .with_icon(inline_action_icons::cancelled_icon(appearance).finish())
                 .render(app)
                 .finish();
         }
-        RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { model_name } => {
+        FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid { fallback_message } => {
             // Use the rich stateful view if it exists, otherwise show a simple error message
             if let Some(view) = props.aws_bedrock_credentials_error_view {
                 return ChildView::new(view).finish();
             }
             // Fallback for contexts that don't have the stateful view (e.g. CLI subagent)
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nAWS credentials expired or missing for {model_name}. \
-                 Please refresh your AWS credentials."
-            )
+            fallback_message
         }
     };
 
@@ -3155,10 +3125,116 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         )
         .finish()
 }
+/// Builds an out-of-credits CTA button, styled like the invalid-API-key error's button.
+fn out_of_credits_cta_button(
+    label: &str,
+    state_handle: &MouseStateHandle,
+    app: &AppContext,
+) -> Button {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    appearance
+        .ui_builder()
+        .button(
+            warpui::ui_components::button::ButtonVariant::Outlined,
+            state_handle.clone(),
+        )
+        .with_style(UiComponentStyles {
+            font_size: Some(14.),
+            border_color: Some(internal_colors::neutral_4(theme).into()),
+            ..Default::default()
+        })
+        .with_hovered_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
+            ..Default::default()
+        })
+        .with_clicked_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_3(theme).into()),
+            ..Default::default()
+        })
+        .with_text_label(label.to_string())
+        .with_cursor(Some(Cursor::PointingHand))
+}
+
+/// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
+fn render_out_of_credits_error(
+    message: &str,
+    subscribe_button_handle: &MouseStateHandle,
+    is_ai_input_enabled: bool,
+    icon_right_margin: f32,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+
+    let icon = Container::new(
+        ConstrainedBox::new(
+            warpui::elements::Icon::new(
+                Icon::AlertTriangle.into(),
+                error_color(appearance.theme()),
+            )
+            .finish(),
+        )
+        .with_width(icon_size(app))
+        .with_height(icon_size(app))
+        .finish(),
+    )
+    .with_margin_right(icon_right_margin)
+    .finish();
+
+    let text = Text::new(
+        message.to_owned(),
+        appearance.monospace_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(blended_colors::text_sub(
+        appearance.theme(),
+        appearance.theme().surface_1(),
+    ))
+    .with_selection_color(if is_ai_input_enabled {
+        appearance
+            .theme()
+            .text_selection_as_context_color()
+            .into_solid()
+    } else {
+        appearance.theme().text_selection_color().into_solid()
+    })
+    .finish();
+
+    let subscribe_button =
+        out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+            })
+            .finish();
+
+    Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(12.)
+        .with_child(
+            Flex::row()
+                .with_child(icon)
+                .with_child(Shrinkable::new(1., text).finish())
+                .finish(),
+        )
+        .with_child(
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_main_axis_alignment(MainAxisAlignment::Start)
+                    .with_child(subscribe_button)
+                    .finish(),
+            )
+            .with_margin_left(icon_size(app) + icon_right_margin)
+            .finish(),
+        )
+        .finish()
+}
 
 fn render_invalid_api_key_error(
-    provider: &str,
-    model_name: &str,
+    title: &str,
+    detail: &str,
     state_handle: &MouseStateHandle,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -3174,29 +3250,18 @@ fn render_invalid_api_key_error(
     .with_height(icon_size(app))
     .finish();
 
-    let alert_text = Text::new(
-        "Provided API key is not valid",
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(error_color(appearance.theme()))
-    .with_selectable(false)
-    .finish();
+    let alert_text = Text::new(title.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(error_color(appearance.theme()))
+        .with_selectable(false)
+        .finish();
 
-    let detail_text = Text::new(
-        format!(
-            "Failed to authenticate with {provider} when using {model_name}. \
-                     Double-check that your API key is correct."
-        ),
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(blended_colors::text_sub(
-        appearance.theme(),
-        appearance.theme().surface_1(),
-    ))
-    .with_selectable(false)
-    .finish();
+    let detail_text = Text::new(detail.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(blended_colors::text_sub(
+            appearance.theme(),
+            appearance.theme().surface_1(),
+        ))
+        .with_selectable(false)
+        .finish();
 
     let settings_button = appearance
         .ui_builder()
@@ -3514,10 +3579,9 @@ pub(super) fn query_prefix_highlight_len(
     if let AIAgentInput::UserQuery {
         user_query_mode, ..
     } = input
+        && let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode)
     {
-        if let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode) {
-            return Some(prefix_len);
-        }
+        return Some(prefix_len);
     }
 
     if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {
@@ -3538,7 +3602,6 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::CreateNewProject { .. }
             | AIAgentInput::CloneRepository { .. }
             | AIAgentInput::CodeReview { .. }
-            | AIAgentInput::FetchReviewComments { .. }
             | AIAgentInput::SummarizeConversation { .. }
             | AIAgentInput::StartFromAmbientRunPrompt { .. }
             | AIAgentInput::ActionResult { .. }

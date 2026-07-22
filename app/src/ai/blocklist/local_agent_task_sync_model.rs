@@ -14,8 +14,8 @@ use super::history_model::{
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
@@ -38,8 +38,10 @@ use crate::terminal::cli_agent_sessions::{
 /// a `terminal_view_id → task_id` mapping via `register_cli_session`.
 pub struct LocalAgentTaskSyncModel {
     ai_client: Arc<dyn AIClient>,
-    /// Maps terminal view IDs to task IDs for third-party harness sessions
-    /// that don't have conversations in `BlocklistAIHistoryModel`.
+    /// Maps terminal view IDs to task IDs for third-party harness runs that
+    /// don't have conversations in `BlocklistAIHistoryModel`. These mappings
+    /// live for the process-scoped `AgentDriver` run, which can span multiple
+    /// pane-scoped CLI agent sessions.
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
     /// Serializes and coalesces model-owned updates independently per task.
     update_queue: LocalTaskUpdateQueue,
@@ -130,6 +132,16 @@ impl LocalAgentTaskSyncModel {
         );
     }
 
+    /// Stops reporting CLI agent status changes for a completed driver run.
+    /// Task updates accepted before unregistration remain queued until delivery
+    /// finishes.
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
+    pub fn unregister_cli_session(&mut self, terminal_view_id: EntityId) {
+        if let Some(task_id) = self.cli_session_task_ids.remove(&terminal_view_id) {
+            self.update_queue.remove_task(&task_id);
+        }
+    }
+
     fn remove_queued_update_state_for_run_id(&mut self, run_id: Option<&str>) {
         let Some(task_id) = run_id.and_then(|run_id| run_id.parse::<AmbientAgentTaskId>().ok())
         else {
@@ -189,14 +201,12 @@ impl LocalAgentTaskSyncModel {
             } => {
                 self.on_cli_session_status_changed(*terminal_view_id, status, ctx);
             }
-            CLIAgentSessionsModelEvent::Ended {
-                terminal_view_id, ..
-            } => {
-                if let Some(task_id) = self.cli_session_task_ids.remove(terminal_view_id) {
-                    self.update_queue.remove_task(&task_id);
-                }
-            }
-            _ => {}
+            // Pane-scoped CLI agent sessions can end between preflight, the
+            // harness, and follow-ups, but the mapping belongs to the driver run.
+            CLIAgentSessionsModelEvent::Started { .. }
+            | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+            | CLIAgentSessionsModelEvent::Ended { .. }
+            | CLIAgentSessionsModelEvent::SessionUpdated { .. } => {}
         }
     }
 
@@ -205,17 +215,32 @@ impl LocalAgentTaskSyncModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some((task_id, update)) =
+        let Some((task_id, Some(update))) =
             with_local_conversation(conversation_id, ctx, |conversation| {
+                // When the conversation transitions to Error but the last exchange is
+                // still streaming, the stream hasn't finished processing the error yet.
+                // Skip this update — `mark_request_completed_with_error` will fire
+                // `UpdatedConversationStatus` again once the exchange finishes, at
+                // which point we can read and classify the real structured error.
+                if matches!(conversation.status(), ConversationStatus::Error) {
+                    let last_is_streaming =
+                        conversation.root_task_exchanges().last().is_some_and(|e| {
+                            matches!(&e.output_status, AIAgentOutputStatus::Streaming { .. })
+                        });
+                    if last_is_streaming {
+                        return None;
+                    }
+                }
+
                 let (task_state, status_message) = map_conversation_status(conversation);
-                LocalTaskUpdate {
+                Some(LocalTaskUpdate {
                     task_state: Some(task_state),
                     server_conversation_token: conversation
                         .server_conversation_token()
                         .map(|token| token.as_str().to_string()),
                     status_message,
                     ..LocalTaskUpdate::default()
-                }
+                })
             })
         else {
             return;
@@ -370,8 +395,10 @@ fn map_conversation_status(
         // can't clear it later, so a "reconnecting" note would linger after resume.
         ConversationStatus::TransientError => (AgentTaskState::InProgress, None),
         ConversationStatus::Error => {
-            // Extract the specific RenderableAIError from the last exchange to
-            // classify ERROR vs FAILED and provide a PlatformErrorCode.
+            // Extract the specific RenderableAIError to classify ERROR vs FAILED
+            // and provide a PlatformErrorCode. Prefer the last exchange's error;
+            // fall back to the conversation's out-of-band `status_error` (set when
+            // the failure had no stream/exchange to attach to, e.g. shell exit).
             let renderable_error = conversation
                 .root_task_exchanges()
                 .last()
@@ -384,7 +411,8 @@ fn map_conversation_status(
                     } else {
                         None
                     }
-                });
+                })
+                .or_else(|| conversation.status_error());
             task_update_for_conversation_error(renderable_error)
         }
         ConversationStatus::Cancelled => (
@@ -403,6 +431,10 @@ fn map_conversation_status(
 /// Maps a conversation-level error to a terminal task update. In-flight recoveries
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.
+///
+/// Every error-setting path records a structured `RenderableAIError` (on the last
+/// exchange or via the conversation's `status_error`), so the `None` arm is only a
+/// defensive fallback for an `Error` status set without one.
 fn task_update_for_conversation_error(
     error: Option<&RenderableAIError>,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
@@ -410,7 +442,9 @@ fn task_update_for_conversation_error(
         Some(error) => classify_renderable_error(error),
         None => (
             AgentTaskState::Error,
-            Some(TaskStatusUpdate::message("Agent encountered an error")),
+            Some(TaskStatusUpdate::message(
+                "Agent encountered an error".to_string(),
+            )),
         ),
     }
 }
@@ -497,6 +531,13 @@ pub(crate) fn classify_renderable_error(
                 )
             }
         }
+        RenderableAIError::AgentExitedShell => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::InvalidRequest,
+            )),
+        ),
     }
 }
 
@@ -507,6 +548,22 @@ fn map_cli_session_status(
     match status {
         CLIAgentSessionStatus::InProgress => (AgentTaskState::InProgress, None),
         CLIAgentSessionStatus::Success => (AgentTaskState::Succeeded, None),
+        CLIAgentSessionStatus::Failed {
+            error_type,
+            message,
+        } => {
+            // User-actionable errors (bad credentials, org restrictions, billing) map to
+            // FAILED. Everything else (rate limits, server errors, model errors, etc.)
+            // maps to ERROR since they are typically Anthropic's or Warp's fault.
+            // The list of error types on Claude Code comes from https://code.claude.com/docs/en/hooks#stopfailure-input
+            let task_state = match error_type.as_deref() {
+                Some("authentication_failed" | "oauth_org_not_allowed" | "billing_error") => {
+                    AgentTaskState::Failed
+                }
+                _ => AgentTaskState::Error,
+            };
+            (task_state, message.as_ref().map(TaskStatusUpdate::message))
+        }
         CLIAgentSessionStatus::Blocked { message } => (
             AgentTaskState::Blocked,
             message.as_ref().map(TaskStatusUpdate::message),

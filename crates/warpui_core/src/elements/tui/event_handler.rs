@@ -1,12 +1,14 @@
 //! [`TuiEventHandler`]: wraps a child element and runs callbacks for keys the
-//! child itself did not handle.
+//! child itself did not handle. (Mouse gestures — clicks and hover — live on
+//! [`TuiHoverable`](super::TuiHoverable), mirroring the GUI split between
+//! `EventHandler` and `Hoverable`.)
 //!
 //! # Construction
 //! Wrap a child with [`TuiEventHandler::new`] and register handlers with
 //! [`on_key`](TuiEventHandler::on_key), matching against the
 //! [`Keystroke::key`](crate::keymap::Keystroke) string (e.g. `"enter"`,
-//! `"a"`). Layout, render, height, and cursor are transparent — they delegate to
-//! the wrapped child.
+//! `"a"`). Layout, render, height, and cursor are transparent — they delegate
+//! to the wrapped child.
 //!
 //! # Dispatch policy
 //! On [`dispatch_event`](TuiElement::dispatch_event) the event is offered to the
@@ -17,11 +19,12 @@
 //! ancestors can react.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
-type KeyCallback = Box<dyn FnMut(&Event, &mut TuiEventContext, &AppContext)>;
+type KeyCallback = Box<dyn for<'a> FnMut(&TuiEvent, &mut TuiEventContext<'a>, &AppContext)>;
 
 struct KeyBinding {
     key: String,
@@ -34,9 +37,9 @@ pub struct TuiEventHandler {
 }
 
 impl TuiEventHandler {
-    pub fn new(child: impl TuiElement + 'static) -> Self {
+    pub fn new(child: Box<dyn TuiElement>) -> Self {
         Self {
-            child: Box::new(child),
+            child,
             bindings: Vec::new(),
         }
     }
@@ -46,7 +49,7 @@ impl TuiEventHandler {
     pub fn on_key(
         mut self,
         key: impl Into<String>,
-        callback: impl FnMut(&Event, &mut TuiEventContext, &AppContext) + 'static,
+        callback: impl for<'a> FnMut(&TuiEvent, &mut TuiEventContext<'a>, &AppContext) + 'static,
     ) -> Self {
         self.bindings.push(KeyBinding {
             key: key.into(),
@@ -57,20 +60,34 @@ impl TuiEventHandler {
 }
 
 impl TuiElement for TuiEventHandler {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
-        self.child.layout(constraint)
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
+        self.child.layout(constraint, ctx, app)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
-        self.child.render(area, buffer);
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        self.child.desired_height(width)
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.child.render(origin, surface, ctx);
     }
 
-    fn cursor_position(&self, area: TuiRect) -> Option<(u16, u16)> {
-        self.child.cursor_position(area)
+    fn size(&self) -> Option<TuiSize> {
+        self.child.size()
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.child.origin()
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -79,19 +96,18 @@ impl TuiElement for TuiEventHandler {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
-        area: TuiRect,
-        ctx: &mut TuiEventContext,
+        event: &TuiEvent,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        if self.child.dispatch_event(event, area, ctx, app) {
+        if self.child.dispatch_event(event, event_ctx, app) {
             return true;
         }
 
-        if let Event::KeyDown { keystroke, .. } = event {
+        if let TuiEvent::KeyDown { keystroke, .. } = event {
             for binding in &mut self.bindings {
                 if binding.key == keystroke.key {
-                    (binding.callback)(event, ctx, app);
+                    (binding.callback)(event, event_ctx, app);
                     return true;
                 }
             }

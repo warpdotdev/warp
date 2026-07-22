@@ -1,14 +1,14 @@
 use anyhow::Context;
-use windows::core::{implement, Interface};
 use windows::Win32::Networking::NetworkListManager::{
     INetworkListManager, INetworkListManagerEvents, INetworkListManagerEvents_Impl,
-    NetworkListManager, NLM_CONNECTIVITY, NLM_CONNECTIVITY_DISCONNECTED,
-    NLM_CONNECTIVITY_IPV4_INTERNET, NLM_CONNECTIVITY_IPV6_INTERNET,
+    NLM_CONNECTIVITY, NLM_CONNECTIVITY_DISCONNECTED, NLM_CONNECTIVITY_IPV4_INTERNET,
+    NLM_CONNECTIVITY_IPV6_INTERNET, NetworkListManager,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, IConnectionPoint, IConnectionPointContainer, CLSCTX_ALL,
-    COINIT_APARTMENTTHREADED,
+    CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IConnectionPoint,
+    IConnectionPointContainer,
 };
+use windows::core::{Interface, implement};
 
 use crate::windowing::winit::app::CustomEvent;
 

@@ -4,21 +4,22 @@ use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     OrderedTerminalEvent, OrderedTerminalEventType, Scrollback, ScrollbackBlock, WindowSize,
 };
+use warp_core::command::ExitCode;
+use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
 use warpui::units::Lines;
 use warpui::{App, SingletonEntity, ViewHandle};
 
-use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
+use crate::terminal::TerminalView;
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::model::block::{BlockId, BlockState, SerializedBlock};
+use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::shared_session::tests::terminal_model_for_viewer;
 use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
 };
-use crate::terminal::shared_session::SharedSessionStatus;
-use crate::terminal::TerminalView;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
@@ -31,6 +32,13 @@ fn ordered_terminal_event_from_bytes(
         event_no,
         event_type: OrderedTerminalEventType::PtyBytesRead { bytes: compressed },
     }
+}
+
+fn old_sharer_dcs_bytes(payload: &str) -> Vec<u8> {
+    let mut bytes = b"\x1bP$d".to_vec();
+    bytes.extend(hex::encode(payload).bytes());
+    bytes.push(0x9c);
+    bytes
 }
 
 fn terminal_view(app: &mut App) -> ViewHandle<TerminalView> {
@@ -106,12 +114,9 @@ fn test_terminal_model_is_correct() {
         });
 
         // Before we receive any events, the block list only contains hidden blocks.
-        assert!(model
-            .lock()
-            .block_list()
-            .blocks()
-            .iter()
-            .all(|block| block.height(&AgentViewState::Inactive) == Lines::zero()));
+        assert!(model.lock().block_list().blocks().iter().all(|block| {
+            block.height(&crate::terminal::model::block::TranscriptScope::Terminal) == Lines::zero()
+        }));
 
         // Load shared session scrollback.
         let scrollback = &[
@@ -124,15 +129,18 @@ fn test_terminal_model_is_correct() {
             // A hidden block, a completed scrollback block, then the active block.
             assert_eq!(model.block_list().blocks().len(), 3);
             assert_eq!(
-                model.block_list().blocks()[0].height(&AgentViewState::Inactive),
+                model.block_list().blocks()[0]
+                    .height(&crate::terminal::model::block::TranscriptScope::Terminal),
                 Lines::zero()
             );
             assert_ne!(
-                model.block_list().blocks()[1].height(&AgentViewState::Inactive),
+                model.block_list().blocks()[1]
+                    .height(&crate::terminal::model::block::TranscriptScope::Terminal),
                 Lines::zero()
             );
             assert_eq!(
-                model.block_list().blocks()[2].height(&AgentViewState::Inactive),
+                model.block_list().blocks()[2]
+                    .height(&crate::terminal::model::block::TranscriptScope::Terminal),
                 Lines::zero()
             );
         }
@@ -148,16 +156,110 @@ fn test_terminal_model_is_correct() {
         // After writing bytes, active block should no longer have height 0.
         assert_eq!(model.block_list().blocks().len(), 3);
         assert_eq!(
-            model.block_list().blocks()[0].height(&AgentViewState::Inactive),
+            model.block_list().blocks()[0]
+                .height(&crate::terminal::model::block::TranscriptScope::Terminal),
             Lines::zero()
         );
         assert_ne!(
-            model.block_list().blocks()[1].height(&AgentViewState::Inactive),
+            model.block_list().blocks()[1]
+                .height(&crate::terminal::model::block::TranscriptScope::Terminal),
             Lines::zero()
         );
         assert_ne!(
-            model.block_list().blocks()[2].height(&AgentViewState::Inactive),
+            model.block_list().blocks()[2]
+                .height(&crate::terminal::model::block::TranscriptScope::Terminal),
             Lines::zero()
+        );
+    })
+}
+
+#[test]
+fn new_viewer_processes_old_sharer_lifecycle_stream() {
+    let _recovery_enabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(true);
+    App::test((), |mut app| async move {
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+        let model = Arc::new(FairMutex::new(terminal_model_for_viewer(
+            channel_event_proxy.clone(),
+        )));
+        let terminal_view = terminal_view(&mut app);
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+
+        let completed_block_id = model.lock().active_block_id().clone();
+        let next_block_id = BlockId::new();
+        let command_finished = old_sharer_dcs_bytes(&format!(
+            r#"{{"hook":"CommandFinished","value":{{"exit_code":47,"next_block_id":"{next_block_id}","session_id":987654321}}}}"#
+        ));
+        let precmd = old_sharer_dcs_bytes(
+            r#"{"hook":"Precmd","value":{"pwd":"/old-sharer","session_id":987654321}}"#,
+        );
+
+        event_loop.update(&mut app, |event_loop, ctx| {
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 0,
+                    event_type: OrderedTerminalEventType::CommandExecutionStarted {
+                        participant_id: Default::default(),
+                        ai_metadata: None,
+                    },
+                },
+                ctx,
+            );
+            event_loop.process_ordered_terminal_event(
+                ordered_terminal_event_from_bytes(command_finished, 1),
+                ctx,
+            );
+            event_loop.process_ordered_terminal_event(
+                OrderedTerminalEvent {
+                    event_no: 2,
+                    event_type: OrderedTerminalEventType::CommandExecutionFinished {
+                        next_block_id: next_block_id.to_string().into(),
+                    },
+                },
+                ctx,
+            );
+            event_loop
+                .process_ordered_terminal_event(ordered_terminal_event_from_bytes(precmd, 3), ctx);
+        });
+
+        let model = model.lock();
+        let completed_block = model
+            .block_list()
+            .block_with_id(&completed_block_id)
+            .expect("The old sharer's completed block should remain in the block list.");
+        assert_eq!(completed_block.state(), BlockState::DoneWithExecution);
+        assert_eq!(completed_block.exit_code(), ExitCode::from(47));
+        assert_eq!(
+            model
+                .block_list()
+                .blocks()
+                .iter()
+                .filter(|block| block.state() == BlockState::DoneWithExecution)
+                .count(),
+            1
+        );
+        assert_eq!(model.active_block_id(), &next_block_id);
+        assert_eq!(
+            model.block_list().active_block().pwd().map(String::as_str),
+            Some("/old-sharer")
+        );
+        assert_eq!(
+            model.block_list().active_block().state(),
+            BlockState::BeforeExecution
         );
     })
 }
@@ -386,7 +488,7 @@ fn test_append_followup_scrollback_with_completed_last_block_creates_active_bloc
             model
                 .block_list()
                 .active_block()
-                .height(&AgentViewState::Inactive),
+                .height(&crate::terminal::model::block::TranscriptScope::Terminal),
             Lines::zero()
         );
         assert!(!model.block_list().active_block().started());
@@ -829,10 +931,12 @@ fn test_cloud_mode_setup_phase_ended_clears_setup_state() {
         });
 
         // Sanity-check the seeded state.
-        assert!(model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
         terminal_view.read(&app, |view, ctx| {
             let setup_state = view
                 .ambient_agent_view_model()
@@ -855,10 +959,12 @@ fn test_cloud_mode_setup_phase_ended_clears_setup_state() {
             );
         });
 
-        assert!(!model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            !model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
         terminal_view.read(&app, |view, ctx| {
             let setup_state = view
                 .ambient_agent_view_model()
@@ -902,10 +1008,12 @@ fn test_cloud_mode_setup_phase_ended_when_flag_already_false() {
         // BlockList flag starts at the default `false`; we intentionally do not
         // call set_is_executing_oz_environment_startup_commands(true) so the
         // marker arrives against a tree that never observed setup phase.
-        assert!(!model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            !model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
 
         let initial_group_id = terminal_view.read(&app, |view, ctx| {
             view.ambient_agent_view_model()
@@ -927,10 +1035,12 @@ fn test_cloud_mode_setup_phase_ended_when_flag_already_false() {
 
         // Flag stays cleared, and the unconditional teardown leaves the
         // initial setup group finished and collapsed.
-        assert!(!model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            !model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
         terminal_view.read(&app, |view, ctx| {
             let setup_state = view
                 .ambient_agent_view_model()
@@ -1007,10 +1117,12 @@ fn test_cloud_mode_setup_phase_ended_is_idempotent() {
             );
         });
 
-        assert!(!model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            !model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
         terminal_view.read(&app, |view, ctx| {
             let setup_state = view
                 .ambient_agent_view_model()

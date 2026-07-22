@@ -107,7 +107,7 @@ pub struct WarpConfig {
 /// Additional platform-dependent functionality can be found in impl blocks
 /// in native.rs and wasm.rs.
 impl WarpConfig {
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(_ctx: &mut ModelContext<Self>) -> Self {
         Self {
             theme_config: WarpThemeConfig::new(),
@@ -135,6 +135,12 @@ impl WarpConfig {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn custom_model_routers(&self) -> &Vec<CustomModelRouter> {
         &self.custom_model_routers
+    }
+
+    /// Parse errors for `custom_model_routers/` files that failed to load.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn custom_model_router_errors(&self) -> &Vec<ModelConfigError> {
+        &self.custom_model_router_errors
     }
 
     /// Saving the newly created launch configuration to the WarpConfig that we currently
@@ -288,13 +294,13 @@ pub(crate) fn materialize_default_worktree_config(
 
     replace_default_worktree_placeholders(&mut toml_value, repo_path, pane_type, &worktree_path);
 
-    if let Some(doc) = toml_value.as_table_mut() {
-        if let Some(params) = doc.get_mut("params").and_then(toml::Value::as_table_mut) {
-            params.remove("repo");
-            params.remove("pane_type");
-            if params.is_empty() {
-                doc.remove("params");
-            }
+    if let Some(doc) = toml_value.as_table_mut()
+        && let Some(params) = doc.get_mut("params").and_then(toml::Value::as_table_mut)
+    {
+        params.remove("repo");
+        params.remove("pane_type");
+        if params.is_empty() {
+            doc.remove("params");
         }
     }
 

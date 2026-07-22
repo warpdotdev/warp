@@ -1,5 +1,6 @@
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext, ViewHandle};
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -104,7 +105,7 @@ impl PaneGroup {
                         resources.clone(),
                         view_size,
                         true, // enable_orchestration_polling
-                        true, // is_cloud_mode
+                        true, // is_ambient_agent
                         ctx,
                     );
                     let new_pane = TerminalPane::new(
@@ -119,19 +120,20 @@ impl PaneGroup {
                 Some(WorkspaceAction::OpenConversationTranscriptViewer {
                     conversation_id,
                     ambient_agent_task_id,
-                }) => {
-                    if let Some(target_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
+                }) => match self.terminal_view_from_pane_id(pane_id, ctx) {
+                    Some(target_view) => {
                         Self::fetch_and_load_transcript(
                             target_view,
                             conversation_id,
                             ambient_agent_task_id,
                             ctx,
                         );
-                    } else {
+                    }
+                    _ => {
                         self.pending_ambient_agent_conversation_restorations
                             .insert(task_id, pane_id);
                     }
-                }
+                },
                 _ => {
                     self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
                 }
@@ -186,7 +188,7 @@ impl PaneGroup {
             } else if let Some(pane_id) =
                 group.find_pane_id_for_terminal_view(target_view.id(), ctx)
             {
-                log::error!(
+                report_error!(
                     "Failed to restore ambient agent pane, replacing with new cloud conversation"
                 );
                 group.replace_pane_with_new_cloud_conversation(pane_id, ctx);

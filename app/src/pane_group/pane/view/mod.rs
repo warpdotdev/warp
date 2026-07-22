@@ -7,9 +7,10 @@ pub use header::PaneHeaderAction::CustomAction as PaneHeaderCustomAction;
 pub use header_content::{
     HeaderContent, HeaderRenderContext, StandardHeader, StandardHeaderOptions,
 };
+use pathfinder_geometry::rect::RectF;
 use warpui::elements::{
-    Border, Container, DropTarget, DropTargetData, Flex, MainAxisSize, ParentElement, SavePosition,
-    Shrinkable,
+    Border, ConstrainedBox, Container, DropTarget, DropTargetData, Flex, MainAxisSize,
+    ParentElement, SavePosition, Shrinkable,
 };
 use warpui::keymap::EditableBinding;
 use warpui::presenter::ChildView;
@@ -30,6 +31,15 @@ use crate::settings::{PaneSettings, PaneSettingsChangedEvent};
 use crate::util::bindings::CustomAction;
 
 const HAS_SHARED_OBJECT_CONTEXT_KEY: &str = "PaneView_HasSharedObject";
+
+/// Max width applied to the pane header while the pane renders as a floating drag preview.
+/// During a pane drag the pane is laid out with unbounded constraints; `MainAxisSize::Min`
+/// avoids the infinite *vertical*-constraint panic, but the header's *width* would still be
+/// unbounded. Content that stretches to fill the width — the orchestration pill bar's clipped
+/// horizontal scrollable — cannot be laid out with an infinite width without reporting an
+/// infinite/NaN viewport and panicking in `Scene::validate_rect`. Capping the preview keeps
+/// the width finite while still producing a representative header ghost.
+const DRAG_PREVIEW_HEADER_MAX_WIDTH: f32 = 400.;
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -55,6 +65,7 @@ pub enum PaneViewEvent {
         origin: ActionOrigin,
         tab_hover_index: TabBarHoverIndex,
         hidden_pane_preview_direction: Direction,
+        drag_position: RectF,
     },
     PaneDraggedOutsideTabBarOrPaneGroup,
     PaneDragEnded,
@@ -187,12 +198,12 @@ impl<P: BackingView> PaneView<P> {
     /// Handles events from the pane stack model.
     fn handle_pane_stack_event(&mut self, event: &PaneStackEvent<P>, ctx: &mut ViewContext<Self>) {
         // Set the focus handle for newly added views
-        if let PaneStackEvent::ViewAdded(view) = event {
-            if let Some(focus_handle) = &self.focus_handle {
-                view.update(ctx, |child, ctx| {
-                    child.set_focus_handle(focus_handle.clone(), ctx);
-                });
-            }
+        if let PaneStackEvent::ViewAdded(view) = event
+            && let Some(focus_handle) = &self.focus_handle
+        {
+            view.update(ctx, |child, ctx| {
+                child.set_focus_handle(focus_handle.clone(), ctx);
+            });
         }
 
         let new_child = self.child(ctx);
@@ -314,6 +325,7 @@ impl<P: BackingView> PaneView<P> {
                 origin,
                 tab_hover_index,
                 hidden_pane_preview_direction,
+                drag_position,
             } => {
                 // Adds a neutral background to the pane if it's being dragged over the workspace tab group.
                 if matches!(origin, ActionOrigin::Pane) {
@@ -324,6 +336,7 @@ impl<P: BackingView> PaneView<P> {
                     origin: *origin,
                     tab_hover_index: *tab_hover_index,
                     hidden_pane_preview_direction: *hidden_pane_preview_direction,
+                    drag_position: *drag_position,
                 });
                 ctx.notify();
             }
@@ -368,7 +381,11 @@ impl<P: BackingView> View for PaneView<P> {
             // When header is not visible (e.g. during drag operation), use Min sizing to avoid infinite constraint panic.
             let column = Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
-                .with_child(ChildView::new(&self.header).finish());
+                .with_child(
+                    ConstrainedBox::new(ChildView::new(&self.header).finish())
+                        .with_max_width(DRAG_PREVIEW_HEADER_MAX_WIDTH)
+                        .finish(),
+                );
             return column.finish();
         }
 

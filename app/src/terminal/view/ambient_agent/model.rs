@@ -5,6 +5,7 @@ use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warp_terminal::model::BlockId;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
@@ -14,41 +15,37 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::extract_user_query_mode;
 use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier};
-use crate::ai::ambient_agents::spawn::{spawn_task, submit_run_followup, AmbientAgentEvent};
+use crate::ai::ambient_agents::spawn::{AmbientAgentEvent, spawn_task, submit_run_followup};
 use crate::ai::ambient_agents::task::{HarnessAuthSecretsConfig, HarnessConfig};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
-use crate::ai::ambient_agents::{
-    github_auth_url, AgentSource, AmbientAgentTaskId, OUT_OF_CREDITS_TASK_FAILURE_MESSAGE,
-    SERVER_OVERLOADED_TASK_FAILURE_MESSAGE,
-};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::TouchedWorkspace;
+use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::handoff::touched_repos::TouchedWorkspace;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::{
-    resolve_cloud_agent_computer_use_state, CloudAgentComputerUseState,
+    CloudAgentComputerUseState, resolve_cloud_agent_computer_use_state,
 };
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
-use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::ai::orchestration::{
+    CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
+    classify_cloud_agent_startup_error, should_disable_snapshot,
+};
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::InitialSnapshotToken;
 use crate::server::server_api::ai::{
     AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
 };
-use crate::server::server_api::{
-    AIApiError, ClientError, CloudAgentCapacityError, ServerApiProvider,
-};
-use crate::settings::PrivacySettings;
-use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
 use crate::terminal::CLIAgent;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::AdminEnablementSetting;
+use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
 
 /// Wire prompt substituted for an empty-prompt handoff against an active source
 /// conversation that also carries uploaded snapshot content.
@@ -63,6 +60,11 @@ const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 /// conversation that carries uploaded snapshot content.
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
+
+/// Cloud `config.model_id` fallback slug used when the pane's active Oz model
+/// is not cloud-runnable (e.g. a custom-endpoint/BYOK model or local custom
+/// router). `auto` defers to Warp's automatic server-side model selection.
+const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -353,6 +355,17 @@ impl AmbientAgentViewModel {
 
     pub fn request(&self) -> Option<&SpawnAgentRequest> {
         self.request.as_ref()
+    }
+
+    /// The terminal view this model belongs to. Used by the handoff open path
+    /// to seed the source conversation's selected model onto this pane.
+    ///
+    /// Only the local→cloud handoff callers use this, and they are gated to
+    /// non-wasm targets; gate the getter the same way so it isn't flagged as
+    /// dead code on the wasm build.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    pub(crate) fn terminal_view_id(&self) -> EntityId {
+        self.terminal_view_id
     }
 
     pub fn setup_command_state(&self) -> &SetupCommandState {
@@ -823,11 +836,11 @@ impl AmbientAgentViewModel {
         environment_id: Option<SyncId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(id) = &environment_id {
-            if CloudAmbientAgentEnvironment::get_by_id(id, ctx).is_none() {
-                log::warn!("Tried to select unknown environment {id:?}");
-                return;
-            }
+        if let Some(id) = &environment_id
+            && CloudAmbientAgentEnvironment::get_by_id(id, ctx).is_none()
+        {
+            log::warn!("Tried to select unknown environment {id:?}");
+            return;
         }
         self.environment_id = environment_id;
         self.environment_id_from_viewed_task = false;
@@ -837,10 +850,10 @@ impl AmbientAgentViewModel {
     /// Resets to the first enabled harness if the current selection is no longer enabled.
     fn validate_selected_harness(&mut self, ctx: &mut ModelContext<Self>) {
         let model = HarnessAvailabilityModel::as_ref(ctx);
-        if !model.is_harness_enabled(self.harness) {
-            if let Some(first_enabled) = model.available_harnesses().iter().find(|h| h.enabled) {
-                self.set_harness(first_enabled.harness, ctx);
-            }
+        if !model.is_harness_enabled(self.harness)
+            && let Some(first_enabled) = model.available_harnesses().iter().find(|h| h.enabled)
+        {
+            self.set_harness(first_enabled.harness, ctx);
         }
     }
 
@@ -978,18 +991,28 @@ impl AmbientAgentViewModel {
         // queued-prompt / harness-command-started flow).
         ctx.spawn(
             async move { ai_client.get_ambient_agent_task(&task_id).await },
-            |me, result, ctx| match result {
+            move |me, result, ctx| match result {
                 Ok(task) => {
                     me.source = task.source.clone();
                     me.apply_viewed_task_config_snapshot(task.agent_config_snapshot.as_ref(), ctx);
                     ctx.emit(AmbientAgentViewModelEvent::ViewerHarnessResolved);
                 }
-                Err(err) => {
-                    log::warn!("Failed to fetch ambient agent task for shared session: {err}");
+                Err(_) => {
                     me.set_environment_id(None, ctx);
                 }
             },
         );
+    }
+
+    /// Records the live execution session for a viewer that just joined an already-running
+    /// ambient session. Unlike [`Self::attach_execution_session`], this does not emit
+    /// `ExecutionSessionReady` (the viewer is already connected to this session), so it does
+    /// not trigger a session swap. Setting `active_execution_session_id` keeps
+    /// `is_ready_for_cloud_followup_prompt` false while the session is live; the end path
+    /// clears it via [`Self::record_ambient_execution_ended`] so follow-ups become available.
+    pub fn set_live_execution_session(&mut self, session_id: SessionId) {
+        self.active_execution_session_id = Some(session_id);
+        self.last_ended_execution_session_id = None;
     }
 
     /// Applies the run configuration for an existing shared ambient session.
@@ -1171,10 +1194,19 @@ impl AmbientAgentViewModel {
         };
 
         let oz_model = (selected_harness == Harness::Oz).then(|| {
-            LLMPreferences::as_ref(ctx)
+            let prefs = LLMPreferences::as_ref(ctx);
+            let active_id = &prefs
                 .get_active_base_model(ctx, Some(self.terminal_view_id))
-                .id
-                .to_string()
+                .id;
+            // The cloud `start_agent` endpoint only accepts Oz model slugs; a
+            // custom-endpoint (BYOK) model or local custom router id would be
+            // rejected, so fall back to `auto`. See
+            // `LLMPreferences::is_cloud_runnable_oz_model_id`.
+            if prefs.is_cloud_runnable_oz_model_id(active_id) {
+                active_id.to_string()
+            } else {
+                CLOUD_FALLBACK_OZ_MODEL_ID.to_owned()
+            }
         });
         let third_party_harness = (selected_harness != Harness::Oz).then(|| HarnessConfig {
             harness_type: selected_harness,
@@ -1344,10 +1376,9 @@ impl AmbientAgentViewModel {
                     ctx.spawn(
                         async move {
                             if let Err(e) = ai_client.cancel_ambient_agent_task(&task_id).await {
-                                log::error!(
-                                    "Failed to cancel ambient agent task {}: {:?}",
-                                    task_id,
-                                    e
+                                report_error!(
+                                    e.context("Failed to cancel ambient agent task"),
+                                    extra: { "task_id" => %task_id }
                                 );
                             }
                         },
@@ -1483,40 +1514,24 @@ impl AmbientAgentViewModel {
             ctx
         );
 
-        if let Some(client_error) = err.downcast_ref::<ClientError>() {
-            if let Some(auth_url) = &client_error.auth_url {
-                self.handle_needs_github_auth(auth_url.clone(), client_error.error.clone(), ctx);
-                return;
+        match classify_cloud_agent_startup_error(&err) {
+            CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
+                message,
+                auth_url,
+            }) => self.handle_needs_github_auth(auth_url, message, ctx),
+            CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Capacity { message }) => {
+                self.handle_spawn_error(message, ctx);
+                ctx.emit(AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal);
             }
-        }
-        if let Some(capacity_error) = err.downcast_ref::<CloudAgentCapacityError>() {
-            self.handle_spawn_error(capacity_error.error.clone(), ctx);
-            ctx.emit(AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal);
-            return;
-        }
-        if let Some(ai_api_error) = err.downcast_ref::<AIApiError>() {
-            match ai_api_error {
-                AIApiError::QuotaLimit {
-                    user_display_message,
-                } => {
-                    let error_message = user_display_message
-                        .clone()
-                        .unwrap_or_else(|| OUT_OF_CREDITS_TASK_FAILURE_MESSAGE.to_string());
-                    self.handle_spawn_error(error_message, ctx);
-                    ctx.emit(AmbientAgentViewModelEvent::ShowAICreditModal);
-                    return;
-                }
-                AIApiError::ServerOverloaded => {
-                    self.handle_spawn_error(
-                        SERVER_OVERLOADED_TASK_FAILURE_MESSAGE.to_string(),
-                        ctx,
-                    );
-                    return;
-                }
-                _ => {}
+            CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::OutOfCredits { message }) => {
+                self.handle_spawn_error(message, ctx);
+                ctx.emit(AmbientAgentViewModelEvent::ShowAICreditModal);
             }
+            CloudAgentStartupIssue::Failed(
+                CloudAgentStartupFailure::ServerOverloaded { message }
+                | CloudAgentStartupFailure::Other { message },
+            ) => self.handle_spawn_error(message, ctx),
         }
-        self.handle_spawn_error(error_message, ctx);
     }
 
     /// Starts the periodic timer that updates the progress UI while waiting for a session.
@@ -1617,7 +1632,7 @@ impl AmbientAgentViewModel {
         self.status = Status::NeedsGithubAuth {
             progress,
             error_message,
-            auth_url: github_auth_url::cloud_setup_auth_url_with_next(&auth_url),
+            auth_url,
         };
         self.pending_followup_prompt = None;
 
@@ -1755,7 +1770,7 @@ impl AmbientAgentViewModel {
                 async move { ai_client.cancel_ambient_agent_task(&task_id).await },
                 |_me, result, _ctx| {
                     if let Err(err) = result {
-                        log::error!("Failed to cancel ambient agent task: {err}");
+                        report_error!(err.context("Failed to cancel ambient agent task"));
                     }
                 },
             );
@@ -1837,17 +1852,6 @@ pub enum AmbientAgentViewModelEvent {
     /// a task is attached to the view (transcript restore) or when an
     /// execution ends.
     RunLifecycleChanged,
-}
-
-pub(crate) fn should_disable_snapshot(ctx: &AppContext) -> bool {
-    let privacy = PrivacySettings::as_ref(ctx);
-    if !privacy.is_cloud_conversation_storage_enabled {
-        return true;
-    }
-    matches!(
-        UserWorkspaces::as_ref(ctx).get_cloud_conversation_storage_enablement_setting(),
-        AdminEnablementSetting::Disable
-    )
 }
 
 impl Entity for AmbientAgentViewModel {

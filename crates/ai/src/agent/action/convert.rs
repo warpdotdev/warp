@@ -6,16 +6,17 @@ use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
+use crate::agent::FileLocations;
 use crate::agent::action::{
-    AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
-    InsertedCommentLine, InsertedCommentLocation, ReadFilesRequest, SearchCodebaseRequest,
+    AIAgentActionType, AIAgentPtyWriteMode, CommentSide, CreateDocumentsRequest, DocumentDiff,
+    DocumentToCreate, EditDocumentsRequest, FileEdit, InsertReviewComment, InsertedCommentLine,
+    InsertedCommentLocation, ReadDocumentsRequest, ReadFilesRequest, SearchCodebaseRequest,
     ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
 use crate::agent::action_result::{AnyFileContent, FileContext};
 use crate::agent::convert::ToolToAIAgentActionError;
-use crate::agent::FileLocations;
 use crate::diff_validation::{ParsedDiff, V4AHunk};
-use crate::document::AIDocumentId;
+use crate::document::{AIDocumentId, DEFAULT_PLANNING_DOCUMENT_TITLE};
 
 impl From<api::message::tool_call::RunShellCommand> for AIAgentActionType {
     fn from(value: api::message::tool_call::RunShellCommand) -> Self {
@@ -333,7 +334,6 @@ impl From<warp_multi_agent_api::AnyFileContent> for FileContext {
 
 impl From<api::message::tool_call::ReadDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::ReadDocuments) -> Self {
-        use crate::agent::action::ReadDocumentsRequest;
         AIAgentActionType::ReadDocuments(ReadDocumentsRequest {
             document_ids: value
                 .documents
@@ -346,7 +346,6 @@ impl From<api::message::tool_call::ReadDocuments> for AIAgentActionType {
 
 impl From<api::message::tool_call::EditDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::EditDocuments) -> Self {
-        use crate::agent::action::{DocumentDiff, EditDocumentsRequest};
         AIAgentActionType::EditDocuments(EditDocumentsRequest {
             diffs: value
                 .diffs
@@ -367,7 +366,6 @@ impl From<api::message::tool_call::EditDocuments> for AIAgentActionType {
 
 impl From<api::message::tool_call::CreateDocuments> for AIAgentActionType {
     fn from(value: api::message::tool_call::CreateDocuments) -> Self {
-        use crate::agent::action::{CreateDocumentsRequest, DocumentToCreate};
         AIAgentActionType::CreateDocuments(CreateDocumentsRequest {
             documents: value
                 .new_documents
@@ -375,9 +373,7 @@ impl From<api::message::tool_call::CreateDocuments> for AIAgentActionType {
                 .map(|doc| DocumentToCreate {
                     content: doc.content,
                     title: if doc.title.is_empty() {
-                        // DO NOT SUBMIT
-                        // crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE.to_string()
-                        "".to_string()
+                        DEFAULT_PLANNING_DOCUMENT_TITLE.to_owned()
                     } else {
                         doc.title
                     },
@@ -425,10 +421,11 @@ impl TryFrom<api::message::tool_call::UseComputer> for AIAgentActionType {
             .actions
             .into_iter()
             .map(|action| {
+                let target = convert_computer_use_target(action.target);
                 let Some(action_type) = action.r#type else {
                     return Err(ToolToAIAgentActionError::MissingComputerUseActionType);
                 };
-                match action_type {
+                let action = match action_type {
                     use_computer::action::Type::MouseMove(mouse_move) => {
                         Ok(computer_use::Action::MouseMove {
                             to: coordinates_to_vec(mouse_move.to.as_ref())?,
@@ -476,7 +473,9 @@ impl TryFrom<api::message::tool_call::UseComputer> for AIAgentActionType {
                         let key = convert_key(key_up.key)?;
                         Ok(computer_use::Action::KeyUp { key })
                     }
-                }
+                }?;
+                log_window_target_coord(&action, target);
+                Ok(computer_use::TargetedAction { action, target })
             })
             .try_collect()?;
         let screenshot_params = value
@@ -497,6 +496,45 @@ impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
             task_summary: value.task_summary,
             screenshot_params: value.screenshot_params.map(convert_screenshot_params),
         })
+    }
+}
+
+impl TryFrom<api::message::tool_call::StartRecording> for AIAgentActionType {
+    type Error = ToolToAIAgentActionError;
+
+    fn try_from(value: api::message::tool_call::StartRecording) -> Result<Self, Self::Error> {
+        let limits = value.limits;
+        // Only carry values > 1 (0 means unset; 1 means real-time).
+        let playback_speed_multiplier =
+            (value.playback_speed_multiplier > 1).then_some(value.playback_speed_multiplier);
+        let window = match convert_recording_target(value.target)? {
+            Some(target @ computer_use::Target::Window { .. }) => Some(target),
+            Some(computer_use::Target::Screen) | None => None,
+        };
+        Ok(AIAgentActionType::StartRecording {
+            frame_rate: value.frame_rate.max(0) as u32,
+            max_duration: limits
+                .as_ref()
+                .and_then(|l| l.max_duration.as_ref())
+                .map(|d| Duration::new(d.seconds.max(0) as u64, d.nanos.max(0) as u32)),
+            max_size_bytes: limits
+                .as_ref()
+                .map(|l| l.max_size_bytes)
+                .filter(|&bytes| bytes > 0)
+                .map(|bytes| bytes as u64),
+            summary: (!value.summary.trim().is_empty()).then_some(value.summary),
+            description: (!value.description.trim().is_empty()).then_some(value.description),
+            playback_speed_multiplier,
+            window,
+        })
+    }
+}
+
+impl From<api::message::tool_call::StopRecording> for AIAgentActionType {
+    fn from(value: api::message::tool_call::StopRecording) -> Self {
+        AIAgentActionType::StopRecording {
+            recording_id: value.recording_id,
+        }
     }
 }
 
@@ -526,6 +564,70 @@ fn convert_screenshot_params(
         max_long_edge_px: (params.max_long_edge_px > 0).then_some(params.max_long_edge_px as usize),
         max_total_px: (params.max_total_px > 0).then_some(params.max_total_px as usize),
         region,
+        target: convert_computer_use_target(params.target),
+    }
+}
+
+/// Converts an optional API `ComputerUseTarget` into the internal computer_use target. An absent
+/// or `Screen` target maps to the legacy whole-screen behavior.
+fn convert_computer_use_target(
+    target: Option<api::message::tool_call::ComputerUseTarget>,
+) -> computer_use::Target {
+    use api::message::tool_call::computer_use_target::Target as ApiTarget;
+    match target.and_then(|t| t.target) {
+        // The proto window id is an opaque string; on macOS it is a CGWindowID, so parse it back
+        // to a u32. An unparseable id is treated as no valid window target and falls back to the
+        // legacy whole-screen behavior rather than panicking.
+        Some(ApiTarget::Window(window)) => match window.window_id.parse::<u32>() {
+            Ok(window_id) => computer_use::Target::Window {
+                window_id,
+                pid: window.pid,
+            },
+            Err(_) => computer_use::Target::Screen,
+        },
+        Some(ApiTarget::Screen(_)) | None => computer_use::Target::Screen,
+    }
+}
+
+fn convert_recording_target(
+    target: Option<api::message::tool_call::ComputerUseTarget>,
+) -> Result<Option<computer_use::Target>, ToolToAIAgentActionError> {
+    use api::message::tool_call::computer_use_target::Target as ApiTarget;
+    match target.and_then(|t| t.target) {
+        Some(ApiTarget::Window(window)) => {
+            let window_id = window.window_id.parse::<u32>().map_err(|_| {
+                ToolToAIAgentActionError::InvalidRecordingWindowId(window.window_id.clone())
+            })?;
+            Ok(Some(computer_use::Target::Window {
+                window_id,
+                pid: window.pid,
+            }))
+        }
+        Some(ApiTarget::Screen(_)) => Ok(Some(computer_use::Target::Screen)),
+        None => Ok(None),
+    }
+}
+
+/// Logs the raw server-provided coordinates for a window-targeted computer-use action, so the
+/// agent-driven coordinate conversion can be compared against where the click actually lands.
+/// Gated on COMPUTER_USE_DEBUG and routed through `log` so it surfaces in the app's log file.
+fn log_window_target_coord(action: &computer_use::Action, target: computer_use::Target) {
+    if std::env::var_os("COMPUTER_USE_DEBUG").is_none() {
+        return;
+    }
+    let computer_use::Target::Window { window_id, pid } = target else {
+        return;
+    };
+    let coord = match action {
+        computer_use::Action::MouseMove { to } => Some(("mouse_move", to.x(), to.y())),
+        computer_use::Action::MouseDown { at, .. } => Some(("mouse_down", at.x(), at.y())),
+        computer_use::Action::MouseWheel { at, .. } => Some(("mouse_wheel", at.x(), at.y())),
+        _ => None,
+    };
+    if let Some((kind, x, y)) = coord {
+        log::info!(
+            "[computer_use] server->client {kind} window#={window_id} pid={pid} raw_coord=({x},{y})"
+        );
     }
 }
 

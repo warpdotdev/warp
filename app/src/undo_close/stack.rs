@@ -1,12 +1,13 @@
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{
     AppContext, ClosedWindowData, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-use super::settings::UndoCloseSettingsChangedEvent;
 use super::UndoCloseSettings;
+use super::settings::UndoCloseSettingsChangedEvent;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{PaneGroup, PaneId};
@@ -129,7 +130,8 @@ impl ClosedItem {
 
             for terminal_view_id in terminal_view_ids {
                 history_model.update(ctx, |history_model, _| {
-                    history_model.mark_conversations_historical_for_terminal_view(terminal_view_id);
+                    history_model
+                        .mark_conversations_historical_for_terminal_surface(terminal_view_id);
                 });
             }
         }
@@ -370,9 +372,9 @@ impl UndoCloseStack {
                 }
                 // Log errors if the expired item was not found or multiple items were found
                 if me.stack.len() == initial_len {
-                    log::error!("Undo close expiry task did not find item in stack!");
+                    report_error!("Undo close expiry task did not find item in stack!");
                 } else if me.stack.len() < initial_len - 1 {
-                    log::error!("Undo close expiry task found multiple matching items in stack!");
+                    report_error!("Undo close expiry task found multiple matching items in stack!");
                 } else {
                     log::debug!("Removed expired item from undo stack");
                 }

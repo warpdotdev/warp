@@ -1,5 +1,5 @@
 use super::event::{
-    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
+    CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType, parse_event,
 };
 use super::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
@@ -616,6 +616,34 @@ fn prompt_submit_clears_permission_scoped_state() {
         session.session_context.query.as_deref(),
         Some("next prompt")
     );
+    assert!(matches!(session.status, CLIAgentSessionStatus::InProgress));
+}
+
+#[test]
+fn tool_complete_clears_permission_scoped_state() {
+    // GH-11082: answering an AskUserQuestion emits only ToolComplete (the
+    // plugin sends no PermissionReplied for it), so the Blocked -> InProgress
+    // transition here must also clear the stale summary. Otherwise the tab
+    // title keeps showing "Wants to run AskUserQuestion: ..." until the next
+    // prompt or Stop.
+    let mut session = blocked_claude_session_with_permission_state();
+
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::ToolComplete,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(session.session_context.summary, None);
+    assert_eq!(session.session_context.tool_name, None);
+    assert_eq!(session.session_context.tool_input_preview, None);
     assert!(matches!(session.status, CLIAgentSessionStatus::InProgress));
 }
 

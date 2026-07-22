@@ -1,14 +1,15 @@
 use settings::Setting as _;
 use voice_input::{StartListeningError, VoiceInput, VoiceSessionResult};
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::elements::{Container, CornerRadius, Icon, Radius};
 use warpui::platform::Cursor;
-use warpui::r#async::SpawnedFutureHandle;
 use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{elements, AppContext, Element, SingletonEntity, ViewContext, ViewHandle};
+use warpui::{AppContext, Element, SingletonEntity, ViewContext, ViewHandle, elements};
 
 use super::{EditorAction, EditorView, VoiceTranscriber, VoiceTranscriptionOptions};
 use crate::ai::blocklist::InputType;
@@ -79,9 +80,11 @@ impl EditorView {
                 crate::view_components::NewFeaturePopupEvent::Dismissed
             ) {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    warp_core::report_if_error!(settings
-                        .dismissed_voice_input_new_feature_popup
-                        .set_value(true, ctx));
+                    warp_errors::report_if_error!(
+                        settings
+                            .dismissed_voice_input_new_feature_popup
+                            .set_value(true, ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -168,7 +171,7 @@ impl EditorView {
                 if cancel_transcription {
                     voice_input.abort_listening();
                 } else if let Err(e) = voice_input.stop_listening(ctx) {
-                    log::error!("Failed to stop voice input: {e:?}");
+                    report_error!(e.context("Failed to stop voice input"));
                 }
             });
         }
@@ -283,7 +286,10 @@ impl EditorView {
                                     Self::show_microphone_access_toast(ctx);
                                 }
                                 _ => {
-                                    log::error!("Failed to start voice input: {e:?}");
+                                    report_error!(
+                                        anyhow::Error::new(e)
+                                            .context("Failed to start voice input")
+                                    );
                                 }
                             }
                             ctx.notify();
@@ -440,6 +446,9 @@ impl EditorView {
                 let voice_transcriber = VoiceTranscriber::handle(ctx).as_ref(ctx);
                 if let Some(transcriber) = voice_transcriber.transcriber() {
                     let transcriber = transcriber.clone();
+                    let language = AISettings::as_ref(ctx)
+                        .voice_input_language_code()
+                        .map(str::to_owned);
 
                     VoiceInput::handle(ctx).update(ctx, |voice, _| {
                         voice.set_transcribing_active(true);
@@ -448,7 +457,7 @@ impl EditorView {
                     self.set_voice_input_state(
                         VoiceInputState::Transcribing {
                             handle: ctx.spawn(
-                                async move { transcriber.transcribe(wav_base64).await },
+                                async move { transcriber.transcribe(wav_base64, language).await },
                                 Self::apply_transcribed_voice_input,
                             ),
                         },
@@ -500,7 +509,9 @@ impl EditorView {
                     self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx)
                 }
                 _ => {
-                    log::error!("Failed to transcribe voice input: {e:?}");
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to transcribe voice input")
+                    );
                     self.voice_error_toast(super::VOICE_ERROR_TOAST_TEXT, ctx)
                 }
             },

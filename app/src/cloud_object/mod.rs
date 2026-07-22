@@ -249,10 +249,10 @@ pub trait CloudObject: Debug {
     /// is not in a folder, this will be the object's space. Otherwise, it will
     /// be the folder the object is placed in directly, even if that folder is nested.
     fn location(&self, cloud_model: &CloudModel, app: &AppContext) -> CloudObjectLocation {
-        if let Some(folder_id) = self.metadata().folder_id {
-            if cloud_model.get_folder(&folder_id).is_some() {
-                return CloudObjectLocation::Folder(folder_id);
-            }
+        if let Some(folder_id) = self.metadata().folder_id
+            && cloud_model.get_folder(&folder_id).is_some()
+        {
+            return CloudObjectLocation::Folder(folder_id);
         }
 
         CloudObjectLocation::Space(self.space(app))
@@ -343,7 +343,7 @@ pub trait CloudObject: Debug {
                     return false;
                 }
             }
-            _ => log::error!(
+            _ => report_error!(
                 "called decrement_in_flight_request_count with a non-`InFlight` cloud status"
             ),
         }
@@ -669,18 +669,18 @@ where
 
         self.set_pending_content_changes_status(CloudObjectSyncStatus::NoLocalChanges);
 
-        if let ConflictStatus::ConflictingChanges { object } = new_conflict {
-            if self.model().should_update_after_server_conflict() {
-                // Update metadata revision from the server object.
-                self.metadata.update_revision_from_server(&object.metadata);
-                // Update the model from the server.
-                self.set_model(object.model.clone());
-                // Update conflict status - this may create a new conflict if there are pending changes.
-                if self.metadata.has_pending_content_changes() {
-                    self.conflict_status = ConflictStatus::ConflictingChanges { object };
-                } else {
-                    self.conflict_status = ConflictStatus::NoConflicts;
-                }
+        if let ConflictStatus::ConflictingChanges { object } = new_conflict
+            && self.model().should_update_after_server_conflict()
+        {
+            // Update metadata revision from the server object.
+            self.metadata.update_revision_from_server(&object.metadata);
+            // Update the model from the server.
+            self.set_model(object.model.clone());
+            // Update conflict status - this may create a new conflict if there are pending changes.
+            if self.metadata.has_pending_content_changes() {
+                self.conflict_status = ConflictStatus::ConflictingChanges { object };
+            } else {
+                self.conflict_status = ConflictStatus::NoConflicts;
             }
         }
     }
@@ -986,6 +986,7 @@ pub use cloud_object_models::{
     ServerPreference, ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflow,
     ServerWorkflowEnum, TryFromGql,
 };
+use warp_errors::report_error;
 
 #[derive(Default, Clone, Copy, Debug, Eq, Derivative)]
 #[derivative(PartialEq, Hash)]

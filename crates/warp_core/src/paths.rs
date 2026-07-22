@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use cfg_if::cfg_if;
 use directories::BaseDirs;
 
-use crate::channel::{Channel, ChannelState};
 use crate::AppId;
+use crate::channel::{Channel, ChannelState};
 
 /// The name of the directory in which to put non-global Warp-specific files.
 ///
@@ -43,6 +43,7 @@ fn base_warp_config_dir_name() -> String {
         Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
     }
 }
+
 /// Returns the home-relative Warp config directory name for the current channel and data profile.
 ///
 /// This preserves the historical `.warp*` directory shape while still isolating dev, local,
@@ -109,6 +110,28 @@ pub fn data_dir() -> PathBuf {
     }
 }
 
+/// Returns the GUI application ID for the current channel.
+///
+/// Most TUI channel binaries use the same application ID as the GUI. The OSS
+/// TUI is the exception: it uses `WarpTui`, while the corresponding GUI uses
+/// `WarpOss`.
+#[cfg(any(not(target_os = "macos"), test))]
+fn gui_app_id_for_channel(channel: Channel, current_app_id: AppId) -> AppId {
+    match channel {
+        Channel::Oss => AppId::new("dev", "warp", "WarpOss"),
+        Channel::Stable
+        | Channel::Preview
+        | Channel::Dev
+        | Channel::Integration
+        | Channel::Local => current_app_id,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn gui_app_id() -> AppId {
+    gui_app_id_for_channel(ChannelState::channel(), ChannelState::app_id())
+}
+
 /// Returns the path to the directory where non-portable configuration files
 /// should be stored.
 pub fn config_local_dir() -> PathBuf {
@@ -125,6 +148,83 @@ pub fn config_local_dir() -> PathBuf {
     }
 }
 
+/// Resolves the GUI's non-portable configuration directory from any frontend.
+///
+/// This differs from [`config_local_dir`] when the active process uses a
+/// frontend-specific application ID, as the OSS TUI does on Linux and Windows.
+/// On macOS, development data profiles do not have an unambiguous corresponding
+/// GUI `.warp*` directory, so this fails closed instead of selecting a source
+/// profile implicitly.
+pub fn gui_config_local_dir() -> Option<PathBuf> {
+    cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            if ChannelState::data_profile().is_some() {
+                return None;
+            }
+            dirs::home_dir().map(|home_dir| home_dir.join(macos_config_dir_name()))
+        } else {
+            project_dirs_for_app_id(
+                gui_app_id(),
+                ChannelState::data_profile().as_deref(),
+            )
+            .map(|dirs| dirs.config_local_dir().to_owned())
+        }
+    }
+}
+
+/// Resolves the GUI's global file-based MCP configuration from any frontend.
+///
+/// As with [`gui_config_local_dir`], macOS development data profiles fail
+/// closed because the matching GUI source profile is ambiguous.
+pub fn gui_mcp_config_file_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if ChannelState::data_profile().is_some() {
+        return None;
+    }
+
+    warp_home_mcp_config_file_path()
+}
+
+/// Returns the macOS config directory name for the TUI front-end (`warp-tui`)
+/// for the current channel.
+///
+/// This mirrors [`macos_config_dir_name`] but under a `.warp_cli*` directory so
+/// the TUI keeps its settings separate from the GUI's `.warp*` directory. Like
+/// the GUI names, these are persisted on disk as directory names and must not be
+/// changed once established.
+#[cfg(target_os = "macos")]
+fn macos_tui_config_dir_name() -> String {
+    macos_config_dir_name().replacen(WARP_CONFIG_DIR, ".warp_cli", 1)
+}
+
+/// Returns the path to the directory where non-portable configuration files for
+/// the TUI front-end (`warp-tui`) should be stored.
+///
+/// This is intentionally distinct from [`config_local_dir`] so the GUI and the
+/// TUI never share (and clobber) a settings file. On macOS it is a sibling
+/// `.warp_cli*` directory (mirroring the GUI's `.warp*`); on other platforms —
+/// whose config dirs are already app-id based — it nests under a `cli`
+/// subdirectory of the standard config dir.
+pub fn tui_config_local_dir() -> PathBuf {
+    cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(macos_tui_config_dir_name())
+        } else {
+            config_local_dir().join("cli")
+        }
+    }
+}
+
+/// Returns the path to the TUI front-end's global MCP configuration file.
+///
+/// This is intentionally distinct from [`warp_home_mcp_config_file_path`] so
+/// the GUI and TUI can run different MCP configurations and versions without
+/// reading or modifying each other's files.
+pub fn tui_mcp_config_file_path() -> PathBuf {
+    tui_config_local_dir().join(".mcp.json")
+}
 /// Returns the base directory for general config files. Useful for accessing the config files for
 /// other programs.
 pub fn base_config_dir() -> PathBuf {
@@ -176,6 +276,19 @@ pub fn secure_state_dir() -> Option<PathBuf> {
     None
 }
 
+/// Returns the path to the directory where non-portable application state
+/// data for the TUI front-end (`warp-tui`) should be stored.
+///
+/// This is intentionally distinct from the GUI's state directory (see
+/// [`state_dir`] / [`secure_state_dir`]) so the two front-ends never share a
+/// SQLite database: they can be on different versions with different
+/// persistence schemas, and whichever binary is newer would otherwise migrate
+/// the shared database out from under the older one. Like other on-disk
+/// names, the `tui` directory name must not be changed once established.
+pub fn tui_state_dir() -> PathBuf {
+    secure_state_dir().unwrap_or_else(state_dir).join("tui")
+}
+
 /// Returns the path to the directory containing the user's custom themes.
 pub fn themes_dir() -> PathBuf {
     data_dir().join("themes")
@@ -206,10 +319,10 @@ pub fn cache_dir() -> PathBuf {
 /// home-dir-relative manner, if appropriate.
 pub fn home_relative_path(path: &Path) -> String {
     #[cfg(unix)]
-    if let Some(base_dirs) = directories::BaseDirs::new() {
-        if let Ok(relative_path) = path.strip_prefix(base_dirs.home_dir()) {
-            return format!("~/{}", relative_path.display());
-        }
+    if let Some(base_dirs) = directories::BaseDirs::new()
+        && let Ok(relative_path) = path.strip_prefix(base_dirs.home_dir())
+    {
+        return format!("~/{}", relative_path.display());
     };
 
     path.display().to_string()
@@ -279,12 +392,12 @@ pub fn app_group_container_path() -> Option<PathBuf> {
         // We have to double-check that the path points to a directory we can actually use. In addition to
         // macOS returning a path that may not exist, processes may list the container directory without
         // having permissions to read to or write from it.
-        if let Some(url) = fm.containerURLForSecurityApplicationGroupIdentifier(&group_id) {
-            if let Some(ns_path) = url.path() {
-                let path = PathBuf::from(ns_path.to_string());
-                if tempfile::tempfile_in(&path).is_ok() {
-                    return Some(path);
-                }
+        if let Some(url) = fm.containerURLForSecurityApplicationGroupIdentifier(&group_id)
+            && let Some(ns_path) = url.path()
+        {
+            let path = PathBuf::from(ns_path.to_string());
+            if tempfile::tempfile_in(&path).is_ok() {
+                return Some(path);
             }
         }
 
@@ -299,7 +412,11 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 /// stored on the filesystem alongside the rest of Warp.
 ///
 /// ## macOS
-/// The resources directory is `$APP_DIR/Contents/Resources` (e.g. `/Applications/Warp.app/Contents/Resources`).
+/// For the `.app` bundle, the resources directory is `$APP_DIR/Contents/Resources`
+/// (e.g. `/Applications/Warp.app/Contents/Resources`). For the standalone CLI build
+/// (compiled with the `standalone` feature) the binary is not inside a `.app` bundle,
+/// and its resources live in a sibling `resources` directory next to the binary
+/// (e.g. `$INSTALL_DIR/resources`), matching the Linux/Windows layout.
 ///
 /// ## Linux
 /// The resources directory is `$INSTALL_DIR/resources`, where `$INSTALL_DIR` depends on the
@@ -311,12 +428,20 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 pub fn bundled_resources_dir() -> Option<PathBuf> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            crate::macos::get_bundle_path().ok()
-                .map(|bundle_path| {
-                    PathBuf::from(bundle_path)
-                        .join("Contents")
-                        .join("Resources")
-                })
+            if cfg!(feature = "standalone") {
+                // Standalone CLI build: the binary is not inside a `.app` bundle, so
+                // its resources live in a sibling `resources` directory next to the
+                // binary (matching the Linux/Windows layout).
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|executable| std::fs::canonicalize(executable).ok())
+                    .and_then(|executable| executable.parent().map(|parent| parent.join("resources")))
+            } else {
+                // Regular `.app` bundle: resources live in `Contents/Resources`.
+                crate::macos::get_bundle_path()
+                    .ok()
+                    .map(|bundle_path| PathBuf::from(bundle_path).join("Contents").join("Resources"))
+            }
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             std::env::current_exe()
                 .ok()

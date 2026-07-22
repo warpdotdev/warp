@@ -9,7 +9,6 @@ mod login_failure_notification;
 pub mod login_slide;
 pub mod needs_sso_link_view;
 pub mod paste_auth_token_modal;
-pub mod provider_keys_modal;
 mod user_properties;
 pub use warp_server_auth::{auth_state, credentials, user, user_uid};
 #[cfg(target_family = "wasm")]
@@ -23,12 +22,13 @@ use itertools::Itertools;
 pub use login_failure_notification::LoginFailureReason;
 pub use user_uid::UserUid;
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::{report_error, report_if_error};
 use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
 use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai_assistant::requests::REQUEST_LIMIT_INFO_CACHE_KEY;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -41,7 +41,7 @@ use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::{PaletteSource, TelemetryEvent};
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::{
-    CloudPreferencesSettings, PrivacySettings, CRASH_REPORTING_ENABLED_DEFAULTS_KEY,
+    CRASH_REPORTING_ENABLED_DEFAULTS_KEY, CloudPreferencesSettings, PrivacySettings,
     TELEMETRY_ENABLED_DEFAULTS_KEY,
 };
 use crate::terminal::general_settings::GeneralSettings;
@@ -50,8 +50,8 @@ use crate::workflows::manager::WorkflowManager;
 use crate::workspace::{Workspace, WorkspaceAction};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::{
-    focus_running_window_and_show_native_modal, persistence, report_if_error,
-    send_telemetry_sync_from_app_ctx, GlobalResourceHandlesProvider,
+    GlobalResourceHandlesProvider, focus_running_window_and_show_native_modal, persistence,
+    send_telemetry_sync_from_app_ctx,
 };
 
 pub fn init(app: &mut AppContext) {
@@ -60,7 +60,6 @@ pub fn init(app: &mut AppContext) {
     auth_override_warning_body::init(app);
     login_slide::init(app);
     paste_auth_token_modal::init(app);
-    provider_keys_modal::init(app);
 }
 
 /// If the app has running processes or dirty objects, we'll show a confirmation modal before logging out.
@@ -122,18 +121,18 @@ pub fn maybe_log_out(app: &mut AppContext) {
                     return;
                 };
 
-                if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-                    if let Some(handle) = workspaces.first() {
-                        ctx.dispatch_typed_action_for_view(
-                            window_id,
-                            handle.id(),
-                            &WorkspaceAction::OpenPalette {
-                                mode: PaletteMode::Navigation,
-                                source: PaletteSource::LogOutModal,
-                                query: Some("running".to_owned()),
-                            },
-                        );
-                    }
+                if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+                    && let Some(handle) = workspaces.first()
+                {
+                    ctx.dispatch_typed_action_for_view(
+                        window_id,
+                        handle.id(),
+                        &WorkspaceAction::OpenPalette {
+                            mode: PaletteMode::Navigation,
+                            source: PaletteSource::LogOutModal,
+                            query: Some("running".to_owned()),
+                        },
+                    );
                 }
             }))
         }
@@ -184,9 +183,11 @@ pub fn maybe_log_out(app: &mut AppContext) {
             button_data,
             move |ctx| {
                 GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-                    report_if_error!(general_settings
-                        .show_warning_before_quitting
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        general_settings
+                            .show_warning_before_quitting
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             },
         );
@@ -289,7 +290,9 @@ fn remove_cloud_persisted_settings(app: &mut AppContext) {
         SettingsManager::handle(app).update(app, |settings_manager, ctx| {
             let errors = settings_manager.clear_cloud_settings_local_state(ctx);
             for e in errors {
-                log::error!("Failed to remove cloud synced setting from user defaults: {e:?}");
+                report_error!(
+                    e.context("Failed to remove cloud synced setting from user defaults")
+                );
             }
         });
     }
@@ -298,15 +301,20 @@ fn remove_cloud_persisted_settings(app: &mut AppContext) {
         .private_user_preferences()
         .remove_value(TELEMETRY_ENABLED_DEFAULTS_KEY)
     {
-        log::error!("Failed to remove Telemetry Enabled Defaults Key from user defaults: {e:?}");
+        report_error!(
+            anyhow::Error::new(e)
+                .context("Failed to remove Telemetry Enabled Defaults Key from user defaults")
+        );
     }
 
     if let Err(e) = app
         .private_user_preferences()
         .remove_value(CRASH_REPORTING_ENABLED_DEFAULTS_KEY)
     {
-        log::error!(
-            "Failed to remove Crash Reporting Enabled Defaults Key from user defaults: {e:?}"
+        report_error!(
+            anyhow::Error::new(e).context(
+                "Failed to remove Crash Reporting Enabled Defaults Key from user defaults"
+            )
         );
     }
 
@@ -314,7 +322,10 @@ fn remove_cloud_persisted_settings(app: &mut AppContext) {
         .private_user_preferences()
         .remove_value(REQUEST_LIMIT_INFO_CACHE_KEY)
     {
-        log::error!("Failed to remove Request Limit Defaults Key from user defaults: {e:?}");
+        report_error!(
+            anyhow::Error::new(e)
+                .context("Failed to remove Request Limit Defaults Key from user defaults")
+        );
     }
 
     // Reset the Privacy Settings in the login screen to default values.

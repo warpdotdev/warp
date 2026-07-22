@@ -1,0 +1,156 @@
+//! The in-progress `⋮ Warping... (Ns)` indicator row rendered between the
+//! transcript and the input box while the selected conversation is in
+//! progress — the TUI counterpart of the GUI's warping indicator — and its
+//! resting form, the completed-response summary row (`∷ 5s • 0.5 credits`).
+//!
+//! All animation state (spinner frame, shimmer phase, elapsed counter) is
+//! derived from one [`AnimationClock`] carrying the exchange's elapsed time,
+//! so it advances on cached-element repaints and survives element-tree
+//! rebuilds.
+//! The spinner and counter are [`TuiAnimated`] leaves and the shimmer label
+//! self-schedules, so the row keeps requesting repaints while it is part of
+//! the painted tree and stops as soon as the session view re-renders without
+//! it.
+
+use std::sync::LazyLock;
+use std::time::Duration;
+
+use warp::tui_export::format_credits;
+use warpui_core::AppContext;
+use warpui_core::elements::animation::{AnimationClock, Keyframe, KeyframeTimeline};
+use warpui_core::elements::shimmer_math::ShimmerConfig;
+use warpui_core::elements::tui::{
+    Modifier, TuiAnimated, TuiElement, TuiFlex, TuiShimmeringText, TuiStyle, TuiText,
+};
+
+use crate::tui_builder::TuiUiBuilder;
+
+/// The spinner's resting glyph, shown by the summary row once a response
+/// completes (`∷ 1s • …`).
+const RESTING_SPINNER: &str = "∷";
+const FAST_SPIN_FRAME_MILLIS: u64 = 80;
+
+/// The spinner choreography from the Figma prototype: a 180° rotation right,
+/// a 180° rotation back left, then a few fast full spins right, restarting.
+///
+/// Terminal cells can't rotate glyphs, so each 45° step maps to the nearest
+/// three-dot orientation glyph (`⋮ ⋰ ⋯ ⋱`, repeating every 180°). The hold
+/// durations are tuned by eye — the prototype's timings aren't
+/// machine-readable.
+static SPINNER_TIMELINE: LazyLock<KeyframeTimeline<&'static str>> = LazyLock::new(|| {
+    KeyframeTimeline::new([
+        // 180° right (clockwise), one 45° step per frame.
+        Keyframe::from_millis("⋮", 200),
+        Keyframe::from_millis("⋰", 200),
+        Keyframe::from_millis("⋯", 200),
+        Keyframe::from_millis("⋱", 200),
+        // 180° back left (counter-clockwise).
+        Keyframe::from_millis("⋮", 200),
+        Keyframe::from_millis("⋱", 200),
+        Keyframe::from_millis("⋯", 200),
+        Keyframe::from_millis("⋰", 200),
+        // Rest at vertical before the fast spins.
+        Keyframe::from_millis("⋮", 200),
+        // Fast spins right: one and a half turns (12 × 45° steps = 540°, three
+        // glyph cycles), ending back at vertical — the loop's restarting `⋮`
+        // doubles as the final step.
+        Keyframe::from_millis("⋰", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋯", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋱", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋮", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋰", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋯", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋱", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋮", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋰", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋯", FAST_SPIN_FRAME_MILLIS),
+        Keyframe::from_millis("⋱", FAST_SPIN_FRAME_MILLIS),
+    ])
+});
+
+/// Renders the shared animated TUI spinner with the supplied clock and style.
+pub(crate) fn render_spinner(clock: AnimationClock, style: TuiStyle) -> Box<dyn TuiElement> {
+    TuiAnimated::new(Duration::from_millis(FAST_SPIN_FRAME_MILLIS), move || {
+        TuiText::new(*SPINNER_TIMELINE.value_at(clock.elapsed()))
+            .with_style(style)
+            .truncate()
+            .finish()
+    })
+    .finish()
+}
+/// Renders the animated progress row for an exchange that has been running
+/// for `elapsed`.
+pub(crate) fn render_warping_indicator_row(
+    label: impl Into<String>,
+    elapsed: Duration,
+    auto_approve_control: Box<dyn TuiElement>,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    // One clock, already `elapsed` into the exchange, drives all three parts
+    // so they stay phase-locked; each repaint reads its current elapsed time.
+    let clock = AnimationClock::starting_at(elapsed);
+
+    // The spinner repaints at its timeline's shortest hold so the fast spins
+    // don't skip frames; repaint requests coalesce to the earliest deadline.
+    let spinner = render_spinner(clock, builder.warping_spinner_style());
+
+    let label = TuiShimmeringText::new(
+        label,
+        builder.warping_base_color(),
+        builder.warping_shimmer_color(),
+        ShimmerConfig::default(),
+        clock,
+    )
+    .with_modifier(Modifier::BOLD);
+
+    let counter_style = builder.muted_text_style();
+    let counter = TuiAnimated::new(Duration::from_secs(1), move || {
+        TuiText::new(format!("({}s)", clock.elapsed().as_secs()))
+            .with_style(counter_style)
+            .truncate()
+            .finish()
+    });
+
+    TuiFlex::row()
+        .child(spinner)
+        .child(TuiText::new(" ").truncate().finish())
+        .child(label.finish())
+        .child(TuiText::new(" ").truncate().finish())
+        .child(counter.finish())
+        .flex_child(TuiText::new("").truncate().finish())
+        .child(auto_approve_control)
+        .child(
+            TuiText::from_spans([
+                ("  Ctrl + C".to_owned(), builder.primary_text_style()),
+                (" to stop".to_owned(), builder.muted_text_style()),
+            ])
+            .truncate()
+            .finish(),
+        )
+        .finish()
+}
+
+/// Renders the completed-response summary row shown in the indicator's slot
+/// once the response finishes: the resting glyph, the response's wall-to-wall
+/// duration, and the credits it spent (omitted until any are reported). The
+/// row is static — no animation, no repaint scheduling.
+pub(crate) fn render_response_summary(
+    duration: Duration,
+    block_credits: Option<f32>,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    let mut text = format!("{RESTING_SPINNER} {}s", duration.as_secs());
+    if let Some(credits) = block_credits.filter(|credits| *credits > 0.0) {
+        text.push_str(&format!(" • {}", format_credits(credits)));
+    }
+    TuiText::new(text)
+        .with_style(builder.muted_text_style())
+        .truncate()
+        .finish()
+}
+
+#[cfg(test)]
+#[path = "warping_indicator_tests.rs"]
+mod tests;

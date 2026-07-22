@@ -4,10 +4,11 @@
 #![deny(clippy::assertions_on_constants)]
 
 use warp_multi_agent_api as api;
-use warpui::integration::{AssertionCallback, AssertionOutcome};
-use warpui::{integration_assert, EntityId, SingletonEntity};
+use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
+use warpui::{EntityId, SingletonEntity as _, integration_assert};
 
 use super::llm_judge::{LLMJudge, LLMJudgeConfig};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -15,8 +16,8 @@ use crate::ai::agent::{
     AIAgentOutputMessageType, AIAgentOutputStatus, AIAgentTextSection, FileEdit,
     FinishedAIAgentOutput, ReadFilesRequest, TodoOperation,
 };
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::integration_testing::view_getters::terminal_view;
-use crate::BlocklistAIHistoryModel;
 
 type TextAssertion = Box<dyn Fn(&str) -> bool + 'static>;
 type ActionAssertion = Box<dyn Fn(&AIAgentActionType) -> bool + 'static>;
@@ -390,12 +391,11 @@ pub fn assert_no_requested_command(
                 };
                 for action in output.get().actions() {
                     if let AIAgentActionType::RequestCommandOutput { command, .. } = &action.action
+                        && forbidden_predicate(command)
                     {
-                        if forbidden_predicate(command) {
-                            return AssertionOutcome::immediate_failure(format!(
-                                "Found forbidden command: {command}"
-                            ));
-                        }
+                        return AssertionOutcome::immediate_failure(format!(
+                            "Found forbidden command: {command}"
+                        ));
                     }
                 }
             }
@@ -522,7 +522,7 @@ pub fn assert_no_suggested_prompt() -> AssertionCallback {
         let terminal_view = terminal_view(app, window_id, 0, 0);
         BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
             let mut exchanges =
-                history_model.all_live_root_task_exchanges_for_terminal_view(terminal_view.id());
+                history_model.all_live_root_task_exchanges_for_terminal_surface(terminal_view.id());
 
             if exchanges.any(|exchange| {
                 let AIAgentOutputStatus::Finished { finished_output } = &exchange.output_status
@@ -616,15 +616,14 @@ pub fn assert_task_is_blocked(conversation_target: ConversationTarget) -> Assert
 fn check_for_api_error_in_latest_exchange(
     conversation: &AIConversation,
 ) -> Option<AssertionOutcome> {
-    if let Some(latest_exchange) = conversation.latest_exchange() {
-        if let AIAgentOutputStatus::Finished {
+    if let Some(latest_exchange) = conversation.latest_exchange()
+        && let AIAgentOutputStatus::Finished {
             finished_output: FinishedAIAgentOutput::Error { error, .. },
         } = &latest_exchange.output_status
-        {
-            return Some(AssertionOutcome::immediate_failure(format!(
-                "Conversation ended with API error: {error:?}"
-            )));
-        }
+    {
+        return Some(AssertionOutcome::immediate_failure(format!(
+            "Conversation ended with API error: {error:?}"
+        )));
     }
     None
 }
@@ -647,7 +646,7 @@ fn get_conversation(
         ConversationTarget::Only => {
             // Get all conversations (including passive ones)
             let mut conversations: Vec<_> = history_model
-                .all_live_conversations_for_terminal_view(terminal_view_id)
+                .all_live_conversations_for_terminal_surface(terminal_view_id)
                 .collect();
             match conversations.len() {
                 1 => conversations.pop().ok_or(AssertionOutcome::failure(
@@ -770,6 +769,61 @@ pub fn assert_llm_judge_whole_conversation_passes(
     })
 }
 
+/// Passes the text of the final exchange in the active conversation to `f` and
+/// returns `f`'s result. Returns an immediate failure if no exchanges are found
+/// or the output cannot be retrieved. Intended for eval assertion callbacks
+/// that need to inspect the agent's last message without accessing the
+/// conversation model directly.
+pub fn assert_on_final_exchange_text(
+    f: impl Fn(&str) -> AssertionOutcome + 'static,
+) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view = terminal_view(app, window_id, 0, 0);
+        BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
+            let exchange_count = get_exchange_count(terminal_view.id(), history_model);
+            if exchange_count == 0 {
+                return AssertionOutcome::immediate_failure(
+                    "No exchanges found in conversation".to_owned(),
+                );
+            }
+            let (text, _) = match get_exchange_output(
+                ConversationTarget::Active,
+                terminal_view.id(),
+                exchange_count - 1,
+                history_model,
+            ) {
+                Ok(output) => output,
+                Err(outcome) => return outcome,
+            };
+            f(&text)
+        })
+    })
+}
+
+/// Returns a test step that asserts `model` is a valid agent-mode LLM ID.
+/// Using a step rather than panicking inside `set_preferred_agent_mode_llm`
+/// keeps a misconfigured judge run inspectable (the harness can still export
+/// debug output) rather than aborting with a panic.
+pub fn validate_agent_mode_llm_step(model: &'static str) -> TestStep {
+    let llm_id = LLMId::from(model);
+    TestStep::new(&format!("Validate judge model '{model}'")).add_named_assertion(
+        "Judge model is an available agent-mode LLM",
+        move |app, _window_id| {
+            let llm_id = llm_id.clone();
+            let is_available = LLMPreferences::handle(app).read(app, |llm_preferences, _| {
+                llm_preferences.is_available_agent_mode_llm(&llm_id)
+            });
+            if is_available {
+                AssertionOutcome::Success
+            } else {
+                AssertionOutcome::immediate_failure(format!(
+                    "Judge model '{llm_id}' is not a valid agent mode LLM"
+                ))
+            }
+        },
+    )
+}
+
 /// Assert that the target conversation contains no actions.
 pub fn assert_conversation_contains_no_actions(
     conversation_target: ConversationTarget,
@@ -787,13 +841,11 @@ pub fn assert_conversation_contains_no_actions(
                 if let AIAgentOutputStatus::Finished {
                     finished_output: FinishedAIAgentOutput::Success { output },
                 } = &exchange.output_status
+                    && output.get().actions().next().is_some()
                 {
-                    if output.get().actions().next().is_some() {
-                        return AssertionOutcome::immediate_failure(
-                            "Expected no actions in conversation, but found at least one"
-                                .to_owned(),
-                        );
-                    }
+                    return AssertionOutcome::immediate_failure(
+                        "Expected no actions in conversation, but found at least one".to_owned(),
+                    );
                 }
             }
 
@@ -1096,13 +1148,54 @@ pub fn assert_conversation_was_summarized() -> AssertionCallback {
     })
 }
 
+/// Assert that the active conversation did not use prior-conversation
+/// context. From the LLM's perspective this is the `search_conversation_history`
+/// tool; on the client it materializes as a `FetchConversation` action followed
+/// by regular file tools pointed at `/tmp/warp_conversation_search`.
+pub fn assert_no_prior_conversation_context_usage() -> AssertionCallback {
+    Box::new(|app, window_id| {
+        let terminal_view = terminal_view(app, window_id, 0, 0);
+        BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
+            let Some(conversation) = history_model.active_conversation(terminal_view.id()) else {
+                return AssertionOutcome::failure("No active conversation".to_owned());
+            };
+
+            for (exchange_index, exchange) in conversation.all_exchanges().into_iter().enumerate() {
+                let AIAgentOutputStatus::Finished {
+                    finished_output: FinishedAIAgentOutput::Success { output },
+                } = &exchange.output_status
+                else {
+                    continue;
+                };
+
+                for action in output.get().actions() {
+                    if matches!(action.action, AIAgentActionType::FetchConversation { .. }) {
+                        return AssertionOutcome::immediate_failure(format!(
+                            "Implementation conversation used prior-conversation context via search_conversation_history in exchange {exchange_index}: {action}"
+                        ));
+                    }
+
+                    let action_text = action.to_string();
+                    if action_text.contains("/tmp/warp_conversation_search") {
+                        return AssertionOutcome::immediate_failure(format!(
+                            "Implementation conversation read materialized prior-conversation context in exchange {exchange_index}: {action_text}"
+                        ));
+                    }
+                }
+            }
+
+            AssertionOutcome::Success
+        })
+    })
+}
+
 /// Asserts that no exchanges exist in the history model (which also means no conversations).
 pub fn assert_no_exchanges() -> AssertionCallback {
     Box::new(|app, window_id| {
         let terminal_view = terminal_view(app, window_id, 0, 0);
         BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
             let exchange_count = history_model
-                .all_live_root_task_exchanges_for_terminal_view(terminal_view.id())
+                .all_live_root_task_exchanges_for_terminal_surface(terminal_view.id())
                 .count();
 
             if exchange_count == 0 {
@@ -1137,13 +1230,13 @@ pub fn assert_no_md_file_edits() -> AssertionCallback {
                         {
                             // Check if any file edit is for a .md file
                             for file_edit in file_edits {
-                                if let Some(file_path) = file_edit.file() {
-                                    if file_path.ends_with(".md") {
-                                        return AssertionOutcome::immediate_failure(format!(
-                                            "Found .md file edit request: {}",
-                                            file_path
-                                        ));
-                                    }
+                                if let Some(file_path) = file_edit.file()
+                                    && file_path.ends_with(".md")
+                                {
+                                    return AssertionOutcome::immediate_failure(format!(
+                                        "Found .md file edit request: {}",
+                                        file_path
+                                    ));
                                 }
                             }
                         }

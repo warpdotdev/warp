@@ -637,6 +637,18 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
             command ssh $argv
             return
         end
+
+        # If the user's SSH config sets a RemoteCommand for this destination,
+        # OpenSSH refuses to also run our bootstrap as a command-line remote
+        # command, aborting with "Cannot execute command-line and remote
+        # command." Warpification is structurally impossible there, so fall back
+        # to plain SSH. `ssh -G` prints `remotecommand none` when unset.
+        set -l user_remote_command (command ssh -G $argv 2>/dev/null | command sed -n 's/^remotecommand //p')
+        if test -n "$user_remote_command"; and test "$user_remote_command" != "none"
+            command ssh $argv
+            return
+        end
+
         # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
         # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
         # and use printf to convert back to plaintext

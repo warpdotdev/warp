@@ -1,5 +1,6 @@
 use std::io;
 
+use base64::Engine;
 use tink_proto::KeysetInfo;
 use tink_proto::keyset_info::KeyInfo;
 
@@ -137,4 +138,53 @@ fn test_encrypt_decrypt() {
 fn read_keyset_json(json: &str) -> tink_core::keyset::Handle {
     let mut reader = tink_core::keyset::JsonReader::new(io::Cursor::new(json.as_bytes()));
     tink_core::keyset::insecure::read(&mut reader).expect("failed to read keyset")
+}
+
+/// BYO credential sealing round-trip via [`UploadKey::seal_with_context`].
+///
+/// Pins the exact context format shared by the WASM producer
+/// (`managed_secrets_wasm::encrypt_byo_first_party`) and the Go consumer
+/// (`byo.UnsealCredential`): `byo:1:TEAM:<owner_uid>:first_party:provider=openai`.
+/// Proves the new seam reuses the same Tink/HPKE primitive (the sealed blob
+/// round-trips) and that a mismatched context fails to unseal.
+#[test]
+fn test_seal_with_context_byo_roundtrip() {
+    super::init();
+
+    let public_key = read_keyset_json(TEST_PUBLIC_KEY);
+    let private_key = read_keyset_json(TEST_PRIVATE_KEY);
+
+    let upload_key = UploadKey {
+        encrypt: tink_hybrid::new_encrypt(&public_key).expect("failed to create encrypt primitive"),
+        public_key,
+    };
+
+    let owner_uid = "t_abc";
+    let context = format!("byo:1:TEAM:{owner_uid}:first_party:provider=openai");
+    assert_eq!(context, "byo:1:TEAM:t_abc:first_party:provider=openai");
+
+    let plaintext = br#"{"api_key":"sk-test"}"#;
+    let sealed = upload_key
+        .seal_with_context(context.as_bytes(), plaintext)
+        .expect("failed to seal BYO credential");
+
+    let ciphertext = base64::prelude::BASE64_STANDARD
+        .decode(&sealed)
+        .expect("sealed blob is not valid base64");
+
+    let decrypt =
+        tink_hybrid::new_decrypt(&private_key).expect("failed to create decrypt primitive");
+    let decrypted = decrypt
+        .decrypt(&ciphertext, context.as_bytes())
+        .expect("failed to unseal BYO credential");
+    assert_eq!(decrypted, plaintext);
+
+    // A mismatched context (e.g. wrong provider) must fail to unseal.
+    let wrong_context = format!("byo:1:TEAM:{owner_uid}:first_party:provider=anthropic");
+    assert!(
+        decrypt
+            .decrypt(&ciphertext, wrong_context.as_bytes())
+            .is_err(),
+        "unseal must fail when the context does not match"
+    );
 }

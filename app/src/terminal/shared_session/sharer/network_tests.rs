@@ -12,22 +12,23 @@ use session_sharing_protocol::sharer::{
     DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
 };
 use warp_server_client::iap::IapManager;
+use warpui::r#async::FutureExt as _;
 use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
 use super::{
-    startup_max_attempts, Network, PtyBytesBatchStatus, Stage, StartupFailure, StartupRetryState,
-    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
+    Stage, StartupFailure, StartupRetryState, startup_max_attempts,
 };
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::editor::ReplicaId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::terminal::shared_session::{
-    SharedSessionScrollbackType, SharedSessionSource, MAX_BYTES_SHAREABLE,
-};
 use crate::terminal::TerminalModel;
+use crate::terminal::shared_session::{
+    MAX_BYTES_SHAREABLE, SharedSessionScrollbackType, SharedSessionSource,
+};
 use crate::test_util::assert_eventually;
 
 fn is_upstream_message_pty_bytes_read(
@@ -67,16 +68,16 @@ fn test_startup_failure_retryability() {
         .is_retryable()
     );
 
-    assert!(!StartupFailure::ServerRejected(
-        FailedToInitializeSessionReason::ScrollbackTooLarge {}
-    )
-    .is_retryable());
-    assert!(!StartupFailure::ServerRejected(
-        FailedToInitializeSessionReason::NoUserQuotaRemaining {
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::ScrollbackTooLarge {})
+            .is_retryable()
+    );
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::NoUserQuotaRemaining {
             quota_type: QuotaType::SessionsCreated,
-        }
-    )
-    .is_retryable());
+        })
+        .is_retryable()
+    );
     assert!(
         !StartupFailure::ServerRejected(FailedToInitializeSessionReason::UserNotFound)
             .is_retryable()
@@ -379,20 +380,29 @@ fn test_handle_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
+        // The test executor uses real (async_io) timers with no mock clock, so this
+        // test relies on the batch timer actually firing. Under test builds
+        // PTY_READS_BATCH_THRESHOLD is larger than the ~50ms production value so the
+        // transient `Batching` state below is reliably observable instead of racing the
+        // timer under coarse scheduler granularity (which flaked on Windows CI).
         assert_eventually!(
+            200 =>
             network.read(&app, |network, _ctx| {
                 matches!(&network.pty_bytes_batch_status, PtyBytesBatchStatus::Batching { accumulated, .. } if accumulated == b"a" )
             }),
             "Batching status should be batching"
         );
 
-        // When the timer is done, the accumulated event should be sent to the server.
-        assert_eventually!(
-            ws_proxy_rx.len() == 1,
-            "Accumulated event should be sent to the server"
-        );
-
-        let item = ws_proxy_rx.recv().await;
+        // When the batch timer fires, the accumulated event is flushed to the server.
+        // Await the flush directly rather than polling a fixed tick budget, but bound the
+        // wait (generously, relative to the test-build batch threshold) so a regression in
+        // the timer/flush path fails this test promptly instead of hanging until the CI
+        // timeout.
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(PTY_READS_BATCH_THRESHOLD * 20)
+            .await
+            .expect("Accumulated event should be flushed before the timeout");
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
             0,
@@ -653,6 +663,7 @@ fn test_messages_are_buffered_while_reconnecting() {
             IapManager::new(
                 None,
                 Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+                None,
                 ctx,
             )
         });

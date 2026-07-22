@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::diff_validation::DiffDelta;
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 // TODO(vorporeal): Remove this re-export at some point.
 pub use ai::document::{AIDocumentId, AIDocumentVersion};
 use chrono::{DateTime, Local, Utc};
@@ -14,21 +15,21 @@ use itertools::Itertools;
 use uuid::Uuid;
 use warp_editor::model::RichTextEditorModel;
 use warp_editor::render::model::RichTextStyles;
+use warp_errors::report_error;
 use warp_multi_agent_api as maa_api;
 use warpui::color::ColorU;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentActionId;
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::appearance::Appearance;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{CloudObject, CloudObjectEventEntrypoint, Owner};
-use crate::drive::folders::CloudFolder;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::folders::CloudFolder;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::notebooks::editor::model::{
     FileLinkResolutionContext, NotebooksEditorModel, RichTextEditorModelEvent,
@@ -42,9 +43,9 @@ use crate::server::cloud_objects::update_manager::{
 };
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::settings::FontSettings;
-use crate::terminal::model::session::active_session::ActiveSession;
-use crate::terminal::model::session::Session;
 use crate::terminal::TerminalView;
+use crate::terminal::model::session::Session;
+use crate::terminal::model::session::active_session::ActiveSession;
 use crate::throttle::throttle;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -227,7 +228,7 @@ impl AIDocumentModel {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test() -> Self {
         let (save_tx, _save_rx) = async_channel::unbounded();
         Self {
@@ -323,8 +324,9 @@ impl AIDocumentModel {
                 }
                 AIDocumentSaveStatus::NotSaved => {
                     if !self.sync_to_warp_drive(document_id, ctx) {
-                        log::error!(
-                            "Failed to publish plan document {document_id} to Warp Drive before child-agent launch."
+                        report_error!(
+                            "Failed to publish plan document to Warp Drive before child-agent launch.",
+                            extra: { "document_id" => %document_id }
                         );
                     } else if !self.get_document_save_status(&document_id).is_saved() {
                         awaiting_server_backing.push(document_id);
@@ -454,7 +456,7 @@ impl AIDocumentModel {
         };
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
             let terminal_view_id =
-                history_model.terminal_view_id_for_conversation(&conversation_id);
+                history_model.terminal_surface_id_for_conversation(&conversation_id);
             if let Some(conversation) = history_model.conversation_mut(&conversation_id) {
                 conversation.update_plan_notebook_uid(
                     document_id,
@@ -964,7 +966,9 @@ impl AIDocumentModel {
             return;
         }
 
-        log::info!("Applying persisted SQLite content for document {id} (content differs from conversation restoration)");
+        log::info!(
+            "Applying persisted SQLite content for document {id} (content differs from conversation restoration)"
+        );
         doc.editor.update(ctx, |editor, editor_ctx| {
             editor.reset_with_markdown(persisted_content, editor_ctx);
         });
@@ -1175,7 +1179,10 @@ impl AIDocumentModel {
         if let Err(e) = self.save_tx.try_send(AIDocumentSaveRequest {
             document_id: *document_id,
         }) {
-            log::error!("Error enqueueing content save for {}: {}", document_id, e);
+            report_error!(
+                anyhow::Error::new(e).context("Error enqueueing content save"),
+                extra: { "document_id" => %document_id }
+            );
         }
     }
 
@@ -1217,7 +1224,10 @@ impl AIDocumentModel {
             title: doc.title.clone(),
         };
         if let Err(err) = sender.try_send(event) {
-            log::error!("Error persisting AI document content for {id}: {err}");
+            report_error!(
+                anyhow::Error::new(err).context("Error persisting AI document content"),
+                extra: { "id" => %id }
+            );
         }
     }
 

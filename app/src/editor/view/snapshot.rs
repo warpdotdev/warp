@@ -9,16 +9,17 @@ use std::time::Duration;
 use anyhow::Result;
 use instant::Instant;
 use parking_lot::Mutex;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use rayon::prelude::*;
 use string_offset::ByteOffset;
 use warp_completer::completer::Description;
+use warp_errors::report_error;
 use warpui::fonts::{Cache as FontCache, FamilyId, Properties};
 use warpui::platform::LineStyle;
 use warpui::text::point::Point;
 use warpui::text_layout::{
-    self, default_compute_baseline_position_fn, ClipConfig, ComputeBaselinePositionFn, LayoutCache,
-    StyleAndFont, TextAlignment, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
+    self, ClipConfig, ComputeBaselinePositionFn, DEFAULT_TOP_BOTTOM_RATIO, LayoutCache,
+    StyleAndFont, TextAlignment, TextStyle, default_compute_baseline_position_fn,
 };
 use warpui::{AppContext, EntityId, ModelHandle};
 
@@ -415,13 +416,13 @@ impl ViewSnapshot {
                 {
                     Some(point) => point.row() as f32 + top_section_height_lines,
                     None => {
-                        log::error!("Failed to get softwrapped point from display point");
+                        report_error!("Failed to get softwrapped point from display point");
                         return false;
                     }
                 }
             }
             Err(err) => {
-                log::error!("Error trying to turn selection into display point {err:?}");
+                report_error!(err.context("Error trying to turn selection into display point"));
                 return false;
             }
         };
@@ -436,13 +437,13 @@ impl ViewSnapshot {
                 {
                     Some(point) => point.row() as f32 + 1.0 + top_section_height_lines,
                     None => {
-                        log::error!("Failed to get softwrapped point from display point");
+                        report_error!("Failed to get softwrapped point from display point");
                         return false;
                     }
                 }
             }
             Err(err) => {
-                log::error!("Error trying to turn selection into display point {err:?}");
+                report_error!(err.context("Error trying to turn selection into display point"));
                 return false;
             }
         };
@@ -626,7 +627,7 @@ impl ViewSnapshot {
     pub fn vim_visual_tails<'a>(
         &self,
         app: &'a AppContext,
-    ) -> impl Iterator<Item = DisplayPoint> + 'a {
+    ) -> impl Iterator<Item = DisplayPoint> + 'a + use<'a> {
         let editor_model = self.editor_model.as_ref(app);
         let map = editor_model.display_map(app);
         editor_model

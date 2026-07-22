@@ -31,15 +31,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use command::r#async::Command;
 use command::Stdio;
+use command::r#async::Command;
 use futures::future::join_all;
 use tokio::fs::{self as tokio_fs, OpenOptions};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{mpsc, oneshot};
-use warp_core::report_error;
-use warpui::r#async::executor::Background;
+use warp_errors::report_error;
 use warpui::r#async::FutureExt as _;
+use warpui::r#async::executor::Background;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -48,7 +48,7 @@ use crate::server::server_api::ai::{
     UploadLocalHandoffSnapshotRequest,
 };
 use crate::server::server_api::harness_support::{
-    upload_to_target, HarnessSupportClient, SnapshotFileInfo, SnapshotUploadRequest, UploadTarget,
+    HarnessSupportClient, SnapshotFileInfo, SnapshotUploadRequest, UploadTarget, upload_to_target,
 };
 
 /// Default path of the declarations file when neither the env var override nor a task ID
@@ -145,9 +145,9 @@ pub(super) async fn run_declarations_script(
     };
     let script_path = PathBuf::from(script_path);
     if !script_path.exists() {
-        log::error!(
-            "Snapshot declarations script not found at '{}'; skipping (task {task_id})",
-            script_path.display()
+        report_error!(
+            "Snapshot declarations script not found; skipping",
+            extra: { "script_path" => %script_path.display(), "task_id" => %task_id }
         );
         return;
     }
@@ -173,17 +173,20 @@ pub(super) async fn run_declarations_script(
     let output = match command.output().with_timeout(script_timeout).await {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            log::error!(
-                "Failed to spawn snapshot declarations script '{}': {e:#} (task {task_id})",
-                script_path.display()
+            report_error!(
+                anyhow::Error::new(e).context("Failed to spawn snapshot declarations script"),
+                extra: { "script_path" => %script_path.display(), "task_id" => %task_id }
             );
             return;
         }
         Err(_) => {
-            log::error!(
-                "Snapshot declarations script '{}' timed out after {:?} (task {task_id})",
-                script_path.display(),
-                script_timeout
+            report_error!(
+                "Snapshot declarations script timed out",
+                extra: {
+                    "script_path" => %script_path.display(),
+                    "timeout" => ?script_timeout,
+                    "task_id" => %task_id
+                }
             );
             return;
         }
@@ -191,10 +194,14 @@ pub(super) async fn run_declarations_script(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        log::error!(
-            "Snapshot declarations script '{}' exited with {}: {stderr} (task {task_id})",
-            script_path.display(),
-            output.status
+        log::error!("Snapshot declarations script stderr: {stderr}");
+        report_error!(
+            "Snapshot declarations script exited with non-zero status",
+            extra: {
+                "script_path" => %script_path.display(),
+                "status" => %output.status,
+                "task_id" => %task_id
+            }
         );
     }
 }
@@ -851,11 +858,10 @@ pub(crate) async fn upload_snapshot_for_handoff(
         // Without the manifest the cloud agent has no catalogue to rehydrate from, even
         // when individual blobs landed. Alert on-call and refuse the token so we don't
         // silently spawn a cloud agent with no recoverable state.
-        report_error!(anyhow::anyhow!(
-            "Handoff snapshot manifest failed to upload (blobs: {}/{}); cloud agent will start with no rehydration content",
-            summary.uploaded,
-            summary.total,
-        ));
+        report_error!(
+            "Handoff snapshot manifest failed to upload; cloud agent will start with no rehydration content",
+            extra: { "uploaded" => %summary.uploaded, "total" => %summary.total }
+        );
         return Ok(None);
     }
 
@@ -1048,8 +1054,10 @@ async fn upload_prepared_snapshot_files(
         Ok(b) => b,
         Err(e) => {
             // Pipeline-abort: route through report_error! so Sentry captures it.
-            report_error!(anyhow::Error::from(e)
-                .context("Failed to serialize snapshot manifest; skipping upload"));
+            report_error!(
+                anyhow::Error::from(e)
+                    .context("Failed to serialize snapshot manifest; skipping upload")
+            );
             return None;
         }
     };
@@ -1281,10 +1289,9 @@ fn fold_upload_results(
                     repo_entry.error = entry.error.clone();
                 }
                 EntryStatus::GatherFailed | EntryStatus::ReadFailed => {
-                    log::error!(
-                        "fold_upload_results: unexpected pre-upload status {:?} for repo patch '{}'",
-                        entry.status,
-                        entry.label
+                    report_error!(
+                        "fold_upload_results: unexpected pre-upload status for repo patch",
+                        extra: { "status" => ?entry.status, "label" => %entry.label }
                     );
                 }
             }
@@ -1308,10 +1315,9 @@ fn fold_upload_results(
                     file_entry.error = entry.error.clone();
                 }
                 EntryStatus::GatherFailed | EntryStatus::ReadFailed => {
-                    log::error!(
-                        "fold_upload_results: unexpected pre-upload status {:?} for file '{}'",
-                        entry.status,
-                        entry.label
+                    report_error!(
+                        "fold_upload_results: unexpected pre-upload status for file",
+                        extra: { "status" => ?entry.status, "label" => %entry.label }
                     );
                 }
             }
@@ -1501,11 +1507,7 @@ async fn git_output_string(repo_dir: &Path, args: &[&str]) -> Option<String> {
     let output = git_output_bytes(repo_dir, args, &[0]).await.ok()?;
     let value = String::from_utf8(output).ok()?;
     let value = value.trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn sanitize_filename_component(value: &str) -> String {

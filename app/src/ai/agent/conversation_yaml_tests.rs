@@ -21,6 +21,7 @@ fn list_dir_sorted(dir: &Path) -> Vec<String> {
 
 fn make_user_query_message(id: &str, task_id: &str, query: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),
@@ -44,6 +45,7 @@ fn make_tool_call_message(
     tool: api::message::tool_call::Tool,
 ) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),
@@ -64,6 +66,7 @@ fn make_tool_call_result_message(
     result: api::message::tool_call_result::Result,
 ) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),

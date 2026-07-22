@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use enum_iterator::{cardinality, Sequence};
+use enum_iterator::{Sequence, cardinality};
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -113,6 +113,11 @@ pub enum FeatureFlag {
     /// Enables the settings file feature.
     SettingsFile,
 
+    /// Stores GUI execution profiles in the shared settings collection.
+    ///
+    /// TUI builds use the collection on every channel independently of this flag.
+    FileBackedExecutionProfiles,
+
     /// Enables rect selection.
     RectSelection,
 
@@ -181,6 +186,10 @@ pub enum FeatureFlag {
 
     /// Maximizes data in flat storage to reduce memory usage.
     MaximizeFlatStorage,
+
+    /// Recognizes the OSC 8 hyperlink escape sequence and makes the
+    /// linked text Cmd+click-able.
+    OscHyperlinks,
 
     ImeMarkedText,
 
@@ -361,9 +370,6 @@ pub enum FeatureFlag {
     /// Enables multiple agent profiles in settings for managing different AI agent configurations.
     MultiProfile,
 
-    /// Enables the /pr-comments slash command.
-    PRCommentsSlashCommand,
-
     /// Enables displaying imported PR review comments in the blocklist.
     PRCommentsV2,
 
@@ -501,6 +507,10 @@ pub enum FeatureFlag {
     /// Enables rendering markdown tables in notebooks.
     MarkdownTables,
 
+    /// Renders `.ipynb` (Jupyter) files as a formatted, read-only notebook in
+    /// Warp's notebook viewer instead of showing the raw JSON in the code editor.
+    JupyterNotebookRendering,
+
     /// Enables rendering markdown tables inline in AI block list responses.
     BlocklistMarkdownTableRendering,
     /// Enables rendering markdown images inline in AI block list responses.
@@ -574,6 +584,13 @@ pub enum FeatureFlag {
 
     /// Enables computer use functionality in local clients.
     LocalComputerUse,
+
+    /// Enables background, per-window computer use: driving a specific window directly without
+    /// raising it or moving the cursor.  Currently only supported on macOS.
+    BackgroundComputerUse,
+
+    /// Enables video recording of computer-use sessions for cloud agents.
+    VideoRecording,
 
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
@@ -689,24 +706,10 @@ pub enum FeatureFlag {
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
 
-    /// Gates client-side support for the `orchestrate` tool, which batches
-    /// multiple child agents into a single tool call with an inline
-    /// confirmation card. When enabled, the client advertises
-    /// `RequestSettings.SupportsOrchestrate = true` and the server's
-    /// orchestrate tool replaces `start_agent` / `start_agent_v2` for
-    /// orchestration-capable conversations. Layered on top of
-    /// `OrchestrationV2`; has no effect when v2 is off.
-    RunAgentsTool,
-
-    /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
-    /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
-    /// viewer-mode entry. Off by default; flipping it on activates the
-    /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
-    /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
-    OrchestrationViewerStreamer,
-
-    /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
-    OwnerOrchestrationAncestorStreamer,
+    /// On `wait_for_events`, confirms parent status against the server and
+    /// registers an orchestrator for the owner-side ancestor stream so it
+    /// receives events for children created out-of-band (Oz CLI / web API).
+    WaitForEventsParentRegistration,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -800,11 +803,6 @@ pub enum FeatureFlag {
     /// When enabled, solo users (not on a team) can use BYO API keys.
     SoloUserByok,
 
-    /// Enables the Custom Inference settings UI for adding user-provided third-party / OpenAI-compatible inference endpoints.
-    CustomInferenceEndpoints,
-    /// Enables Custom Inference endpoints for enterprise users.
-    CustomInferenceEndpointsEnterprise,
-
     /// Replaces the in-block warpification banner with a warpify footer.
     WarpifyFooter,
 
@@ -885,13 +883,43 @@ pub enum FeatureFlag {
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
 
+    /// Gates NLD input classification matching the buffer against agent
+    /// prompt history (in addition to shell command history). Still in
+    /// development; currently disabled on all channels as a mitigation for
+    /// misclassification bug reports (see PR #12586). Re-enable via
+    /// `DOGFOOD_FLAGS` once the underlying issues are resolved.
+    NldPromptHistoryMatch,
+
     /// Gates the custom model router feature, which allows users to define
     /// their own model routers.
     CustomModelRouters,
 
+    /// Enables state-mutating recovery for abnormal terminal lifecycle sequences.
+    TerminalLifecycleRecovery,
+
     /// Shows a warning in the agent view when the active conversation's
     /// provider-side prompt cache has expired.
     PromptCacheExpiryWarning,
+
+    /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
+    /// compute (docker image, instance shape, setup commands) by runner ID.
+    CloudRunners,
+
+    /// Renders MCP tool-call request and response JSON as an interactive
+    /// collapsible tree with typed colors and per-row Copy JSON, instead of
+    /// a flat pretty-printed blob.
+    McpJsonTreeView,
+
+    /// Renders supported solid box-drawing characters (`U+2500..=U+257F`)
+    /// procedurally as cell-filling rectangles instead of from the font,
+    /// eliminating seams between adjacent box-drawing cells in the terminal.
+    BoxDrawingGlyphs,
+
+    /// Enables cloud agent runner selection: the `oz runner` CRUD commands
+    /// for managing runners via the CLI, and the Runner dropdown in the
+    /// orchestration (`run_agents`) confirmation card and plan-card config
+    /// block for choosing a runner when starting remote child agents.
+    CloudAgentRunners,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -938,6 +966,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::FileGlobV2Warnings,
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
+    FeatureFlag::VideoRecording,
     FeatureFlag::OzLaunchModal,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
@@ -957,19 +986,21 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
-    FeatureFlag::CustomModelRouters,
+    FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
-    FeatureFlag::PinnedTabs,
+    FeatureFlag::FileBackedExecutionProfiles,
+    FeatureFlag::BackgroundComputerUse,
     FeatureFlag::ContextWindowUsageBreakdown,
+    FeatureFlag::JupyterNotebookRendering,
+    FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::McpJsonTreeView,
+    FeatureFlag::GeminiEnterprise,
+    FeatureFlag::BoxDrawingGlyphs,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    #[cfg(target_os = "macos")]
-    FeatureFlag::GroupedTabs,
-    FeatureFlag::AsyncFind,
-];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::OscHyperlinks];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1076,10 +1107,6 @@ impl FeatureFlag {
             ),
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
-            ),
-            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
-            AsyncFind => Some(
-                "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
             ),
             _ => None,
         }

@@ -1,10 +1,10 @@
 use warp_core::context_flag::ContextFlag;
+use warpui::AppContext;
 use warpui::keymap::{
     BindingDescription, ContextPredicate, EditableBinding, FixedBinding, PerPlatformKeystroke,
 };
 use warpui::platform::OperatingSystem;
 use warpui::units::IntoLines;
-use warpui::AppContext;
 
 use super::{
     AgentOnboardingVersion, AskAISource, ContextMenuAction, OnboardingIntention, OnboardingVersion,
@@ -18,6 +18,7 @@ use crate::channel::{Channel, ChannelState};
 use crate::features::FeatureFlag;
 use crate::server::telemetry::{InteractionSource, ToggleBlockFilterSource};
 use crate::settings_view::flags;
+use crate::terminal::TerminalView;
 use crate::terminal::input::{
     SET_INPUT_MODE_AGENT_ACTION_NAME, SET_INPUT_MODE_TERMINAL_ACTION_NAME,
 };
@@ -29,9 +30,8 @@ use crate::terminal::view::{
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY,
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY,
 };
-use crate::terminal::TerminalView;
 use crate::util::bindings;
-use crate::util::bindings::{cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
+use crate::util::bindings::{CustomAction, cmd_or_ctrl_shift, is_binding_pty_compliant};
 
 pub const TOGGLE_BLOCK_FILTER_KEYBINDING: &str =
     "terminal:toggle_block_filter_on_selected_or_last_block";
@@ -840,26 +840,7 @@ pub fn init(app: &mut AppContext) {
     }
 
     app.register_editable_bindings([
-        EditableBinding::new(
-            "terminal:onboarding_flow",
-            "Setup Guide",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
-        )
-        .with_context_predicate(
-            id!("Terminal") & id!(SharedSessionStatus::NotShared.as_keymap_context()),
-        ),
         // UniversalInput callout debug bindings
-        EditableBinding::new(
-            "terminal:agent_onboarding_flow_legacy_terminal",
-            "[Debug] Onboarding Callout: WarpInput - Terminal",
-            TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
-        .with_context_predicate(
-            id!("Terminal") & id!(SharedSessionStatus::NotShared.as_keymap_context()),
-        ),
         EditableBinding::new(
             "terminal:agent_onboarding_flow_universal_input_project",
             "[Debug] Onboarding Callout: WarpInput - Project",
@@ -1017,29 +998,6 @@ pub fn init(app: &mut AppContext) {
             FeatureFlag::FullSourceCodeEmbedding.is_enabled()
                 && ChannelState::enable_debug_features()
         }),
-    ]);
-
-    app.register_fixed_bindings(vec![
-        FixedBinding::new(
-            "cmdorctrl-1",
-            TerminalAction::SelectAgenticSuggestion(1),
-            id!("Terminal") & id!("OnboardingAgenticSuggestionsBlock"),
-        ),
-        FixedBinding::new(
-            "cmdorctrl-2",
-            TerminalAction::SelectAgenticSuggestion(2),
-            id!("Terminal") & id!("OnboardingAgenticSuggestionsBlock"),
-        ),
-        FixedBinding::new(
-            "cmdorctrl-3",
-            TerminalAction::SelectAgenticSuggestion(3),
-            id!("Terminal") & id!("OnboardingAgenticSuggestionsBlock"),
-        ),
-        FixedBinding::new(
-            "cmdorctrl-4",
-            TerminalAction::SelectAgenticSuggestion(4),
-            id!("Terminal") & id!("OnboardingAgenticSuggestionsBlock"),
-        ),
     ]);
 
     app.register_editable_bindings([EditableBinding::new(

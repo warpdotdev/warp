@@ -156,6 +156,7 @@ integration_tests! {
     test_code_review_scroll_preserved_header_range,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_preserved_footer_range,
+    test_code_review_double_click_fully_expands_hidden_section,
     test_pane_group_state_single_pane,
     test_pane_group_state_multi_pane,
     test_pane_group_state_close_pane,
@@ -211,6 +212,13 @@ integration_tests! {
     test_secret_case_sensitivity,
     test_secrets_are_always_redacted_in_ai_inputs,
 
+    // OSC 8 hyperlink tests (GH6393)
+    test_osc8_open_close_renders_visible_text,
+    test_osc8_copy_block_yields_visible_text_only,
+    test_osc8_open_link_action_opens_url,
+    test_osc8_file_scheme_opens_url,
+    test_osc8_no_regression_on_url_autodetect,
+
     test_active_session_follows_focus,
     test_tab_context_menu_copies_metadata,
     test_vertical_tab_context_menu_copies_metadata,
@@ -258,6 +266,8 @@ integration_tests! {
     test_latest_buffer_operations,
 
     test_pass_control_sequences_to_long_running_block,
+    test_execution_profiles_load_from_settings_file,
+    test_execution_profile_model_persists_and_hot_reloads_settings_file,
     test_settings_file_migration_from_native_store,
     test_settings_file_hot_reload_applies_new_values,
 
@@ -324,6 +334,9 @@ integration_tests! {
     test_file_tree_non_openable_files,
     test_file_tree_nested_file_opening,
 
+    // Copy current path command-palette action
+    test_copy_current_path_copies_terminal_pwd,
+
     // Go to Line tests
     test_goto_line_dialog_open_close,
     test_goto_line_jumps_to_line,
@@ -331,6 +344,9 @@ integration_tests! {
     test_goto_line_clamps_out_of_range,
     test_code_editor_line_numbers_default_to_absolute,
     test_code_editor_relative_line_numbers_follow_cursor,
+
+    // AI document tests
+    test_copy_ai_document_as_markdown_from_overflow_menu,
 
     // Keyboard protocol tests
     test_keyboard_protocol_disabled_shift_enter,

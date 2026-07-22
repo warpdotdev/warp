@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
@@ -17,19 +18,19 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
-    write_temp_file, HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload,
-    SavePoint, ThirdPartyHarness,
+    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
+    ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
-use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::harness_support::HarnessSupportClient;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::server::server_api::ServerApi;
-use crate::terminal::model::block::BlockId;
+use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
+use crate::terminal::model::block::BlockId;
 
 pub(crate) struct GeminiHarness;
 
@@ -166,7 +167,7 @@ impl HarnessRunner for GeminiHarnessRunner {
                     .create_external_conversation(GEMINI_CLI_FORMAT)
                     .await
                     .map_err(|e| {
-                        log::error!("Failed to create external conversation: {e}");
+                        report_error!(&e);
                         AgentDriverError::ConfigBuildFailed(e)
                     })
             })

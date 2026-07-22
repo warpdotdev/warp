@@ -27,8 +27,8 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
-    id, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle, WindowId,
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, WindowId, id,
 };
 
 use super::buffer_location::LocalOrRemotePath;
@@ -45,22 +45,23 @@ use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, S
 use crate::editor::InteractionState;
 use crate::input::Vector2F;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::notebooks::file::{is_markdown_file, MarkdownDisplayMode};
+use crate::notebooks::file::{MarkdownDisplayMode, renders_in_warp_notebook_viewer};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::header::components::{
-    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
-    CenteredHeaderEdgeWidth,
+    CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
+    render_three_column_header,
 };
 use crate::pane_group::pane::view::header::render_pane_header_draggable;
-use crate::pane_group::pane::{view, ActionOrigin, PaneHeaderAction};
+use crate::pane_group::pane::{ActionOrigin, PaneHeaderAction, view};
 use crate::pane_group::{
     BackingView, CodePane, PaneConfiguration, PaneConfigurationEvent, PaneDragDropLocation,
-    PaneEvent,
+    PaneEvent, TabBarAxis,
 };
 use crate::quit_warning::UnsavedStateSummary;
-use crate::search::files::icon::icon_from_file_path;
 use crate::search::ItemHighlightState;
+use crate::search::files::icon::icon_from_file_path;
 use crate::server::telemetry::CodeContextDestination;
+use crate::settings::CodeSettings;
 use crate::tab::TAB_BAR_BORDER_HEIGHT;
 use crate::terminal::cli_agent::{
     build_selection_line_range_prompt, build_selection_substring_prompt,
@@ -72,7 +73,7 @@ use crate::util::path::{display_name_with_host, display_path_with_host};
 use crate::view_components::{DismissibleToast, MarkdownToggleEvent, MarkdownToggleView};
 use crate::workspace::util::get_context_target_terminal_view;
 use crate::workspace::{ActiveSession, TabBarDropTargetData, ToastStack, WorkspaceAction};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 type SaveCallback =
     Box<dyn FnOnce(SaveOutcome, &mut CodeView, &mut ViewContext<CodeView>) + Send + Sync + 'static>;
@@ -278,13 +279,13 @@ impl CodeView {
 
     #[cfg(feature = "local_fs")]
     fn update_markdown_mode_segmented_control(&mut self, ctx: &mut ViewContext<Self>) {
-        let is_markdown = self
+        let renders_in_notebook_viewer = self
             .tab_at(self.active_tab_index)
             .and_then(|t| t.location.as_ref())
-            .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))
+            .map(|loc| renders_in_warp_notebook_viewer(std::path::Path::new(&loc.display_path())))
             .unwrap_or(false);
 
-        if !is_markdown {
+        if !renders_in_notebook_viewer {
             self.markdown_mode_segmented_control = None;
             ctx.notify();
             return;
@@ -353,15 +354,15 @@ impl CodeView {
 
     /// If a tab is a preview, promote it and emit "FileOpened"
     fn promote_if_preview(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(tab) = self.tab_group.get_mut(self.active_tab_index) {
-            if tab.preview {
-                tab.preview = false;
-                self.set_title_after_content_update(ctx);
-                self.update_tab_bar_state(ctx);
-                self.focus_contents(ctx);
-                send_telemetry_from_ctx!(TelemetryEvent::PreviewPanePromoted, ctx);
-                ctx.notify();
-            }
+        if let Some(tab) = self.tab_group.get_mut(self.active_tab_index)
+            && tab.preview
+        {
+            tab.preview = false;
+            self.set_title_after_content_update(ctx);
+            self.update_tab_bar_state(ctx);
+            self.focus_contents(ctx);
+            send_telemetry_from_ctx!(TelemetryEvent::PreviewPanePromoted, ctx);
+            ctx.notify();
         }
     }
 
@@ -530,10 +531,14 @@ impl CodeView {
                     ctx,
                 );
             }
-            LocalCodeEditorEvent::FileSaved => {
+            LocalCodeEditorEvent::FileSaved { auto_saved } => {
                 me.sync_active_tab_location(ctx);
                 me.set_title_after_content_update(ctx);
-                CodeView::display_save_success(ctx.window_id(), ctx);
+                // Only surface the success toast for manual (cmd-s) saves;
+                // auto-saves persist silently.
+                if !*auto_saved {
+                    CodeView::display_save_success(ctx.window_id(), ctx);
+                }
                 ctx.notify();
             }
             LocalCodeEditorEvent::FailedToSave { error: err } => {
@@ -980,9 +985,59 @@ impl CodeView {
         Self::has_unsaved_changes(tab, ctx)
     }
 
+    /// Whether the active tab should render the unsaved-changes indicator.
+    /// Auto-save-aware: see [`Self::show_unsaved_indicator`].
+    pub fn active_tab_shows_unsaved_indicator(&self, ctx: &AppContext) -> bool {
+        self.tab_at(self.active_tab_index)
+            .is_some_and(|tab| Self::show_unsaved_indicator(tab, ctx))
+    }
+
     fn has_unsaved_changes(tab: &TabData, ctx: &AppContext) -> bool {
         let local_editor = tab.editor_view.as_ref(ctx);
         local_editor.has_unsaved_changes(ctx)
+    }
+
+    /// Whether to render the transient "unsaved changes" indicator for a tab.
+    ///
+    /// When auto-save is enabled, edits are persisted automatically (debounced
+    /// while typing and on focus loss), so showing the dot would just make it
+    /// flicker on and off as the user types. It is only hidden for changes
+    /// auto-save can actually persist, though: untitled buffers and
+    /// disconnected remotes keep the indicator so unsaveable changes stay
+    /// visible.
+    fn show_unsaved_indicator(tab: &TabData, app: &AppContext) -> bool {
+        if !Self::has_unsaved_changes(tab, app) {
+            return false;
+        }
+        !*CodeSettings::as_ref(app).auto_save || !tab.editor_view.as_ref(app).can_auto_save(app)
+    }
+
+    /// Flush-saves every unsaved tab that has a backing file, marking each save
+    /// as an auto-save so it stays silent (no "File saved." toast). Returns
+    /// `true` if any unsaved tab could NOT be auto-saved (e.g. an untitled
+    /// buffer with no path), so callers can still warn before discarding those.
+    pub fn auto_save_all_unsaved_tabs(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let mut unsaveable_changes_remain = false;
+        for index in self.unsaved_indices(ctx) {
+            // A tab can only be auto-saved if it has a backing file *and*, for
+            // remote files, its host is still connected. A disconnected remote
+            // buffer has a `file_id` but `save_local` would fail silently, so
+            // treat it as unsaveable and let the caller warn before discarding
+            // the edits.
+            let can_auto_save = self
+                .tab_at(index)
+                .is_some_and(|tab| tab.editor_view.as_ref(ctx).can_auto_save(ctx));
+            if can_auto_save {
+                if let Some(tab) = self.tab_at(index) {
+                    tab.editor_view
+                        .update(ctx, |editor, _| editor.mark_next_save_as_auto_save());
+                }
+                self.save_local(index, None, ctx);
+            } else {
+                unsaveable_changes_remain = true;
+            }
+        }
+        unsaveable_changes_remain
     }
 
     /// Check whether there are unsaved changes and reset the pane title accordingly.
@@ -1151,6 +1206,43 @@ impl CodeView {
             if summary.should_display_warning(ctx)
                 && ChannelState::channel() != Channel::Integration
             {
+                // With auto-save enabled, closing a file that has a backing path
+                // shouldn't block on the "unsaved changes" dialog just because
+                // the debounce hasn't fired yet — the edits will be persisted
+                // anyway. Flush them and close (mirroring the dialog's "Save
+                // changes" action), marking the saves as auto-saves so they stay
+                // silent. Untitled files (no path) still prompt, since auto-save
+                // can't persist them without a Save As.
+                let tab_has_backing_file = self
+                    .tab_at(index)
+                    .is_some_and(|tab| tab.editor_view.as_ref(ctx).file_id().is_some());
+                if *CodeSettings::as_ref(ctx).auto_save && tab_has_backing_file {
+                    if is_clearing_group {
+                        let unsaved_indices = self.unsaved_indices(ctx);
+                        for &unsaved_index in &unsaved_indices {
+                            if let Some(tab) = self.tab_group.get(unsaved_index)
+                                && tab.editor_view.as_ref(ctx).file_id().is_some()
+                            {
+                                tab.editor_view
+                                    .update(ctx, |editor, _| editor.mark_next_save_as_auto_save());
+                            }
+                        }
+                        self.clear_tab_group_with_intent(
+                            unsaved_indices,
+                            0,
+                            Some(PendingSaveIntent::Save),
+                            ctx,
+                        );
+                    } else {
+                        if let Some(tab) = self.tab_at(index) {
+                            tab.editor_view
+                                .update(ctx, |editor, _| editor.mark_next_save_as_auto_save());
+                        }
+                        self.remove_tab_with_intent(index, Some(PendingSaveIntent::Save), ctx);
+                    }
+                    return;
+                }
+
                 let handle_save_intent = |intent: PendingSaveIntent| {
                     let handle = ctx.handle().clone();
                     move |ctx: &mut AppContext| {
@@ -1614,7 +1706,7 @@ impl CodeView {
                         origin: ActionOrigin::EditorTab(index),
                         drag_location: PaneDragDropLocation::TabBar(data.tab_bar_location),
                         drag_position,
-                        precomputed_tab_hover_index: None,
+                        tab_bar_axis: Some(TabBarAxis::Horizontal),
                     },
                 );
             } else {
@@ -1717,7 +1809,7 @@ impl CodeView {
                             index,
                             is_active,
                             tab_handle.is_hovered(),
-                            Self::has_unsaved_changes(tab_data, app),
+                            Self::show_unsaved_indicator(tab_data, app),
                             appearance,
                             app,
                         ))
@@ -1761,23 +1853,22 @@ impl CodeView {
                             .mouse_state_handles
                             .tab_draggable_state
                             .is_dragging()
+                        && let Some(path) = tab_data.local_path()
                     {
-                        if let Some(path) = tab_data.local_path() {
-                            let tooltip = appearance
-                                .ui_builder()
-                                .tool_tip(Self::relative_path(path, self.window_id, app))
-                                .build()
-                                .finish();
-                            stack.add_positioned_overlay_child(
-                                tooltip,
-                                OffsetPositioning::offset_from_parent(
-                                    vec2f(10., -1.),
-                                    ParentOffsetBounds::Unbounded,
-                                    ParentAnchor::BottomLeft,
-                                    ChildAnchor::TopLeft,
-                                ),
-                            );
-                        }
+                        let tooltip = appearance
+                            .ui_builder()
+                            .tool_tip(Self::relative_path(path, self.window_id, app))
+                            .build()
+                            .finish();
+                        stack.add_positioned_overlay_child(
+                            tooltip,
+                            OffsetPositioning::offset_from_parent(
+                                vec2f(10., -1.),
+                                ParentOffsetBounds::Unbounded,
+                                ParentAnchor::BottomLeft,
+                                ChildAnchor::TopLeft,
+                            ),
+                        );
                     }
 
                     stack.finish()
@@ -1925,7 +2016,7 @@ impl CodeView {
         let tab_handle = tab.map(|tab| tab.mouse_state_handles.tab_handle.clone());
 
         // Check unsaved changes for the active tab.
-        let has_unsaved = tab.is_some_and(|tab| Self::has_unsaved_changes(tab, app));
+        let has_unsaved = tab.is_some_and(|tab| Self::show_unsaved_indicator(tab, app));
 
         // Build the center title element, with a hover tooltip showing the full path.
         let title_element: Box<dyn Element> = match tab_handle {
@@ -2061,15 +2152,19 @@ impl CodeView {
                 );
             }
 
-            let is_md = local_path
+            let renders_in_notebook_viewer = local_path
                 .as_ref()
-                .map(is_markdown_file)
+                .map(renders_in_warp_notebook_viewer)
                 .unwrap_or_else(|| {
                     active_location
-                        .map(|loc| is_markdown_file(std::path::Path::new(&loc.display_path())))
+                        .map(|loc| {
+                            renders_in_warp_notebook_viewer(std::path::Path::new(
+                                &loc.display_path(),
+                            ))
+                        })
                         .unwrap_or(false)
                 });
-            if is_md {
+            if renders_in_notebook_viewer {
                 items.push(
                     MenuItemFields::new("View Markdown preview")
                         .with_on_select_action(CodeViewAction::RenderMarkdown)

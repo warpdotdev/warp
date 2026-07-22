@@ -1,10 +1,15 @@
 //! [`TuiContainer`]: a single-child decorator that adds a background fill, an
-//! optional box-drawing border, and uniform padding around its child.
+//! optional box-drawing border, and padding around its child.
 //!
 //! # Construction
 //! Wrap a child with [`TuiContainer::new`] and layer decorations:
 //! - [`with_padding`](TuiContainer::with_padding): cells of empty space on every
 //!   side, inside any border.
+//! - [`with_padding_x`](TuiContainer::with_padding_x) /
+//!   [`with_padding_y`](TuiContainer::with_padding_y): cells of empty space on
+//!   one axis.
+//! - [`with_padding_top`](TuiContainer::with_padding_top) and sibling side
+//!   methods: cells of empty space on one side.
 //! - [`with_border`](TuiContainer::with_border) /
 //!   [`with_border_style`](TuiContainer::with_border_style): a one-cell box-drawn
 //!   frame.
@@ -12,40 +17,103 @@
 //!   behind the border and padding.
 //!
 //! # Layout policy
-//! The child is inset on every side by `border (0 or 1) + padding`. The
-//! container reports its child's size grown by that inset on both axes (clamped
-//! to the constraint), so the child occupies exactly the area left inside the
-//! frame and padding.
+//! The child is inset on every side by `border (0 or 1) + side padding`. The
+//! container reports its child's size grown by those insets (clamped to the
+//! constraint), so the child occupies exactly the area left inside the frame and
+//! padding.
 
 use ratatui::style::Color;
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect,
-    TuiRectExt, TuiSize, TuiStyle,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPresentationContext, TuiRect, TuiScreenPoint, TuiScreenPosition, TuiSize,
+    TuiStyle,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
 pub struct TuiContainer {
     child: Box<dyn TuiElement>,
-    padding: u16,
+    padding: TuiPadding,
     border: bool,
     border_style: TuiStyle,
     background: Option<Color>,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TuiPadding {
+    top: u16,
+    right: u16,
+    bottom: u16,
+    left: u16,
+}
+
+impl TuiPadding {
+    /// Creates equal padding on every side.
+    fn uniform(padding: u16) -> Self {
+        Self {
+            top: padding,
+            right: padding,
+            bottom: padding,
+            left: padding,
+        }
+    }
 }
 
 impl TuiContainer {
-    pub fn new(child: impl TuiElement + 'static) -> Self {
+    pub fn new(child: Box<dyn TuiElement>) -> Self {
         Self {
-            child: Box::new(child),
-            padding: 0,
+            child,
+            padding: TuiPadding::default(),
             border: false,
             border_style: TuiStyle::default(),
             background: None,
+            size: None,
+            origin: None,
         }
     }
 
     pub fn with_padding(mut self, padding: u16) -> Self {
-        self.padding = padding;
+        self.padding = TuiPadding::uniform(padding);
+        self
+    }
+
+    /// Sets horizontal padding on both left and right sides.
+    pub fn with_padding_x(mut self, padding: u16) -> Self {
+        self.padding.left = padding;
+        self.padding.right = padding;
+        self
+    }
+
+    /// Sets vertical padding on both top and bottom sides.
+    pub fn with_padding_y(mut self, padding: u16) -> Self {
+        self.padding.top = padding;
+        self.padding.bottom = padding;
+        self
+    }
+
+    /// Sets padding above the child.
+    pub fn with_padding_top(mut self, padding: u16) -> Self {
+        self.padding.top = padding;
+        self
+    }
+
+    /// Sets padding to the right of the child.
+    pub fn with_padding_right(mut self, padding: u16) -> Self {
+        self.padding.right = padding;
+        self
+    }
+
+    /// Sets padding below the child.
+    pub fn with_padding_bottom(mut self, padding: u16) -> Self {
+        self.padding.bottom = padding;
+        self
+    }
+
+    /// Sets padding to the left of the child.
+    pub fn with_padding_left(mut self, padding: u16) -> Self {
+        self.padding.left = padding;
         self
     }
 
@@ -65,9 +133,48 @@ impl TuiContainer {
         self
     }
 
-    /// The number of cells the child is inset on each side.
-    fn inset(&self) -> u16 {
-        u16::from(self.border) + self.padding
+    /// The child inset from the left edge.
+    fn left_inset(&self) -> u16 {
+        u16::from(self.border).saturating_add(self.padding.left)
+    }
+
+    /// The child inset from the right edge.
+    fn right_inset(&self) -> u16 {
+        u16::from(self.border).saturating_add(self.padding.right)
+    }
+
+    /// The child inset from the top edge.
+    fn top_inset(&self) -> u16 {
+        u16::from(self.border).saturating_add(self.padding.top)
+    }
+
+    /// The child inset from the bottom edge.
+    fn bottom_inset(&self) -> u16 {
+        u16::from(self.border).saturating_add(self.padding.bottom)
+    }
+
+    /// The total horizontal space reserved by border and padding.
+    fn horizontal_inset(&self) -> u16 {
+        self.left_inset().saturating_add(self.right_inset())
+    }
+
+    /// The total vertical space reserved by border and padding.
+    fn vertical_inset(&self) -> u16 {
+        self.top_inset().saturating_add(self.bottom_inset())
+    }
+
+    /// The area available to the child after border and padding.
+    fn child_area(&self, area: TuiRect) -> TuiRect {
+        let left = self.left_inset().min(area.width);
+        let top = self.top_inset().min(area.height);
+        let right = self.right_inset().min(area.width.saturating_sub(left));
+        let bottom = self.bottom_inset().min(area.height.saturating_sub(top));
+        TuiRect::new(
+            area.x.saturating_add(left),
+            area.y.saturating_add(top),
+            area.width.saturating_sub(left).saturating_sub(right),
+            area.height.saturating_sub(top).saturating_sub(bottom),
+        )
     }
 
     /// The style used to paint border glyphs, inheriting the background fill so
@@ -82,40 +189,72 @@ impl TuiContainer {
 }
 
 impl TuiElement for TuiContainer {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
-        let total = self.inset().saturating_mul(2);
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
         let inner_max = TuiSize::new(
-            constraint.max.width.saturating_sub(total),
-            constraint.max.height.saturating_sub(total),
+            constraint.max.width.saturating_sub(self.horizontal_inset()),
+            constraint.max.height.saturating_sub(self.vertical_inset()),
         );
-        let inner = self.child.layout(TuiConstraint::loose(inner_max));
+        let inner = self.child.layout(TuiConstraint::loose(inner_max), ctx, app);
         let size = TuiSize::new(
-            inner.width.saturating_add(total),
-            inner.height.saturating_add(total),
+            inner.width.saturating_add(self.horizontal_inset()),
+            inner.height.saturating_add(self.vertical_inset()),
         );
-        constraint.clamp(size)
+        let size = constraint.clamp(size);
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        let area = TuiRect::new(0, 0, size.width, size.height);
         if area.is_empty() {
             return;
         }
+        if (self.background.is_some() || self.border)
+            && let Some(bounds) = self.bounds()
+        {
+            ctx.scene.record_hit_rect(bounds);
+        }
 
         if let Some(background) = self.background {
-            buffer.set_style(area, TuiStyle::default().bg(background));
+            surface.set_style(origin, size, TuiStyle::default().bg(background));
         }
 
         if self.border {
-            draw_border(area, buffer, self.painted_border_style());
+            draw_border(origin, size, surface, self.painted_border_style());
         }
 
-        self.child.render(area.inset(self.inset()), buffer);
+        let child_area = self.child_area(area);
+        self.child.render(
+            origin.offset(i32::from(child_area.x), i32::from(child_area.y)),
+            surface,
+            ctx,
+        );
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        let total = self.inset().saturating_mul(2);
-        let inner_width = width.saturating_sub(total);
-        self.child.desired_height(inner_width).saturating_add(total)
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -124,54 +263,74 @@ impl TuiElement for TuiContainer {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
-        area: TuiRect,
-        ctx: &mut TuiEventContext,
+        event: &TuiEvent,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        if area.is_empty() {
-            return false;
-        }
-        self.child
-            .dispatch_event(event, area.inset(self.inset()), ctx, app)
+        self.child.dispatch_event(event, event_ctx, app)
     }
 }
 
-/// Paints a single-cell box-drawing frame around the perimeter of `area`.
-fn draw_border(area: TuiRect, buffer: &mut TuiBuffer, style: TuiStyle) {
-    let right = area.right().saturating_sub(1);
-    let bottom = area.bottom().saturating_sub(1);
-    let multi_column = area.width > 1;
-    let multi_row = area.height > 1;
+/// Paints a single-cell box-drawing frame around the perimeter of `size`.
+fn draw_border(
+    origin: TuiScreenPosition,
+    size: TuiSize,
+    surface: &mut TuiPaintSurface<'_>,
+    style: TuiStyle,
+) {
+    let right = size.width.saturating_sub(1);
+    let bottom = size.height.saturating_sub(1);
+    let multi_column = size.width > 1;
+    let multi_row = size.height > 1;
 
-    for x in area.x..area.right() {
-        put(buffer, x, area.y, "─", style);
+    for x in 0..size.width {
+        put(surface, origin.offset(i32::from(x), 0), "─", style);
         if multi_row {
-            put(buffer, x, bottom, "─", style);
+            put(
+                surface,
+                origin.offset(i32::from(x), i32::from(bottom)),
+                "─",
+                style,
+            );
         }
     }
-    for y in area.y..area.bottom() {
-        put(buffer, area.x, y, "│", style);
+    for y in 0..size.height {
+        put(surface, origin.offset(0, i32::from(y)), "│", style);
         if multi_column {
-            put(buffer, right, y, "│", style);
+            put(
+                surface,
+                origin.offset(i32::from(right), i32::from(y)),
+                "│",
+                style,
+            );
         }
     }
 
-    put(buffer, area.x, area.y, "┌", style);
+    put(surface, origin, "┌", style);
     if multi_column {
-        put(buffer, right, area.y, "┐", style);
+        put(surface, origin.offset(i32::from(right), 0), "┐", style);
     }
     if multi_row {
-        put(buffer, area.x, bottom, "└", style);
+        put(surface, origin.offset(0, i32::from(bottom)), "└", style);
     }
     if multi_column && multi_row {
-        put(buffer, right, bottom, "┘", style);
+        put(
+            surface,
+            origin.offset(i32::from(right), i32::from(bottom)),
+            "┘",
+            style,
+        );
     }
 }
 
-/// Writes a single styled glyph at `(x, y)`, ignoring out-of-bounds positions.
-fn put(buffer: &mut TuiBuffer, x: u16, y: u16, symbol: &str, style: TuiStyle) {
-    if let Some(cell) = buffer.cell_mut((x, y)) {
+/// Writes a single styled glyph, ignoring out-of-bounds positions.
+fn put(
+    surface: &mut TuiPaintSurface<'_>,
+    position: TuiScreenPosition,
+    symbol: &str,
+    style: TuiStyle,
+) {
+    if let Some(cell) = surface.cell_mut(position) {
         cell.set_symbol(symbol).set_style(style);
     }
 }

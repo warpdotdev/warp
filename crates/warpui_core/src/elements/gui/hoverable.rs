@@ -86,7 +86,8 @@ pub struct MouseState {
     /// events that both want to alter the hover state, we stop the
     /// invocation to prevent the potential infinite loop. Note that
     /// any non-synthetic event should reset this state to false.
-    last_event_is_synthetic_hover: bool,
+    /// Shared with the TUI `TuiHoverable`, which applies the same guard.
+    pub(crate) last_event_is_synthetic_hover: bool,
 
     /// A timer that starts when the mouse begins hovering the element.
     ///
@@ -110,6 +111,13 @@ impl MouseState {
     /// in the corresponding mouse down event.
     pub fn click_count(&self) -> Option<u32> {
         self.click_count
+    }
+
+    /// Sets or clears the pressed state used for press-then-release click
+    /// pairing (the TUI hoverable arms this on mouse-down).
+    #[cfg(feature = "tui")]
+    pub(crate) fn set_click_count(&mut self, click_count: Option<u32>) {
+        self.click_count = click_count;
     }
 
     /// True iff the element is considered hovered.
@@ -623,12 +631,12 @@ impl Element for Hoverable {
         // If there's a mouse-down event outside of the element,
         // there's nothing to do except reset the hover state
         // (because there might have been a hover delay in-progress).
-        if let Some(position) = event.raw_event().mouse_down_position() {
-            if !self.is_mouse_over_element(ctx, position) {
-                self.state().is_hovered = false;
-                self.state().is_mouse_over_element = false;
-                return handled;
-            }
+        if let Some(position) = event.raw_event().mouse_down_position()
+            && !self.is_mouse_over_element(ctx, position)
+        {
+            self.state().is_hovered = false;
+            self.state().is_mouse_over_element = false;
+            return handled;
         }
 
         match event.raw_event() {

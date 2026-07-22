@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{
-    add_pending_file_attachments, input_context_for_request, parse_context_attachments,
-    BlocklistAIController, BlocklistAIControllerEvent, RequestInput,
+    BlocklistAIController, BlocklistAIControllerEvent, RequestInput, add_pending_file_attachments,
+    input_context_for_request, parse_context_attachments,
 };
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentContext, AIAgentInput, CancellationReason, CloneRepositoryURL, EntrypointType,
@@ -19,7 +21,6 @@ use crate::ai::blocklist::context_model::{
 use crate::ai::blocklist::queued_query::{QueuedQueryId, QueuedQueryModel};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::BlocklistAIHistoryModel;
 
 pub enum SlashCommandRequest {
     CreateNewProject {
@@ -35,9 +36,6 @@ pub enum SlashCommandRequest {
     },
     Summarize {
         prompt: Option<String>,
-    },
-    FetchReviewComments {
-        repo_path: String,
     },
     /// Invoke a skill.
     InvokeSkill {
@@ -127,7 +125,7 @@ impl SlashCommandRequest {
             return;
         }
         let active_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
-            .active_conversation_id(controller.terminal_view_id);
+            .active_conversation_id(controller.terminal_surface_id);
 
         // If no existing conversation, create a new one.
         // When AgentView is enabled, enter agent view which creates the conversation
@@ -136,7 +134,7 @@ impl SlashCommandRequest {
             if FeatureFlag::AgentView.is_enabled() {
                 controller.context_model.update(ctx, |context_model, ctx| {
                     context_model
-                        .try_enter_agent_view_for_new_conversation(
+                        .try_start_new_conversation(
                             AgentViewEntryOrigin::SlashCommand {
                                 trigger: SlashCommandTrigger::input(),
                             },
@@ -148,7 +146,7 @@ impl SlashCommandRequest {
                 Some(controller.start_new_conversation_for_request(ctx).id())
             }
         }) else {
-            log::error!("Failed to get conversation ID for slash command request");
+            report_error!("Failed to get conversation ID for slash command request");
             return;
         };
 
@@ -169,14 +167,15 @@ impl SlashCommandRequest {
         else {
             return;
         };
+        let task_id = conversation.get_root_task_id().clone();
 
         let request_input = RequestInput::for_task(
             inputs,
-            conversation.get_root_task_id().clone(),
+            task_id,
             &controller.active_session,
             controller.get_current_response_initiator(),
             conversation_id,
-            controller.terminal_view_id,
+            controller.terminal_surface_id,
             ctx,
         );
         let model_id = request_input.model_id.clone();
@@ -188,7 +187,6 @@ impl SlashCommandRequest {
                 entrypoint,
                 is_auto_resume_after_error: false,
             }),
-            /*default_to_follow_up_on_success*/ true,
             /*can_attempt_resume_on_error*/ true,
             is_queued_prompt,
             ctx,
@@ -211,7 +209,7 @@ impl SlashCommandRequest {
                     });
                 }
             }
-            Err(e) => log::error!("Failed to send agent slash command request: {e:?}"),
+            Err(e) => report_error!(e.context("Failed to send agent slash command request")),
         }
     }
 
@@ -221,13 +219,12 @@ impl SlashCommandRequest {
         app: &AppContext,
     ) -> Option<AIConversationId> {
         match self {
-            Self::Summarize { .. }
-            | Self::CreateEnvironment { .. }
-            | Self::InvokeSkill { .. }
-            | Self::FetchReviewComments { .. } => controller
-                .context_model
-                .as_ref(app)
-                .selected_conversation_id(app),
+            Self::Summarize { .. } | Self::CreateEnvironment { .. } | Self::InvokeSkill { .. } => {
+                controller
+                    .context_model
+                    .as_ref(app)
+                    .selected_conversation_id(app)
+            }
             _ => None,
         }
     }
@@ -277,9 +274,6 @@ impl SlashCommandRequest {
             SlashCommandRequest::Summarize { prompt, .. } => {
                 vec![AIAgentInput::SummarizeConversation { prompt, context }]
             }
-            SlashCommandRequest::FetchReviewComments { repo_path } => {
-                vec![AIAgentInput::FetchReviewComments { repo_path, context }]
-            }
             SlashCommandRequest::InvokeSkill { skill, user_query } => {
                 let user_query = if FeatureFlag::SkillArguments.is_enabled() {
                     let query = user_query
@@ -313,7 +307,6 @@ impl SlashCommandRequest {
             SlashCommandRequest::CreateNewProject { .. }
             | SlashCommandRequest::CreateEnvironment { .. }
             | SlashCommandRequest::Summarize { .. }
-            | SlashCommandRequest::FetchReviewComments { .. }
             | SlashCommandRequest::InvokeSkill { .. } => EntrypointType::UserInitiated,
         }
     }

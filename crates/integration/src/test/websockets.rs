@@ -5,7 +5,7 @@ use warp::integration_testing::assertions::{
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::{self};
 
-use super::{new_builder, TEST_ONLY_ASSETS};
+use super::{TEST_ONLY_ASSETS, new_builder};
 use crate::Builder;
 
 /// With no objects and no teams, the websocket should not begin

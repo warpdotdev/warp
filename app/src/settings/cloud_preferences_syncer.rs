@@ -6,23 +6,24 @@ use std::time::Duration;
 use cloud_object_models::JsonSerializer;
 use lazy_static::lazy_static;
 use settings::{Setting as _, SyncToCloud};
-use warp_core::execution_mode::AppExecutionMode;
 use warp_core::r#async::debounce;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::settings::ChangeEventReason;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_if_error;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
+use super::PrivacySettings;
+use super::ai::ExecutionProfiles;
 use super::cloud_preferences::{CloudPreferencesSettings, CloudPreferencesSettingsChangedEvent};
 use super::manager::SettingsEvent;
-use super::PrivacySettings;
 use crate::auth::auth_state::AuthState;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, GenericStringObjectFormat, JsonObjectType};
 use crate::drive::CloudObjectTypeAndId;
-use crate::report_if_error;
 use crate::server::cloud_objects::update_manager::{
     GenericStringObjectInput, InitiatedBy, UpdateManager, UpdateManagerEvent,
 };
@@ -96,7 +97,15 @@ pub fn initialize_cloud_preferences_syncer(
     let force_local_wins_on_startup =
         file_has_unsynced_changes && startup_toml_parse_error.is_none();
 
-    CloudPreferencesSyncer::new(force_local_wins_on_startup, toml_file_path, ctx)
+    // The settings surface decides whether this process participates in cloud
+    // sync at all (e.g. the TUI keeps its config local).
+    let sync_enabled = settings::settings_mode().should_sync_to_cloud();
+    CloudPreferencesSyncer::new(
+        force_local_wins_on_startup,
+        toml_file_path,
+        sync_enabled,
+        ctx,
+    )
 }
 
 /// Handles syncing CloudPreferences (the Warp Drive objects) and local Settings models that
@@ -127,6 +136,14 @@ pub struct CloudPreferencesSyncer {
     /// `update_stored_settings_hash` to compute the hash persisted
     /// after every successful cloud sync reconciliation.
     toml_file_path: PathBuf,
+
+    /// Whether cloud sync is active for the current settings surface. Derived
+    /// from [`settings::SettingsMode::should_sync_to_cloud`]; when `false` (e.g.
+    /// the TUI surface) the syncer is inert — it never reads from or writes to
+    /// the cloud, so a surface with its own local settings file cannot clobber
+    /// shared cloud state. The singleton is still registered so callers that
+    /// reach for it (e.g. on login) don't panic.
+    sync_enabled: bool,
 }
 
 /// Event fired by the CloudPreferencesSyncer when a cloud preference has changed.
@@ -159,6 +176,7 @@ lazy_static! {
         super::privacy::TELEMETRY_ENABLED_DEFAULTS_KEY,
         super::privacy::CRASH_REPORTING_ENABLED_DEFAULTS_KEY,
         super::privacy::CLOUD_CONVERSATION_STORAGE_ENABLED_DEFAULTS_KEY,
+        ExecutionProfiles::storage_key(),
     ];
 }
 
@@ -179,24 +197,39 @@ impl CloudPreferencesSyncer {
         // `None` and `update_stored_settings_hash` becomes a no-op.
         // End-to-end tests that care about the hash path construct
         // the syncer via `initialize_cloud_preferences_syncer`.
-        Self::new_internal(ctx, client_id_provider, PathBuf::new())
+        Self::new_internal(ctx, client_id_provider, PathBuf::new(), true)
     }
 
     pub fn new(
         force_local_wins_on_startup: bool,
         toml_file_path: PathBuf,
+        sync_enabled: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let mut me = Self::new_internal(ctx, Arc::new(DefaultClientIdProvider), toml_file_path);
+        let mut me = Self::new_internal(
+            ctx,
+            Arc::new(DefaultClientIdProvider),
+            toml_file_path,
+            sync_enabled,
+        );
         me.force_local_wins_on_startup = force_local_wins_on_startup;
-        me.retry_failed_settings(ctx);
+        // Only poll to retry failed cloud syncs when cloud sync is active.
+        if sync_enabled {
+            me.retry_failed_settings(ctx);
+        }
         me
+    }
+
+    /// Returns whether initial cloud/local preference reconciliation has completed.
+    pub(crate) fn has_completed_initial_load(&self) -> bool {
+        self.has_completed_initial_load
     }
 
     fn new_internal(
         ctx: &mut ModelContext<Self>,
         client_id_provider: Arc<dyn ClientIdProvider>,
         toml_file_path: PathBuf,
+        sync_enabled: bool,
     ) -> Self {
         // Set up event syncing in both directions (local -> cloud and cloud -> local).
         // We only apply cloud->local updates AFTER the initial load has been processed by
@@ -279,6 +312,7 @@ impl CloudPreferencesSyncer {
             has_completed_initial_load: false,
             force_local_wins_on_startup: false,
             toml_file_path,
+            sync_enabled,
         }
     }
 
@@ -398,6 +432,11 @@ impl CloudPreferencesSyncer {
         auth_state: Arc<AuthState>,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Inert when cloud sync is disabled for this surface (e.g. the TUI).
+        if !self.sync_enabled {
+            return;
+        }
+
         let is_onboarded = auth_state.is_onboarded();
 
         // Reset the initial load flag so that we re-evaluate sync direction
@@ -445,6 +484,11 @@ impl CloudPreferencesSyncer {
         force_cloud_to_match_local: ForceCloudToMatchLocal,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Inert when cloud sync is disabled for this surface (e.g. the TUI).
+        if !self.sync_enabled {
+            return;
+        }
+
         let update_manager = UpdateManager::as_ref(ctx);
 
         // We wait for the cloud objects to load because we need to know if there are any cloud preferences
@@ -608,10 +652,8 @@ impl CloudPreferencesSyncer {
                 // initial load.
                 keys_to_sync_to_cloud.push(storage_key);
             } else {
-                // This is one of the two legacy settings stored in the user_settings table and
-                // it has not yet been saved to warp drive. In this case we want to wait for
-                // these settings to load from the server, and then sync them to warp drive.
-                // The logic for this is in privacy.rs.
+                // This setting has a dedicated migration path that explicitly
+                // writes it after its legacy source has loaded.
                 log::info!(
                     "Waiting to sync legacy cloud preference with storage key {storage_key} until it is explicitly set"
                 );
@@ -638,6 +680,11 @@ impl CloudPreferencesSyncer {
         keys_to_sync: Vec<String>,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Inert when cloud sync is disabled for this surface (e.g. the TUI).
+        if !self.sync_enabled {
+            return;
+        }
+
         if !AppExecutionMode::as_ref(ctx).can_sync_preferences() {
             // Early exit if the app can't sync preferences.
             return;
@@ -658,7 +705,9 @@ impl CloudPreferencesSyncer {
                 && !settings_manager.sync_regardless_of_users_syncing_setting(storage_key)
             {
                 // Skip syncing if settings sync is disabled and this particular cloud pref is not always synced.
-                log::debug!("Not syncing cloud preference with storage key {storage_key} because settings sync is disabled for it");
+                log::debug!(
+                    "Not syncing cloud preference with storage key {storage_key} because settings sync is disabled for it"
+                );
                 continue;
             }
 
@@ -675,7 +724,9 @@ impl CloudPreferencesSyncer {
                 .unwrap_or(false);
             if !is_current_value_syncable {
                 // Don't sync this preference if the current value is not syncable.
-                log::debug!("Not syncing cloud preference with storage key {storage_key} because the current value is not syncable");
+                log::debug!(
+                    "Not syncing cloud preference with storage key {storage_key} because the current value is not syncable"
+                );
                 continue;
             }
 

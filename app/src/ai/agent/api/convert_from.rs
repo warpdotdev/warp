@@ -2,12 +2,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use ai::agent::UnknownCitationTypeError;
 use ai::agent::action::{LifecycleEventType as StartAgentLifecycleEventType, ReadSkillRequest};
 use ai::agent::action_result::StartAgentVersion;
 use ai::agent::convert::ToolToAIAgentActionError;
-use ai::agent::UnknownCitationTypeError;
 use ai::skills::{
-    skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref, SkillPathOrigin,
+    SkillPathOrigin, skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref,
 };
 use api::ask_user_question::question::QuestionType;
 use warp_core::channel::ChannelState;
@@ -129,6 +129,7 @@ fn convert_run_agents_execution_mode(
             environment_id: remote.environment_id,
             worker_host: remote.worker_host,
             computer_use_enabled: remote.computer_use_enabled,
+            runner_id: remote.runner_id,
         },
         Some(api::run_agents::ExecutionMode::Local(_)) | None => RunAgentsExecutionMode::Local,
     }
@@ -164,6 +165,7 @@ fn convert_run_agents(
                 name: config.name,
                 prompt: config.prompt,
                 title: config.title,
+                agent_identity_uid: config.agent_identity_uid,
             })
             .collect(),
         plan_id,
@@ -198,6 +200,12 @@ fn convert_start_agent_v2_execution_mode(
                 // Auth secret is plumbed client-side via `RunAgentsRequest`;
                 // StartAgentV2 from the server never carries it.
                 auth_secret_name: None,
+                // StartAgentV2 (server→child) does not carry a runner
+                // override; runner selection flows through RunAgents.
+                runner_id: String::new(),
+                // Agent identity is plumbed client-side via `RunAgentsRequest`;
+                // StartAgentV2 from the server never carries it.
+                agent_identity_uid: None,
             }
         }
         Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {
@@ -771,9 +779,15 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             api::message::tool_call::Tool::RequestComputerUse(request_computer_use) => {
                 create_standard_action(request_computer_use.into())
             }
+            api::message::tool_call::Tool::StartRecording(start_recording) => {
+                create_standard_action(start_recording.try_into()?)
+            }
+            api::message::tool_call::Tool::StopRecording(stop_recording) => {
+                create_standard_action(stop_recording.into())
+            }
             api::message::tool_call::Tool::Subagent(subagent) => {
-                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 use api::message::tool_call::subagent::Metadata;
+                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 let subagent_type = match subagent.metadata {
                     Some(Metadata::Cli(_)) => SubagentType::Cli,
                     Some(Metadata::Research(_)) => SubagentType::Research,
@@ -979,12 +993,6 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                         api::message::system_query::Type::AutoCodeDiff(p) => {
                             inputs.push(AIAgentInput::AutoCodeDiffQuery {
                                 query: p.query.clone(),
-                                context: ctx,
-                            });
-                        }
-                        api::message::system_query::Type::FetchReviewComments(fetch) => {
-                            inputs.push(AIAgentInput::FetchReviewComments {
-                                repo_path: fetch.repo_path.clone(),
                                 context: ctx,
                             });
                         }

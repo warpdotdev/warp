@@ -11,7 +11,8 @@ use std::io::Write;
 use schemars::SchemaGenerator;
 use serde_json::{Map, Value};
 use settings::schema::SettingSchemaEntry;
-use warp_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
+use settings::{SettingSurfaces, SettingsMode};
+use warp_core::features::{DEBUG_FLAGS, DOGFOOD_FLAGS, FeatureFlag, PREVIEW_FLAGS, RELEASE_FLAGS};
 
 /// Ensures all `inventory::submit!` registrations from the app crate's
 /// dependency tree are linked into the binary.
@@ -139,6 +140,13 @@ fn ensure_hierarchy<'a>(
     current
 }
 
+fn setting_surface_names(surfaces: SettingSurfaces) -> Vec<Value> {
+    [(SettingsMode::Gui, "gui"), (SettingsMode::Tui, "tui")]
+        .into_iter()
+        .filter(|(mode, _)| surfaces.includes(*mode))
+        .map(|(_, name)| Value::String(name.to_owned()))
+        .collect()
+}
 fn main() {
     ensure_settings_linked();
 
@@ -178,33 +186,40 @@ fn main() {
         }
 
         // Skip settings whose feature flag is not active
-        if let Some(flag) = entry.feature_flag {
-            if !active_flags.contains(&flag) {
-                continue;
-            }
+        if let Some(flag) = entry.feature_flag
+            && !active_flags.contains(&flag)
+        {
+            continue;
         }
 
         let type_schema = (entry.schema_fn)(&mut generator);
 
         let mut schema_value: Value = type_schema.to_value();
+        schema_value
+            .as_object_mut()
+            .expect("setting schema should be an object")
+            .insert(
+                "x-warp-surfaces".to_string(),
+                Value::Array(setting_surface_names((entry.surfaces_fn)())),
+            );
 
         // Compute default value — prefer file default over serde default
         let default_json = (entry.file_default_value_fn)();
 
-        if let Ok(default_value) = serde_json::from_str::<Value>(&default_json) {
-            if let Some(obj) = schema_value.as_object_mut() {
-                obj.insert("default".to_string(), default_value);
-            }
+        if let Ok(default_value) = serde_json::from_str::<Value>(&default_json)
+            && let Some(obj) = schema_value.as_object_mut()
+        {
+            obj.insert("default".to_string(), default_value);
         }
 
         // Always overwrite description with the macro-provided one
-        if !entry.description.is_empty() {
-            if let Some(obj) = schema_value.as_object_mut() {
-                obj.insert(
-                    "description".to_string(),
-                    Value::String(entry.description.to_string()),
-                );
-            }
+        if !entry.description.is_empty()
+            && let Some(obj) = schema_value.as_object_mut()
+        {
+            obj.insert(
+                "description".to_string(),
+                Value::String(entry.description.to_string()),
+            );
         }
 
         // Place the setting in the hierarchy
@@ -263,3 +278,7 @@ fn main() {
         println!("{output}");
     }
 }
+
+#[cfg(test)]
+#[path = "generate_settings_schema_tests.rs"]
+mod tests;

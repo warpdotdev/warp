@@ -3,6 +3,7 @@ use std::path::Path;
 use settings::{Setting as _, SettingsManager};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
+use warp_errors::report_if_error;
 use warpui::rendering::GPUPowerPreference;
 use warpui::{AppContext, SingletonEntity};
 use warpui_extras::user_preferences;
@@ -17,13 +18,16 @@ use super::{
     BlockVisibilitySettings, ChangelogSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
     FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
     InputSettings, LocalControlSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
-    SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
+    SelectionSettings, SharedObjectLimitBannerSettings, SshSettings, ThemeSettings,
+    TuiAutoupdateSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::appearance;
 use crate::banner::BannerState;
 use crate::drive::settings::WarpDriveSettings;
 use crate::resource_center::TipsCompleted;
 use crate::search::command_search::settings::CommandSearchSettings;
+use crate::terminal::BlockListSettings;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::keys_settings::KeysSettings;
@@ -33,12 +37,10 @@ use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedE
 use crate::terminal::settings::TerminalSettings;
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::warpify::settings::WarpifySettings;
-use crate::terminal::BlockListSettings;
 use crate::undo_close::UndoCloseSettings;
 use crate::window_settings::WindowSettings;
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workspace::tab_settings::TabSettings;
-use crate::{appearance, report_if_error};
 
 pub struct UserDefaultsOnStartup {
     pub should_restore_session: bool,
@@ -77,6 +79,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     SelectionSettings::register(ctx);
     InputModeSettings::register(ctx);
     ThemeSettings::register(ctx);
+    TuiAutoupdateSettings::register(ctx);
     AccessibilitySettings::register(ctx);
     NativePreferenceSettings::register(ctx);
     CloudPreferencesSettings::register(ctx);
@@ -90,6 +93,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     UndoCloseSettings::register(ctx);
     SshSettings::register(ctx);
     VimBannerSettings::register(ctx);
+    SharedObjectLimitBannerSettings::register(ctx);
     SharedSessionSettings::register(ctx);
     WarpDriveSettings::register(ctx);
     WorkflowAliases::register(ctx);
@@ -149,6 +153,23 @@ pub fn init(
     } else {
         None
     };
+
+    // Always log a settings-load failure. The GUI additionally surfaces this
+    // via a banner/footer, but headless surfaces (e.g. the TUI) have no such
+    // UI, so the log is the baseline signal. Final user-facing UX is TBD.
+    if let Some(err) = &settings_file_error {
+        match err {
+            super::SettingsFileError::FileParseFailed(detail) => {
+                log::error!("Settings file could not be parsed: {detail}");
+            }
+            super::SettingsFileError::InvalidSettings(keys) => {
+                log::warn!(
+                    "Settings file has invalid values (using defaults for): {}",
+                    keys.join(", ")
+                );
+            }
+        }
+    }
 
     let user_defaults_on_startup = UserDefaultsOnStartup {
         should_restore_session,
@@ -266,7 +287,7 @@ fn init_platform_native_preferences() -> user_preferences::Model {
             match user_preferences::file_backed::FileBackedUserPreferences::new(super::user_preferences_file_path()) {
                 Ok(prefs) => Box::new(prefs) as user_preferences::Model,
                 Err(err) => {
-                    crate::report_error!(anyhow::anyhow!(err));
+                    warp_errors::report_error!(anyhow::anyhow!(err));
                     Box::<user_preferences::in_memory::InMemoryPreferences>::default()
                 }
             }
@@ -335,6 +356,13 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
 /// 3. The migration-complete marker is absent from the native store
 ///    (handles the case where a user deletes `settings.toml` to reset).
 fn needs_settings_file_migration(ctx: &AppContext) -> bool {
+    // Migration only applies to the GUI surface, which is the one with legacy
+    // native-store settings to move into its TOML file. Other surfaces (e.g.
+    // the TUI) have nothing to migrate and must never run migration or touch
+    // the shared migration-complete marker.
+    if !settings::settings_mode().should_migrate_native_settings() {
+        return false;
+    }
     needs_settings_file_migration_for_path(ctx, &super::user_preferences_toml_file_path())
 }
 
@@ -409,23 +437,29 @@ fn migrate_native_settings_to_settings_file(ctx: &mut AppContext) {
         ))));
     }
 
-    log::info!("Settings file migration complete — migrated {migrated_count} settings, {failed_count} failed");
+    log::info!(
+        "Settings file migration complete — migrated {migrated_count} settings, {failed_count} failed"
+    );
 
     // Record the migration so it won't re-run if the user deletes the TOML
     // file. This marker is written unconditionally — for new users the native
     // store is empty so the migration is a no-op, but the marker still gets
     // written to indicate that migration was attempted.
-    report_if_error!(ctx
-        .private_user_preferences()
-        .write_value(SETTINGS_FILE_MIGRATION_COMPLETE_KEY, "true".to_owned())
-        .map_err(|err| anyhow::anyhow!(err)));
+    report_if_error!(
+        ctx.private_user_preferences()
+            .write_value(SETTINGS_FILE_MIGRATION_COMPLETE_KEY, "true".to_owned())
+            .map_err(|err| anyhow::anyhow!(err))
+    );
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(feature = "tui", feature = "test-util")))]
 pub fn init_and_register_user_preferences(ctx: &mut AppContext) {
-    let (public_prefs, _parse_error) = init_public_user_preferences();
+    let public_prefs = Box::<user_preferences::in_memory::InMemoryPreferences>::default();
+    let private_prefs = settings::PrivatePreferences::new(Box::<
+        user_preferences::in_memory::InMemoryPreferences,
+    >::default());
     ctx.add_singleton_model(move |_| settings::PublicPreferences::new(public_prefs));
-    ctx.add_singleton_model(move |_| init_private_user_preferences());
+    ctx.add_singleton_model(move |_| private_prefs);
 }
 
 #[cfg(test)]

@@ -17,7 +17,13 @@ use crate::ai::blocklist::InputConfig;
 pub enum CLIAgentSessionStatus {
     InProgress,
     Success,
-    Blocked { message: Option<String> },
+    Failed {
+        error_type: Option<String>,
+        message: Option<String>,
+    },
+    Blocked {
+        message: Option<String>,
+    },
 }
 
 impl CLIAgentSessionStatus {
@@ -26,6 +32,7 @@ impl CLIAgentSessionStatus {
         match self {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
+            CLIAgentSessionStatus::Failed { .. } => ConversationStatus::Error,
             CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
                 blocked_action: message.clone().unwrap_or_default(),
             },
@@ -162,10 +169,11 @@ impl CLIAgentSession {
     }
 
     /// Clears state populated by `PermissionRequest`. Called whenever the
-    /// session leaves the permission flow (the user replied, a new prompt
-    /// is submitted, or the session ends successfully) so the permission
-    /// summary doesn't leak into later UI surfaces — most visibly the tab
-    /// title, which can fall back to `summary` when `query` is unset.
+    /// session leaves the permission flow (the user replied, a blocking tool
+    /// completed, a new prompt is submitted, or the session ends successfully)
+    /// so the permission summary doesn't leak into later UI surfaces — most
+    /// visibly the tab title, which can fall back to `summary` when `query`
+    /// is unset.
     fn clear_permission_scoped_state(&mut self) {
         self.session_context.summary = None;
         self.session_context.tool_name = None;
@@ -196,6 +204,7 @@ impl CLIAgentSession {
                 if !matches!(self.status, CLIAgentSessionStatus::Blocked { .. }) {
                     return None;
                 }
+                self.clear_permission_scoped_state();
                 CLIAgentSessionStatus::InProgress
             }
             CLIAgentEventType::Stop => {
@@ -203,6 +212,15 @@ impl CLIAgentSession {
                 self.session_context.response = event.payload.response.clone();
                 self.clear_permission_scoped_state();
                 CLIAgentSessionStatus::Success
+            }
+            CLIAgentEventType::StopFailure => {
+                self.session_context.query = event.payload.query.clone();
+                self.session_context.response = event.payload.response.clone();
+                self.clear_permission_scoped_state();
+                CLIAgentSessionStatus::Failed {
+                    error_type: event.payload.error_type.clone(),
+                    message: event.payload.response.clone(),
+                }
             }
             CLIAgentEventType::PermissionRequest => {
                 self.session_context.summary = event.payload.summary.clone();

@@ -8,7 +8,7 @@ use std::rc::{self, Rc};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 use futures::future::join_all;
 use futures::prelude::*;
@@ -19,17 +19,20 @@ use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use rustc_hash::FxHashMap;
+use warp_errors::report_error;
 
 use super::{
-    autotracking, ActionCallback, BlurContext, FocusContext, GlobalActionCallback, GlobalShortcut,
+    ActionCallback, BlurContext, FocusContext, GlobalActionCallback, GlobalShortcut,
     InvalidationCallback, Observation, PendingUnsubscribes, RefCounts, Subscription, TaskCallback,
-    TypedActionCallback, ViewType,
+    TypedActionCallback, ViewType, autotracking,
 };
 use crate::accessibility::{AccessibilityVerbosity, ActionAccessibilityContent};
 use crate::actions::StandardAction;
 use crate::app_focus_telemetry::AppFocusInfo;
-use crate::assets::asset_cache::{AssetCache, AssetHandle, AssetSource, AssetState};
 use crate::assets::AssetProvider;
+use crate::assets::asset_cache::{AssetCache, AssetHandle, AssetSource, AssetState};
+use crate::r#async::executor::{self, Background, Foreground, ForegroundTask};
+use crate::r#async::{FutureId, SpawnableOutput, Timer, block_on};
 use crate::core::{ActionType, StoredView, Window};
 use crate::event::KeyState;
 use crate::fonts::{self, ExternalFontFamily, FallbackFontModel, RequestedFallbackFontSource};
@@ -50,17 +53,16 @@ use crate::platform::{
     TerminationMode, WindowBounds, WindowContext, WindowOptions, WindowStyle,
 };
 use crate::presenter::{CursorUpdate, DispatchedActionKind};
-use crate::r#async::executor::{self, Background, Foreground, ForegroundTask};
-use crate::r#async::{block_on, FutureId, SpawnableOutput, Timer};
 use crate::util::post_inc;
 use crate::windowing::{self, WindowCallbacks, WindowManager};
 use crate::{
-    assets, rendering, AccessibilityData, Action, AddSingletonModel, AddWindowOptions, AnyModel,
-    AnyModelHandle, ApplicationBundleInfo, Clipboard, CursorInfo, Effect, Element, Entity,
-    EntityId, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
+    AccessibilityData, Action, AddSingletonModel, AddWindowOptions, AnyModel, AnyModelHandle,
+    ApplicationBundleInfo, Clipboard, CursorInfo, Effect, Element, Entity, EntityId, EntityIdMap,
+    EntityIdSet, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
     NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView, Scene,
     SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
-    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor,
+    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor, assets,
+    rendering,
 };
 
 #[cfg(feature = "tui")]
@@ -72,6 +74,20 @@ lazy_static! {
 
 #[derive(Clone)]
 pub struct App(Rc<RefCell<AppContext>>);
+
+/// A weak handle to the owning [`App`], obtained via [`AppContext::weak_app`].
+/// Upgrade it to a strong [`App`] to re-enter the shared core from a spawned
+/// task (for example, the TUI runtime's input loop) without keeping the app
+/// alive past termination.
+#[derive(Clone)]
+pub struct WeakApp(rc::Weak<RefCell<AppContext>>);
+
+impl WeakApp {
+    /// Upgrades to a strong [`App`] handle if the app is still alive.
+    pub fn upgrade(&self) -> Option<App> {
+        self.0.upgrade().map(App)
+    }
+}
 
 impl App {
     pub fn test<A: assets::AssetProvider, T: 'static, F: Future<Output = T> + 'static>(
@@ -237,7 +253,7 @@ impl App {
             let responder_chain = ctx.get_responder_chain(window_id);
             let res = ctx.dispatch_standard_action(action, window_id, &responder_chain);
             if let Err(error) = res {
-                log::error!("error dispatching standard action: {error}");
+                report_error!(error.context("error dispatching standard action"));
             }
         });
     }
@@ -573,7 +589,7 @@ pub struct AppContext {
     /////////////////////////
     // Fields from AppContext
     /////////////////////////
-    pub(super) models: HashMap<EntityId, Box<dyn AnyModel>>,
+    pub(super) models: EntityIdMap<Box<dyn AnyModel>>,
     /// A mapping from type ID -> handle to the single global model of that
     /// type.  The handle is a strong reference, ensuring the model will not be
     /// dropped during the lifetime of the application.
@@ -608,8 +624,8 @@ pub struct AppContext {
     keystroke_matcher: Matcher,
     next_task_id: usize,
     weak_self: rc::Weak<RefCell<Self>>,
-    pub(super) subscriptions: HashMap<EntityId, Vec<Subscription>>,
-    pub(super) observations: HashMap<EntityId, Vec<Observation>>,
+    pub(super) subscriptions: EntityIdMap<Vec<Subscription>>,
+    pub(super) observations: EntityIdMap<Vec<Observation>>,
     /// Tracks pending unsubscribes during event emission.
     /// When `emit_event` is processing callbacks, unsubscribes are deferred here to avoid
     /// O(N²) tombstone scanning. The unsubscribes are processed at the end of event emission.
@@ -687,7 +703,7 @@ pub struct AppContext {
     /// Visibility is `pub(super)` because the `view::handle` module needs to access
     /// this field for dynamic window lookup in `ViewHandle::window_id()`,
     /// `WeakViewHandle::upgrade()`, and `WeakViewHandle::window_id()`.
-    pub(super) view_to_window: HashMap<EntityId, WindowId>,
+    pub(super) view_to_window: EntityIdMap<WindowId>,
 
     /// Maps child view → parent view for views created via `add_typed_action_view_with_parent`.
     /// Unlike the presenter's layout-time parent map, this persists across renders and
@@ -696,12 +712,12 @@ pub struct AppContext {
     ///
     /// Populated by `add_typed_action_view_internal` when a parent_view_id is provided,
     /// and cleaned up in `remove_dropped_items` when views are dropped.
-    structural_child_to_parent: HashMap<EntityId, EntityId>,
+    structural_child_to_parent: EntityIdMap<EntityId>,
 
     /// Reverse of `structural_child_to_parent`: maps parent view → set of child views.
     /// Enables efficient traversal in `transfer_structural_children` without iterating
     /// all views in the source window.
-    structural_parent_to_children: HashMap<EntityId, HashSet<EntityId>>,
+    structural_parent_to_children: EntityIdMap<EntityIdSet>,
 
     /// Backend-neutral child-view → parent-view map, per window. This is the view
     /// hierarchy the shared core walks for [`Self::view_ancestors`], the responder
@@ -713,7 +729,7 @@ pub struct AppContext {
     /// child-view embeddings it discovers while laying out a frame
     /// ([`Self::report_view_embeddings`]). Entries are removed when views are
     /// dropped or transferred out of the window, and when the window closes.
-    view_parents: HashMap<WindowId, HashMap<EntityId, EntityId>>,
+    view_parents: HashMap<WindowId, EntityIdMap<EntityId>>,
 
     /// When set, all focus changes to this window are suppressed.
     /// Used during tab drag to prevent the new window from stealing focus.
@@ -865,6 +881,12 @@ impl AppContext {
 
     pub fn background_executor(&self) -> &Arc<executor::Background> {
         &self.background
+    }
+
+    /// Returns a weak handle to the owning [`App`], for spawned tasks that need
+    /// to re-enter the shared core later without keeping it alive.
+    pub fn weak_app(&self) -> WeakApp {
+        WeakApp(self.weak_self.clone())
     }
 
     pub fn window_bounds(&self, window_id: &WindowId) -> Option<RectF> {
@@ -1083,10 +1105,15 @@ impl AppContext {
             });
     }
 
-    /// Subscribes to a [`ViewHandle`] for changes, calling `callback` with the emitted event whenever the view is invalidated.
+    /// Subscribes to a GUI or TUI [`ViewHandle`] for emitted events.
+    ///
+    /// The [`ViewHandle`] parameter is the proof that `S` is a view: callers can
+    /// only obtain one through GUI or TUI view creation APIs. The generic bound
+    /// stays at [`Entity`] so this can accept both GUI [`View`](crate::View) and
+    /// TUI [`TuiView`](crate::TuiView) instances while still accessing `S::Event`.
     pub fn subscribe_to_view<S, F>(&mut self, handle: &ViewHandle<S>, mut callback: F)
     where
-        S: View,
+        S: Entity,
         S::Event: 'static,
         F: 'static + FnMut(ViewHandle<S>, &S::Event, &mut AppContext),
     {
@@ -1340,7 +1367,10 @@ impl AppContext {
                         )
                     }
                     None => {
-                        log::error!("Could not downcast argument for action {name_clone}");
+                        report_error!(
+                            "Could not downcast argument for action",
+                            extra: { "action" => name_clone }
+                        );
                         false
                     }
                 }
@@ -1374,7 +1404,10 @@ impl AppContext {
                         false,
                         "Could not downcast argument for action {name_clone}: {location:?}"
                     );
-                    log::error!("Could not downcast argument for action {name_clone}");
+                    report_error!(
+                        "Could not downcast argument for action",
+                        extra: { "action" => name_clone }
+                    );
                 }
             },
         );
@@ -1454,7 +1487,7 @@ impl AppContext {
     pub fn report_view_embeddings(
         &mut self,
         window_id: WindowId,
-        embeddings: HashMap<EntityId, EntityId>,
+        embeddings: EntityIdMap<EntityId>,
     ) {
         self.view_parents
             .entry(window_id)
@@ -1470,7 +1503,10 @@ impl AppContext {
         if let Some(parents) = self.view_parents.get(&window_id) {
             while let Some(parent_id) = parents.get(&view_id) {
                 if chain.contains(parent_id) {
-                    log::error!("Cycle detected in the view hierarchy at view {parent_id}");
+                    report_error!(
+                        "Cycle detected in the view hierarchy",
+                        extra: { "view" => parent_id }
+                    );
                     break;
                 }
                 view_id = *parent_id;
@@ -1910,7 +1946,7 @@ impl AppContext {
         match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                log::error!("Unable to fetch Key Bindings for View: {error}");
+                report_error!(error.context("Unable to fetch Key Bindings for View"));
                 Vec::new()
             }
         }
@@ -1957,7 +1993,7 @@ impl AppContext {
         let contexts = match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                log::error!("Unable to fetch Key Bindings for View: {error}");
+                report_error!(error.context("Unable to fetch Key Bindings for View"));
                 return Vec::new();
             }
         };
@@ -2064,7 +2100,7 @@ impl AppContext {
             }
 
             if let Err(error) = res {
-                log::error!("error dispatching custom action: {error}");
+                report_error!(error.context("error dispatching custom action"));
             }
         } else {
             // We hit this case when the user is in the course of editing their keybindings.
@@ -2485,7 +2521,7 @@ impl AppContext {
                 let responder_chain = ctx.get_responder_chain(window_id);
                 let res = ctx.dispatch_standard_action(action, window_id, &responder_chain);
                 if let Err(error) = res {
-                    log::error!("error dispatching standard action: {error}");
+                    report_error!(error.context("error dispatching standard action"));
                 }
             }),
             event_callback: Box::new(move |event, ctx| {
@@ -2509,46 +2545,44 @@ impl AppContext {
                             *shift = modifiers.shift;
                         }
 
-                        if let Some(presenter) = ctx.presenter(window_id) {
-                            if let Some(key_code) = key_code {
-                                // Based on the key code in question and the new state of the modifier key,
-                                // we can infer whether it was pressed or released.
-                                let key_pressed = match key_code {
-                                    KeyCode::ShiftLeft | KeyCode::ShiftRight => {
-                                        Some(modifiers.shift)
-                                    }
-                                    KeyCode::ControlLeft | KeyCode::ControlRight => {
-                                        Some(modifiers.ctrl)
-                                    }
-                                    KeyCode::AltLeft | KeyCode::AltRight => Some(modifiers.alt),
-                                    KeyCode::SuperLeft | KeyCode::SuperRight => Some(modifiers.cmd),
-                                    KeyCode::Fn => Some(modifiers.func),
-                                    _ => None,
-                                };
-                                if let Some(key_pressed) = key_pressed {
-                                    // Note: this can be slightly incorrect in a particular edge case where the user
-                                    // uses 2 physical keys corresponding to the same logical modifer. For example:
-                                    // 1. The user holds down right-alt - we fire the right-alt pressed event
-                                    // 2. The user then holds down left-alt - we fire the left-alt pressed event
-                                    // 3. The user lets go of left-alt - we would incorrectly fire the left-alt pressed event (since the logical state is still true)
-                                    // 4. The user lets go of right-alt - we correctly fire the right-alt released event
-                                    // This is a known limitation due to the underlying APIs being limited (we must use lower-level Apple
-                                    // APIs to get the exact physical key states, which we currently don't do).
-                                    let key_state = if key_pressed {
-                                        KeyState::Pressed
-                                    } else {
-                                        KeyState::Released
-                                    };
-
-                                    ctx.handle_window_event(
-                                        Event::ModifierKeyChanged {
-                                            key_code,
-                                            state: key_state,
-                                        },
-                                        window_id,
-                                        presenter.clone(),
-                                    );
+                        if let Some(presenter) = ctx.presenter(window_id)
+                            && let Some(key_code) = key_code
+                        {
+                            // Based on the key code in question and the new state of the modifier key,
+                            // we can infer whether it was pressed or released.
+                            let key_pressed = match key_code {
+                                KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(modifiers.shift),
+                                KeyCode::ControlLeft | KeyCode::ControlRight => {
+                                    Some(modifiers.ctrl)
                                 }
+                                KeyCode::AltLeft | KeyCode::AltRight => Some(modifiers.alt),
+                                KeyCode::SuperLeft | KeyCode::SuperRight => Some(modifiers.cmd),
+                                KeyCode::Fn => Some(modifiers.func),
+                                _ => None,
+                            };
+                            if let Some(key_pressed) = key_pressed {
+                                // Note: this can be slightly incorrect in a particular edge case where the user
+                                // uses 2 physical keys corresponding to the same logical modifer. For example:
+                                // 1. The user holds down right-alt - we fire the right-alt pressed event
+                                // 2. The user then holds down left-alt - we fire the left-alt pressed event
+                                // 3. The user lets go of left-alt - we would incorrectly fire the left-alt pressed event (since the logical state is still true)
+                                // 4. The user lets go of right-alt - we correctly fire the right-alt released event
+                                // This is a known limitation due to the underlying APIs being limited (we must use lower-level Apple
+                                // APIs to get the exact physical key states, which we currently don't do).
+                                let key_state = if key_pressed {
+                                    KeyState::Pressed
+                                } else {
+                                    KeyState::Released
+                                };
+
+                                ctx.handle_window_event(
+                                    Event::ModifierKeyChanged {
+                                        key_code,
+                                        state: key_state,
+                                    },
+                                    window_id,
+                                    presenter.clone(),
+                                );
                             }
                         }
                     }
@@ -2627,7 +2661,7 @@ impl AppContext {
 
         match window_result {
             Err(err) => {
-                log::error!("error opening window: {err}");
+                report_error!("error opening window", extra: { "error" => %err });
             }
             Ok(_) => {
                 self.on_window_invalidated(window_id, move |window_id, ctx| {
@@ -2725,11 +2759,11 @@ impl AppContext {
         self.view_parents.remove(&window_id);
         autotracking::close_window(window_id);
 
-        let mut subscriptions = HashMap::new();
-        let mut observations = HashMap::new();
+        let mut subscriptions = EntityIdMap::default();
+        let mut observations = EntityIdMap::default();
         // Back up view_to_window mappings so they can be restored if the window is reopened
         // via reopen_closed_window(). This preserves the view-to-window associations.
-        let mut view_to_window_backup = HashMap::new();
+        let mut view_to_window_backup = EntityIdMap::default();
         for view_id in view_ids.into_iter().flatten() {
             if let Some(subs) = self.subscriptions.remove(&view_id) {
                 subscriptions.insert(view_id, subs);
@@ -2756,7 +2790,7 @@ impl AppContext {
             self.windows.remove(&window_id),
             self.window_bounds.remove(&window_id),
         ) else {
-            log::error!("Closed a window that was missing underlying window data!");
+            report_error!("Closed a window that was missing underlying window data!");
             self.flush_effects();
             return None;
         };
@@ -2787,7 +2821,7 @@ impl AppContext {
         } = data;
 
         let Some(bounds) = bounds else {
-            log::error!("Had no bounds for cached closed window!");
+            report_error!("Had no bounds for cached closed window!");
             return;
         };
 
@@ -3287,7 +3321,7 @@ impl AppContext {
         root_view_id: EntityId,
         window_id: WindowId,
     ) -> Vec<EntityId> {
-        let mut seen: HashSet<EntityId> = HashSet::new();
+        let mut seen = EntityIdSet::default();
         let mut order: Vec<EntityId> = Vec::new();
         let mut stack: Vec<EntityId> = vec![root_view_id];
 
@@ -3303,14 +3337,13 @@ impl AppContext {
                 stack.extend(children.iter().copied());
             }
 
-            if let Some(current_window_id) = self.view_to_window.get(&view_id).copied() {
-                if let Some(view) = self
+            if let Some(current_window_id) = self.view_to_window.get(&view_id).copied()
+                && let Some(view) = self
                     .windows
                     .get(&current_window_id)
                     .and_then(|window| window.views.get(&view_id))
-                {
-                    stack.extend(view.child_view_ids(self));
-                }
+            {
+                stack.extend(view.child_view_ids(self));
             }
         }
 
@@ -3327,7 +3360,7 @@ impl AppContext {
         target_window_id: WindowId,
         transferred: &mut Vec<EntityId>,
     ) {
-        let mut transferred_set: HashSet<EntityId> = transferred.iter().copied().collect();
+        let mut transferred_set: EntityIdSet = transferred.iter().copied().collect();
         let mut to_process: Vec<EntityId> = transferred.clone();
 
         while let Some(parent_id) = to_process.pop() {
@@ -3377,22 +3410,21 @@ impl AppContext {
                     .unwrap_or(handle_window_id);
 
                 // Focus the root view if the view being removed is focused
-                if let Some(focused_view_id) = self.focused_view_id(current_window_id) {
-                    if view_id == focused_view_id {
-                        if let Some(root_view_id) = self.root_view_id(current_window_id) {
-                            self.focus(current_window_id, root_view_id);
-                        }
-                    }
+                if let Some(focused_view_id) = self.focused_view_id(current_window_id)
+                    && view_id == focused_view_id
+                    && let Some(root_view_id) = self.root_view_id(current_window_id)
+                {
+                    self.focus(current_window_id, root_view_id);
                 }
 
                 self.subscriptions.remove(&view_id);
                 self.observations.remove(&view_id);
-                if let Some(parent_id) = self.structural_child_to_parent.remove(&view_id) {
-                    if let Some(children) = self.structural_parent_to_children.get_mut(&parent_id) {
-                        children.remove(&view_id);
-                        if children.is_empty() {
-                            self.structural_parent_to_children.remove(&parent_id);
-                        }
+                if let Some(parent_id) = self.structural_child_to_parent.remove(&view_id)
+                    && let Some(children) = self.structural_parent_to_children.get_mut(&parent_id)
+                {
+                    children.remove(&view_id);
+                    if children.is_empty() {
+                        self.structural_parent_to_children.remove(&parent_id);
                     }
                 }
                 self.structural_parent_to_children.remove(&view_id);
@@ -3456,6 +3488,11 @@ impl AppContext {
         }
     }
 
+    /// Fires each invalidated window's [`Self::on_window_invalidated`] callback.
+    /// Normally run at the end of [`Self::flush_effects`], but also called
+    /// directly to imperatively trigger a redraw after work that doesn't flush
+    /// app effects (e.g. the repaint tasks in this file, and the TUI driver's
+    /// input handling).
     fn update_windows(&mut self) {
         let invalidated_window_ids = self
             .window_invalidations
@@ -3505,21 +3542,16 @@ impl AppContext {
                 is_composing,
                 ..
             } = &event
+                && let Some(focused_view_id) = self.focused_view_id(window_id)
             {
-                if let Some(focused_view_id) = self.focused_view_id(window_id) {
-                    let responder_chain = self.view_ancestors(window_id, focused_view_id);
-                    match self.dispatch_keystroke(
-                        window_id,
-                        &responder_chain,
-                        keystroke,
-                        *is_composing,
-                    ) {
-                        Ok(handled) => {
-                            keystroke_handled = handled;
-                        }
-                        Err(error) => {
-                            log::error!("error dispatching keystroke: {error}");
-                        }
+                let responder_chain = self.view_ancestors(window_id, focused_view_id);
+                match self.dispatch_keystroke(window_id, &responder_chain, keystroke, *is_composing)
+                {
+                    Ok(handled) => {
+                        keystroke_handled = handled;
+                    }
+                    Err(error) => {
+                        report_error!(error.context("error dispatching keystroke"));
                     }
                 }
             }
@@ -3535,11 +3567,12 @@ impl AppContext {
         // Only dispatch `self_or_child_interacted_with` if:
         // (1) the event was handled by a view in the responder chain, and
         // (2) the event is a valid interaction (we exclude mouse and scroll movements to reduce noise)
-        if handled && !matches!(event, Event::MouseMoved { .. } | Event::ScrollWheel { .. }) {
-            if let Some(focused_view_id) = self.focused_view_id(window_id) {
-                let responder_chain = self.view_ancestors(window_id, focused_view_id);
-                self.dispatch_self_or_child_interacted_with(window_id, &responder_chain);
-            }
+        if handled
+            && !matches!(event, Event::MouseMoved { .. } | Event::ScrollWheel { .. })
+            && let Some(focused_view_id) = self.focused_view_id(window_id)
+        {
+            let responder_chain = self.view_ancestors(window_id, focused_view_id);
+            self.dispatch_self_or_child_interacted_with(window_id, &responder_chain);
         }
 
         crate::windowing::EventDispatchResult {
@@ -3673,7 +3706,7 @@ impl AppContext {
                     log::warn!("Unable to load requested fallback font: {e:?}");
                 }
                 AssetState::Loading { .. } => {
-                    log::error!("Fallback font asset should not be in a loading state");
+                    report_error!("Fallback font asset should not be in a loading state");
                 }
             }
         }
@@ -3769,10 +3802,10 @@ impl AppContext {
 
                 // If the font is loading, collect the future so we can wait
                 // for it to resolve.
-                if let AssetState::Loading { ref handle } = asset {
-                    if let Some(future) = handle.when_loaded(asset_cache) {
-                        futures.push(future);
-                    }
+                if let AssetState::Loading { ref handle } = asset
+                    && let Some(future) = handle.when_loaded(asset_cache)
+                {
+                    futures.push(future);
                 }
                 // We need to load the asset again once the future has resolved,
                 // so collect the asset source.
@@ -3994,67 +4027,67 @@ impl AppContext {
     fn notify_model_observers(&mut self, observed_id: EntityId) {
         // TODO: Apply the same deferred unsubscribe pattern used in `emit_event` to support
         // unobserving from inside an observation callback.
-        if let Some(observations) = self.observations.remove(&observed_id) {
-            if self.models.contains_key(&observed_id) {
-                for mut observation in observations {
-                    let alive = match &mut observation {
-                        Observation::FromModel { model_id, callback } => {
-                            if let Some(mut model) = self.models.remove(model_id) {
-                                callback(model.as_any_mut(), observed_id, self, *model_id);
-                                self.models.insert(*model_id, model);
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        Observation::FromView {
-                            window_id: stored_window_id,
-                            view_id,
-                            callback,
-                        } => {
-                            let current_window_id = self
-                                .view_to_window
-                                .get(view_id)
-                                .copied()
-                                .unwrap_or(*stored_window_id);
-                            if let Some(mut view) = self
-                                .windows
-                                .get_mut(&current_window_id)
-                                .and_then(|w| w.views.remove(view_id))
-                            {
-                                callback(
-                                    view.as_any_mut(),
-                                    observed_id,
-                                    self,
-                                    current_window_id,
-                                    *view_id,
-                                );
-                                if let Some(window) = self.windows.get_mut(&current_window_id) {
-                                    window.views.insert(*view_id, view);
-                                }
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        Observation::FromApp { callback } => {
-                            callback(observed_id, self);
+        if let Some(observations) = self.observations.remove(&observed_id)
+            && self.models.contains_key(&observed_id)
+        {
+            for mut observation in observations {
+                let alive = match &mut observation {
+                    Observation::FromModel { model_id, callback } => {
+                        if let Some(mut model) = self.models.remove(model_id) {
+                            callback(model.as_any_mut(), observed_id, self, *model_id);
+                            self.models.insert(*model_id, model);
                             true
+                        } else {
+                            false
                         }
-                    };
-
-                    if alive {
-                        self.observations
-                            .entry(observed_id)
-                            .or_default()
-                            .push(observation);
                     }
+                    Observation::FromView {
+                        window_id: stored_window_id,
+                        view_id,
+                        callback,
+                    } => {
+                        let current_window_id = self
+                            .view_to_window
+                            .get(view_id)
+                            .copied()
+                            .unwrap_or(*stored_window_id);
+                        if let Some(mut view) = self
+                            .windows
+                            .get_mut(&current_window_id)
+                            .and_then(|w| w.views.remove(view_id))
+                        {
+                            callback(
+                                view.as_any_mut(),
+                                observed_id,
+                                self,
+                                current_window_id,
+                                *view_id,
+                            );
+                            if let Some(window) = self.windows.get_mut(&current_window_id) {
+                                window.views.insert(*view_id, view);
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    Observation::FromApp { callback } => {
+                        callback(observed_id, self);
+                        true
+                    }
+                };
+
+                if alive {
+                    self.observations
+                        .entry(observed_id)
+                        .or_default()
+                        .push(observation);
                 }
             }
         }
     }
 
-    fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
+    pub(crate) fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
         self.window_invalidations
             .entry(window_id)
             .or_default()
@@ -4251,9 +4284,9 @@ impl AppContext {
     pub fn open_file_picker(
         &mut self,
         callback: impl FnOnce(Result<Vec<String>, FilePickerError>, &mut AppContext)
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
         config: FilePickerConfiguration,
     ) {
         self.platform_delegate
@@ -4467,7 +4500,7 @@ impl AppContext {
     }
 
     #[cfg(test)]
-    pub fn finish_pending_tasks(&self) -> impl Future<Output = ()> {
+    pub fn finish_pending_tasks(&self) -> impl Future<Output = ()> + use<> {
         let mut pending_tasks = self.task_callbacks.keys().cloned().collect::<HashSet<_>>();
         let task_done = self.task_done.1.clone();
 
@@ -4483,7 +4516,7 @@ impl AppContext {
     }
 
     /// Snapshot of the window's child-view → parent-view map (for debug tooling).
-    fn view_parent_map(&self, window_id: WindowId) -> HashMap<EntityId, EntityId> {
+    fn view_parent_map(&self, window_id: WindowId) -> EntityIdMap<EntityId> {
         self.view_parents
             .get(&window_id)
             .cloned()
@@ -4629,9 +4662,9 @@ impl AddSingletonModel for AppContext {
 pub struct ClosedWindowData {
     pub window_id: WindowId,
     window: Window,
-    subscriptions: HashMap<EntityId, Vec<Subscription>>,
-    observations: HashMap<EntityId, Vec<Observation>>,
-    view_to_window: HashMap<EntityId, WindowId>,
+    subscriptions: EntityIdMap<Vec<Subscription>>,
+    observations: EntityIdMap<Vec<Observation>>,
+    view_to_window: EntityIdMap<WindowId>,
     // TODO(vorporeal): why is AppContext.window_bounds holding an option?
     bounds: Option<RectF>,
     fullscreen_state: FullscreenState,
@@ -4757,7 +4790,7 @@ impl AppContext {
     // allow is needed because the filter half of `filter_map` is only
     // exercised when the additive `tui` feature adds the non-GUI variant.
     #[allow(clippy::unnecessary_filter_map)]
-    pub fn render_views(&self, window_id: WindowId) -> Result<HashMap<EntityId, Box<dyn Element>>> {
+    pub fn render_views(&self, window_id: WindowId) -> Result<EntityIdMap<Box<dyn Element>>> {
         self.windows
             .get(&window_id)
             .map(|w| {
@@ -4768,7 +4801,7 @@ impl AppContext {
                         #[cfg(feature = "tui")]
                         StoredView::Tui(_) => None,
                     })
-                    .collect::<HashMap<_, _>>()
+                    .collect::<EntityIdMap<_>>()
             })
             .ok_or_else(|| anyhow!("window not found"))
     }
@@ -4879,6 +4912,17 @@ impl GetSingletonModelHandle for AppContext {
 }
 
 impl AppContext {
+    /// Returns whether a singleton model of type `T` has been registered.
+    ///
+    /// Unlike [`SingletonEntity::handle`] / [`SingletonEntity::as_ref`], this
+    /// does not panic when the singleton is absent, so callers can gracefully
+    /// skip work that depends on an optional singleton (for example, in test
+    /// harnesses that don't register it).
+    pub fn has_singleton_model<T: SingletonEntity>(&self) -> bool {
+        self.singleton_models
+            .contains_key(&std::any::TypeId::of::<T>())
+    }
+
     pub(super) fn get_singleton_model_as_ref<T: SingletonEntity>(&self) -> &T {
         match self.singleton_models.get(&std::any::TypeId::of::<T>()) {
             Some(model_handle) => model_handle

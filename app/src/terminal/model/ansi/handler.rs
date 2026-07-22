@@ -5,8 +5,8 @@ use warp_terminal::model::ansi::control_sequence_parameters::*;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::color::ColorU;
 
-use super::dcs_hooks::*;
 use super::ProcessorInput;
+use super::dcs_hooks::*;
 use crate::terminal::model::completions::{
     ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
 };
@@ -255,8 +255,18 @@ pub trait Handler {
     /// Process a prompt marker control sequence.
     fn prompt_marker(&mut self, _marker: PromptMarker) {}
 
-    /// Callback for the Warp precmd hook.
-    fn precmd(&mut self, _data: PrecmdValue) {}
+    /// Set or clear the active OSC 8 hyperlink. Subsequent characters
+    /// written via [`Handler::input`] should carry this hyperlink (or none,
+    /// if `hyperlink` is `None`) until this is called again. The implementer
+    /// owns the active state; `BlockGrid`/`Block` delegate here rather than
+    /// keeping a shadow copy that could go stale.
+    fn set_hyperlink(&mut self, _hyperlink: Option<Hyperlink>) {}
+
+    /// Callback for a Warp precmd hook with completion metadata.
+    fn precmd_with_completion_metadata(&mut self, _data: PrecmdValue) {}
+
+    /// Callback for a prompt-only Warp precmd hook.
+    fn prompt_only_precmd(&mut self, _data: PromptMetadata) {}
 
     /// Update the active block's current working directory, independent of the
     /// prompt cycle. Invoked from OSC 7 (`\e]7;file://host/path`) so external

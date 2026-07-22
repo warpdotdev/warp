@@ -11,15 +11,16 @@ pub use remote_server::setup::RemoteServerSetupState;
 use super::history::HistoryEntry;
 use super::model::ansi::FinishUpdateValue;
 use super::model::block::BlockId;
+use super::model::lifecycle::LifecycleRecoveryRecord;
 use super::model::session::{SessionId, SessionInfo};
 use super::model::terminal_model::{BlockIndex, ExitReason};
 use crate::server::ids::SyncId;
 use crate::server::telemetry::ImageProtocol;
+use crate::terminal::ClipboardType;
 use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::terminal_model::HandlerEvent;
 use crate::terminal::shell::ShellType;
-use crate::terminal::ClipboardType;
 use crate::util::AsciiDebug;
 
 #[derive(Clone)]
@@ -107,6 +108,8 @@ pub enum Event {
         is_tagged_in: bool,
     },
     Handler(HandlerEvent),
+    /// Carries non-UGC lifecycle diagnostics to the model dispatcher for telemetry.
+    LifecycleRecovery(LifecycleRecoveryRecord),
     /// Emitted when the remote server binary has been successfully checked or
     /// installed and is ready. The session is initialized independently on
     /// `Bootstrapped`; when the remote server later connects, the client is
@@ -192,9 +195,6 @@ pub struct BootstrappedEvent {
 
 #[derive(Clone)]
 pub struct BlockCompletedEvent {
-    /// This will be None when we don't want to collect telemetry
-    /// for this block's latency.
-    pub block_latency_data: Option<BlockLatencyData>,
     pub block_type: BlockType,
     pub num_secrets_obfuscated: usize,
     pub block_index: BlockIndex,
@@ -218,13 +218,6 @@ pub struct AfterBlockCompletedEvent {
 
     /// If the completed block had an env var object associated.
     pub cloud_env_var_collection_id: Option<SyncId>,
-}
-
-#[derive(Clone)]
-pub struct BlockLatencyData {
-    pub command: &'static str,
-    /// When the block's command grid was started (i.e. when the user hit enter).
-    pub started_at: Instant,
 }
 
 #[derive(Clone, Debug)]
@@ -466,13 +459,11 @@ impl Debug for Event {
                 )
             }
             Event::Handler(handler_event) => write!(f, "Handler({handler_event:?}))"),
+            Event::LifecycleRecovery(record) => write!(f, "LifecycleRecovery({record:?})"),
             Event::RemoteServerReady { session_id } => {
                 write!(f, "RemoteServerReady(session: {session_id:?})")
             }
-            Event::RemoteServerFailed {
-                session_id,
-                ref error,
-            } => {
+            Event::RemoteServerFailed { session_id, error } => {
                 write!(
                     f,
                     "RemoteServerFailed(session: {session_id:?}, error: {error})"

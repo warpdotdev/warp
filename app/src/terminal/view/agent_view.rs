@@ -1,20 +1,23 @@
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
 use warpui::keymap::Keystroke;
 use warpui::{EntityId, SingletonEntity, ViewContext};
 
+use crate::TelemetryEvent;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlock, AgentViewEntryBlockEvent, AgentViewEntryBlockParams, AgentViewEntryOrigin,
-    AutoTriggerBehavior, DismissalStrategy, EnterAgentViewError, EphemeralMessage,
-    ENTER_OR_EXIT_CONFIRMATION_WINDOW,
+    AutoTriggerBehavior, DismissalStrategy, ENTER_OR_EXIT_CONFIRMATION_WINDOW, EnterAgentViewError,
+    EphemeralMessage,
 };
 use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::persistence::ModelEvent;
 use crate::server::telemetry::TelemetryAgentViewEntryOrigin;
+use crate::terminal::TerminalView;
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::view::load_ai_conversation::{
@@ -23,10 +26,8 @@ use crate::terminal::view::load_ai_conversation::{
 use crate::terminal::view::{
     AgentViewEntryMetadata, RichContentInsertionPosition, RichContentMetadata,
 };
-use crate::terminal::TerminalView;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::TelemetryEvent;
 
 pub const ENTER_AGAIN_TO_SEND_MESSAGE_ID: &str = "enter_again_to_send";
 
@@ -75,10 +76,9 @@ impl TerminalView {
         }
 
         if let Err(e) = self.try_enter_agent_view(initial_prompt, origin.clone(), None, ctx) {
-            log::error!(
-                "Failed to enter agent view for new conversation from origin {:?}: {:?}",
-                origin,
-                e
+            report_error!(
+                anyhow::Error::new(e).context("Failed to enter agent view for new conversation"),
+                extra: { "origin" => ?origin }
             );
             self.show_error_toast(e.to_string(), ctx);
         }
@@ -108,10 +108,9 @@ impl TerminalView {
                 Some(conversation_id)
             }
             Err(e) => {
-                log::error!(
-                    "Failed to enter agent view for restored CLI agent from origin {:?}: {:?}",
-                    origin,
-                    e
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to enter agent view for restored CLI agent"),
+                    extra: { "origin" => ?origin }
                 );
                 self.show_error_toast(e.to_string(), ctx);
                 self.redetermine_global_focus(ctx);
@@ -133,7 +132,7 @@ impl TerminalView {
             let in_memory_conversation = history_model_ref.conversation(&conversation_id).cloned();
             let is_live = in_memory_conversation.is_some()
                 && history_model_ref
-                    .all_live_conversations_for_terminal_view(self.view_id)
+                    .all_live_conversations_for_terminal_surface(self.view_id)
                     .any(|conversation| conversation.id() == conversation_id);
             (in_memory_conversation, is_live)
         };
@@ -145,11 +144,9 @@ impl TerminalView {
                 Some(conversation_id),
                 ctx,
             ) {
-                log::error!(
-                    "Failed to enter agent view for existing conversation ({:?}) from origin {:?}: {:?}",
-                    conversation_id,
-                    origin,
-                    e
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to enter agent view for existing conversation"),
+                    extra: { "conversation_id" => ?conversation_id, "origin" => ?origin }
                 );
                 self.show_error_toast(e.to_string(), ctx);
             }
@@ -166,11 +163,10 @@ impl TerminalView {
                 Some(conversation_id),
                 ctx,
             ) {
-                log::error!(
-                    "Failed to enter agent view for restored in-memory conversation ({:?}) from origin {:?}: {:?}",
-                    conversation_id,
-                    origin,
-                    e
+                report_error!(
+                    anyhow::Error::new(e)
+                        .context("Failed to enter agent view for restored in-memory conversation"),
+                    extra: { "conversation_id" => ?conversation_id, "origin" => ?origin }
                 );
                 self.show_error_toast(e.to_string(), ctx);
             }
@@ -275,7 +271,10 @@ impl TerminalView {
                         block_id: block_id.to_string(),
                         agent_view_visibility: agent_view_visibility.into(),
                     }) {
-                        log::error!("Error sending UpdateBlockAgentViewVisibility event: {e:?}");
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("Error sending UpdateBlockAgentViewVisibility event")
+                        );
                     }
                 }
             }

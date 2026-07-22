@@ -11,6 +11,7 @@ define_settings_group!(InputModeSettings, settings: [
         default: InputMode::PinnedToBottom,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "InputMode",
         toml_path: "appearance.input.input_mode",

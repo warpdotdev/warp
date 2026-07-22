@@ -6,10 +6,10 @@ use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warpui_core::assets::asset_cache::AssetSource;
 use warpui_core::image_cache::ImageType;
-use warpui_core::windowing::state::{ApplicationStage, StateEvent};
 use warpui_core::windowing::WindowManager;
+use warpui_core::windowing::state::{ApplicationStage, StateEvent};
 
-use crate::components::feature_optout_dialog::{render_feature_optout_dialog, FeatureOptOutDialog};
+use crate::components::feature_optout_dialog::{FeatureOptOutDialog, render_feature_optout_dialog};
 use crate::model::{
     OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel, OnboardingStep,
     SelectedSettings,
@@ -20,7 +20,6 @@ use crate::slides::{
     ThemePickerSlide, ThemePickerSlideEvent, ThirdPartySlide,
 };
 use crate::telemetry::OnboardingEvent;
-use crate::AI_FEATURES;
 
 const APP_BECAME_ACTIVE_DEBOUNCE: Duration = Duration::from_secs(15);
 
@@ -28,10 +27,10 @@ const PLAN_ACTIVATED_TOAST_DURATION: Duration = Duration::from_secs(5);
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::{Fill, WarpTheme};
-use warp_core::ui::Icon;
 use warpui_core::elements::{
     Align, CacheOption, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Dismiss, Empty,
     Flex, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
@@ -67,8 +66,6 @@ pub enum AgentOnboardingEvent {
     UpgradeRequested,
     UpgradeCopyUrlRequested,
     UpgradePasteTokenFromClipboardRequested,
-    AddApiKeyRequested,
-    AddCustomEndpointRequested,
     /// Emitted when the app regains focus (e.g. user returns from the browser).
     /// The parent should refresh any stale data: available models, workspace/billing metadata, etc.
     AppBecameActive,
@@ -229,12 +226,6 @@ impl AgentOnboardingView {
         };
 
         ctx.subscribe_to_view(&ai_access_slide, |_me, _view, event, ctx| match event {
-            AiAccessSlideEvent::AddApiKeyRequested => {
-                ctx.emit(AgentOnboardingEvent::AddApiKeyRequested);
-            }
-            AiAccessSlideEvent::AddCustomEndpointRequested => {
-                ctx.emit(AgentOnboardingEvent::AddCustomEndpointRequested);
-            }
             AiAccessSlideEvent::CopyUpgradeUrlRequested => {
                 ctx.emit(AgentOnboardingEvent::UpgradeCopyUrlRequested);
             }
@@ -320,20 +311,6 @@ impl AgentOnboardingView {
             state.set_auth_state(auth_state, ctx);
         });
         ctx.notify();
-    }
-
-    /// Updates how many BYOK provider keys and custom endpoints the user has
-    /// configured. This drives the AI-access slide's "connected" status line and
-    /// gates "Next" on the bring-your-own path.
-    pub fn set_byok_status(
-        &mut self,
-        key_count: usize,
-        endpoint_count: usize,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.ai_access_slide.update(ctx, |slide, ctx| {
-            slide.set_byok_status(key_count, endpoint_count, ctx);
-        });
     }
 
     /// The current `use_vertical_tabs` value on the onboarding UI customization.
@@ -447,9 +424,9 @@ impl AgentOnboardingView {
             appearance,
             FeatureOptOutDialog {
                 title: "Are you sure you don't want AI?",
-                body: "Warp is better with AI. By continuing, you won't have access to any of the \
-                       following features:",
-                features: AI_FEATURES,
+                body: "Without AI, you'll still get Warp's terminal experience, but you'll miss \
+                       our agentic features like automatic fixes for terminal errors.",
+                features: &[],
                 close_button,
                 cancel_button,
                 confirm_button,

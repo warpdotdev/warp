@@ -1,7 +1,7 @@
 pub use cloud_object_models::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, CloudAIExecutionProfile,
-    CloudAIExecutionProfileModel, ComputerUsePermission, RunAgentsPermission, WriteToPtyPermission,
-    PROFILE_NAME_MAX_LENGTH,
+    CloudAIExecutionProfileModel, ComputerUsePermission, PROFILE_NAME_MAX_LENGTH,
+    RunAgentsPermission, WriteToPtyPermission,
 };
 use markdown_parser::{FormattedTextFragment, FormattedTextInline};
 use warp_core::features::FeatureFlag;
@@ -29,9 +29,11 @@ pub(crate) fn long_context_pricing_warning_title() -> FormattedTextInline {
     ]
 }
 
+mod config;
 pub mod editor;
 pub mod model_menu_items;
 pub mod profiles;
+pub use config::{ExecutionProfileId, ExecutionProfilesConfig};
 
 /// Result of resolving the cloud agent computer use setting.
 /// Contains both the effective value and whether it's forced by organization policy.
@@ -47,7 +49,7 @@ fn effective_base_model<'a>(profile: &AIExecutionProfile, app: &'a AppContext) -
         .base_model
         .as_ref()
         .and_then(|id| prefs.get_llm_info(id))
-        .unwrap_or_else(|| prefs.get_default_base_model())
+        .unwrap_or_else(|| prefs.get_default_base_model(app))
 }
 
 /// Resolves the effective cloud agent computer use state by reading the workspace

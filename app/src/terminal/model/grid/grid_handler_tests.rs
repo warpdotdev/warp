@@ -685,6 +685,23 @@ fn test_find_url_with_delimiter() {
         })
     );
 
+    let blockgrid = mock_blockgrid("https://google.com，");
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 0, col: 0 }),
+        Some(Link {
+            range: Point { row: 0, col: 0 }..=Point { row: 0, col: 17 },
+            is_empty: false
+        })
+    );
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 0, col: 18 }),
+        None
+    );
+
     let blockgrid = mock_blockgrid("https://google.com/search?q=warp");
     assert_eq!(
         blockgrid
@@ -1723,9 +1740,11 @@ fn test_input_overwriting_wide_char_spacer_resets_wide_char() {
     grid.input('x');
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
     assert_eq!(grid.grid_storage()[VisibleRow(0)][1].c, 'x');
 }
 
@@ -1741,9 +1760,11 @@ fn test_input_overwriting_wide_char_resets_spacer() {
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
     assert_eq!(grid.grid_storage()[VisibleRow(0)][0].c, 'y');
-    assert!(!grid.grid_storage()[VisibleRow(0)][1]
-        .flags
-        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 }
 
 #[test]
@@ -1757,9 +1778,11 @@ fn test_erase_chars_at_wide_char_spacer_boundary() {
     grid.erase_chars(1);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1789,9 +1812,11 @@ fn test_delete_chars_at_wide_char_spacer_boundary() {
     grid.delete_chars(1);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1805,9 +1830,11 @@ fn test_insert_blank_at_wide_char_spacer_boundary() {
     grid.insert_blank(1);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1821,9 +1848,11 @@ fn test_clear_line_right_at_wide_char_spacer() {
     grid.clear_line(ansi::LineClearMode::Right);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1840,9 +1869,11 @@ fn test_clear_line_left_at_wide_char() {
     grid.clear_line(ansi::LineClearMode::Left);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][3]
-        .flags
-        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][3]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 }
 
 #[test]
@@ -1856,9 +1887,11 @@ fn test_clear_screen_below_at_wide_char_spacer() {
     grid.clear_screen(ansi::ClearMode::Below);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][0]
-        .flags
-        .contains(Flags::WIDE_CHAR));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][0]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
 }
 
 #[test]
@@ -1875,9 +1908,11 @@ fn test_clear_screen_above_at_wide_char() {
     grid.clear_screen(ansi::ClearMode::Above);
 
     assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert!(!grid.grid_storage()[VisibleRow(0)][3]
-        .flags
-        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(
+        !grid.grid_storage()[VisibleRow(0)][3]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 }
 
 fn assert_visible_grid_blank(grid: &GridHandler) {
@@ -2463,6 +2498,50 @@ fn test_full_grid_clear_resize_narrower_then_scroll_does_not_panic() {
 }
 
 #[test]
+fn test_full_grid_clear_shrink_cols_does_not_orphan_wide_char_at_boundary() {
+    let old_cols = 6;
+    let new_cols = 5;
+    let num_rows = 1;
+
+    let mut grid =
+        GridHandler::new_for_test_with_scroll_limit(num_rows, old_cols, MAX_SCROLL_LIMIT);
+    for c in ['a', 'b', 'c', 'd', 'Ｗ'] {
+        grid.input(c);
+    }
+    grid.grid_storage_mut()[VisibleRow(0)][new_cols - 1].bg = Color::Named(NamedColor::Red);
+
+    assert!(
+        grid.grid_storage()[VisibleRow(0)][new_cols - 1]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    );
+    assert!(
+        grid.grid_storage()[VisibleRow(0)][new_cols]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
+
+    grid.enable_full_grid_clear_behavior();
+    grid.resize(SizeInfo::new_without_font_metrics(num_rows, new_cols));
+
+    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+
+    let retained_row = grid.grid_storage()[VisibleRow(0)].clone();
+    grid.flat_storage.push_rows([&retained_row]);
+    let materialized_rows = grid.flat_storage.pop_rows(1);
+
+    assert_eq!(materialized_rows.len(), 1);
+    assert_eq!(
+        grid.grid_storage()[VisibleRow(0)][new_cols - 1],
+        Cell::from(Color::Named(NamedColor::Red))
+    );
+    assert_eq!(
+        materialized_rows[0][new_cols - 1],
+        Cell::from(Color::Named(NamedColor::Red))
+    );
+}
+
+#[test]
 fn test_full_grid_clear_resize_then_bounds_to_string_does_not_panic() {
     // End-to-end repro via the same code path as block_snapshot:
     // bounds_to_string → line_to_string → row() → RowIterator::next.
@@ -2535,5 +2614,131 @@ fn test_resize_with_wide_chars_does_not_panic() {
     // without panicking.
     for cols in [6, 3, 1, 5, 2, 8, 1, 4, 10, 2, 12] {
         grid.resize(SizeInfo::new_without_font_metrics(4, cols));
+    }
+}
+
+/// Write `text` into the grid with `uri` as the active OSC 8 hyperlink, then
+/// close the hyperlink. Cells written for `text` carry the interned id.
+fn input_hyperlinked(grid: &mut GridHandler, uri: &str, text: &str) {
+    grid.set_hyperlink(Some(warp_terminal::model::ansi::Hyperlink {
+        id: None,
+        uri: uri.to_owned(),
+    }));
+    for c in text.chars() {
+        grid.input(c);
+    }
+    grid.set_hyperlink(None);
+}
+
+#[test]
+fn test_hyperlink_at_point_spans_contiguous_cells() {
+    let _flag = crate::features::FeatureFlag::OscHyperlinks.override_enabled(true);
+    let mut grid = GridHandler::new_for_test(5, 20);
+
+    // Plain "ab", then a hyperlink over "link", then plain "cd".
+    for c in "ab".chars() {
+        grid.input(c);
+    }
+    input_hyperlinked(&mut grid, "https://example.com", "link");
+    for c in "cd".chars() {
+        grid.input(c);
+    }
+
+    // Cols 2..=5 carry the hyperlink; a lookup anywhere inside resolves to the
+    // full contiguous span.
+    let expected = Link {
+        range: Point::new(0, 2)..=Point::new(0, 5),
+        is_empty: false,
+    };
+    assert_eq!(
+        grid.hyperlink_at_point(Point::new(0, 2)),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        grid.hyperlink_at_point(Point::new(0, 3)),
+        Some(expected.clone())
+    );
+    assert_eq!(grid.hyperlink_at_point(Point::new(0, 5)), Some(expected));
+
+    // Plain cells before and after the span are not part of any hyperlink.
+    assert_eq!(grid.hyperlink_at_point(Point::new(0, 1)), None);
+    assert_eq!(grid.hyperlink_at_point(Point::new(0, 6)), None);
+
+    // The URI lookup returns the interned destination.
+    assert_eq!(
+        grid.hyperlink_uri_at_point(Point::new(0, 3)),
+        Some("https://example.com")
+    );
+    assert_eq!(grid.hyperlink_uri_at_point(Point::new(0, 0)), None);
+}
+
+#[test]
+fn test_adjacent_hyperlinks_with_different_uris_do_not_merge() {
+    let _flag = crate::features::FeatureFlag::OscHyperlinks.override_enabled(true);
+    let mut grid = GridHandler::new_for_test(5, 20);
+
+    input_hyperlinked(&mut grid, "https://a.com", "aa");
+    input_hyperlinked(&mut grid, "https://b.com", "bb");
+
+    // Distinct ids mean the two spans stay separate rather than merging into
+    // one range across cols 0..=3.
+    assert_eq!(
+        grid.hyperlink_at_point(Point::new(0, 0)),
+        Some(Link {
+            range: Point::new(0, 0)..=Point::new(0, 1),
+            is_empty: false,
+        })
+    );
+    assert_eq!(
+        grid.hyperlink_at_point(Point::new(0, 2)),
+        Some(Link {
+            range: Point::new(0, 2)..=Point::new(0, 3),
+            is_empty: false,
+        })
+    );
+    assert_eq!(
+        grid.hyperlink_uri_at_point(Point::new(0, 1)),
+        Some("https://a.com")
+    );
+    assert_eq!(
+        grid.hyperlink_uri_at_point(Point::new(0, 2)),
+        Some("https://b.com")
+    );
+}
+
+#[test]
+fn test_hyperlink_at_point_short_circuits_when_flag_disabled() {
+    let _flag = crate::features::FeatureFlag::OscHyperlinks.override_enabled(false);
+    let mut grid = GridHandler::new_for_test(5, 20);
+
+    // Even though cells are stamped, both lookups short-circuit to None while
+    // the feature flag is off.
+    input_hyperlinked(&mut grid, "https://example.com", "link");
+    assert_eq!(grid.hyperlink_at_point(Point::new(0, 0)), None);
+    assert_eq!(grid.hyperlink_uri_at_point(Point::new(0, 0)), None);
+}
+
+#[test]
+fn test_full_grid_clear_drops_active_hyperlink() {
+    let _flag = crate::features::FeatureFlag::OscHyperlinks.override_enabled(true);
+    let mut grid = GridHandler::new_for_test_with_scroll_limit(3, 20, MAX_SCROLL_LIMIT);
+    grid.enable_full_grid_clear_behavior();
+
+    // Open a hyperlink and write a linked char, but never close it.
+    grid.set_hyperlink(Some(warp_terminal::model::ansi::Hyperlink {
+        id: None,
+        uri: "https://example.com".to_owned(),
+    }));
+    grid.input('a');
+
+    // A full-screen clear of the primary screen must drop the active link so
+    // output written afterwards does not inherit the stale URI.
+    grid.clear_screen(ansi::ClearMode::All);
+    grid.input('b');
+
+    for row in 0..3 {
+        for col in 0..20 {
+            assert_eq!(grid.hyperlink_uri_at_point(Point::new(row, col)), None);
+        }
     }
 }

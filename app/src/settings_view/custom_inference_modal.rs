@@ -4,12 +4,15 @@ use ::ai::api_keys::CustomEndpoint;
 use url::Url;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
+    Shrinkable, Text,
 };
 use warpui::fonts::FamilyId;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -25,10 +28,24 @@ use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme};
 
 const LABEL_FONT_SIZE: f32 = 12.;
 const INPUT_WIDTH: f32 = 480.;
+const ENDPOINT_NAME_SCROLL_POSITION_ID: &str = "custom_endpoint_name";
+const ENDPOINT_URL_SCROLL_POSITION_ID: &str = "custom_endpoint_url";
+const API_KEY_SCROLL_POSITION_ID: &str = "custom_endpoint_api_key";
+const ACTIONS_POSITION_ID: &str = "custom_endpoint_actions";
 
 const MODEL_ROW_SPACING: f32 = 16.;
-const REMOVE_MODEL_BUTTON_COL_WIDTH: f32 = 32.;
+const REMOVE_MODEL_BUTTON_SPACING: f32 = 8.;
+const REMOVE_MODEL_BUTTON_COL_WIDTH: f32 = 20.;
+const MODAL_SCROLLBAR_WIDTH: f32 = 4.;
+// Right margin shared by the scrollable content and the (non-scrollable) actions
+// row. It includes the overlayed scrollbar width so the scrollable content's right
+// edge (e.g. the remove-model "X" buttons) lines up with the Save/Cancel buttons,
+// which have no scrollbar.
+const SCROLL_CONTENT_RIGHT_MARGIN: f32 = 24. + MODAL_SCROLLBAR_WIDTH;
 const MODEL_INPUT_WIDTH: f32 = (INPUT_WIDTH - MODEL_ROW_SPACING) / 2.;
+fn model_row_scroll_position_id(index: usize) -> String {
+    format!("custom_endpoint_model_row_{index}")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CustomEndpointModalEvent {
@@ -78,6 +95,7 @@ pub struct CustomEndpointModal {
     remove_endpoint_button: ViewHandle<ActionButton>,
     editing_index: Option<usize>,
     url_has_error: bool,
+    scroll_state: ClippedScrollStateHandle,
 }
 
 impl CustomEndpointModal {
@@ -222,6 +240,7 @@ impl CustomEndpointModal {
             remove_endpoint_button,
             editing_index,
             url_has_error,
+            scroll_state: Default::default(),
         }
     }
 
@@ -288,6 +307,7 @@ impl CustomEndpointModal {
         ctx: &mut ViewContext<Self>,
     ) {
         self.editing_index = editing_index;
+        self.scroll_state = Default::default();
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text(endpoint.map(|e| e.name.as_str()).unwrap_or(""), ctx);
         });
@@ -339,8 +359,8 @@ impl CustomEndpointModal {
     }
 
     pub fn on_open(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.focus(&self.endpoint_name_editor);
-        ctx.notify();
+        self.scroll_state.scroll_to(Pixels::zero());
+        self.focus_editor(&self.endpoint_name_editor, ctx);
     }
 
     pub fn on_close(&mut self, ctx: &mut ViewContext<Self>) {
@@ -444,6 +464,9 @@ impl CustomEndpointModal {
             me.handle_model_editor_event(&editor, event, ctx);
         });
         self.model_rows.push(row);
+        // ClippedScrollable clamps this to its true maximum after laying out the new row.
+        // Until the form overflows, that maximum remains zero and the modal grows naturally.
+        self.scroll_state.scroll_to(Pixels::new(f32::MAX));
         ctx.notify();
     }
 
@@ -468,6 +491,29 @@ impl CustomEndpointModal {
         is_endpoint_form_valid(&name, &url, &api_key, has_models)
     }
 
+    fn focus_editor(&self, editor: &ViewHandle<EditorView>, ctx: &mut ViewContext<Self>) {
+        ctx.focus(editor);
+        let position_id = if self.endpoint_name_editor == *editor {
+            Some(ENDPOINT_NAME_SCROLL_POSITION_ID.to_string())
+        } else if self.endpoint_url_editor == *editor {
+            Some(ENDPOINT_URL_SCROLL_POSITION_ID.to_string())
+        } else if self.api_key_editor == *editor {
+            Some(API_KEY_SCROLL_POSITION_ID.to_string())
+        } else {
+            self.model_rows
+                .iter()
+                .position(|row| row.name_editor == *editor || row.alias_editor == *editor)
+                .map(model_row_scroll_position_id)
+        };
+        if let Some(position_id) = position_id {
+            self.scroll_state.scroll_to_position(ScrollTarget {
+                position_id,
+                mode: ScrollToPositionMode::FullyIntoView,
+            });
+            ctx.notify();
+        }
+    }
+
     fn focus_next_editor(&self, current: &ViewHandle<EditorView>, ctx: &mut ViewContext<Self>) {
         let mut editors: Vec<&ViewHandle<EditorView>> = vec![
             &self.endpoint_name_editor,
@@ -480,7 +526,7 @@ impl CustomEndpointModal {
         }
         if let Some(pos) = editors.iter().position(|e| *e == current) {
             let next = (pos + 1) % editors.len();
-            ctx.focus(editors[next]);
+            self.focus_editor(editors[next], ctx);
         }
     }
 
@@ -496,20 +542,20 @@ impl CustomEndpointModal {
         }
         if let Some(pos) = editors.iter().position(|e| *e == current) {
             let prev = if pos == 0 { editors.len() - 1 } else { pos - 1 };
-            ctx.focus(editors[prev]);
+            self.focus_editor(editors[prev], ctx);
         }
     }
 
     fn handle_endpoint_name_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
         match event {
             EditorEvent::Navigate(NavigationKey::Tab) => {
-                ctx.focus(&self.endpoint_url_editor);
+                self.focus_editor(&self.endpoint_url_editor, ctx);
             }
             EditorEvent::Navigate(NavigationKey::ShiftTab) => {
                 self.focus_prev_editor(&self.endpoint_name_editor, ctx);
             }
             EditorEvent::Enter => {
-                ctx.focus(&self.endpoint_url_editor);
+                self.focus_editor(&self.endpoint_url_editor, ctx);
             }
             EditorEvent::Escape => {
                 self.cancel(ctx);
@@ -525,15 +571,15 @@ impl CustomEndpointModal {
         match event {
             EditorEvent::Navigate(NavigationKey::Tab) => {
                 self.validate_url_field(ctx);
-                ctx.focus(&self.api_key_editor);
+                self.focus_editor(&self.api_key_editor, ctx);
             }
             EditorEvent::Navigate(NavigationKey::ShiftTab) => {
                 self.validate_url_field(ctx);
-                ctx.focus(&self.endpoint_name_editor);
+                self.focus_editor(&self.endpoint_name_editor, ctx);
             }
             EditorEvent::Enter => {
                 self.validate_url_field(ctx);
-                ctx.focus(&self.api_key_editor);
+                self.focus_editor(&self.api_key_editor, ctx);
             }
             EditorEvent::Escape => {
                 self.cancel(ctx);
@@ -562,15 +608,15 @@ impl CustomEndpointModal {
         match event {
             EditorEvent::Navigate(NavigationKey::Tab) => {
                 if let Some(first_row) = self.model_rows.first() {
-                    ctx.focus(&first_row.name_editor);
+                    self.focus_editor(&first_row.name_editor, ctx);
                 }
             }
             EditorEvent::Navigate(NavigationKey::ShiftTab) => {
-                ctx.focus(&self.endpoint_url_editor);
+                self.focus_editor(&self.endpoint_url_editor, ctx);
             }
             EditorEvent::Enter => {
                 if let Some(first_row) = self.model_rows.first() {
-                    ctx.focus(&first_row.name_editor);
+                    self.focus_editor(&first_row.name_editor, ctx);
                 }
             }
             EditorEvent::Escape => {
@@ -666,15 +712,19 @@ impl View for CustomEndpointModal {
                 .finish(),
         );
         column.add_child(
-            Container::new(
-                appearance
-                    .ui_builder()
-                    .text_input(self.endpoint_name_editor.clone())
-                    .with_style(input_style)
-                    .build()
-                    .finish(),
+            SavePosition::new(
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .text_input(self.endpoint_name_editor.clone())
+                        .with_style(input_style)
+                        .build()
+                        .finish(),
+                )
+                .with_margin_bottom(16.)
+                .finish(),
+                ENDPOINT_NAME_SCROLL_POSITION_ID,
             )
-            .with_margin_bottom(16.)
             .finish(),
         );
 
@@ -690,17 +740,21 @@ impl View for CustomEndpointModal {
             theme.outline()
         };
         column.add_child(
-            Container::new(
-                appearance
-                    .ui_builder()
-                    .text_input(self.endpoint_url_editor.clone())
-                    .with_style(input_style)
-                    .build()
-                    .finish(),
+            SavePosition::new(
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .text_input(self.endpoint_url_editor.clone())
+                        .with_style(input_style)
+                        .build()
+                        .finish(),
+                )
+                .with_border(Border::all(1.).with_border_fill(url_border_fill))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .with_margin_bottom(16.)
+                .finish(),
+                ENDPOINT_URL_SCROLL_POSITION_ID,
             )
-            .with_border(Border::all(1.).with_border_fill(url_border_fill))
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-            .with_margin_bottom(16.)
             .finish(),
         );
 
@@ -711,15 +765,19 @@ impl View for CustomEndpointModal {
                 .finish(),
         );
         column.add_child(
-            Container::new(
-                appearance
-                    .ui_builder()
-                    .text_input(self.api_key_editor.clone())
-                    .with_style(input_style)
-                    .build()
-                    .finish(),
+            SavePosition::new(
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .text_input(self.api_key_editor.clone())
+                        .with_style(input_style)
+                        .build()
+                        .finish(),
+                )
+                .with_margin_bottom(16.)
+                .finish(),
+                API_KEY_SCROLL_POSITION_ID,
             )
-            .with_margin_bottom(16.)
             .finish(),
         );
 
@@ -728,15 +786,20 @@ impl View for CustomEndpointModal {
         let mut model_labels = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(MODEL_ROW_SPACING)
+            .with_spacing(REMOVE_MODEL_BUTTON_SPACING)
             .with_child(
-                ConstrainedBox::new(label("Model name"))
-                    .with_width(MODEL_INPUT_WIDTH)
-                    .finish(),
-            )
-            .with_child(
-                ConstrainedBox::new(label("Model alias (optional)"))
-                    .with_width(MODEL_INPUT_WIDTH)
+                Flex::row()
+                    .with_spacing(MODEL_ROW_SPACING)
+                    .with_child(
+                        ConstrainedBox::new(label("Model name"))
+                            .with_width(MODEL_INPUT_WIDTH)
+                            .finish(),
+                    )
+                    .with_child(
+                        ConstrainedBox::new(label("Model alias (optional)"))
+                            .with_width(MODEL_INPUT_WIDTH)
+                            .finish(),
+                    )
                     .finish(),
             );
         if has_remove_model_button {
@@ -747,6 +810,7 @@ impl View for CustomEndpointModal {
             );
         }
 
+        // Model column labels
         column.add_child(
             Container::new(model_labels.finish())
                 .with_margin_bottom(4.)
@@ -786,13 +850,17 @@ impl View for CustomEndpointModal {
             } else {
                 Empty::new().finish()
             };
+            let model_inputs = Flex::row()
+                .with_spacing(MODEL_ROW_SPACING)
+                .with_child(name_input)
+                .with_child(alias_input)
+                .finish();
 
             let mut row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(MODEL_ROW_SPACING)
-                .with_child(name_input)
-                .with_child(alias_input);
+                .with_spacing(REMOVE_MODEL_BUTTON_SPACING)
+                .with_child(model_inputs);
             if has_remove_model_button {
                 row.add_child(
                     ConstrainedBox::new(remove_button)
@@ -802,32 +870,37 @@ impl View for CustomEndpointModal {
             }
             let row = row.finish();
 
-            column.add_child(Container::new(row).with_margin_bottom(12.).finish());
+            column.add_child(
+                SavePosition::new(
+                    Container::new(row).with_margin_bottom(12.).finish(),
+                    &model_row_scroll_position_id(i),
+                )
+                .finish(),
+            );
         }
 
-        // + Add model button
-        column.add_child(
-            Container::new(
-                appearance
-                    .ui_builder()
-                    .button(
-                        ButtonVariant::Secondary,
-                        self.add_model_button_mouse_state.clone(),
-                    )
-                    .with_text_label("+ Add model".to_string())
-                    .with_style(UiComponentStyles {
-                        font_size: Some(14.),
-                        padding: Some(Coords::uniform(6.).left(8.).right(8.)),
-                        ..Default::default()
-                    })
-                    .build()
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(CustomEndpointModalAction::AddModel);
-                    })
-                    .finish(),
+        let add_model_button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Secondary,
+                self.add_model_button_mouse_state.clone(),
             )
-            .with_margin_bottom(24.)
-            .finish(),
+            .with_text_label("+ Add model".to_string())
+            .with_style(UiComponentStyles {
+                font_size: Some(14.),
+                padding: Some(Coords::uniform(6.).left(8.).right(8.)),
+                ..Default::default()
+            })
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(CustomEndpointModalAction::AddModel);
+            })
+            .finish();
+
+        column.add_child(
+            Container::new(add_model_button)
+                .with_margin_bottom(24.)
+                .finish(),
         );
 
         // Bottom buttons row
@@ -884,9 +957,34 @@ impl View for CustomEndpointModal {
             .finish(),
         );
 
-        column.add_child(buttons_row.finish());
+        let scrollable_content = ClippedScrollable::vertical(
+            self.scroll_state.clone(),
+            Container::new(column.finish())
+                .with_margin_right(SCROLL_CONTENT_RIGHT_MARGIN)
+                .finish(),
+            ScrollbarWidth::Custom(MODAL_SCROLLBAR_WIDTH),
+            theme.nonactive_ui_text_color().into(),
+            theme.active_ui_text_color().into(),
+            warpui::elements::Fill::None,
+        )
+        .with_overlayed_scrollbar()
+        .with_padding_start(0.)
+        .with_padding_end(0.)
+        .finish();
+        let buttons_row = SavePosition::new(
+            Container::new(buttons_row.finish())
+                .with_margin_right(SCROLL_CONTENT_RIGHT_MARGIN)
+                .finish(),
+            ACTIONS_POSITION_ID,
+        )
+        .for_single_frame()
+        .finish();
 
-        column.finish()
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(Shrinkable::new(1., scrollable_content).finish())
+            .with_child(buttons_row)
+            .finish()
     }
 }
 

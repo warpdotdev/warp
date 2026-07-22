@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::Path;
 use std::{fs, io};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use repo_metadata::RepositoryUpdate;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
@@ -13,8 +13,8 @@ use super::util::{
     parse_single_theme_dir_entry, parse_tab_config_dir_entry,
 };
 use super::{
-    custom_model_routers_dir, launch_configs_dir, tab_configs_dir, themes_dir, workflows_dir,
-    WarpConfigUpdateEvent, LAUNCH_CONFIG_COMMENT,
+    LAUNCH_CONFIG_COMMENT, WarpConfigUpdateEvent, custom_model_routers_dir, launch_configs_dir,
+    tab_configs_dir, themes_dir, workflows_dir,
 };
 use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
 use crate::features::FeatureFlag;
@@ -22,8 +22,8 @@ use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::WarpThemeConfig;
 use crate::warp_managed_paths_watcher::{
-    repository_update_touches_path, repository_update_touches_prefix, WarpManagedPathsWatcher,
-    WarpManagedPathsWatcherEvent,
+    WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent, repository_update_touches_path,
+    repository_update_touches_prefix,
 };
 use crate::workflows::workflow::Workflow;
 
@@ -164,6 +164,53 @@ impl super::WarpConfig {
         {
             ctx.emit(WarpConfigUpdateEvent::Settings);
         }
+    }
+
+    /// Writes a custom model router to disk as a YAML file.
+    ///
+    /// When `existing_path` is provided (editing) the file at that path is
+    /// overwritten; otherwise a new file is created under
+    /// `custom_model_routers_dir()`. The file name is derived from `name` by
+    /// lowercasing and replacing non-alphanumeric characters (except `-`) with
+    /// `_`. If the candidate path already exists, a numeric suffix is appended
+    /// (`_2`, `_3`, …) until a free slot is found. Returns the path written to.
+    #[cfg(feature = "local_fs")]
+    pub fn save_custom_model_router(
+        name: &str,
+        yaml: &str,
+        existing_path: Option<&std::path::Path>,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        let dir = custom_model_routers_dir();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow::anyhow!("could not create custom_model_routers dir: {e}"))?;
+        let path = if let Some(p) = existing_path {
+            p.to_path_buf()
+        } else {
+            let sanitized = name
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric() && c != '-', "_");
+            let candidate = dir.join(format!("{sanitized}.yaml"));
+            if candidate.exists() {
+                (2..)
+                    .map(|n| dir.join(format!("{sanitized}_{n}.yaml")))
+                    .find(|p| !p.exists())
+                    .expect("infinite iterator always finds a free slot")
+            } else {
+                candidate
+            }
+        };
+        std::fs::write(&path, yaml)
+            .map_err(|e| anyhow::anyhow!("could not write router file: {e}"))?;
+        Ok(path)
+    }
+
+    /// Deletes a custom model router file from disk.
+    /// The filesystem watcher in [`Self::handle_warp_managed_paths_event`] will
+    /// pick up the deletion and reload `custom_model_routers`.
+    #[cfg(feature = "local_fs")]
+    pub fn delete_custom_model_router(source_path: &std::path::Path) -> anyhow::Result<()> {
+        std::fs::remove_file(source_path)
+            .map_err(|e| anyhow::anyhow!("could not delete router file: {e}"))
     }
 
     /// This method takes a file name candidate (appends .yaml if missing) and a LaunchConfig as

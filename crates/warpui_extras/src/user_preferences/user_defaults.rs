@@ -1,8 +1,8 @@
 //! Implementation of the [`UserPreferences`] trait using macOS user defaults.
 
+use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::AnyThread;
 use objc2_foundation::{NSString, NSUserDefaults};
 
 /// A user preferences store backed by macOS user defaults (`NSUserDefaults`).

@@ -44,11 +44,6 @@ impl TryFrom<StaticQueryType> for api::request::input::query_with_canned_respons
                     api::request::input::query_with_canned_response::SomethingElse {},
                 ),
             ),
-            StaticQueryType::CustomOnboardingRequest => Ok(
-                api::request::input::query_with_canned_response::Type::CustomOnboardingRequest(
-                    api::request::input::query_with_canned_response::CustomOnboardingRequest {},
-                ),
-            ),
             StaticQueryType::EvaluationSuite => {
                 Err(anyhow::anyhow!("EvaluationSuite StaticQueryType not yet supported").into())
             }
@@ -196,14 +191,6 @@ pub(super) fn convert_input(
                                 ),
                             ),
                         },
-                    )),
-                });
-            }
-            AIAgentInput::FetchReviewComments { repo_path, context } => {
-                return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
-                    r#type: Some(api::request::input::Type::FetchReviewComments(
-                        api::request::input::FetchReviewComments { repo_path },
                     )),
                 });
             }
@@ -449,7 +436,6 @@ fn convert_input_to_user_input(
         AIAgentInput::ResumeConversation { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::InitProjectRules { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::CodeReview { .. } => Err(ConvertToAPITypeError::Ignore),
-        AIAgentInput::FetchReviewComments { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::CreateEnvironment { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::InvokeSkill { .. } => Err(ConvertToAPITypeError::Ignore),
         invalid_input => Err(anyhow!(
@@ -688,6 +674,12 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::RequestComputerUse(request_computer_use_result) => {
                 Some(request_computer_use_result.try_into()?)
             }
+            AIAgentActionResultType::StartRecording(start_recording_result) => {
+                Some(start_recording_result.try_into()?)
+            }
+            AIAgentActionResultType::StopRecording(stop_recording_result) => {
+                Some(stop_recording_result.try_into()?)
+            }
             AIAgentActionResultType::FetchConversation(fetch_conversation_result) => {
                 Some(fetch_conversation_result.try_into()?)
             }
@@ -812,12 +804,13 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 api_git_context.head = head;
                 api_git_context.branch = branch.unwrap_or_default();
             }
-            AIAgentContext::Repository { name, owner } => {
+            AIAgentContext::Repository { name, owner, host } => {
                 let api_git_context =
                     git_context.get_or_insert_with(api::input_context::Git::default);
                 api_git_context.repository = Some(api::input_context::git::Repository {
                     name,
                     owner: owner.unwrap_or_default(),
+                    host: host.unwrap_or_default(),
                 });
             }
             AIAgentContext::PullRequest {
@@ -825,6 +818,7 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 state,
                 draft,
                 base_branch,
+                url,
             } => {
                 if number <= 0 {
                     continue;
@@ -836,6 +830,7 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                     number,
                     state: state as i32,
                     base_branch,
+                    url,
                 };
                 let api_git_context =
                     git_context.get_or_insert_with(api::input_context::Git::default);

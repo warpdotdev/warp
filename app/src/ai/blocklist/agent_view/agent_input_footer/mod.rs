@@ -15,8 +15,10 @@ use ai::document::{AIDocumentId, AIDocumentVersion};
 use chrono::{DateTime, Local};
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use settings::{Setting, ToggleableSetting};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
+#[cfg(feature = "voice_input")]
+use settings::Setting;
+use settings::ToggleableSetting;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs;
 use toolbar_item::AgentToolbarItemKind;
@@ -24,20 +26,21 @@ use toolbar_item::AgentToolbarItemKind;
 use voice_input::{StartListeningError, VoiceSessionResult};
 use warp_cli::agent::Harness;
 use warp_core::context_flag::ContextFlag;
-use warp_core::report_if_error;
+use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::contrast::MinimumAllowedContrast;
-use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
-use warpui::elements::{
-    Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, DispatchEventResult, Element, Empty, EventHandler, Expanded, Flex,
-    MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Shrinkable,
-    Stack, Text, Wrap, WrapFill, WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
-};
+#[cfg(any(not(target_family = "wasm"), feature = "voice_input"))]
+use warp_errors::report_error;
+use warp_errors::report_if_error;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::elements::{
+    ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, Element, Empty, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
+    Wrap, WrapFill, WrapFillEntireRun,
+};
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
@@ -48,14 +51,14 @@ pub(crate) use self::environment_selector::sort_environments_by_recency;
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
+use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
-use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::completer::SessionContext;
@@ -75,9 +78,11 @@ use crate::settings::{
 };
 use crate::settings_view::SettingsSection;
 #[cfg(not(target_family = "wasm"))]
+use crate::terminal::ShellLaunchData;
+#[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
-    compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
-    PluginInstallError, PluginModalKind,
+    CliAgentPluginManager, PluginInstallError, PluginModalKind, compare_versions,
+    plugin_manager_for, plugin_manager_for_with_shell,
 };
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -86,7 +91,6 @@ use crate::terminal::input::models::InlineModelSelectorTab;
 use crate::terminal::input::{HandoffComposeState, MenuPositioningProvider};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_shell::LocalShellState;
-use crate::terminal::model_events::ModelEvent;
 use crate::terminal::profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent};
 use crate::terminal::session_settings::{
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
@@ -96,22 +100,19 @@ use crate::terminal::view::ambient_agent::{
     AmbientAgentViewModel, ModelSelector, ModelSelectorEvent,
 };
 use crate::terminal::view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING;
-use crate::terminal::view::TerminalAction;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::ShellLaunchData;
+use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
 use crate::terminal::{CLIAgent, TerminalModel};
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{
-    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
-    TooltipAlignment,
-};
 use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::ToastLink;
-use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, TooltipAlignment,
+};
 use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
+use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
@@ -124,6 +125,9 @@ const FAST_FORWARD_LOCKED_TOOLTIP: &str =
 
 const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
+
+const LIVE_REMOTE_VM_INDICATOR_TOOLTIP: &str = "Connected to a live cloud agent session. Your next prompt continues on the running remote machine.";
+const NEW_CLOUD_VM_INDICATOR_TOOLTIP: &str = "Not connected to cloud agent. Your next prompt starts a new cloud machine to continue this conversation.";
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 
@@ -200,8 +204,12 @@ pub struct AgentInputFooter {
     start_remote_control_button: ViewHandle<ActionButton>,
     stop_remote_control_button: ViewHandle<ActionButton>,
     context_window_button: ViewHandle<ActionButton>,
+    /// Non-interactive indicators for a cloud follow-up pane: one shown when attached to a live
+    /// remote VM, one when the next follow-up will start a new cloud VM. See
+    /// [`AIQueryRouting`].
+    live_session_indicator: ViewHandle<ActionButton>,
+    new_cloud_vm_indicator: ViewHandle<ActionButton>,
     model_selector: ViewHandle<ProfileModelSelector>,
-    ftu_callout_close_button: ViewHandle<ActionButton>,
     environment_selector: Option<ViewHandle<EnvironmentSelector>>,
     handoff_environment_selector: ViewHandle<EnvironmentSelector>,
     prompt_alert: ViewHandle<PromptAlertView>,
@@ -215,7 +223,6 @@ pub struct AgentInputFooter {
     display_chip_config: DisplayChipConfig,
 
     terminal_model: Arc<FairMutex<TerminalModel>>,
-    render_ftu_callout: bool,
 
     // CLI agent-specific buttons (rendered when a CLI agent session is active).
     file_explorer_button: ViewHandle<ActionButton>,
@@ -259,6 +266,72 @@ pub struct AgentInputFooter {
 }
 
 impl AgentInputFooter {
+    /// Attaches an ambient agent view model to an already-constructed footer. Used when a
+    /// shared-session viewer only learns at `SessionJoined` that the session is an ambient
+    /// run (e.g. a raw `shared_session` link): the footer was built with `None` at
+    /// construction, so it must be given the model now to render the cloud environment
+    /// selector and re-render on model events. Mirrors the ambient wiring in [`Self::new`].
+    /// `menu_positioning_provider` is passed in because the footer does not retain it.
+    /// Idempotent: a no-op when a model is already present.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        self.ambient_agent_view_model = Some(ambient_agent_view_model.clone());
+        self.display_chip_config.ambient_agent_view_model = Some(ambient_agent_view_model.clone());
+
+        // Push the model into the model/harness selector chip too. It captured `None` at
+        // construction on this link-join path, so without this it shows the local default model
+        // instead of the viewed cloud run's harness/model.
+        let selector_model = ambient_agent_view_model.clone();
+        self.model_selector.update(ctx, |selector, ctx| {
+            selector.set_ambient_agent_view_model(selector_model, ctx);
+        });
+
+        // Build the environment selector now that the model exists (mirrors `new`).
+        let environment_selector = ctx.add_typed_action_view(|ctx| {
+            EnvironmentSelector::new(
+                menu_positioning_provider.clone(),
+                EnvironmentSelectorTarget::CloudPane(ambient_agent_view_model.clone()),
+                ctx,
+            )
+        });
+        ctx.subscribe_to_view(&environment_selector, |_, _, event, ctx| match event {
+            EnvironmentSelectorEvent::MenuVisibilityChanged { open } => {
+                ctx.emit(AgentInputFooterEvent::ToggledChipMenu { open: *open });
+                if !*open {
+                    ctx.emit(AgentInputFooterEvent::EnvironmentSelectorClosed);
+                }
+            }
+            EnvironmentSelectorEvent::OpenEnvironmentManagementPane => {
+                ctx.emit(AgentInputFooterEvent::OpenEnvironmentManagementPane);
+            }
+        });
+        self.environment_selector = Some(environment_selector);
+
+        // Push the model into the V2 model selector chip, which was built with `None` at
+        // construction. Uses the `ModelSelector` setter so construction and lazy attach wire it
+        // identically.
+        if let Some(v2_model_selector) = self.v2_model_selector.clone() {
+            let v2_selector_model = ambient_agent_view_model.clone();
+            v2_model_selector.update(ctx, |selector, ctx| {
+                selector.set_ambient_agent_view_model(v2_selector_model, ctx);
+            });
+        }
+
+        // Re-render on ambient model events (mirrors `new`).
+        ctx.subscribe_to_model(&ambient_agent_view_model, |_, _, _, ctx| {
+            ctx.notify();
+        });
+
+        ctx.notify();
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
@@ -526,28 +599,28 @@ impl AgentInputFooter {
                 // When a session starts, update the install chip label and
                 // start a debounce timer for non-auto-install agents.
                 #[cfg(not(target_family = "wasm"))]
-                if let CLIAgentSessionsModelEvent::Started { .. } = event {
-                    if let Some(agent) = me.cli_agent(ctx) {
-                        let label = format!("Enable {} notifications", agent.display_name());
-                        me.install_plugin_button.update(ctx, |button, ctx| {
-                            button.set_label(label, ctx);
-                        });
-                        if let Some(manager) = plugin_manager_for(agent) {
-                            if !manager.can_auto_install() {
-                                ctx.spawn(
-                                    Timer::after(PLUGIN_CHIP_DEBOUNCE),
-                                    |me, _, ctx: &mut ViewContext<Self>| {
-                                        let suppress = CLIAgentSessionsModel::as_ref(ctx)
-                                            .session(me.terminal_view_id)
-                                            .is_some_and(|s| s.supports_rich_status());
-                                        if !suppress {
-                                            me.plugin_chip_ready = true;
-                                            ctx.notify();
-                                        }
-                                    },
-                                );
-                            }
-                        }
+                if let CLIAgentSessionsModelEvent::Started { .. } = event
+                    && let Some(agent) = me.cli_agent(ctx)
+                {
+                    let label = format!("Enable {} notifications", agent.display_name());
+                    me.install_plugin_button.update(ctx, |button, ctx| {
+                        button.set_label(label, ctx);
+                    });
+                    if let Some(manager) = plugin_manager_for(agent)
+                        && !manager.can_auto_install()
+                    {
+                        ctx.spawn(
+                            Timer::after(PLUGIN_CHIP_DEBOUNCE),
+                            |me, _, ctx: &mut ViewContext<Self>| {
+                                let suppress = CLIAgentSessionsModel::as_ref(ctx)
+                                    .session(me.terminal_view_id)
+                                    .is_some_and(|s| s.supports_rich_status());
+                                if !suppress {
+                                    me.plugin_chip_ready = true;
+                                    ctx.notify();
+                                }
+                            },
+                        );
                     }
                 }
 
@@ -609,18 +682,38 @@ impl AgentInputFooter {
 
         let context_window_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
-                .with_icon(Icon::ConversationContext0)
+                .with_icon(Icon::ContextRemaining100)
                 .with_tooltip("Context window usage")
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
         });
 
+        // Non-interactive cloud follow-up indicators. Only one is rendered at a time, chosen by
+        // `AIQueryRouting` at render time.
+        let live_session_indicator = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new("", AgentInputButtonTheme)
+                .with_icon(Icon::CloudFilled)
+                .with_tooltip(LIVE_REMOTE_VM_INDICATOR_TOOLTIP)
+                .with_size(button_size)
+                .with_tooltip_alignment(TooltipAlignment::Left)
+        });
+        let new_cloud_vm_indicator = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new("", AgentInputButtonTheme)
+                .with_icon(Icon::CloudOffline)
+                .with_icon_ansi_color(AnsiColorIdentifier::Yellow)
+                .with_tooltip(NEW_CLOUD_VM_INDICATOR_TOOLTIP)
+                .with_size(button_size)
+                .with_tooltip_alignment(TooltipAlignment::Left)
+        });
+
         let profile_model_selector_full = ctx.add_typed_action_view(|ctx| {
+            // Built without the ambient model; the footer's ambient setter attaches it (for both
+            // construction and the lazy viewer path) via `ProfileModelSelector::set_ambient_agent_view_model`.
             let mut selector = ProfileModelSelector::new(
                 menu_positioning_provider.clone(),
                 terminal_view_id,
                 ai_input_model,
-                ambient_agent_view_model.clone(),
+                None,
                 terminal_model.clone(),
                 None,
                 ctx,
@@ -633,18 +726,8 @@ impl AgentInputFooter {
             me.handle_profile_model_selector_event(event, ctx);
         });
 
-        let environment_selector =
-            ambient_agent_view_model
-                .as_ref()
-                .map(|ambient_agent_view_model| {
-                    ctx.add_typed_action_view(|ctx| {
-                        EnvironmentSelector::new(
-                            menu_positioning_provider.clone(),
-                            EnvironmentSelectorTarget::CloudPane(ambient_agent_view_model.clone()),
-                            ctx,
-                        )
-                    })
-                });
+        // Built by the ambient setter (construction + lazy viewer path share that single point).
+        let environment_selector: Option<ViewHandle<EnvironmentSelector>> = None;
 
         let handoff_environment_selector = ctx.add_typed_action_view(|ctx| {
             EnvironmentSelector::new(
@@ -653,20 +736,6 @@ impl AgentInputFooter {
                 ctx,
             )
         });
-
-        if let Some(environment_selector) = environment_selector.as_ref() {
-            ctx.subscribe_to_view(environment_selector, |_, _, event, ctx| match event {
-                EnvironmentSelectorEvent::MenuVisibilityChanged { open } => {
-                    ctx.emit(AgentInputFooterEvent::ToggledChipMenu { open: *open });
-                    if !*open {
-                        ctx.emit(AgentInputFooterEvent::EnvironmentSelectorClosed);
-                    }
-                }
-                EnvironmentSelectorEvent::OpenEnvironmentManagementPane => {
-                    ctx.emit(AgentInputFooterEvent::OpenEnvironmentManagementPane);
-                }
-            });
-        }
 
         ctx.subscribe_to_view(
             &handoff_environment_selector,
@@ -682,12 +751,6 @@ impl AgentInputFooter {
                 }
             },
         );
-
-        if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
-            ctx.subscribe_to_model(ambient_agent_view_model, |_, _, _, ctx| {
-                ctx.notify();
-            });
-        }
 
         ctx.subscribe_to_model(
             &handoff_compose_state,
@@ -733,11 +796,6 @@ impl AgentInputFooter {
                 ctx.notify()
             }
         });
-        ctx.subscribe_to_model(&display_chip_config.model_events, |me, _, event, ctx| {
-            if let ModelEvent::AgentTaggedInChanged { .. } = event {
-                me.update_ftu_callout_render_state(ctx);
-            }
-        });
         ctx.subscribe_to_model(
             &display_chip_config.agent_view_controller,
             |me, _, _, ctx| {
@@ -777,18 +835,17 @@ impl AgentInputFooter {
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
                 if event
-                    .terminal_view_id()
+                    .terminal_surface_id()
                     .is_some_and(|id| id != me.terminal_view_id)
                 {
                     return;
                 }
-                me.update_ftu_callout_render_state(ctx);
 
                 match event {
                     BlocklistAIHistoryEvent::StartedNewConversation { .. }
                     | BlocklistAIHistoryEvent::SetActiveConversation { .. }
                     | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-                    | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                    | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                     | BlocklistAIHistoryEvent::RemoveConversation { .. }
                     | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
                         me.sync_fast_forward_button(ctx);
@@ -814,12 +871,13 @@ impl AgentInputFooter {
         });
 
         let v2_model_selector = if FeatureFlag::CloudModeInputV2.is_enabled() {
-            let ambient_agent_view_model_for_selector = ambient_agent_view_model.clone();
             let view = ctx.add_typed_action_view(|ctx| {
+                // Built without the ambient model; the footer's ambient setter attaches it via the
+                // `ModelSelector` setter so construction and the lazy viewer path share one path.
                 ModelSelector::new(
                     menu_positioning_provider.clone(),
                     terminal_view_id,
-                    ambient_agent_view_model_for_selector,
+                    None,
                     ctx,
                 )
             });
@@ -839,7 +897,7 @@ impl AgentInputFooter {
 
         let mut me = Self {
             terminal_view_id,
-            ambient_agent_view_model,
+            ambient_agent_view_model: None,
             nld_button,
             mic_button,
             file_button,
@@ -856,13 +914,14 @@ impl AgentInputFooter {
             plugin_operation_in_progress: false,
             plugin_chip_ready: false,
             context_window_button,
+            live_session_indicator,
+            new_cloud_vm_indicator,
             model_selector: profile_model_selector_full,
             environment_selector,
             handoff_environment_selector,
             prompt_alert,
             terminal_model,
             handoff_compose_state,
-            render_ftu_callout: false,
             left_display_chips: vec![],
             right_display_chips: vec![],
             cli_display_chips: vec![],
@@ -873,14 +932,6 @@ impl AgentInputFooter {
             cli_voice_input_state: CLIVoiceInputState::default(),
             #[cfg(feature = "voice_input")]
             cli_transcription_handle: None,
-            ftu_callout_close_button: ctx.add_typed_action_view(|_ctx| {
-                ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::X)
-                    .with_size(ButtonSize::XSmall)
-                    .on_click(|ctx| {
-                        ctx.dispatch_typed_action(AgentInputFooterAction::DismissFtuModelCallout);
-                    })
-            }),
             v2_model_selector,
             prompt_cache_expiry_timer_handle: None,
             prompt_cache_expired: false,
@@ -889,7 +940,15 @@ impl AgentInputFooter {
         me.sync_remote_control_button(ctx);
         me.update_context_window_button(ctx);
         me.update_display_chips(&prompt, ctx);
-        me.update_ftu_callout_render_state(ctx);
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(
+                ambient_agent_view_model,
+                menu_positioning_provider,
+                ctx,
+            );
+        }
         me
     }
 
@@ -1163,10 +1222,10 @@ impl AgentInputFooter {
         }
 
         #[cfg(not(target_family = "wasm"))]
-        if let Some(manager) = plugin_manager_for(session.agent) {
-            if !manager.can_auto_install() {
-                return true;
-            }
+        if let Some(manager) = plugin_manager_for(session.agent)
+            && !manager.can_auto_install()
+        {
+            return true;
         }
         if session.is_remote() {
             return true;
@@ -1350,9 +1409,10 @@ impl AgentInputFooter {
                             CLIAgentSessionsModel::handle(ctx).update(ctx, |model, _| {
                                 model.record_plugin_auto_failure(agent, remote_host);
                             });
-                            log::error!(
-                                "Failed plugin operation for {agent:?}: {err}\n{log}",
-                                log = err.log,
+                            log::error!("Failed plugin operation log: {}", err.log);
+                            report_error!(
+                                anyhow::anyhow!("{err}").context("Failed plugin operation"),
+                                extra: { "agent" => ?agent }
                             );
                             let mut toast =
                                 DismissibleToast::error(format!("{error_label}: {err}"));
@@ -1540,23 +1600,23 @@ impl AgentInputFooter {
             .with_spacing(4.);
 
         // CLI agent brand icon is always rendered (not configurable).
-        if let Some(agent) = self.cli_agent(app) {
-            if let Some(icon) = agent.icon() {
-                let icon_color = agent
-                    .brand_color()
-                    .map(|c| c.on_background(background_color, MinimumAllowedContrast::NonText))
-                    .unwrap_or_else(|| appearance.theme().foreground().into_solid());
-                left_buttons.add_child(
-                    Container::new(
-                        ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(icon_color)).finish())
-                            .with_width(cli_icon_size)
-                            .with_height(cli_icon_size)
-                            .finish(),
-                    )
-                    .with_padding_right(8.)
-                    .finish(),
-                );
-            }
+        if let Some(agent) = self.cli_agent(app)
+            && let Some(icon) = agent.icon()
+        {
+            let icon_color = agent
+                .brand_color()
+                .map(|c| c.on_background(background_color, MinimumAllowedContrast::NonText))
+                .unwrap_or_else(|| appearance.theme().foreground().into_solid());
+            left_buttons.add_child(
+                Container::new(
+                    ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(icon_color)).finish())
+                        .with_width(cli_icon_size)
+                        .with_height(cli_icon_size)
+                        .finish(),
+                )
+                .with_padding_right(8.)
+                .finish(),
+            );
         }
 
         if let Some(chip_kind) = self.plugin_chip_kind(app) {
@@ -1647,36 +1707,6 @@ impl AgentInputFooter {
         self.model_selector.as_ref(app).is_open()
     }
 
-    fn update_ftu_callout_render_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let ftu_dismissed = *AISettings::as_ref(ctx).ftu_model_callout_dismissed;
-        if !self.render_ftu_callout && ftu_dismissed {
-            return;
-        }
-
-        let showing_ftu_model_picker = FeatureFlag::InlineMenuHeaders.is_enabled()
-            && self
-                .terminal_model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_agent_in_control_or_tagged_in();
-        if showing_ftu_model_picker && !ftu_dismissed {
-            if !self.render_ftu_callout {
-                self.render_ftu_callout = true;
-                ctx.notify();
-            }
-            AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                // This setting actually indicates whether we've shown the ftu callout at all,
-                // but it originally tracked whether the user manually dismissed the callout and
-                // we don't want to resurface the callout to folks who have already dismissed.
-                let _ = settings.ftu_model_callout_dismissed.set_value(true, ctx);
-            });
-        } else if !showing_ftu_model_picker && self.render_ftu_callout {
-            self.render_ftu_callout = false;
-            ctx.notify();
-        }
-    }
-
     fn handle_profile_model_selector_event(
         &mut self,
         event: &ProfileModelSelectorEvent,
@@ -1694,11 +1724,6 @@ impl AgentInputFooter {
                 ctx.emit(AgentInputFooterEvent::OpenSettings(*section));
             }
             ProfileModelSelectorEvent::ToggleInlineModelSelector => {
-                if self.render_ftu_callout {
-                    self.render_ftu_callout = false;
-                    ctx.notify();
-                }
-
                 let initial_tab = if self
                     .terminal_model
                     .lock()
@@ -1815,14 +1840,19 @@ impl AgentInputFooter {
                         self.show_cli_microphone_access_toast(ctx);
                     }
                     Err(e) => {
-                        log::error!("Failed to start CLI voice input: {e:?}");
+                        report_error!(
+                            anyhow::Error::new(e).context("Failed to start CLI voice input")
+                        );
                     }
                 }
             }
             CLIVoiceInputState::Listening => {
                 voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, ctx| {
-                    if let Err(e) = voice_input.stop_listening(ctx) {
-                        log::error!("Failed to stop CLI voice input: {e:?}");
+                    if let Err(e) = anyhow::Context::context(
+                        voice_input.stop_listening(ctx),
+                        "Failed to stop CLI voice input",
+                    ) {
+                        report_error!(e);
                     }
                 });
             }
@@ -1849,6 +1879,9 @@ impl AgentInputFooter {
                 let voice_transcriber = VoiceTranscriber::as_ref(ctx);
                 if let Some(transcriber) = voice_transcriber.transcriber() {
                     let transcriber = transcriber.clone();
+                    let language = AISettings::as_ref(ctx)
+                        .voice_input_language_code()
+                        .map(str::to_owned);
                     self.cli_voice_input_state = CLIVoiceInputState::Transcribing;
 
                     voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
@@ -1856,7 +1889,7 @@ impl AgentInputFooter {
                     });
 
                     self.cli_transcription_handle = Some(ctx.spawn(
-                        async move { transcriber.transcribe(wav_base64).await },
+                        async move { transcriber.transcribe(wav_base64, language).await },
                         Self::apply_cli_transcribed_voice_input,
                     ));
                 } else {
@@ -1898,7 +1931,9 @@ impl AgentInputFooter {
                     self.show_cli_voice_error_toast("Voice input limit reached", ctx);
                 }
                 _ => {
-                    log::error!("Failed to transcribe CLI voice input: {e:?}");
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to transcribe CLI voice input")
+                    );
                     self.show_cli_voice_error_toast("Failed to transcribe voice input", ctx);
                 }
             },
@@ -1965,10 +2000,7 @@ impl AgentInputFooter {
     fn sync_fast_forward_button(&self, ctx: &mut ViewContext<Self>) {
         // In cloud agent conversations fast forward is force-enabled.
         let terminal_model = self.terminal_model.lock();
-        let is_force_enabled = is_in_cloud_context(
-            terminal_model.block_list().agent_view_state(),
-            &terminal_model,
-        );
+        let is_force_enabled = is_in_cloud_context(&terminal_model);
         drop(terminal_model);
 
         // Read directly from the conversation, same data source as the warping
@@ -2290,12 +2322,35 @@ impl View for AgentInputFooter {
 
         let terminal_model = self.terminal_model.lock();
         let shared_status = terminal_model.shared_session_status();
-        let is_cloud_context = super::is_in_cloud_context(
-            terminal_model.block_list().agent_view_state(),
-            &terminal_model,
-        );
+        let is_cloud_context = super::is_in_cloud_context(&terminal_model);
         let is_conversation_transcript_context =
             is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+
+        // Indicate whether the next follow-up continues on the live remote VM or starts a new one.
+        // The new-cloud-VM chip uses a yellow icon; the live-session chip uses the default color.
+        match resolve_ai_query_routing(
+            self.terminal_view_id,
+            self.ambient_agent_view_model.as_ref(),
+            &terminal_model,
+            app,
+        ) {
+            AIQueryRouting::LiveRemoteVm {
+                ambient_agent_task_id: Some(_),
+                ..
+            } => {
+                left_buttons.add_child(ChildView::new(&self.live_session_indicator).finish());
+            }
+            AIQueryRouting::NewCloudVm { .. } => {
+                left_buttons.add_child(ChildView::new(&self.new_cloud_vm_indicator).finish());
+            }
+            // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
+            AIQueryRouting::LiveRemoteVm {
+                ambient_agent_task_id: None,
+                ..
+            }
+            | AIQueryRouting::UnconnectedReadOnly
+            | AIQueryRouting::Local => {}
+        }
 
         for item in &left_items {
             if let Some(element) = self.render_toolbar_item(
@@ -2357,119 +2412,8 @@ impl View for AgentInputFooter {
             container = container.with_padding_right(16.);
         }
 
-        // If the model chip has switched to show the ftu model options
-        // (and this is the first time this has happened)
-        // we show a little callout explaining the change.
-        let showing_ftu_model_picker = FeatureFlag::InlineMenuHeaders.is_enabled()
-            && terminal_model
-                .block_list()
-                .active_block()
-                .is_agent_in_control_or_tagged_in();
-
-        if showing_ftu_model_picker && self.render_ftu_callout {
-            let mut stack = Stack::new();
-            stack.add_child(container.finish());
-            stack.add_positioned_overlay_child(
-                render_ftu_callout(&self.ftu_callout_close_button, app),
-                OffsetPositioning::offset_from_save_position_element(
-                    "profile_model_selector_model_button",
-                    vec2f(8., -8.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    PositionedElementAnchor::TopRight,
-                    ChildAnchor::BottomRight,
-                ),
-            );
-            stack.finish()
-        } else {
-            container.finish()
-        }
+        container.finish()
     }
-}
-
-/// Render a message bubble calling out that the model has switched now that we're in FTU mode.
-/// This callout is dismissable and does not re-appear once you've dismissed it once.
-fn render_ftu_callout(
-    close_button: &ViewHandle<ActionButton>,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
-    let background = theme.background().blend(&theme.accent().with_opacity(50));
-    let text_color = internal_colors::text_main(theme, background.into_solid());
-
-    let callout_box = ConstrainedBox::new(
-        Container::new(
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_spacing(8.)
-                .with_child(
-                    Expanded::new(
-                        1.,
-                        Text::new(
-                            "Now using Full Terminal Agent's default model.",
-                            appearance.ui_font_family(),
-                            appearance.monospace_font_size() - 2.,
-                        )
-                        .with_color(text_color)
-                        .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO)
-                        .with_selectable(false)
-                        .finish(),
-                    )
-                    .finish(),
-                )
-                .with_child(
-                    Container::new(ChildView::new(close_button).finish())
-                        .with_margin_top(-3.)
-                        .finish(),
-                )
-                .finish(),
-        )
-        .with_vertical_padding(12.)
-        .with_horizontal_padding(16.)
-        .with_background(background)
-        .with_border(Border::all(1.).with_border_fill(theme.accent()))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-        .finish(),
-    )
-    .with_width(348.)
-    .finish();
-
-    // The way that we render the little triangle in the bottom of the message bubble
-    // is by rendering two triangle icons (a filled triangle and an outlined triangle) and then
-    // stacking them on top of each other below the message bubble. I don't think there's a simpler
-    // way to do this with our UI framework.
-    let triangle_stack = Stack::new()
-        .with_child(
-            ConstrainedBox::new(
-                Icon::CalloutTriangleBorderDown
-                    .to_warpui_icon(Fill::Solid(theme.accent().into_solid()))
-                    .finish(),
-            )
-            .with_width(24.)
-            .with_height(24.)
-            .finish(),
-        )
-        .with_child(
-            ConstrainedBox::new(
-                Icon::CalloutTriangleFillDown
-                    .to_warpui_icon(background)
-                    .finish(),
-            )
-            .with_width(24.)
-            .with_height(24.)
-            .finish(),
-        );
-
-    Flex::column()
-        .with_main_axis_size(MainAxisSize::Min)
-        .with_child(callout_box)
-        .with_child(
-            Container::new(triangle_stack.finish())
-                .with_margin_left(300.)
-                .with_margin_top(-3.)
-                .finish(),
-        )
-        .finish()
 }
 
 #[derive(Debug, Clone)]
@@ -2482,7 +2426,6 @@ pub enum AgentInputFooterAction {
     ToggleFileExplorer,
     ToggleRichInput,
     ToggleAutodetectionSetting,
-    DismissFtuModelCallout,
     InstallPlugin,
     UpdatePlugin,
     OpenPluginInstallInstructionsPane,
@@ -2565,16 +2508,12 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::ToggleAutodetectionSetting => {
                 let ai_settings = AISettings::handle(ctx);
                 ai_settings.update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .ai_autodetection_enabled_internal
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .ai_autodetection_enabled_internal
+                            .toggle_and_save_value(ctx)
+                    );
                 });
-            }
-            AgentInputFooterAction::DismissFtuModelCallout => {
-                if self.render_ftu_callout {
-                    self.render_ftu_callout = false;
-                    ctx.notify();
-                }
             }
             AgentInputFooterAction::InstallPlugin => {
                 #[cfg(not(target_family = "wasm"))]
@@ -2645,16 +2584,16 @@ impl TypedActionView for AgentInputFooter {
             AgentInputFooterAction::DismissPluginChip => {
                 let chip_kind = self.plugin_chip_kind(ctx);
                 let is_update = matches!(chip_kind, Some(PluginChipKind::Update));
-                if let Some(agent) = self.cli_agent(ctx) {
-                    if let Some(kind) = chip_kind {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::CLIAgentPluginChipDismissed {
-                                cli_agent: agent.into(),
-                                chip_kind: kind.into(),
-                            },
-                            ctx
-                        );
-                    }
+                if let Some(agent) = self.cli_agent(ctx)
+                    && let Some(kind) = chip_kind
+                {
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::CLIAgentPluginChipDismissed {
+                            cli_agent: agent.into(),
+                            chip_kind: kind.into(),
+                        },
+                        ctx
+                    );
                 }
                 let session = CLIAgentSessionsModel::as_ref(ctx)
                     .session(self.terminal_view_id)

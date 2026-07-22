@@ -7,11 +7,12 @@ use futures::StreamExt as _;
 use instant::Instant;
 use num_traits::SaturatingSub;
 use regex::escape;
+use remote_server::HostId;
 use remote_server::manager::{HostRequestError, RemoteServerManager, RipgrepSearchParams};
 use remote_server::proto::RipgrepSearchSuccess;
 use remote_server::protocol::RequestId;
-use remote_server::HostId;
 use string_offset::ByteOffset;
+use warp_errors::report_error;
 use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -238,8 +239,8 @@ impl GlobalSearch {
                         capped: false,
                     }),
                     Err(err) => {
-                        log::error!(
-                            "GlobalSearch: warp_ripgrep CLI search failed or aborted: {err}"
+                        report_error!(
+                            err.context("GlobalSearch: warp_ripgrep CLI search failed or aborted")
                         );
                         None
                     }
@@ -416,8 +417,9 @@ impl GlobalSearch {
             roots_display
         );
 
+        let patterns = &[pattern];
         let stream =
-            warp_ripgrep::search::search_streaming(&[pattern], &roots, ignore_case, multiline)?;
+            warp_ripgrep::search::search_streaming(patterns, &roots, ignore_case, multiline)?;
         futures::pin_mut!(stream);
 
         let mut total_match_count: usize = 0;

@@ -10,14 +10,16 @@ use super::{
     AutoCloudHandoffTrigger, OneTimeModalModel, ToastStack, Workspace, WorkspaceAction,
     WorkspaceRegistry,
 };
+use crate::BlocklistAIHistoryModel;
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
+use crate::ai::blocklist::orchestration_topology::has_local_orchestrated_children;
+use crate::ai::llms::LLMPreferences;
 use crate::settings::AISettings;
 use crate::system::{SystemStats, SystemStatsEvent};
 use crate::terminal::view::TerminalView;
 use crate::view_components::DismissibleToast;
-use crate::BlocklistAIHistoryModel;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoCloudHandoffSkipReason {
@@ -26,6 +28,8 @@ pub(crate) enum AutoCloudHandoffSkipReason {
     MissingServerConversationToken,
     SharedSessionViewer,
     CloudHandoffUnavailable,
+    ModelNotCloudRunnable,
+    OrchestratorWithLocalChildren,
     AlreadyAttempted,
     NoFocusedConversation,
     TerminalNotFound { terminal_view_id: EntityId },
@@ -42,6 +46,15 @@ pub(crate) struct AutoCloudHandoffEligibility {
     pub(crate) is_viewing_shared_session: bool,
     pub(crate) can_handoff_to_cloud: bool,
     pub(crate) already_attempted: bool,
+    /// True when the focused conversation is an orchestrator with at least one
+    /// active local child agent. Handing such a session off to the cloud would
+    /// fork only the parent and orphan its local children, so we skip it.
+    pub(crate) has_local_orchestrated_children: bool,
+    /// True when the pane's active Agent Mode model can't run in a Warp cloud
+    /// (Oz) agent (e.g. a custom-endpoint/BYOK model or local custom router).
+    /// Handing off would silently swap the run onto a different model, so we
+    /// skip instead.
+    pub(crate) active_model_not_cloud_runnable: bool,
 }
 
 impl AutoCloudHandoffEligibility {
@@ -49,6 +62,8 @@ impl AutoCloudHandoffEligibility {
         conversation: &AIConversation,
         can_handoff_to_cloud: bool,
         already_attempted: bool,
+        has_local_orchestrated_children: bool,
+        active_model_not_cloud_runnable: bool,
     ) -> Self {
         Self {
             is_empty: conversation.is_empty(),
@@ -57,6 +72,8 @@ impl AutoCloudHandoffEligibility {
             is_viewing_shared_session: conversation.is_viewing_shared_session(),
             can_handoff_to_cloud,
             already_attempted,
+            has_local_orchestrated_children,
+            active_model_not_cloud_runnable,
         }
     }
 
@@ -73,11 +90,17 @@ impl AutoCloudHandoffEligibility {
         if !self.is_in_progress {
             return Some(AutoCloudHandoffSkipReason::NotInProgress);
         }
+        if self.has_local_orchestrated_children {
+            return Some(AutoCloudHandoffSkipReason::OrchestratorWithLocalChildren);
+        }
         if !self.has_server_conversation_token {
             return Some(AutoCloudHandoffSkipReason::MissingServerConversationToken);
         }
         if !self.can_handoff_to_cloud {
             return Some(AutoCloudHandoffSkipReason::CloudHandoffUnavailable);
+        }
+        if self.active_model_not_cloud_runnable {
+            return Some(AutoCloudHandoffSkipReason::ModelNotCloudRunnable);
         }
         None
     }
@@ -312,10 +335,14 @@ impl AutoCloudHandoffController {
         };
 
         let can_handoff_to_cloud = AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx);
+        let active_model_not_cloud_runnable =
+            !LLMPreferences::as_ref(ctx).is_active_base_model_cloud_runnable(terminal_view_id, ctx);
         if let Some(reason) = AutoCloudHandoffEligibility::from_conversation(
             conversation,
             can_handoff_to_cloud,
             self.attempted_conversation_ids.contains(&conversation_id),
+            has_local_orchestrated_children(history, conversation_id),
+            active_model_not_cloud_runnable,
         )
         .skip_reason()
         {
@@ -367,7 +394,7 @@ impl AutoCloudHandoffController {
         // handoff flow validates against — then the agent-view registry, and
         // only fall back to the last-focused id.
         let terminal_view_id = BlocklistAIHistoryModel::as_ref(ctx)
-            .terminal_view_id_for_conversation(&conversation_id)
+            .terminal_surface_id_for_conversation(&conversation_id)
             .or_else(|| {
                 active_agent_views.get_terminal_view_id_for_conversation(conversation_id, ctx)
             })

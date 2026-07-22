@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use warp_errors::report_error;
 use warpui::{AppContext, SingletonEntity, ViewHandle};
 
 use super::enum_creation_dialog::{EnumCreationDialog, WorkflowEnumData};
@@ -312,7 +313,7 @@ where
             true
         }
         _ => {
-            log::error!("Attempting to select an enum that cannot be found");
+            report_error!("Attempting to select an enum that cannot be found");
             false
         }
     }

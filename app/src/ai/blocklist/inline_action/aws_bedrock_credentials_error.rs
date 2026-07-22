@@ -1,5 +1,6 @@
 use settings::Setting as _;
 use warp_core::ui::Icon;
+use warp_errors::report_if_error;
 use warpui::elements::{
     ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Shrinkable, SizeConstraintCondition,
@@ -12,11 +13,11 @@ use warpui::{
 };
 
 use super::inline_action_icons::icon_size;
+use crate::Appearance;
 use crate::ai::blocklist::view_util::error_color;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, PrimaryTheme};
-use crate::{report_if_error, Appearance};
 
 #[derive(Clone, Debug)]
 pub enum AwsBedrockCredentialsErrorAction {

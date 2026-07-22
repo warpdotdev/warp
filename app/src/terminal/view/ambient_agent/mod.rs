@@ -29,7 +29,6 @@ pub use host_selector::{
     Host, HostSelector, HostSelectorAction, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 pub use loading_screen::{render_cloud_mode_error_screen, render_cloud_mode_loading_screen};
-pub(crate) use model::should_disable_snapshot;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) use model::PendingHandoff;
 pub use model::{AgentProgress, AmbientAgentViewModel, AmbientAgentViewModelEvent, Status};
@@ -38,16 +37,16 @@ pub(crate) use model::{HandoffSubmissionState, SnapshotUploadStatus};
 pub use model_selector::{
     HarnessSelection, ModelSelection, ModelSelector, ModelSelectorAction, ModelSelectorEvent,
 };
-pub use progress::{render_progress, ProgressProps, ProgressStep, ProgressStepState};
+pub use progress::{ProgressProps, ProgressStep, ProgressStepState, render_progress};
 pub use progress_ui_state::AmbientAgentProgressUIState;
-pub use tips::{get_cloud_mode_tips, CloudModeTip};
+pub use tips::{CloudModeTip, get_cloud_mode_tips};
 use warp_core::features::FeatureFlag;
 use warpui::geometry::vector::Vector2F;
 use warpui::{AppContext, ModelHandle, ViewHandle, WindowId};
 
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewState};
 use crate::pane_group::TerminalViewResources;
-use crate::terminal::{shared_session, TerminalManager, TerminalModel, TerminalView};
+use crate::terminal::{TerminalManager, TerminalModel, TerminalView, shared_session};
 
 /// Creates a cloud mode terminal view and manager for ambient agent sessions.
 /// See `viewer::TerminalManager::enable_orchestration_polling` for the flag.
@@ -64,17 +63,17 @@ pub fn create_cloud_mode_view(
     // In Cloud Mode, ambient agent prompts are composed in an uninitialized session-sharing
     // viewer pane. This lets us reuse the terminal input without a backing session, and
     // then join the ambient agent session once it's ready.
-    let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = ctx.add_model(|ctx| {
-        Box::new(shared_session::viewer::TerminalManager::new_deferred(
-            resources,
-            view_bounds_size,
-            window_id,
-            enable_orchestration_polling,
-            ctx,
-        )) as Box<dyn TerminalManager>
-    });
-
-    let terminal_view = terminal_manager.as_ref(ctx).view();
+    let terminal_init = shared_session::viewer::TerminalManager::new_deferred(
+        resources,
+        view_bounds_size,
+        window_id,
+        enable_orchestration_polling,
+        ctx,
+    );
+    let viewer_manager = terminal_init.manager;
+    let terminal_view = terminal_init.view;
+    let terminal_manager: ModelHandle<Box<dyn TerminalManager>> =
+        ctx.add_model(|_ctx| Box::new(viewer_manager) as Box<dyn TerminalManager>);
 
     // Subscribe to the ambient agent view model to join the session once it's ready.
     // This ensures that we use the manager corresponding to this specific view.
@@ -86,6 +85,29 @@ pub fn create_cloud_mode_view(
         log::warn!("Cloud mode view was created without an ambient agent view model");
         return (terminal_view, terminal_manager);
     };
+    wire_ambient_agent_session_events(&terminal_manager, &view_model, ctx);
+
+    (terminal_view, terminal_manager)
+}
+
+/// Wires an [`AmbientAgentViewModel`]'s session lifecycle events to the viewer
+/// [`shared_session::viewer::TerminalManager`] so the viewer connects/attaches to
+/// the right shared session as runs come and go:
+/// - [`AmbientAgentViewModelEvent::SessionReady`]: a freshly spawned run's session is
+///   ready, so connect the viewer to it (initial run).
+/// - [`AmbientAgentViewModelEvent::ExecutionSessionReady`]: a follow-up run started on a
+///   new VM after the previous one ended, so re-attach the viewer to the new session.
+///
+/// Shared by the compose path ([`create_cloud_mode_view`]) and the shared-session viewer
+/// path (`PaneGroup::create_shared_session_viewer`) so every ambient viewer re-attaches on
+/// follow-up runs — including a raw `shared_session` link join whose model is created lazily
+/// at `SessionJoined`.
+pub fn wire_ambient_agent_session_events(
+    terminal_manager: &ModelHandle<Box<dyn TerminalManager>>,
+    view_model: &ModelHandle<AmbientAgentViewModel>,
+    ctx: &mut AppContext,
+) {
+    let view_model = view_model.clone();
     terminal_manager.update(ctx, |_, ctx| {
         ctx.subscribe_to_model(&view_model, move |manager, view_model, event, ctx| {
             let Some(manager) = manager
@@ -133,8 +155,6 @@ pub fn create_cloud_mode_view(
             }
         });
     });
-
-    (terminal_view, terminal_manager)
 }
 
 /// Returns `true` when a cloud agent shared session is in any pre-first-exchange phase —
@@ -171,8 +191,15 @@ pub fn is_cloud_agent_pre_first_exchange(
 
     // Handoff panes enter agent view with `RestoreExistingConversation` because they restore the
     // forked conversation, not `CloudAgent`. The `is_local_to_cloud_handoff` flag is the
-    // authoritative "this is a cloud agent pane" signal for that path, so accept either.
-    if !origin.is_cloud_agent() && !view_model.is_local_to_cloud_handoff() {
+    // authoritative "this is a cloud agent pane" signal for that path. Shared-session viewers of
+    // an ambient run (raw link join / attach-to-running) enter agent view via
+    // `SharedSessionSelection` / `ThirdPartyCloudAgent`, so `is_shared_ambient_agent_session()` is
+    // the authoritative signal for that path — e.g. a post-death cloud follow-up spinning up a new
+    // VM must still count as pre-first-exchange so the setup progress + prompt-queuing UI render.
+    if !origin.is_cloud_agent()
+        && !view_model.is_local_to_cloud_handoff()
+        && !terminal_model.is_shared_ambient_agent_session()
+    {
         return false;
     }
 

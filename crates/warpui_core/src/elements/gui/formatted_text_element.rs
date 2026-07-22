@@ -9,15 +9,16 @@ use std::sync::{Arc, Mutex, Once};
 use itertools::Itertools;
 use markdown_parser::{Action, FormattedText, FormattedTextFragment, FormattedTextLine, Hyperlink};
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::vec1;
+use warp_errors::report_error;
 
 use super::{Highlight, ListNumbering, Selection};
 use crate::elements::{
     Axis, ClickableCharRange, CornerRadius, Fill, HighlightedRange, HoverableCharRange,
-    MouseStateHandle, PartialClickableElement, Point, Radius, SecretRange, SelectableElement,
-    SelectionFragment, SmartSelectFn, ZIndex, SELECTED_HIGHLIGHT_COLOR,
+    MouseStateHandle, PartialClickableElement, Point, Radius, SELECTED_HIGHLIGHT_COLOR,
+    SecretRange, SelectableElement, SelectionFragment, SmartSelectFn, ZIndex,
 };
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::fonts::{FamilyId, Properties, Style, Weight};
@@ -25,11 +26,11 @@ use crate::geometry::rect::RectF;
 use crate::platform::{Cursor, LineStyle};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{
-    char_slice, count_chars_up_to_byte, BlockHeaderSize, IsRect, SelectionDirection, SelectionType,
-    TextBuffer,
+    BlockHeaderSize, IsRect, SelectionDirection, SelectionType, TextBuffer, char_slice,
+    count_chars_up_to_byte,
 };
 use crate::text_layout::{
-    ClipConfig, StyleAndFont, TextAlignment, TextFrame, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
+    ClipConfig, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextAlignment, TextFrame, TextStyle,
 };
 use crate::{
     AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
@@ -1030,6 +1031,53 @@ impl FormattedTextElement {
         handled
     }
 
+    /// Returns `true` if `position` lands on a registered clickable range (e.g. a hyperlink),
+    /// *without* invoking the click handler. Used to report a single click as handled across the
+    /// whole down/up lifecycle: `handle_mouse_down` fires the click on press, and this lets the
+    /// matching release also be reported as handled so an enclosing `SelectableArea` does not run
+    /// its mouse-up selection handler (which dispatches a selection action that dismisses the link
+    /// tooltip the press just opened).
+    fn point_is_on_clickable_range(
+        &self,
+        position: Vector2F,
+        z_index: ZIndex,
+        ctx: &EventContext,
+    ) -> bool {
+        if self.is_mouse_interaction_disabled
+            || ctx.is_covered(Point::from_vec2f(position, z_index))
+        {
+            return false;
+        }
+
+        if !self
+            .bounds()
+            .is_some_and(|bounds| bounds.contains_point(position))
+        {
+            return false;
+        }
+
+        let Some(click_pos) =
+            self.position_for_point(position, SnappingPolicy::precise_char_range())
+        else {
+            return false;
+        };
+        let handlers = match self.laid_out_text.get(click_pos.frame_index) {
+            Some(
+                LaidOutTextFrame::Text { mouse_handlers, .. }
+                | LaidOutTextFrame::Indented { mouse_handlers, .. },
+            ) => mouse_handlers,
+            _ => return false,
+        };
+
+        let handlers = handlers.borrow();
+        let glyph_offset = handlers.glyph_offset;
+        handlers.click_handlers.iter().any(|clickable_range| {
+            let handler_char_range = (clickable_range.char_range.start + glyph_offset.as_usize())
+                ..(clickable_range.char_range.end + glyph_offset.as_usize());
+            handler_char_range.contains(&click_pos.glyph_index)
+        })
+    }
+
     fn frame_index_to_line_index(&self, frame_index: usize) -> usize {
         // Render text line-by-line.
         let mut lines = self.formatted_text.lines.iter().enumerate().peekable();
@@ -1243,11 +1291,11 @@ impl FormattedTextElement {
             let end_glyph_index = end_bound.glyph_index.min(end_text.chars().count());
 
             // This is to prevent slicing an empty string (i.e. a newline frame) and returning a None.
-            if let Some(text) = char_slice(end_text, 0, end_glyph_index) {
-                if !text.is_empty() {
-                    result.push('\n');
-                    result.push_str(text);
-                }
+            if let Some(text) = char_slice(end_text, 0, end_glyph_index)
+                && !text.is_empty()
+            {
+                result.push('\n');
+                result.push_str(text);
             }
 
             Some(result)
@@ -1558,7 +1606,12 @@ fn apply_secret_replacements(
     }
 
     if let Some(msg) = out_of_bound_message {
-        SECRET_REPLACEMENT_OOB_ONCE.call_once(|| log::error!("{msg}"));
+        SECRET_REPLACEMENT_OOB_ONCE.call_once(|| {
+            report_error!(
+                "Secret redaction out of bounds during formatting",
+                extra: { "details" => %msg }
+            )
+        });
     }
 }
 
@@ -1744,13 +1797,12 @@ impl Element for FormattedTextElement {
                         let mut style = Properties::default();
                         let mut text_style = TextStyle::default();
 
-                        if let Some(style) = link_styles_iter.peek() {
-                            if style.highlight_indices[0] + glyph_offset
+                        if let Some(style) = link_styles_iter.peek()
+                            && style.highlight_indices[0] + glyph_offset
                                 == prev_index + character_count
-                            {
-                                current_link_style = Some((*style).clone());
-                                link_styles_iter.next();
-                            }
+                        {
+                            current_link_style = Some((*style).clone());
+                            link_styles_iter.next();
                         }
 
                         let start_char_index = prev_index + character_count;
@@ -1803,15 +1855,15 @@ impl Element for FormattedTextElement {
                         if inline.styles.inline_code {
                             // If we have existing background and foreground highlighting from, for example,
                             // a link or a search, we don't want to override it.
-                            if let Some(font_color) = self.inline_code_font_color {
-                                if text_style.foreground_color.is_none() {
-                                    text_style.foreground_color = Some(font_color);
-                                }
+                            if let Some(font_color) = self.inline_code_font_color
+                                && text_style.foreground_color.is_none()
+                            {
+                                text_style.foreground_color = Some(font_color);
                             }
-                            if let Some(bg_color) = self.inline_code_bg_color {
-                                if text_style.background_color.is_none() {
-                                    text_style.background_color = Some(bg_color);
-                                }
+                            if let Some(bg_color) = self.inline_code_bg_color
+                                && text_style.background_color.is_none()
+                            {
+                                text_style.background_color = Some(bg_color);
                             }
                         }
 
@@ -2222,15 +2274,33 @@ impl Element for FormattedTextElement {
             Some(Event::LeftMouseDown {
                 position,
                 modifiers,
+                click_count,
                 ..
             }) => {
-                self.handle_mouse_down(*position, z_index, modifiers, ctx, app);
-                false
+                // Only a single click can land on a clickable range (e.g. a hyperlink). When it
+                // does, report the event as handled so an enclosing `SelectableArea` does not also
+                // treat the press as the start of a text selection. Otherwise the selection path
+                // dispatches its selection handler on the same press, which clears the link
+                // tooltip/click that `handle_mouse_down` just triggered — making clicks on
+                // markdown links appear to do nothing. Multi-clicks fall through so word/line
+                // selection still works when it begins on top of a link.
+                if *click_count == 1 {
+                    self.handle_mouse_down(*position, z_index, modifiers, ctx, app)
+                } else {
+                    false
+                }
+            }
+            Some(Event::LeftMouseUp { position, .. }) => {
+                // Report the release of a click that lands on a link as handled too. The press is
+                // handled above; if the matching release is left unhandled, an enclosing
+                // `SelectableArea` runs its mouse-up selection handler on the same click, which
+                // dispatches a selection action that dismisses the link tooltip the press opened.
+                // A genuine drag selection bypasses the child on mouse-up, so this only affects
+                // plain clicks on a link.
+                self.point_is_on_clickable_range(*position, z_index, ctx)
             }
             _ => false,
         }
-
-        // false
     }
 
     fn origin(&self) -> Option<Point> {
@@ -2238,11 +2308,7 @@ impl Element for FormattedTextElement {
     }
 
     fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
-        if self.is_selectable {
-            Some(self)
-        } else {
-            None
-        }
+        if self.is_selectable { Some(self) } else { None }
     }
 }
 

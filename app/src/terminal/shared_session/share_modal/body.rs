@@ -18,13 +18,13 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 use super::style::{self, BUTTON_GAP, MODAL_MARGIN};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
+use crate::terminal::TerminalModel;
 use crate::terminal::shared_session::ai_agent::encode_agent_response_event;
 use crate::terminal::shared_session::replay_agent_conversations::reconstruct_response_events_from_conversations;
 use crate::terminal::shared_session::role_change_modal::TEXT_FONT_SIZE;
 use crate::terminal::shared_session::{
-    max_session_size, SharedSessionActionSource, SharedSessionScrollbackType,
+    SharedSessionActionSource, SharedSessionScrollbackType, max_session_size,
 };
-use crate::terminal::TerminalModel;
 
 #[derive(Default)]
 struct ButtonMouseStateHandles {
@@ -81,7 +81,7 @@ impl Body {
         ctx: &ViewContext<Self>,
     ) -> Byte {
         let conversations: Vec<_> = BlocklistAIHistoryModel::as_ref(ctx)
-            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
             .filter(|conv| conv.exchange_count() > 0)
             .cloned()
             .collect();
@@ -121,7 +121,7 @@ impl Body {
         // Check if agent shared sessions is enabled and there are active conversations
         self.has_agent_conversations = if FeatureFlag::AgentSharedSessions.is_enabled() {
             BlocklistAIHistoryModel::as_ref(ctx)
-                .all_live_conversations_for_terminal_view(terminal_view_id)
+                .all_live_conversations_for_terminal_surface(terminal_view_id)
                 .any(|conv| conv.exchange_count() > 0)
         } else {
             false
@@ -334,14 +334,18 @@ impl View for Body {
         } else if disabled_count > 1 {
             // Multiple options disabled - mention both reasons if agent conversations exist
             if self.has_agent_conversations {
-                Some("Some options are disabled due to sharing size limits and the presence of agent conversations in the session")
+                Some(
+                    "Some options are disabled due to sharing size limits and the presence of agent conversations in the session",
+                )
             } else {
                 Some("Some options are disabled due to sharing size limits")
             }
         } else {
             // Only one option disabled - use specific message if it's due to agent conversations
             if self.has_agent_conversations {
-                Some("Sharing without scrollback is disabled because this session has agent conversations")
+                Some(
+                    "Sharing without scrollback is disabled because this session has agent conversations",
+                )
             } else {
                 Some("Some options are disabled due to sharing size limits")
             }

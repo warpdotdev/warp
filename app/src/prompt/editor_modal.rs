@@ -3,6 +3,7 @@ use pathfinder_geometry::vector::vec2f;
 use serde::Serialize;
 use settings::Setting as _;
 use warp_core::ui::theme::Fill;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -21,17 +22,17 @@ use crate::chip_configurator::{ChipConfigurator, ChipConfiguratorAction, ChipCon
 use crate::context_chips::prompt::{Prompt, PromptConfiguration, PromptSelection};
 use crate::context_chips::renderer::Renderer as ContextChipRenderer;
 use crate::context_chips::{
-    available_chips, ChipAvailability, ChipRuntimeCapabilities, ContextChipKind,
+    ChipAvailability, ChipRuntimeCapabilities, ContextChipKind, available_chips,
 };
 use crate::server::telemetry::{PromptChoice, TelemetryEvent};
 use crate::settings::{FontSettings, WarpPromptSeparator};
-use crate::terminal::blockgrid_element::BlockGridElement;
-use crate::terminal::model::blockgrid::BlockGrid;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::SizeInfo;
+use crate::terminal::blockgrid_element::BlockGridElement;
+use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::session_settings::SessionSettings;
 use crate::view_components::{Dropdown, DropdownItem};
-use crate::{report_if_error, send_telemetry_from_ctx, Appearance};
+use crate::{Appearance, send_telemetry_from_ctx};
 
 const MODAL_WIDTH: f32 = 700.;
 const BORDER_WIDTH: f32 = 1.;

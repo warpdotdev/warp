@@ -12,19 +12,19 @@ use ordered_float::OrderedFloat;
 use warpui::{AppContext, Entity, EntityId, ModelHandle, SingletonEntity};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::input_suggestions::{HistoryInputSuggestion, HistoryOrder};
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::SyncDataSource;
 use crate::terminal::history::{History, LinkedWorkflowData, UpArrowHistoryConfig};
 use crate::terminal::input::inline_history::search_item::InlineHistoryItem;
 use crate::terminal::input::inline_menu::{
     InlineMenuAction, InlineMenuClickBehavior, InlineMenuType,
 };
-use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionId;
+use crate::terminal::model::session::active_session::ActiveSession;
 
 #[derive(Clone, Debug)]
 pub enum AcceptHistoryItem {
@@ -155,7 +155,7 @@ impl InlineHistoryMenuDataSource {
         let mut conversation_entries: Vec<MenuEntry> = Vec::new();
         let history_model = BlocklistAIHistoryModel::handle(app).as_ref(app);
         for conversation in
-            history_model.all_live_conversations_for_terminal_view(self.terminal_view_id)
+            history_model.all_live_conversations_for_terminal_surface(self.terminal_view_id)
         {
             if conversation.is_entirely_passive() || conversation.exchange_count() == 0 {
                 continue;

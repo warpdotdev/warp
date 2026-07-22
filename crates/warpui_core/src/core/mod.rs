@@ -7,7 +7,7 @@ mod view;
 mod window;
 
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::mem;
@@ -31,7 +31,7 @@ pub use window::*;
 
 use crate::platform::{self, FullscreenState, WindowBounds, WindowStyle};
 use crate::rendering::OnGPUDeviceSelected;
-use crate::{keymap, Element};
+use crate::{Element, keymap};
 
 /// A unique identifier for a display.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,8 +192,8 @@ pub(crate) type SpawnedFuture = BoxFuture<'static, ()>;
 
 #[derive(Debug, Default, Clone)]
 pub struct WindowInvalidation {
-    pub updated: HashSet<EntityId>,
-    pub removed: HashSet<EntityId>,
+    pub updated: EntityIdSet,
+    pub removed: EntityIdSet,
     /// Stores whether an element in the window needs to be repainted. Currently an
     /// invalidation will repaint the entire element tree for that window, so we
     /// only store a boolean. In the future we can extend this to store entity ids
@@ -318,12 +318,12 @@ where
         let mut ctx = ViewContext::new(app, window_id, view_id);
         View::on_focus(self, focus_ctx, &mut ctx);
         // Send notification to a11y tools that the view gained focus
-        if focus_ctx.is_self_focused() {
-            if let Some(accessibility_contents) = View::accessibility_contents(self, app) {
-                app.platform_delegate.set_accessibility_contents(
-                    accessibility_contents.with_verbosity(app.a11y_verbosity),
-                );
-            }
+        if focus_ctx.is_self_focused()
+            && let Some(accessibility_contents) = View::accessibility_contents(self, app)
+        {
+            app.platform_delegate.set_accessibility_contents(
+                accessibility_contents.with_verbosity(app.a11y_verbosity),
+            );
         }
     }
 
@@ -396,13 +396,13 @@ pub enum EntityLocation {
 
 #[derive(Default)]
 struct RefCounts {
-    entity_counts: HashMap<EntityId, usize>,
+    entity_counts: EntityIdMap<usize>,
     dropped: DroppedItems,
 }
 
 #[derive(Default)]
 struct DroppedItems {
-    models: HashSet<EntityId>,
+    models: EntityIdSet,
     views: HashSet<(WindowId, EntityId)>,
 }
 

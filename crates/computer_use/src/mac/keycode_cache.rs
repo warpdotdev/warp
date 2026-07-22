@@ -4,8 +4,7 @@
 //! The translation depends on the current keyboard layout.
 //!
 //! The Carbon APIs used for translation (`TISCopyCurrentKeyboardInputSource`,
-//! `UCKeyTranslate`) are not thread-safe, so we build the cache on the main thread
-//! using GCD dispatch.
+//! `UCKeyTranslate`) must run on the main thread, so cache construction dispatches there.
 
 use std::collections::HashMap;
 use std::ptr::NonNull;

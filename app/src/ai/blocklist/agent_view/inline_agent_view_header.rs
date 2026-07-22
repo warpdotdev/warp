@@ -14,8 +14,8 @@ use crate::ai::blocklist::inline_action::inline_action_header::HeaderConfig;
 use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
 };
-use crate::terminal::model::session::Sessions;
 use crate::terminal::TerminalModel;
+use crate::terminal::model::session::Sessions;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 
@@ -45,7 +45,7 @@ impl InlineAgentViewHeader {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
             if event
-                .terminal_view_id()
+                .terminal_surface_id()
                 .is_some_and(|id| id != me.terminal_view_id)
             {
                 return;

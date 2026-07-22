@@ -2,10 +2,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
@@ -16,16 +16,16 @@ use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, View};
 
 use super::{FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::notebooks::context_menu::MenuSource;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::file::is_markdown_file;
 use crate::search::files::model::FileSearchModel;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::keys::TerminalKeybindings;
@@ -105,6 +105,123 @@ fn test_load_local() {
             assert!(!editor.is_editable(ctx));
             // We don't want to check the actual README contents, but it should be clearly non-empty.
             assert!(editor.markdown(ctx).len() > 4);
+
+            // Rendering should not panic.
+            handle.as_ref(ctx).render(ctx);
+        });
+    });
+}
+
+#[test]
+fn test_load_jupyter_notebook_renders_cells() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("analysis.ipynb");
+        std::fs::write(
+            &path,
+            r##"{
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {"language_info": {"name": "python"}},
+                "cells": [
+                    {"cell_type": "markdown", "source": ["# Notebook heading"]},
+                    {"cell_type": "code", "source": "print('hello')", "outputs": []}
+                ]
+            }"##,
+        )
+        .unwrap();
+
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        let session = Arc::new(Session::test());
+        handle
+            .update(&mut app, |file_notebook, ctx| {
+                file_notebook.open_local(&path, Some(session), ctx);
+
+                let file_id = file_notebook
+                    .file_id
+                    .expect("File should be opened and have a file_id");
+
+                let future_handle = FileModel::as_ref(ctx)
+                    .get_future_handle(file_id)
+                    .expect("Loading future should be present");
+
+                ctx.await_spawned_future(future_handle.future_id())
+            })
+            .await;
+
+        app.read(|ctx| {
+            let editor = handle.as_ref(ctx).editor.as_ref(ctx);
+            let markdown = editor.markdown(ctx);
+            // The notebook is rendered (heading from the markdown cell shows),
+            // and the raw JSON is not (no `nbformat` key leaks through).
+            assert!(
+                markdown.contains("Notebook heading"),
+                "expected rendered heading, got: {markdown}"
+            );
+            assert!(
+                !markdown.contains("nbformat"),
+                "raw notebook JSON should not be shown, got: {markdown}"
+            );
+
+            // The Rendered/Raw toggle is exposed for .ipynb, the same way it is
+            // for markdown files (PRODUCT invariant 14).
+            assert!(
+                handle.as_ref(ctx).shows_markdown_toggle(),
+                "rendered notebook should expose the Rendered/Raw toggle"
+            );
+
+            // Rendering should not panic.
+            handle.as_ref(ctx).render(ctx);
+        });
+    });
+}
+
+#[test]
+fn test_malformed_jupyter_notebook_falls_back_to_raw() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.ipynb");
+        // Invalid notebook JSON that also contains Markdown which must NOT be
+        // rendered as Markdown (PRODUCT invariant 11: fall back to raw text).
+        std::fs::write(&path, "{ \"nbformat\": 4, broken json # Heading").unwrap();
+
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        let session = Arc::new(Session::test());
+        handle
+            .update(&mut app, |file_notebook, ctx| {
+                file_notebook.open_local(&path, Some(session), ctx);
+
+                let file_id = file_notebook
+                    .file_id
+                    .expect("File should be opened and have a file_id");
+
+                let future_handle = FileModel::as_ref(ctx)
+                    .get_future_handle(file_id)
+                    .expect("Loading future should be present");
+
+                ctx.await_spawned_future(future_handle.future_id())
+            })
+            .await;
+
+        app.read(|ctx| {
+            let editor = handle.as_ref(ctx).editor.as_ref(ctx);
+            let markdown = editor.markdown(ctx);
+            // The raw contents are shown verbatim (never a blank view), fenced
+            // as a code block rather than interpreted as Markdown.
+            assert!(
+                markdown.contains("broken json"),
+                "expected raw contents shown, got: {markdown}"
+            );
+            assert!(
+                markdown.contains("```"),
+                "raw fallback should be fenced, got: {markdown}"
+            );
 
             // Rendering should not panic.
             handle.as_ref(ctx).render(ctx);

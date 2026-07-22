@@ -3,11 +3,11 @@ use std::env;
 
 use anyhow::Result;
 use clap::Parser;
-use integration::test::*;
 use integration::Builder;
+use integration::test::*;
 use warp_cli::WorkerCommand;
-use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 use warp_core::AppId;
+use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 
 /// The Warp integration test runner.
 #[derive(Debug, Default, Parser, Clone)]
@@ -276,6 +276,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_color_overrides_in_prompt_dont_crash);
     register_test!(test_copy_prompt_from_block_honor_ps1_disabled);
     register_test!(test_copy_prompt_from_block_honor_ps1_enabled);
+    register_test!(test_copy_block_command_and_output_honor_ps1_disabled);
+    register_test!(test_copy_block_command_and_output_honor_ps1_enabled);
     register_test!(test_copy_prompt_from_input_honor_ps1_disabled);
     register_test!(test_warp_prompt_unsets_zsh_rprompt);
     register_test!(test_copy_prompt_from_input_honor_ps1_enabled);
@@ -297,6 +299,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_code_review_scroll_preserved_deleted_range);
     register_test!(test_code_review_scroll_preserved_header_range);
     register_test!(test_code_review_scroll_preserved_footer_range);
+    register_test!(test_code_review_double_click_fully_expands_hidden_section);
     register_test!(test_alt_screen_context_menu_with_sgr_with_mouse_reporting);
     register_test!(test_alt_screen_context_menu_with_sgr_without_mouse_reporting);
     register_test!(test_alt_screen_context_menu_without_sgr_with_mouse_reporting);
@@ -346,6 +349,13 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_secret_case_sensitivity);
     register_test!(test_secrets_are_always_redacted_in_ai_inputs);
 
+    // OSC 8 hyperlink tests (GH6393)
+    register_test!(test_osc8_open_close_renders_visible_text);
+    register_test!(test_osc8_copy_block_yields_visible_text_only);
+    register_test!(test_osc8_open_link_action_opens_url);
+    register_test!(test_osc8_file_scheme_opens_url);
+    register_test!(test_osc8_no_regression_on_url_autodetect);
+
     register_test!(test_context_chips_prompt_at_bootstrap);
 
     register_test!(test_active_session_follows_focus);
@@ -394,6 +404,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_latest_buffer_operations);
 
     register_test!(test_pass_control_sequences_to_long_running_block);
+    register_test!(test_execution_profiles_load_from_settings_file);
+    register_test!(test_execution_profile_model_persists_and_hot_reloads_settings_file);
     register_test!(test_settings_file_migration_from_native_store);
     register_test!(test_settings_file_hot_reload_applies_new_values);
 
@@ -448,6 +460,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_file_tree_non_openable_files);
     register_test!(test_file_tree_nested_file_opening);
 
+    // Copy current path command-palette action
+    register_test!(test_copy_current_path_copies_terminal_pwd);
+
     // Go to Line tests
     register_test!(test_goto_line_dialog_open_close);
     register_test!(test_goto_line_jumps_to_line);
@@ -455,6 +470,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_goto_line_clamps_out_of_range);
     register_test!(test_code_editor_line_numbers_default_to_absolute);
     register_test!(test_code_editor_relative_line_numbers_follow_cursor);
+
+    // AI document tests
+    register_test!(test_copy_ai_document_as_markdown_from_overflow_menu);
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);

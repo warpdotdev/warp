@@ -1,9 +1,89 @@
+use uuid::Uuid;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
+
+#[test]
+fn participant_resolution_uses_the_direct_parent_as_orchestrator() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let surface_id = EntityId::new();
+        let root_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let grandchild_run_id = Uuid::new_v4().to_string();
+
+        let (root_id, child_id, grandchild_id) = history_model.update(&mut app, |history, ctx| {
+            let root_id = history.start_new_conversation(surface_id, false, false, false, ctx);
+            history.assign_run_id_for_conversation(
+                root_id,
+                root_run_id.clone(),
+                None,
+                surface_id,
+                ctx,
+            );
+            let child_id = history.start_new_child_conversation(
+                surface_id,
+                "child".to_string(),
+                root_id,
+                None,
+                ctx,
+            );
+            history.assign_run_id_for_conversation(
+                child_id,
+                child_run_id.clone(),
+                None,
+                surface_id,
+                ctx,
+            );
+            let grandchild_id = history.start_new_child_conversation(
+                surface_id,
+                "grandchild".to_string(),
+                child_id,
+                None,
+                ctx,
+            );
+            history.assign_run_id_for_conversation(
+                grandchild_id,
+                grandchild_run_id,
+                None,
+                surface_id,
+                ctx,
+            );
+            (root_id, child_id, grandchild_id)
+        });
+
+        history_model.read(&app, |history, _| {
+            let grandchild = history
+                .conversation(&grandchild_id)
+                .expect("grandchild conversation exists");
+            assert_eq!(
+                orchestrator_agent_id_for_conversation(history, grandchild),
+                Some(child_run_id.clone())
+            );
+            assert_eq!(
+                resolve_orchestration_participant(history, &child_run_id, Some(&child_run_id)),
+                ResolvedOrchestrationParticipant {
+                    kind: OrchestrationParticipantKind::Orchestrator,
+                    conversation_id: Some(child_id),
+                }
+            );
+            assert_eq!(
+                resolve_orchestration_participant(history, &root_run_id, Some(&child_run_id)),
+                ResolvedOrchestrationParticipant {
+                    kind: OrchestrationParticipantKind::Agent {
+                        name: "Agent".to_string(),
+                    },
+                    conversation_id: Some(root_id),
+                }
+            );
+        });
+    });
+}
+
 #[test]
 fn pill_order_keys_prioritize_attention_then_in_progress_then_done() {
     let blocked = ConversationStatus::Blocked {
@@ -252,6 +332,109 @@ fn orchestration_aware_status_uses_direct_status_for_non_parent() {
         });
     });
 }
+#[test]
+fn has_local_orchestrated_children_detects_active_local_children() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        // No children yet.
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+
+        let child = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "local-child".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        // An active local child counts.
+        history_model.read(&app, |history_model, _| {
+            assert!(has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+
+        // A finished local child no longer counts.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+    });
+}
+
+#[test]
+fn has_local_orchestrated_children_ignores_remote_children() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let remote_child = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "remote-child".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                remote_child,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.mark_conversation_as_remote_child(remote_child, ctx);
+        });
+
+        // A remote child runs on its own worker and is not orphaned by a
+        // parent-only cloud handoff, so it must not count.
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+    });
+}
+
 #[test]
 fn descendant_conversation_ids_in_spawn_order_returns_empty_without_children() {
     App::test((), |mut app| async move {

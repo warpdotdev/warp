@@ -9,13 +9,13 @@ use iso8601_duration::Duration as Iso8601Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::SessionId;
 use url::Url;
-use warp_core::report_error;
 use warp_core::ui::theme::WarpTheme;
+use warp_errors::report_error;
 use warpui::color::ColorU;
 use warpui::{SingletonEntity, View, ViewContext};
 
 use super::AmbientAgentTaskId;
-use crate::ai::artifacts::{deserialize_artifacts, Artifact};
+use crate::ai::artifacts::{Artifact, deserialize_artifacts};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
@@ -534,7 +534,7 @@ pub fn cancel_task_with_toast<V: View>(task_id: AmbientAgentTaskId, ctx: &mut Vi
             let message = match result {
                 Ok(()) => "Task cancelled".to_string(),
                 Err(e) => {
-                    log::error!("Failed to cancel task: {e}");
+                    report_error!(&e);
                     format!("Failed to cancel task: {e}")
                 }
             };
@@ -553,7 +553,7 @@ pub fn cancel_task_silently<V: View>(task_id: AmbientAgentTaskId, ctx: &mut View
         async move { ai_client.cancel_ambient_agent_task(&task_id).await },
         move |_view, result, _| {
             if let Err(e) = result {
-                log::error!("Failed to cancel task: {e}");
+                report_error!(e.context("Failed to cancel task"));
             }
         },
     );

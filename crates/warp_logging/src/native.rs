@@ -9,6 +9,7 @@ use chrono::Local;
 use log::LevelFilter;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -140,13 +141,13 @@ pub async fn rotate_log_files() {
     let max_rotation = config.max_rotation;
 
     if let Err(err) = rotate_files(&ChannelState::logfile_name(), max_rotation).await {
-        log::error!("Failed to rotate log files: {err:?}");
+        report_error!(err.context("Failed to rotate log files"));
     }
 
     if FeatureFlag::SendTelemetryToFile.is_enabled()
         && let Err(err) = rotate_files(&ChannelState::telemetry_file_name(), max_rotation).await
     {
-        log::error!("Failed to rotate telemetry files: {err:?}");
+        report_error!(err.context("Failed to rotate telemetry files"));
     }
 }
 
@@ -335,13 +336,8 @@ pub fn log_file_path() -> Result<PathBuf> {
 /// - For each previous-startup slot `K = 0..max_rotation`, in order:
 ///   `<name>.log.old.K` (that session's final-state log) immediately
 ///   followed by its `<name>.log.old.K.in_session.N` chunks, sorted by N.
-fn current_and_rotated_log_paths() -> Result<Vec<PathBuf>> {
-    let log_directory = log_directory()?;
-    let logfile_name = ChannelState::logfile_name();
-    collect_log_paths_in(&log_directory, &logfile_name)
-}
-
-/// Directory-scanning core of [`current_and_rotated_log_paths`], parameterized
+///
+/// Directory-scanning core of the log-bundle operation, parameterized
 /// for testability. See the parent docs for ordering semantics.
 fn collect_log_paths_in(log_directory: &Path, logfile_name: &str) -> Result<Vec<PathBuf>> {
     let current_log_path = log_directory.join(logfile_name);
@@ -432,9 +428,9 @@ fn collect_log_paths_in(log_directory: &Path, logfile_name: &str) -> Result<Vec<
 /// Creates a timestamped zip archive containing the current log file
 /// and any older logs for the active instance.
 pub fn create_log_bundle_zip() -> Result<PathBuf> {
-    let log_files = current_and_rotated_log_paths()?;
     let log_directory = log_directory()?;
     let logfile_name = ChannelState::logfile_name();
+    let log_files = collect_log_paths_in(&log_directory, &logfile_name)?;
     let logfile_stem = logfile_name.strip_suffix(".log").unwrap_or(&logfile_name);
 
     let zip_path = log_directory.join(format!(
@@ -477,7 +473,7 @@ fn temp_log_file_path(log_directory: impl AsRef<Path>) -> PathBuf {
 
 #[cfg(feature = "crash_reporting")]
 fn sentry_log_filter(md: &log::Metadata) -> sentry_log::LogFilter {
-    if warp_core::errors::should_ignore_log_for_sentry(md) {
+    if warp_errors::should_ignore_log_for_sentry(md) {
         return sentry_log::LogFilter::Ignore;
     }
 
@@ -497,7 +493,12 @@ fn sentry_log_filter(md: &log::Metadata) -> sentry_log::LogFilter {
         // anything in the process of forwarding logs to Sentry.
         t if t.starts_with("warp::crash_reporting::") => sentry_log::LogFilter::Ignore,
 
-        _ => sentry_log::default_filter(md),
+        _ => match md.level() {
+            log::Level::Error | log::Level::Warn | log::Level::Info => {
+                sentry_log::LogFilter::Breadcrumb
+            }
+            log::Level::Debug | log::Level::Trace => sentry_log::LogFilter::Ignore,
+        },
     }
 }
 

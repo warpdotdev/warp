@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use warpui::SingletonEntity;
 
 use super::editor::AgentToolbarEditorMode;
-use crate::context_chips::{agent_footer_available_chips, available_chips, ContextChipKind};
+use crate::context_chips::{ContextChipKind, agent_footer_available_chips, available_chips};
 use crate::features::FeatureFlag;
 use crate::settings::AISettings;
 use crate::terminal::shared_session::SharedSessionStatus;
@@ -138,7 +138,7 @@ impl AgentToolbarItemKind {
             Self::NLDToggle => Some(Icon::NLD),
             Self::VoiceInput => Some(Icon::Microphone),
             Self::FileAttach => Some(Icon::Plus),
-            Self::ContextWindowUsage => Some(Icon::ConversationContext0),
+            Self::ContextWindowUsage => Some(Icon::ContextRemaining100),
             Self::FileExplorer => Some(Icon::FileCopy),
             Self::RichInput => Some(Icon::TextInput),
             Self::ShareSession => Some(Icon::Phone01),

@@ -2,25 +2,24 @@ use warpui::prelude::ChildView;
 use warpui::{Element, EntityId, View, ViewContext, ViewHandle};
 
 use super::{InitStepBlock, InitStepKind};
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::AIBlock;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::block::PendingUserQueryBlock;
 use crate::ai::blocklist::telemetry_banner::TelemetryBanner;
-use crate::ai::blocklist::AIBlock;
 use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
+use crate::terminal::TerminalView;
 use crate::terminal::block_list_viewport::ScrollPositionUpdate;
 use crate::terminal::model::blocks::{RemovableBlocklistItem, RichContentItem};
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::view::ambient_agent::AmbientAgentEntryBlock;
-use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingAgenticSuggestionsBlock;
 use crate::terminal::view::init_environment::InitEnvironmentBlock;
 use crate::terminal::view::ssh_remote_server_choice_view::SshRemoteServerChoiceView;
 use crate::terminal::view::ssh_remote_server_failed_banner::SshRemoteServerFailedBanner;
 use crate::terminal::view::ssh_tmux_deprecation_banner::SshTmuxDeprecationBanner;
 use crate::terminal::warpify::success_block::WarpifySuccessBlock;
-use crate::terminal::TerminalView;
 
 /// Specifies where to insert rich content in the blocklist.
 #[derive(Clone, Copy, Debug)]
@@ -237,9 +236,6 @@ pub enum RichContentMetadata {
     },
     InitEnvironment {
         block_handle: ViewHandle<InitEnvironmentBlock>,
-    },
-    OnboardingAgenticSuggestions {
-        agentic_suggestions_block_handle: ViewHandle<OnboardingAgenticSuggestionsBlock>,
     },
     EnvVarCollectionBlock {
         env_var_collection_block_handle: ViewHandle<EnvVarCollectionBlock>,

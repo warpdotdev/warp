@@ -11,15 +11,15 @@ use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{Empty, MouseStateHandle};
 use warpui::{App, Element};
 
-#[cfg(feature = "local_fs")]
-use super::{blocklist_image_asset_source, ResolvedBlocklistImageSources};
 use super::{
+    CollapsibleElementState, CollapsibleExpansionState, VisualMarkdownLightboxCollection,
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
     image_tooltip_handles_for_group, inline_image_source_label,
     is_supported_blocklist_image_source, lightbox_trigger_for_section, query_prefix_highlight_len,
-    render_scrollable_collapsible_content, text_sections_with_indices, CollapsibleElementState,
-    CollapsibleExpansionState, VisualMarkdownLightboxCollection,
+    render_scrollable_collapsible_content, text_sections_with_indices, warping_footer_height,
 };
+#[cfg(feature = "local_fs")]
+use super::{ResolvedBlocklistImageSources, blocklist_image_asset_source};
 use crate::ai::agent::{
     AIAgentInput, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
     AgentOutputMermaidDiagram, MessageId, UserQueryMode,
@@ -162,6 +162,26 @@ fn render_scrollable_collapsible_content_returns_none_when_collapsed() {
 }
 
 #[test]
+fn warping_footer_height_reserves_a_line_for_the_secondary_element() {
+    // Regression: the warping indicator's footer is a fixed-height, clipped
+    // container. When an agent tip (or fallback-model explanation) is present it
+    // renders on a second line, so the footer must be taller than the
+    // single-line case — otherwise the clip (added to keep action chips from
+    // overflowing narrow panes) hides the tip entirely.
+    let font_size = 13.;
+    let without_tip = warping_footer_height(font_size, false);
+    let with_tip = warping_footer_height(font_size, true);
+
+    assert!(
+        with_tip > without_tip,
+        "footer with a secondary element ({with_tip}) should be taller than without ({without_tip})",
+    );
+    // The extra room must cover the secondary line: its font size
+    // (monospace_font_size - 3) plus the 1px top margin on the tip container.
+    assert_eq!(with_tip - without_tip, (font_size - 3.) + 1.);
+}
+
+#[test]
 fn compute_visual_section_width_rejects_non_finite_dimensions() {
     assert_eq!(compute_visual_section_width(f32::INFINITY, 20., 40.), None);
     assert_eq!(compute_visual_section_width(20., f32::NAN, 40.), None);
@@ -266,10 +286,12 @@ fn collect_visual_markdown_lightbox_collection_includes_mermaid_sections_in_sour
 
             assert_eq!(collection.section_indices, vec![11, 13]);
             assert_eq!(collection.images.len(), 2);
-            assert!(collection
-                .images
-                .iter()
-                .all(|image| image.description.is_none()));
+            assert!(
+                collection
+                    .images
+                    .iter()
+                    .all(|image| image.description.is_none())
+            );
         });
     });
 }

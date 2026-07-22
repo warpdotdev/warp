@@ -3,12 +3,13 @@ use std::path::PathBuf;
 
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
-use super::{apply_hidden_child_agent_task_context, HiddenChildAgentTaskContext};
+use super::{HiddenChildAgentTaskContext, apply_hidden_child_agent_task_context};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
-use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::pane_group::{
     AmbientAgentViewModelHandleExt, PaneGroup, PaneId, TerminalPane, TerminalViewResources,
@@ -78,12 +79,9 @@ impl PaneGroup {
             .terminal_view_from_pane_id(terminal_pane_id, ctx)
             .and_then(|terminal_view| {
                 let terminal_view = terminal_view.as_ref(ctx);
-                let agent_view_state = terminal_view
-                    .agent_view_controller()
-                    .as_ref(ctx)
-                    .agent_view_state();
-                if agent_view_state.is_fullscreen() {
-                    agent_view_state.active_conversation_id()
+                let controller = terminal_view.agent_view_controller().as_ref(ctx);
+                if controller.is_fullscreen() {
+                    controller.agent_view_state().active_conversation_id()
                 } else {
                     None
                 }
@@ -126,7 +124,7 @@ impl PaneGroup {
                         history_model.resolved_parent_conversation_id_for_conversation(conversation)
                     })
                     .or_else(|| {
-                        RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
+                        RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
                             store.get_conversation(&child_conversation_id).and_then(
                                 |conversation| {
                                     history_model.resolved_parent_conversation_id_for_conversation(
@@ -205,9 +203,10 @@ impl PaneGroup {
                 .attach_child_pane_off_tree(Box::new(pane_data), ctx)
                 .is_none()
             {
-                log::error!(
+                report_error!(
                     "create_hidden_child_agent_pane: failed to attach loading placeholder for \
-                     viewer-side child {child_id:?}"
+                     viewer-side child",
+                    extra: { "child_id" => ?child_id }
                 );
                 return;
             }
@@ -271,29 +270,35 @@ impl PaneGroup {
             ctx,
         );
 
-        if let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) {
-            if let Some(task_context) = child_task_context.as_ref() {
-                apply_hidden_child_agent_task_context(&new_terminal_view, task_context, ctx);
-            }
-            new_terminal_view.update(ctx, |terminal_view, ctx| {
-                terminal_view.restore_conversation_after_view_creation(
-                    RestoredAIConversation::new(child_conversation),
-                    true,
-                    RestoreConversationEntryBehavior::PreserveAgentViewState,
-                    ctx,
-                );
-                terminal_view.enter_agent_view(
-                    None,
-                    Some(child_id),
-                    AgentViewEntryOrigin::ChildAgent,
-                    ctx,
-                );
-            });
+        match self.terminal_view_from_pane_id(new_pane_id, ctx) {
+            Some(new_terminal_view) => {
+                if let Some(task_context) = child_task_context.as_ref() {
+                    apply_hidden_child_agent_task_context(&new_terminal_view, task_context, ctx);
+                }
+                new_terminal_view.update(ctx, |terminal_view, ctx| {
+                    terminal_view.restore_conversation_after_view_creation(
+                        RestoredAIConversation::new(child_conversation),
+                        true,
+                        RestoreConversationEntryBehavior::PreserveAgentViewState,
+                        ctx,
+                    );
+                    terminal_view.enter_agent_view(
+                        None,
+                        Some(child_id),
+                        AgentViewEntryOrigin::ChildAgent,
+                        ctx,
+                    );
+                });
 
-            self.child_agent_panes.insert(child_id, new_pane_id.into());
-        } else {
-            log::error!("Failed to get terminal view for child agent pane {child_id:?}");
-            self.discard_pane(new_pane_id.into(), ctx);
+                self.child_agent_panes.insert(child_id, new_pane_id.into());
+            }
+            _ => {
+                report_error!(
+                    "Failed to get terminal view for child agent pane",
+                    extra: { "child_id" => ?child_id }
+                );
+                self.discard_pane(new_pane_id.into(), ctx);
+            }
         }
     }
 
@@ -354,7 +359,7 @@ impl PaneGroup {
             resources,
             view_size,
             false, // enable_orchestration_polling
-            false, // is_cloud_mode
+            false, // is_ambient_agent
             ctx,
         );
 
@@ -370,8 +375,9 @@ impl PaneGroup {
             .attach_child_pane_off_tree(Box::new(pane_data), ctx)
             .is_none()
         {
-            log::error!(
-                "ensure_shared_session_viewer_child_pane: failed to attach pane for conv={child_conversation_id:?}"
+            report_error!(
+                "ensure_shared_session_viewer_child_pane: failed to attach pane",
+                extra: { "child_conversation_id" => ?child_conversation_id }
             );
             return;
         }

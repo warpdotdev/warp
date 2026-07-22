@@ -5,12 +5,13 @@ use std::ops::AddAssign;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use warp_core::sync_queue::{IsTransientError, SyncQueue, SyncQueueTaskTrait};
+use warp_errors::report_error;
 
 use super::changed_files::ChangedFiles;
-use super::codebase_index::{build_fragments_from_metadata, SyncProgress};
+use super::codebase_index::{SyncProgress, build_fragments_from_metadata};
 use super::fragment_metadata::LeafToFragmentMetadataMapping;
 use super::merkle_tree::{MerkleTree, NodeLens};
 use super::store_client::StoreClient;
@@ -338,7 +339,9 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }) {
                 Ok(res) => res,
                 Err(err) => {
-                    log::error!("Failed to generate embeddings: {err:?}");
+                    report_error!(
+                        anyhow::anyhow!("{err:?}").context("Failed to generate embeddings")
+                    );
                     if files_need_resync.is_empty() {
                         return Err(SyncOperationError::ServerSyncError(err));
                     } else {
@@ -415,7 +418,9 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }) {
                 Ok(res) => res,
                 Err(err) => {
-                    log::error!("Failed to sync intermediate node: {err:?}");
+                    report_error!(
+                        anyhow::anyhow!("{err:?}").context("Failed to sync intermediate node")
+                    );
                     if files_need_resync.is_empty() {
                         return Err(SyncOperationError::ServerSyncError(err));
                     } else {
@@ -493,13 +498,13 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
                 Ok(Ok(_)) => {
                     return Err(SyncOperationError::Other(anyhow::anyhow!(
                         "Shouldn't receive other task result in channel"
-                    )))
+                    )));
                 }
                 Ok(Err(e)) => return Err(SyncOperationError::ServerSyncError(e)),
                 Err(_) => {
                     return Err(SyncOperationError::Other(anyhow::anyhow!(
                         "Sync queue task cancelled"
-                    )))
+                    )));
                 }
             };
 

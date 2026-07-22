@@ -3,11 +3,11 @@ use std::ops::Range;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 
+use crate::EventContext;
 use crate::elements::{Point, ZIndex};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 use crate::zoom::{Scale, ZoomFactor};
-use crate::EventContext;
 
 #[derive(Debug)]
 pub struct DispatchedEvent {
@@ -255,24 +255,31 @@ pub trait InBoundsExt {
 
 impl InBoundsExt for Event {
     fn in_bounds(&self, bounds: RectF) -> bool {
-        use Event::*;
-
+        // This trait is meant to check whether the Self is within the bounds,
+        // however in this implementation Self is Event that may not always be related to the
+        // mouse - so for all such cases, lets just return true.
         match self {
-            ScrollWheel { position, .. }
-            | LeftMouseDown { position, .. }
-            | LeftMouseUp { position, .. }
-            | LeftMouseDragged { position, .. }
-            | RightMouseDown { position, .. }
-            | MouseMoved { position, .. }
-            | MiddleMouseDown { position, .. } => bounds.contains_point(*position),
-            ModifierStateChanged { mouse_position, .. } => bounds.contains_point(*mouse_position),
-            DragAndDropFiles { location, .. } | DragFiles { location } => {
+            Event::ScrollWheel { position, .. }
+            | Event::LeftMouseDown { position, .. }
+            | Event::LeftMouseUp { position, .. }
+            | Event::LeftMouseDragged { position, .. }
+            | Event::MiddleMouseDown { position, .. }
+            | Event::RightMouseDown { position, .. }
+            | Event::ForwardMouseDown { position, .. }
+            | Event::BackMouseDown { position, .. }
+            | Event::MouseMoved { position, .. } => bounds.contains_point(*position),
+            Event::ModifierStateChanged { mouse_position, .. } => {
+                bounds.contains_point(*mouse_position)
+            }
+            Event::DragAndDropFiles { location, .. } | Event::DragFiles { location } => {
                 bounds.contains_point(*location)
             }
-            // This trait is meant to check whether the Self is within the bounds,
-            // however in this implementation Self is Event that may not always be related to the
-            // mouse - so for all such cases, lets just return true.
-            _ => true,
+            Event::KeyDown { .. }
+            | Event::ModifierKeyChanged { .. }
+            | Event::TypedCharacters { .. }
+            | Event::DragFileExit
+            | Event::SetMarkedText { .. }
+            | Event::ClearMarkedText => true,
         }
     }
 }

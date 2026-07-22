@@ -21,6 +21,9 @@ use std::time::Duration;
 use context_chip::PromptGenerator;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::contrast::{MinimumAllowedContrast, high_enough_contrast};
+use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::color::ColorU;
 use warpui::elements::Text;
 use warpui::fonts::{Properties, Weight};
@@ -310,7 +313,9 @@ impl ContextChipKind {
             Self::GitBranchStatus => Some(ContextChip::shell_builtin(
                 "Git Branch Status",
                 builtins::shell_git_branch_status(),
-                None,
+                // Same branch list as ShellGitBranch, so clicking the chip
+                // opens the same branch-switcher menu.
+                Some(builtins::shell_other_git_branches()),
                 GIT_REFRESH_CONFIG,
             )),
             Self::GitDiffStats => Some(
@@ -643,9 +648,29 @@ pub fn chips_to_string(chips: impl Iterator<Item = ChipResult>) -> String {
 
 pub(crate) fn agent_view_chip_color(appearance: &Appearance) -> ColorU {
     let theme = appearance.theme();
-    theme
-        .sub_text_color(blended_colors::neutral_1(theme).into())
-        .into_solid()
+    readable_chip_label_color(theme, Fill::Solid(blended_colors::neutral_1(theme)))
+}
+
+/// The label/icon color for a chip drawn on `background`.
+///
+/// Chips normally use the muted `sub_text_color` (which is `font_color` at 60%
+/// opacity). Because the contrast machinery is alpha-blind, that muted color can
+/// composite to a faint mid-grey that drops below WCAG AA on light themes,
+/// making chip labels hard to read. So we keep the muted look wherever it is
+/// still legible (e.g. dark themes) and only fall back to the fully-opaque,
+/// contrast-enforced `font_color` where the muted color would be sub-AA.
+pub(crate) fn readable_chip_label_color(theme: &WarpTheme, background: Fill) -> ColorU {
+    let muted = theme.sub_text_color(background).into_solid();
+    let solid_background = background.into_solid();
+    if high_enough_contrast(
+        solid_background.blend(&muted),
+        solid_background,
+        MinimumAllowedContrast::Text,
+    ) {
+        muted
+    } else {
+        theme.font_color(background).into_solid()
+    }
 }
 
 /// Helper function that adds specific styling to chips' text element.
@@ -742,3 +767,7 @@ pub fn render_text_from_kind(
         _ => (),
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

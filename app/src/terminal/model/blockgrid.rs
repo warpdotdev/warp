@@ -14,18 +14,18 @@ use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
+use crate::terminal::SizeInfo;
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::GridStorage;
 use crate::terminal::model::ansi::{
     self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
     PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
 };
-use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
 use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
-use crate::terminal::model::GridStorage;
-use crate::terminal::SizeInfo;
 
 #[derive(Clone)]
 pub struct BlockGrid {
@@ -207,6 +207,15 @@ impl BlockGrid {
                 .col
                 .min(self.grid_handler().columns().saturating_sub(1)),
         )))
+    }
+
+    /// Returns the visible cursor position in displayed-grid coordinates as
+    /// `(column, row)`. A cursor hidden below trimmed content is omitted.
+    pub fn visible_cursor_display_position(&self) -> Option<(usize, usize)> {
+        match self.cursor_display_point()? {
+            CursorDisplayPoint::Visible(point) => Some((point.col, point.row)),
+            CursorDisplayPoint::HiddenCache(_) => None,
+        }
     }
 
     /// Determine whether the block is currently empty
@@ -696,7 +705,7 @@ impl BlockGrid {
         self.grid_handler.reset_received_osc();
     }
 
-    fn ansi_handler(&mut self) -> &mut impl ansi::Handler {
+    fn ansi_handler(&mut self) -> &mut (impl ansi::Handler + use<>) {
         self.grid_handler.ansi_handler()
     }
 
@@ -726,6 +735,10 @@ impl ansi::Handler for BlockGrid {
 
     fn input(&mut self, c: char) {
         self.ansi_handler().input(c);
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        self.ansi_handler().set_hyperlink(hyperlink);
     }
 
     fn goto(&mut self, row: VisibleRow, col: usize) {
@@ -952,7 +965,7 @@ impl ansi::Handler for BlockGrid {
         self.ansi_handler().text_area_size_chars(writer);
     }
 
-    fn precmd(&mut self, _: PrecmdValue) {
+    fn precmd_with_completion_metadata(&mut self, _: PrecmdValue) {
         unreachable!("Handled at block layer");
     }
 

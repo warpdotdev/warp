@@ -1,0 +1,481 @@
+//! Background window activation without private SkyLight APIs.
+//!
+//! Background input (delivering clicks/keys to a window that is not frontmost, without moving
+//! the real cursor) requires the target window to believe it is in the AppKit-active input
+//! state. We achieve that the way a real first click on an inactive window would, but without
+//! the visual side effect of bringing the app to the front:
+//!
+//! 1. Install per-process [`CGEvent`] event taps (`CGEventTapCreateForPid`) on both the
+//!    previously-frontmost app and the target app. The taps run on a dedicated run-loop thread
+//!    and drop the focus-change messages that macOS would otherwise deliver to the previous app
+//!    to switch the user's frontmost application.
+//! 2. Send an `appKitDefined` activation primer event (an `NSEvent` of type `AppKitDefined`,
+//!    subtype `ApplicationActivated`) directly to the target process via `CGEventPostToPid`.
+//! 3. Send a single "primer" left click to the exact center of the window. While the window is
+//!    inactive, macOS routes this first click through its activation flow instead of firing a
+//!    UI action, so it activates the window without otherwise affecting the app.
+//!
+//! State is tracked in a process-global registry keyed by `(pid, window)` rather than on the
+//! per-action [`super::Actor`] (which is recreated for every computer-use turn). This lets a
+//! single computer-use session activate a window once and reuse that activation across later
+//! turns without re-sending the disruptive center click, and lets concurrent computer-use
+//! sessions targeting different windows coexist while serializing each activation handshake
+//! through the registry lock.
+
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventSubtype, NSEventType};
+use objc2_core_foundation::{CFMachPort, CFRunLoop, CGPoint, kCFRunLoopDefaultMode};
+use objc2_core_graphics::{
+    CGEvent, CGEventField, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
+    CGMouseButton,
+};
+
+use super::window::{self, WindowInfo};
+
+/// Delay after the `appKitDefined` activation primer, giving AppKit time to process it before
+/// the center primer click arrives.
+const APPKIT_PRIMER_DELAY: Duration = Duration::from_millis(20);
+/// Delay between the center primer's mouse-down and mouse-up.
+const PRIMER_CLICK_HOLD: Duration = Duration::from_millis(30);
+/// Delay after the center primer click settles.
+const PRIMER_CLICK_SETTLE: Duration = Duration::from_millis(20);
+/// How long each run-loop service iteration blocks before re-checking the stop flag.
+const RUN_LOOP_SERVICE_INTERVAL: f64 = 0.1;
+
+/// Ensures the window described by `info` (owned by `target_pid`) is in the AppKit-active input
+/// state so background events are accepted, without raising it or moving the cursor.
+///
+/// The first call for a given `(pid, window)` installs focus-suppression taps and sends the
+/// activation primers (including the center primer click). Subsequent calls for the same window
+/// are a no-op, so the disruptive center click is never re-sent across turns. If the target app
+/// is already frontmost, no activation is needed and this is a no-op.
+pub fn ensure_activated(target_pid: libc::pid_t, info: &WindowInfo, owner: Option<&str>) {
+    let window_number = info.number;
+    if window_number <= 0 {
+        return;
+    }
+    let key = (target_pid, window_number);
+
+    let mut registry = registry().lock().unwrap();
+    if registry.contains_key(&key) {
+        // Already activated this window; do not re-activate (a second center click would land
+        // as a real click rather than being absorbed by the activation flow).
+        return;
+    }
+
+    // The window that currently owns input focus, so we can both protect it from deactivation
+    // and detect when the target app is already frontmost.
+    let previous = window::frontmost_window();
+    if previous.map(|(pid, _)| pid) == Some(target_pid) {
+        // The target app is already frontmost: events route to it normally and no focus would
+        // be stolen, so there is nothing to activate or suppress.
+        return;
+    }
+
+    let suppress = Arc::new(AtomicBool::new(true));
+    let stop = Arc::new(AtomicBool::new(false));
+
+    // Install focus-suppression taps before sending the activation click, so the focus-change
+    // messages it triggers are intercepted. Skip the taps if there is no distinct previous app.
+    // The activation window number is carried into each tap context so the callback can narrow
+    // suppression to the activation transition for this specific window rather than dropping
+    // every focus event headed to the previously-frontmost process (APP-4902).
+    let thread = match previous {
+        Some((previous_pid, _)) if previous_pid != target_pid => spawn_tap_thread(
+            previous_pid,
+            target_pid,
+            window_number,
+            suppress.clone(),
+            stop.clone(),
+        ),
+        _ => None,
+    };
+    let has_taps = thread.is_some();
+
+    // Activate: AppKit activation primer, then the center-of-window primer click.
+    post_appkit_activation(
+        target_pid,
+        window_number,
+        NSEventSubtype::ApplicationActivated.0,
+    );
+    thread::sleep(APPKIT_PRIMER_DELAY);
+    post_center_primer(target_pid, info);
+
+    registry.insert(
+        key,
+        ActiveSession {
+            suppress,
+            stop,
+            thread,
+            has_taps,
+            previous,
+            owner: owner.map(str::to_owned),
+        },
+    );
+}
+
+/// Ends the background-activation sessions owned by `owner`, restoring the user's original
+/// keyboard focus. For each of the owner's activated windows this first tears down the
+/// focus-suppression taps (by dropping the [`ActiveSession`], whose `Drop` stops and joins the
+/// tap thread), then sends an `ApplicationDeactivated` to the window we activated and re-activates
+/// the app that was frontmost before the session. Tearing the taps down first is essential: while
+/// installed they drop the previous app's focus-change messages, so the re-activation would be
+/// swallowed if it ran first.
+///
+/// Only the finishing owner's windows are removed, so concurrent sessions owned by other
+/// conversations (targeting different windows) are left intact — preserving the module's
+/// coexistence invariant.
+///
+/// Idempotent: a no-op when `owner` has no active session, so it is safe to call from every
+/// terminal path (normal completion, cancellation, teardown) and more than once.
+///
+/// The registry lock is held for the whole teardown so a concurrent [`ensure_activated`] — e.g.
+/// an immediate restart targeting the same window — blocks until teardown fully completes,
+/// leaving no window in which the taps are half torn-down or a stale registry key would suppress
+/// re-activation.
+pub fn end_sessions_for_owner(owner: &str) {
+    let mut registry = registry().lock().unwrap();
+    let keys: Vec<(libc::pid_t, i64)> = registry
+        .iter()
+        .filter(|(_, session)| session.owner.as_deref() == Some(owner))
+        .map(|(key, _)| *key)
+        .collect();
+    for key in keys {
+        let Some(session) = registry.remove(&key) else {
+            continue;
+        };
+        let (target_pid, target_window) = key;
+        let previous = session.previous;
+        // Tear the taps down first (Drop stops the run loop and joins the thread) so the
+        // re-activation below is no longer suppressed.
+        drop(session);
+        post_appkit_activation(
+            target_pid,
+            target_window,
+            NSEventSubtype::ApplicationDeactivated.0,
+        );
+        if let Some((previous_pid, previous_window)) = previous {
+            post_appkit_activation(
+                previous_pid,
+                previous_window,
+                NSEventSubtype::ApplicationActivated.0,
+            );
+        }
+    }
+}
+
+/// The process-global registry of activated windows, keyed by `(pid, window_number)`.
+fn registry() -> &'static Mutex<HashMap<(libc::pid_t, i64), ActiveSession>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<(libc::pid_t, i64), ActiveSession>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Tracks an activated window: the focus-suppression tap thread (if any) and the flags used to
+/// drive and tear it down.
+struct ActiveSession {
+    /// While set, the tap callback drops focus-change messages headed to the previous app.
+    suppress: Arc<AtomicBool>,
+    /// Signals the tap thread's run loop to exit.
+    stop: Arc<AtomicBool>,
+    /// The run-loop thread servicing the taps, joined on teardown.
+    thread: Option<JoinHandle<()>>,
+    has_taps: bool,
+    /// The app that was frontmost when this window was activated, as `(pid, window_number)`, so
+    /// teardown can restore the user's focus to it. `None` when there was no distinct previous
+    /// app to protect.
+    previous: Option<(libc::pid_t, i64)>,
+    /// The owner (client conversation id) of the session that activated this window, so teardown
+    /// removes only the finishing session's windows and leaves concurrent sessions intact. `None`
+    /// when the activation was not tagged with an owner.
+    owner: Option<String>,
+}
+
+impl Drop for ActiveSession {
+    fn drop(&mut self) {
+        if self.has_taps {
+            self.suppress.store(false, Ordering::SeqCst);
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+}
+
+/// Per-tap data handed to the C event-tap callback via its `user_info` pointer.
+struct TapContext {
+    /// Shared with [`ActiveSession`]; gates focus-message suppression.
+    suppress: Arc<AtomicBool>,
+    /// Whether this tap is attached to the previously-frontmost app (whose focus messages we
+    /// drop) versus the target app (which we always let through).
+    is_previous: bool,
+    /// The window number this session activated. Only focus events that AppKit addresses to this
+    /// exact window are the activation transition we intend to suppress; focus events for any
+    /// other window (including the user clicking a different Warp window) pass through. Both the
+    /// previous-process and target-process contexts carry this, but the target context never
+    /// suppresses because `is_previous` is false.
+    window_number: i64,
+}
+
+/// Spawns the run-loop thread that installs and services the focus-suppression taps for
+/// `previous_pid` and `target_pid`. Returns the thread handle once both taps are installed, or
+/// `None` if tap creation failed (e.g. missing permission).
+fn spawn_tap_thread(
+    previous_pid: libc::pid_t,
+    target_pid: libc::pid_t,
+    window_number: i64,
+    suppress: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let handle = thread::Builder::new()
+        .name("cu-bg-activation".to_string())
+        .spawn(move || {
+            run_tap_loop(
+                previous_pid,
+                target_pid,
+                window_number,
+                suppress,
+                stop,
+                ready_tx,
+            )
+        })
+        .ok()?;
+
+    match ready_rx.recv() {
+        Ok(true) => Some(handle),
+        _ => {
+            // Tap installation failed (or the thread died); reclaim it and report no taps.
+            let _ = handle.join();
+            None
+        }
+    }
+}
+
+/// Body of the tap thread: creates the taps on this thread's run loop, signals readiness, then
+/// services the run loop until asked to stop, tearing the taps down on exit.
+fn run_tap_loop(
+    previous_pid: libc::pid_t,
+    target_pid: libc::pid_t,
+    window_number: i64,
+    suppress: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    ready_tx: mpsc::Sender<bool>,
+) {
+    let Some(run_loop) = CFRunLoop::current() else {
+        let _ = ready_tx.send(false);
+        return;
+    };
+    let mode = unsafe { kCFRunLoopDefaultMode };
+
+    // Keep the taps, their run-loop sources, and the heap-allocated contexts alive for as long
+    // as the run loop runs. The contexts are reclaimed (and dropped) after the loop exits.
+    let mut taps = Vec::new();
+    let mut sources = Vec::new();
+    let mut contexts: Vec<*mut TapContext> = Vec::new();
+
+    for (pid, is_previous) in [(previous_pid, true), (target_pid, false)] {
+        let context = Box::into_raw(Box::new(TapContext {
+            suppress: suppress.clone(),
+            is_previous,
+            window_number,
+        }));
+        // SAFETY: `tap_callback` matches the `CGEventTapCallBack` ABI and `context` is a valid,
+        // owned `TapContext` pointer that outlives the tap (it is dropped only after the run
+        // loop stops, below).
+        let tap = unsafe {
+            CGEvent::tap_create_for_pid(
+                pid,
+                CGEventTapPlacement::HeadInsertEventTap,
+                CGEventTapOptions::Default,
+                u64::MAX,
+                Some(tap_callback),
+                context as *mut c_void,
+            )
+        };
+        let Some(tap) = tap else {
+            // Reclaim the context this tap would have owned.
+            drop(unsafe { Box::from_raw(context) });
+            continue;
+        };
+        let Some(source) = CFMachPort::new_run_loop_source(None, Some(&tap), 0) else {
+            tap.invalidate();
+            drop(unsafe { Box::from_raw(context) });
+            continue;
+        };
+        run_loop.add_source(Some(&source), mode);
+        CGEvent::tap_enable(&tap, true);
+        taps.push(tap);
+        sources.push(source);
+        contexts.push(context);
+    }
+
+    let installed = !taps.is_empty();
+    let _ = ready_tx.send(installed);
+    if !installed {
+        return;
+    }
+
+    // Service the taps until teardown. `run_in_mode` blocks up to the interval (sleeping when
+    // idle), so re-checking the flag this way costs only a brief teardown latency.
+    while !stop.load(Ordering::SeqCst) {
+        CFRunLoop::run_in_mode(mode, RUN_LOOP_SERVICE_INTERVAL, false);
+    }
+
+    for tap in &taps {
+        tap.invalidate();
+    }
+    drop(sources);
+    drop(taps);
+    for context in contexts {
+        drop(unsafe { Box::from_raw(context) });
+    }
+}
+
+/// The raw `CGEventType` values of the focus-change messages macOS delivers when an app is
+/// activated/deactivated. These do not have stable public `CGEventType` variants across macOS
+/// versions, so they are matched by raw value (13, 19, 20) as in the existing implementation.
+const FOCUS_EVENT_TYPES: [u32; 3] = [13, 19, 20];
+
+/// The private CGEvent field that carries the target window number on the `postToPid` path.
+const FIELD_WINDOW_NUMBER: CGEventField = CGEventField(51);
+/// The private CGEvent field that flags `FIELD_WINDOW_NUMBER` as valid (1 = valid).
+const FIELD_WINDOW_NUMBER_VALID: CGEventField = CGEventField(58);
+
+/// Returns true when `event` is the AppKit activation transition for this session's activated
+/// window — the one focus event the previous-process tap should swallow to keep the target window
+/// backgrounded while it receives input.
+///
+/// This is the window-scoped narrowing of the previous process-wide suppression (APP-4902). It
+/// recognizes only raw focus types `13`, `19`, and `20`; requires the previous-process context
+/// with suppression enabled; reads the event's window-addressing identity using the same
+/// private field-51/field-58 contract [`post_appkit_activation`] stamps, corroborated by the
+/// standard mouse window-under-pointer fields (`91`/`92`) when present; and returns true only
+/// when the event is validly addressed to this session's activated window. Missing, invalid, or
+/// different identities return false so the event passes through — failing open preserves the
+/// user's ability to focus any other window (including other Warp windows) during an active
+/// background computer-use task.
+///
+/// Side-effect-free so the callback matrix can be unit-tested with synthetic events.
+fn is_activation_focus_transition(
+    context: &TapContext,
+    event_type: CGEventType,
+    event: &CGEvent,
+) -> bool {
+    if !FOCUS_EVENT_TYPES.contains(&event_type.0) {
+        return false;
+    }
+    if !context.is_previous || !context.suppress.load(Ordering::SeqCst) {
+        return false;
+    }
+    // The private routing pair is the primary identity: field 58 must mark field 51 valid, and
+    // field 51 must equal the window this session activated.
+    if CGEvent::integer_value_field(Some(event), FIELD_WINDOW_NUMBER_VALID) != 1 {
+        return false;
+    }
+    if CGEvent::integer_value_field(Some(event), FIELD_WINDOW_NUMBER) != context.window_number {
+        return false;
+    }
+    // Corroborate against the standard mouse window-under-pointer fields when they are present.
+    // If either identifies a different window, the event is not this session's activation
+    // transition — pass it through rather than risking suppression of an unrelated focus change.
+    for field in [
+        CGEventField::MouseEventWindowUnderMousePointer,
+        CGEventField::MouseEventWindowUnderMousePointerThatCanHandleThisEvent,
+    ] {
+        let window = CGEvent::integer_value_field(Some(event), field);
+        if window != 0 && window != context.window_number {
+            return false;
+        }
+    }
+    true
+}
+
+/// The C event-tap callback. Returns the event to pass it through, or null to drop it.
+///
+/// Only the AppKit activation transition for this session's specific activated window is dropped
+/// (see [`is_activation_focus_transition`]); every other event — including focus events for a
+/// different window the user clicked — passes through unchanged. This keeps a background
+/// computer-use target window controllable without raising it, while never trapping the user's
+/// own focus changes to any Warp window.
+unsafe extern "C-unwind" fn tap_callback(
+    _proxy: CGEventTapProxy,
+    event_type: CGEventType,
+    event: NonNull<CGEvent>,
+    user_info: *mut c_void,
+) -> *mut CGEvent {
+    let event_ptr = event.as_ptr();
+    let Some(context) = (unsafe { (user_info as *const TapContext).as_ref() }) else {
+        return event_ptr;
+    };
+    if is_activation_focus_transition(context, event_type, unsafe { &*event_ptr }) {
+        return std::ptr::null_mut();
+    }
+    event_ptr
+}
+
+/// Sends an `appKitDefined` application-activation event to the target process. `subtype`
+/// selects activate ([`NSEventSubtype::ApplicationActivated`]) vs. deactivate
+/// ([`NSEventSubtype::ApplicationDeactivated`]).
+fn post_appkit_activation(target_pid: libc::pid_t, window_number: i64, subtype: i16) {
+    let Some(event) = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+        NSEventType::AppKitDefined,
+        CGPoint { x: 0.0, y: 0.0 },
+        NSEventModifierFlags::empty(),
+        0.0,
+        window_number as isize,
+        None,
+        subtype,
+        0,
+        0,
+    ) else {
+        return;
+    };
+    let Some(cg_event) = event.CGEvent() else {
+        return;
+    };
+    // Associate the event with the target window so AppKit applies the activation to it.
+    super::mouse::set_window_addressing_fields(&cg_event, window_number);
+    CGEvent::post_to_pid(target_pid, Some(&cg_event));
+}
+
+/// Sends a single left click to the exact center of the window. On an inactive window this is
+/// absorbed by the activation flow rather than firing a UI action; the center avoids the
+/// title-bar traffic-light controls (which respond even when inactive).
+fn post_center_primer(target_pid: libc::pid_t, info: &WindowInfo) {
+    let center = CGPoint {
+        x: info.x + info.width / 2.0,
+        y: info.y + info.height / 2.0,
+    };
+    super::mouse::post_window_mouse_event(
+        target_pid,
+        info,
+        CGEventType::LeftMouseDown,
+        CGMouseButton::Left,
+        center,
+        1,
+        1.0,
+    );
+    thread::sleep(PRIMER_CLICK_HOLD);
+    super::mouse::post_window_mouse_event(
+        target_pid,
+        info,
+        CGEventType::LeftMouseUp,
+        CGMouseButton::Left,
+        center,
+        1,
+        0.0,
+    );
+    thread::sleep(PRIMER_CLICK_SETTLE);
+}
+
+#[cfg(test)]
+#[path = "activation_tests.rs"]
+mod tests;

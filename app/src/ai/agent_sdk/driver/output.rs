@@ -8,6 +8,7 @@ pub mod text {
     use ai::agent::action_result::{FetchConversationResult, ReadSkillResult, UseComputerResult};
     use itertools::Itertools;
 
+    use crate::AIAgentActionResultType;
     use crate::ai::agent::{
         AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentTodo,
         ArtifactCreatedData, CallMCPToolResult, FileGlobResult, FileGlobV2Result, GrepResult,
@@ -16,7 +17,6 @@ pub mod text {
         UploadArtifactResult, WebFetchStatus, WebSearchStatus,
         WriteToLongRunningShellCommandResult,
     };
-    use crate::AIAgentActionResultType;
 
     /// Format an agent input as a human-readable string. For action results, it's assumed that
     /// the action is shown immediately before this result.
@@ -31,7 +31,6 @@ pub mod text {
             | AIAgentInput::CloneRepository { .. }
             | AIAgentInput::InitProjectRules { .. }
             | AIAgentInput::CodeReview { .. }
-            | AIAgentInput::FetchReviewComments { .. }
             | AIAgentInput::CreateEnvironment { .. }
             | AIAgentInput::SummarizeConversation { .. }
             | AIAgentInput::InvokeSkill { .. }
@@ -286,6 +285,8 @@ pub mod text {
                 },
                 // TODO(AGENT-2281): implement
                 AIAgentActionResultType::RequestComputerUse(_result) => Ok(()),
+                AIAgentActionResultType::StartRecording(_)
+                | AIAgentActionResultType::StopRecording(_) => Ok(()),
                 AIAgentActionResultType::FetchConversation(result) => match result {
                     FetchConversationResult::Success { directory_path } => {
                         writeln!(w, "Fetched conversation to {directory_path}")
@@ -408,6 +409,12 @@ pub mod text {
                     }
                     AIAgentActionType::RequestComputerUse(request) => {
                         writeln!(w, "Requesting computer use: {}", request.task_summary)?;
+                    }
+                    AIAgentActionType::StartRecording { .. } => {
+                        writeln!(w, "Starting recording")?;
+                    }
+                    AIAgentActionType::StopRecording { recording_id } => {
+                        writeln!(w, "Stopping recording {recording_id}")?;
                     }
                     AIAgentActionType::ReadSkill(request) => {
                         writeln!(w, "Reading skill: {}", request.skill)?;
@@ -569,16 +576,17 @@ pub mod json {
 
     use serde::Serialize;
 
+    use crate::AIAgentActionResultType;
     use crate::ai::agent::comment::ReviewComment;
     use crate::ai::agent::{
         AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
         AIAgentOutputMessageType, AIAgentTodo, ArtifactCreatedData, CallMCPToolResult, FileContext,
-        FileGlobResult, FileGlobV2Result, GrepResult, ReadFilesResult, ReadMCPResourceResult,
-        RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, SubagentCall,
-        TodoOperation, UploadArtifactResult, WriteToLongRunningShellCommandResult,
+        FileGlobResult, FileGlobV2Result, GrepResult, ReadFilesFailedFile, ReadFilesResult,
+        ReadMCPResourceResult, RequestCommandOutputResult, RequestFileEditsResult,
+        SearchCodebaseResult, SubagentCall, TodoOperation, UploadArtifactResult,
+        WriteToLongRunningShellCommandResult,
     };
     use crate::code::buffer_location::LocalOrRemotePath;
-    use crate::AIAgentActionResultType;
 
     /// JSON representation of messages in an agent conversation. This is intentionally not 1:1 with our internal `AIAgent*` types - it's
     /// a stable interface for callers.
@@ -680,7 +688,7 @@ pub mod json {
     enum JsonToolResult<'a> {
         RunCommand(JsonRunCommandResult<'a>),
         EditFiles(JsonEditFilesResult<'a>),
-        ReadFiles(JsonFileCollectionResult<'a>),
+        ReadFiles(JsonReadFilesResult<'a>),
         UploadArtifact(JsonUploadArtifactResult<'a>),
         SearchCodebase(JsonFileCollectionResult<'a>),
         Grep(JsonFileCollectionResult<'a>),
@@ -699,6 +707,28 @@ pub mod json {
     #[derive(Serialize)]
     struct JsonEditFilesResult<'a> {
         diff: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct JsonReadFilesResult<'a> {
+        files: Vec<JsonFile<'a>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        failed_files: Vec<JsonFailedFile<'a>>,
+    }
+
+    #[derive(Serialize)]
+    struct JsonFailedFile<'a> {
+        path: &'a str,
+        message: &'a str,
+    }
+
+    impl<'a> From<&'a ReadFilesFailedFile> for JsonFailedFile<'a> {
+        fn from(f: &'a ReadFilesFailedFile) -> Self {
+            Self {
+                path: f.path.as_str(),
+                message: f.message.as_str(),
+            }
+        }
     }
 
     #[derive(Serialize)]
@@ -784,7 +814,6 @@ pub mod json {
                 | AIAgentInput::CloneRepository { .. }
                 | AIAgentInput::InitProjectRules { .. }
                 | AIAgentInput::CodeReview { .. }
-                | AIAgentInput::FetchReviewComments { .. }
                 | AIAgentInput::CreateEnvironment { .. }
                 | AIAgentInput::SummarizeConversation { .. }
                 | AIAgentInput::InvokeSkill { .. }
@@ -864,11 +893,15 @@ pub mod json {
                     RequestFileEditsResult::Cancelled => Some(JsonMessage::ToolCanceled),
                 },
                 AIAgentActionResultType::ReadFiles(result) => match result {
-                    ReadFilesResult::Success { files } => Some(JsonMessage::ToolResult(
-                        JsonToolResult::ReadFiles(JsonFileCollectionResult {
+                    ReadFilesResult::Success {
+                        files,
+                        failed_files,
+                    } => Some(JsonMessage::ToolResult(JsonToolResult::ReadFiles(
+                        JsonReadFilesResult {
                             files: JsonFile::from_file_contexts(files),
-                        }),
-                    )),
+                            failed_files: failed_files.iter().map(JsonFailedFile::from).collect(),
+                        },
+                    ))),
                     ReadFilesResult::Error(error) => Some(JsonMessage::ToolError {
                         error: Cow::Borrowed(error.as_str()),
                     }),
@@ -1094,7 +1127,9 @@ pub mod json {
                     // TODO(AGENT-2281): implement
                     AIAgentActionType::RequestComputerUse(_) => None,
                     // Internal or non-CLI tool calls: skip them
-                    AIAgentActionType::SuggestNewConversation { .. }
+                    AIAgentActionType::StartRecording { .. }
+                    | AIAgentActionType::StopRecording { .. }
+                    | AIAgentActionType::SuggestNewConversation { .. }
                     | AIAgentActionType::SuggestPrompt { .. }
                     | AIAgentActionType::InitProject
                     | AIAgentActionType::OpenCodeReview

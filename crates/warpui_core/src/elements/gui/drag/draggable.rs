@@ -1,11 +1,11 @@
 use std::cmp::Ordering;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use itertools::Itertools;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 use crate::elements::{DropTargetData, Point};
 use crate::event::{DispatchedEvent, Event};
@@ -60,6 +60,14 @@ impl DraggableState {
                 mouse_down_offset, ..
             } => Some(-mouse_down_offset),
             DragState::Dragging { mouse_offset, .. } => Some(-mouse_offset),
+        }
+    }
+
+    /// Returns the actual mouse position while dragging an element.
+    pub fn dragging_mouse_position(&self) -> Option<Vector2F> {
+        match self.read() {
+            DragState::Dragging { mouse_position, .. } => Some(mouse_position),
+            DragState::None | DragState::WaitingToDrag { .. } => None,
         }
     }
 

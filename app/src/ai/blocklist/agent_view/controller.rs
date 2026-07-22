@@ -4,20 +4,20 @@ use std::time::Duration;
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
-use warpui::keymap::Keystroke;
 use warpui::r#async::SpawnedFutureHandle;
+use warpui::keymap::Keystroke;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{DismissalStrategy, EphemeralMessage, EphemeralMessageModel};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::orchestration_topology::{
-    adjacent_orchestration_child_conversation_id, OrchestrationNavigationDirection,
+    OrchestrationNavigationDirection, adjacent_orchestration_child_conversation_id,
 };
+use crate::terminal::TerminalModel;
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::terminal::TerminalModel;
 use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::BlocklistAIHistoryModel;
 
 /// Error returned when entering the agent view fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -136,6 +136,8 @@ pub enum AgentViewEntryOrigin {
     ThirdPartyCloudAgent,
     /// Entered agent view via the CLI (e.g. `warp agent run`).
     Cli,
+    /// Entered agent view via the headless TUI frontend.
+    Tui,
     /// Entered agent view by adding an image (drag-and-drop or paste).
     ImageAdded,
     /// Entered agent view by executing a slash command that requires agent mode.
@@ -828,10 +830,16 @@ impl AgentViewController {
             display_mode,
             original_conversation_length: exchange_count,
         };
+
+        let is_cloud = matches!(
+            origin,
+            AgentViewEntryOrigin::CloudAgent | AgentViewEntryOrigin::ThirdPartyCloudAgent
+        );
+
         self.terminal_model
             .lock()
             .block_list_mut()
-            .set_agent_view_state(self.agent_view_state.clone());
+            .enter_conversation_context(conversation_id, display_mode.is_inline(), is_cloud);
 
         ctx.emit(AgentViewControllerEvent::EnteredAgentView {
             conversation_id,
@@ -956,7 +964,7 @@ impl AgentViewController {
         self.terminal_model
             .lock()
             .block_list_mut()
-            .set_agent_view_state(self.agent_view_state.clone());
+            .exit_conversation_context();
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let final_exchange_count = history_model

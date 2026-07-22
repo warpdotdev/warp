@@ -1,8 +1,8 @@
 //! Onboarding-specific AI types and conversions.
 
 use ai::LLMId;
-use onboarding::slides::OnboardingModelInfo;
 use onboarding::OnboardingAuthState;
+use onboarding::slides::OnboardingModelInfo;
 use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
@@ -25,7 +25,7 @@ pub fn build_onboarding_models(
     prefs: &LLMPreferences,
     app: &AppContext,
 ) -> (Vec<OnboardingModelInfo>, LLMId) {
-    let default_id = prefs.get_default_base_model().id.clone();
+    let default_id = prefs.get_default_base_model(app).id.clone();
     let models: Vec<OnboardingModelInfo> = prefs
         .get_base_llm_choices_for_agent_mode(app)
         .map(|llm| {
