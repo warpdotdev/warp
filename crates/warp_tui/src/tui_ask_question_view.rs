@@ -151,6 +151,14 @@ impl TuiAskQuestionView {
             .is_some_and(|status| status.is_blocked())
     }
 
+    pub(super) fn is_awaiting_answers(&self, app: &AppContext) -> bool {
+        self.session.is_editing() && self.is_waiting_on_answers(app)
+    }
+
+    pub(super) fn focus(&self, ctx: &mut ViewContext<Self>) {
+        ctx.focus(&self.selector);
+    }
+
     pub(super) fn matches_action(
         &self,
         action_id: &AIAgentActionId,
@@ -281,8 +289,17 @@ impl TuiAskQuestionView {
             }
             TuiOptionSelectorEvent::CustomTextOpened => {
                 self.abort_auto_advance();
-                let _ = self.session.apply(AskUserQuestionAction::OpenOtherInput);
+                let _ = self
+                    .session
+                    .apply(AskUserQuestionAction::EnterCustomAnswerEditing);
                 self.invalidate_layout(ctx);
+            }
+            TuiOptionSelectorEvent::CustomTextClosed => {
+                self.abort_auto_advance();
+                let effect = self
+                    .session
+                    .apply(AskUserQuestionAction::ExitCustomAnswerEditing);
+                self.handle_effect(effect, ctx);
             }
             TuiOptionSelectorEvent::LayoutInvalidated => self.invalidate_layout(ctx),
             TuiOptionSelectorEvent::RetryRequested | TuiOptionSelectorEvent::Dismissed => {}
@@ -337,7 +354,7 @@ impl TuiAskQuestionView {
         match effect {
             AskUserQuestionEffect::Noop => {}
             AskUserQuestionEffect::RefreshCurrent => self.refresh_selection(ctx),
-            AskUserQuestionEffect::FocusOtherInput => {
+            AskUserQuestionEffect::FocusCustomAnswerInput => {
                 self.selector
                     .update(ctx, |selector, ctx| selector.confirm_selected(ctx));
             }

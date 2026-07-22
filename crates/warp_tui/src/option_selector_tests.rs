@@ -14,8 +14,8 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext, TuiView as _, TypedActionView as _, ViewHandle};
 
 use super::{
-    OptionSelectorHeader, OptionSelectorPage, SelectorItem, TuiOptionSelector,
-    TuiOptionSelectorAction, TuiOptionSelectorEvent,
+    OptionSelectorHeader, OptionSelectorPage, SELECTOR_NAVIGATION_ACTIVE, SelectorItem,
+    TuiOptionSelector, TuiOptionSelectorAction, TuiOptionSelectorEvent,
 };
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::TuiEditorCommand;
@@ -913,9 +913,8 @@ fn back_cancels_custom_text_editing_before_leaving_the_page() {
     });
 }
 
-/// Arrow navigation leaves list state untouched while custom text owns focus.
 #[test]
-fn arrows_do_not_navigate_the_list_while_editing_custom_text() {
+fn arrows_leave_custom_text_and_navigate_adjacent_options() {
     App::test((), |mut app| async move {
         let (selector, _) = add_selector(&mut app);
         let mut with_footer = snapshot(&["a", "b", "c", "d", "e", "f", "g", "h"], Some("a"));
@@ -924,33 +923,28 @@ fn arrows_do_not_navigate_the_list_while_editing_custom_text() {
         });
         set_page(&mut app, &selector, with_footer);
         let custom_text_index = 8;
-
-        for action in [
-            TuiOptionSelectorAction::MoveUp,
-            TuiOptionSelectorAction::MoveDown,
+        for (action, expected_index) in [
+            (TuiOptionSelectorAction::MoveUp, 7),
+            (TuiOptionSelectorAction::MoveDown, 0),
         ] {
             act(
                 &mut app,
                 &selector,
                 TuiOptionSelectorAction::SelectItem(custom_text_index),
             );
-            let before = selector.read(&app, |selector, _| {
-                (
-                    selector.interaction.selection.selected_index(),
-                    selector.interaction.scroll_offset,
-                )
-            });
+            assert!(selector.read(&app, |selector, ctx| {
+                selector
+                    .keymap_context(ctx)
+                    .set
+                    .contains(SELECTOR_NAVIGATION_ACTIVE)
+            }));
 
             act(&mut app, &selector, action);
-
-            let after = selector.read(&app, |selector, _| {
-                (
-                    selector.interaction.selection.selected_index(),
-                    selector.interaction.scroll_offset,
-                )
-            });
-            assert_eq!(after, before);
-            assert!(custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
+            assert_eq!(
+                selector.read(&app, |selector, _| selector.highlighted_index()),
+                Some(expected_index)
+            );
+            assert!(!custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
         }
     });
 }

@@ -233,7 +233,7 @@ fn navigation_restores_multi_selection_and_other_text() {
 }
 
 #[test]
-fn opening_other_keeps_selector_and_shared_session_in_sync() {
+fn opening_and_leaving_other_keeps_selector_and_shared_session_in_sync() {
     App::test((), |mut app| async move {
         let (_, view) = add_view(
             &mut app,
@@ -253,6 +253,23 @@ fn opening_other_keeps_selector_and_shared_session_in_sync() {
                     .is_some_and(|draft| draft.is_other_input_active)
             );
             assert_eq!(view.selector.as_ref(ctx).highlighted_question_index(), None);
+        });
+
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::MoveUp, ctx);
+        });
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            assert!(
+                view.session
+                    .current()
+                    .and_then(|current| current.draft)
+                    .is_none_or(|draft| !draft.is_other_input_active)
+            );
+            assert_eq!(
+                view.selector.as_ref(ctx).highlighted_question_index(),
+                Some(0)
+            );
         });
     });
 }
@@ -275,7 +292,9 @@ fn navigating_away_from_a_cleared_other_editor_removes_the_previous_answer() {
             view.handle_effect(effect, ctx);
             view.show_current_question(ctx);
 
-            let effect = view.session.apply(AskUserQuestionAction::OpenOtherInput);
+            let effect = view
+                .session
+                .apply(AskUserQuestionAction::EnterCustomAnswerEditing);
             view.handle_effect(effect, ctx);
             view.selector.update(ctx, |selector, ctx| {
                 selector.set_active_custom_text_for_test("", ctx);

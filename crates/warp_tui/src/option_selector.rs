@@ -110,6 +110,8 @@ pub(crate) enum TuiOptionSelectorEvent {
     CustomTextSubmitted { value: String },
     /// The question-card Other editor was opened.
     CustomTextOpened,
+    /// The custom-text editor was left without submitting a new value.
+    CustomTextClosed,
     /// The Retry affordance of a `Failed` catalog was activated.
     RetryRequested,
     /// The selector asked to be dismissed (element-level Escape fallback for
@@ -592,6 +594,7 @@ impl TuiOptionSelector {
         };
 
         ctx.focus_self();
+        ctx.emit(TuiOptionSelectorEvent::CustomTextClosed);
         if layout_changed {
             self.invalidate_layout(ctx);
         } else {
@@ -761,7 +764,7 @@ impl TuiOptionSelector {
     /// Moves the selection one step, scrolling to keep it visible.
     fn move_selection(&mut self, forward: bool, ctx: &mut ViewContext<Self>) {
         if self.custom_text.is_editing() {
-            return;
+            self.cancel_custom_text_editing(ctx);
         }
         let items_len = self.items().len();
         if self.search_field_is_focused(ctx) || self.leading_editor_is_focused(ctx) {
@@ -1205,7 +1208,10 @@ impl TuiView for TuiOptionSelector {
 
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
         let mut context = Self::default_keymap_context();
-        if self.focused || self.search_field_is_focused(app) {
+        if self.focused
+            || self.search_field_is_focused(app)
+            || self.custom_text.editor.as_ref(app).is_focused()
+        {
             context.set.insert(SELECTOR_NAVIGATION_ACTIVE);
         }
         context

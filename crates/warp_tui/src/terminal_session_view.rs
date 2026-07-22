@@ -603,6 +603,9 @@ impl TuiTerminalSessionView {
 
     fn focus_blocking_child(blocker: TuiBlockingChild, ctx: &mut ViewContext<Self>) {
         match blocker {
+            TuiBlockingChild::AskQuestion(view) => {
+                view.update(ctx, |view, ctx| view.focus(ctx));
+            }
             TuiBlockingChild::Permission(view) => {
                 view.update(ctx, |view, ctx| view.focus(ctx));
             }
