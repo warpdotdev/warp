@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use async_channel::Sender;
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -20,7 +19,7 @@ use warp::tui_export::{
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
     CLISubagentEvent, CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel,
-    ChangelogModelEvent, ChangelogRequestType, CloudConversationData, CommandExecutionSource,
+    ChangelogRequestType, CloudConversationData, CommandExecutionSource,
     ConversationFileExport, ConversationSelection, ConversationSelectionHandle,
     ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels,
     GitRepoStatusModel, GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
@@ -63,7 +62,6 @@ use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
     TuiAttachmentPasteDisposition,
 };
-use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
@@ -108,7 +106,7 @@ use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
 use crate::warping_indicator::{render_response_summary, render_warping_indicator_row};
-use crate::zero_state::render_zero_state;
+use crate::zero_state::TuiZeroStateView;
 mod input_detection;
 
 use self::input_detection::InputDetectionState;
@@ -459,6 +457,7 @@ pub(crate) struct TuiTerminalSessionView {
     active_blocker_view_id: Option<EntityId>,
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
     orchestration_tabs_focused: bool,
+    zero_state_view: ViewHandle<TuiZeroStateView>,
 }
 
 /// Registers the session surface's keybindings. Called once at TUI startup
@@ -1255,36 +1254,10 @@ impl TuiTerminalSessionView {
             }
         });
 
-        // The zero state's "What's new" section: fetch the changelog once at
-        // startup and re-render when it arrives. The model no-ops when a
-        // changelog is already cached; the other changelog events (request
-        // failed, image fetched) don't change what the zero state renders.
+        // Trigger the changelog fetch once at startup so `TuiZeroStateView`
+        // has data to display.  The re-render subscription lives in the view.
         ChangelogModel::handle(ctx).update(ctx, |changelog, ctx| {
             changelog.check_for_changelog(ChangelogRequestType::WindowLaunch, ctx);
-        });
-        ctx.subscribe_to_model(&ChangelogModel::handle(ctx), |_, _, event, ctx| {
-            if let ChangelogModelEvent::ChangelogRequestComplete { .. } = event {
-                ctx.notify();
-            }
-        });
-        // The zero state's version line shows the background auto-update
-        // status: re-render as the updater progresses.
-        ctx.subscribe_to_model(&TuiAutoupdater::handle(ctx), |_, _, event, ctx| {
-            let TuiAutoupdaterEvent::StatusChanged = event;
-            ctx.notify();
-        });
-        // The zero state's project section: rules/skills discovery is
-        // asynchronous, so re-render as indexed results land. `PathIndexed`
-        // accompanies every project-rules mutation (`KnownRulesChanged` is a
-        // persistence-oriented duplicate), and `GlobalRulesChanged` covers
-        // global rules, which the zero state doesn't show.
-        ctx.subscribe_to_model(&ProjectContextModel::handle(ctx), |_, _, event, ctx| {
-            if let ProjectContextModelEvent::PathIndexed = event {
-                ctx.notify();
-            }
-        });
-        ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| {
-            ctx.notify();
         });
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
@@ -1419,6 +1392,8 @@ impl TuiTerminalSessionView {
             |_, _| {},
         );
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
+        let zero_state_view =
+            ctx.add_tui_view(|ctx| TuiZeroStateView::new(active_session.clone(), ctx));
         Self {
             transcript,
             input_view,
@@ -1459,6 +1434,7 @@ impl TuiTerminalSessionView {
             active_blocker_view_id: None,
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
+            zero_state_view,
         }
     }
 
@@ -3113,6 +3089,7 @@ impl TuiView for TuiTerminalSessionView {
             self.input_view.id(),
             self.orchestration_tab_bar.id(),
             self.attachment_bar.id(),
+            self.zero_state_view.id(),
         ]
     }
 
@@ -3201,10 +3178,7 @@ impl TuiView for TuiTerminalSessionView {
         // swaps the transcript back in.
         let mut content = TuiFlex::column();
         if self.transcript.as_ref(ctx).is_empty() {
-            content = content.flex_child(render_zero_state(
-                self.current_working_directory(ctx).as_deref(),
-                ctx,
-            ));
+            content = content.flex_child(TuiChildView::new(&self.zero_state_view).finish());
         } else {
             content = content.flex_child(TuiChildView::new(&self.transcript).finish());
         }
