@@ -364,44 +364,16 @@ where
             Ok(stream) => stream,
             Err(err) => {
                 failures += 1;
-                if is_auth_error(&err) {
-                    consecutive_auth_failures += 1;
-                } else {
-                    consecutive_auth_failures = 0;
-                }
-                if let Some(reason) = agent_event_give_up_reason(
+                handle_http_error(
                     &config,
-                    consecutive_auth_failures,
-                    &mut retry_window_started_at,
-                ) {
-                    return Err(err.context(format!(
-                        "Agent event driver {reason} for {}",
-                        config.filter.log_label()
-                    )));
-                }
-                let backoff_steps = if is_transient_http_error(&err) {
-                    config.reconnect_backoff_steps
-                } else {
-                    config.permanent_error_backoff_steps
-                };
-                let backoff = agent_event_backoff(failures, backoff_steps);
-                log_stream_failure(
-                    &config.filter,
-                    failures,
-                    backoff,
-                    &err,
-                    config.failures_before_error_log,
-                );
-                notify_driver_state(
                     consumer,
-                    AgentEventDriverState::RetryScheduled {
-                        consecutive_failures: failures,
-                        backoff,
-                        is_initial_connect: !has_connected_once,
-                    },
+                    err,
+                    failures,
+                    &mut consecutive_auth_failures,
+                    &mut retry_window_started_at,
+                    !has_connected_once,
                 )
-                .await;
-                Timer::after(backoff).await;
+                .await?;
                 continue;
             }
         };
@@ -469,44 +441,16 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Err(err))) => {
                     failures += 1;
-                    if is_auth_error(&err) {
-                        consecutive_auth_failures += 1;
-                    } else {
-                        consecutive_auth_failures = 0;
-                    }
-                    if let Some(reason) = agent_event_give_up_reason(
+                    handle_http_error(
                         &config,
-                        consecutive_auth_failures,
-                        &mut retry_window_started_at,
-                    ) {
-                        return Err(err.context(format!(
-                            "Agent event driver {reason} for {}",
-                            config.filter.log_label()
-                        )));
-                    }
-                    let backoff_steps = if is_transient_http_error(&err) {
-                        config.reconnect_backoff_steps
-                    } else {
-                        config.permanent_error_backoff_steps
-                    };
-                    let backoff = agent_event_backoff(failures, backoff_steps);
-                    log_stream_failure(
-                        &config.filter,
-                        failures,
-                        backoff,
-                        &err,
-                        config.failures_before_error_log,
-                    );
-                    notify_driver_state(
                         consumer,
-                        AgentEventDriverState::RetryScheduled {
-                            consecutive_failures: failures,
-                            backoff,
-                            is_initial_connect: false,
-                        },
+                        err,
+                        failures,
+                        &mut consecutive_auth_failures,
+                        &mut retry_window_started_at,
+                        false,
                     )
-                    .await;
-                    Timer::after(backoff).await;
+                    .await?;
                     break;
                 }
                 // Clean stream closure (server-side close, not an HTTP
@@ -553,6 +497,75 @@ where
 enum NextDriverItem {
     StreamItem(Option<Result<AgentEventSourceItem>>),
     ProactiveReconnect,
+}
+
+/// Update the consecutive auth-failure streak for `err` and return a give-up
+/// reason if the driver should stop retrying. Bumps `consecutive_auth_failures`
+/// on an HTTP 401/403 error and resets it otherwise, then defers to
+/// [`agent_event_give_up_reason`].
+fn classify_failure_and_give_up_reason(
+    config: &AgentEventDriverConfig,
+    err: &anyhow::Error,
+    consecutive_auth_failures: &mut usize,
+    retry_window_started_at: &mut Option<Instant>,
+) -> Option<String> {
+    if is_auth_error(err) {
+        *consecutive_auth_failures += 1;
+    } else {
+        *consecutive_auth_failures = 0;
+    }
+    agent_event_give_up_reason(config, *consecutive_auth_failures, retry_window_started_at)
+}
+
+/// Handles an HTTP error from either `open_stream` or a stream item: checks the
+/// give-up policy, selects a backoff schedule, logs, notifies the consumer of the
+/// pending retry, and waits out the backoff delay. Returns `Err` if the driver
+/// should stop — the error is ready to propagate directly — or `Ok(())` once the
+/// retry delay has elapsed.
+async fn handle_http_error<C: AgentEventConsumer>(
+    config: &AgentEventDriverConfig,
+    consumer: &mut C,
+    err: anyhow::Error,
+    failures: usize,
+    consecutive_auth_failures: &mut usize,
+    retry_window_started_at: &mut Option<Instant>,
+    is_initial_connect: bool,
+) -> Result<()> {
+    if let Some(reason) = classify_failure_and_give_up_reason(
+        config,
+        &err,
+        consecutive_auth_failures,
+        retry_window_started_at,
+    ) {
+        return Err(err.context(format!(
+            "Agent event driver {reason} for {}",
+            config.filter.log_label()
+        )));
+    }
+    let backoff_steps = if is_transient_http_error(&err) {
+        config.reconnect_backoff_steps
+    } else {
+        config.permanent_error_backoff_steps
+    };
+    let backoff = agent_event_backoff(failures, backoff_steps);
+    log_stream_failure(
+        &config.filter,
+        failures,
+        backoff,
+        &err,
+        config.failures_before_error_log,
+    );
+    notify_driver_state(
+        consumer,
+        AgentEventDriverState::RetryScheduled {
+            consecutive_failures: failures,
+            backoff,
+            is_initial_connect,
+        },
+    )
+    .await;
+    Timer::after(backoff).await;
+    Ok(())
 }
 
 /// Decide whether a bounded driver should stop retrying after a failure.
