@@ -636,6 +636,8 @@ jobs:
     # download endpoint and installer accept Linux payloads.
     if: ${{ inputs.build_linux != false && inputs.channel == 'dev' }}
     timeout-minutes: 180
+    # Experimental TUI failures must not block dev release cuts.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -699,9 +701,12 @@ jobs:
           test -s "$bundle_dir/resources/THIRD_PARTY_LICENSES.txt"
           grep -q "\"warp_version\": \"${GIT_RELEASE_TAG}\"" \
             "$bundle_dir/resources/bundled/metadata/version.json"
-          tar tzf "$archive" | grep -qx "warp-tui-${CHANNEL}"
-          tar tzf "$archive" | grep -qx "resources/settings_schema.json"
-          tar tzf "$archive" | grep -qx "resources/THIRD_PARTY_LICENSES.txt"
+
+          archive_listing="${RUNNER_TEMP}/warp-tui-${CHANNEL}-linux-${{ matrix.arch }}-contents.txt"
+          tar tzf "$archive" > "$archive_listing"
+          grep -Fqx "warp-tui-${CHANNEL}" "$archive_listing"
+          grep -Fqx "resources/settings_schema.json" "$archive_listing"
+          grep -Fqx "resources/THIRD_PARTY_LICENSES.txt" "$archive_listing"
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -712,6 +717,17 @@ jobs:
         with:
           name: release-linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
+
+      - name: Report Linux TUI build failure
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::The experimental Linux TUI ${{ matrix.arch }} release artifact failed to build. This failure will not block the dev release."
+          {
+            echo "## Linux TUI ${{ matrix.arch }} release artifact failed"
+            echo
+            echo "This experimental build failure will not block the dev release. Review the failed step above for details."
+          } >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
 
   release_linux_x86:
     name: Build Release (Linux x86_64)
