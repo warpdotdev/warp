@@ -1,3 +1,4 @@
+use ai::api_keys::{ApiKeyManager, GeapCredentialsState};
 use warp_core::ui::Icon;
 use warpui::elements::{
     ChildView, ConstrainedBox, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
@@ -28,6 +29,8 @@ pub enum GeminiEnterpriseCredentialsErrorEvent {
 pub struct GeminiEnterpriseCredentialsErrorView {
     refresh_button: ViewHandle<ActionButton>,
     manage_button: ViewHandle<ActionButton>,
+    refresh_requested: bool,
+    refresh_succeeded: bool,
 }
 
 impl GeminiEnterpriseCredentialsErrorView {
@@ -41,6 +44,33 @@ impl GeminiEnterpriseCredentialsErrorView {
                     )
                 })
         });
+        ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |view, manager, _event, ctx| {
+            if !view.refresh_requested {
+                return;
+            }
+
+            match manager.as_ref(ctx).geap_credentials_state().clone() {
+                GeapCredentialsState::Refreshing { .. } => {
+                    view.update_refresh_button("Refreshing...", true, ctx);
+                }
+                GeapCredentialsState::Loaded {
+                    ref credentials, ..
+                } if !credentials.needs_refresh() => {
+                    view.refresh_succeeded = true;
+                    view.update_refresh_button("Credentials refreshed", true, ctx);
+                }
+                GeapCredentialsState::Missing
+                | GeapCredentialsState::Disabled
+                | GeapCredentialsState::Unconfigured
+                | GeapCredentialsState::Loaded { .. }
+                | GeapCredentialsState::Failed { .. } => {
+                    view.refresh_requested = false;
+                    view.refresh_succeeded = false;
+                    view.update_refresh_button("Try again", false, ctx);
+                }
+            }
+            ctx.notify();
+        });
         let manage_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Manage", NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
@@ -52,7 +82,21 @@ impl GeminiEnterpriseCredentialsErrorView {
         Self {
             refresh_button,
             manage_button,
+            refresh_requested: false,
+            refresh_succeeded: false,
         }
+    }
+
+    fn update_refresh_button(
+        &self,
+        label: &'static str,
+        disabled: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.refresh_button.update(ctx, |button, ctx| {
+            button.set_label(label, ctx);
+            button.set_disabled(disabled, ctx);
+        });
     }
 }
 
@@ -69,6 +113,21 @@ impl View for GeminiEnterpriseCredentialsErrorView {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
+        let title = if self.refresh_succeeded {
+            "Gemini Enterprise credentials refreshed"
+        } else if self.refresh_requested {
+            "Refreshing Gemini Enterprise credentials..."
+        } else {
+            "Gemini Enterprise credentials expired or invalid"
+        };
+        let detail = if self.refresh_succeeded {
+            "Your credentials are ready. Retry the request to continue."
+        } else if self.refresh_requested {
+            "Warp is refreshing your Google Cloud credentials."
+        } else {
+            "Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request."
+        };
+
         let make_header = || {
             Flex::row()
                 .with_spacing(8.)
@@ -84,27 +143,19 @@ impl View for GeminiEnterpriseCredentialsErrorView {
                     .finish(),
                 )
                 .with_child(
-                    Text::new(
-                        "Gemini Enterprise credentials expired or invalid".to_string(),
-                        appearance.ui_font_family(),
-                        14.,
-                    )
-                    .with_color(error_color(theme))
-                    .with_selectable(false)
-                    .finish(),
+                    Text::new(title.to_string(), appearance.ui_font_family(), 14.)
+                        .with_color(error_color(theme))
+                        .with_selectable(false)
+                        .finish(),
                 )
                 .finish()
         };
 
         let make_detail = || {
-            Text::new(
-                "Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request.".to_string(),
-                appearance.ui_font_family(),
-                14.,
-            )
-            .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-            .with_selectable(false)
-            .finish()
+            Text::new(detail.to_string(), appearance.ui_font_family(), 14.)
+                .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+                .with_selectable(false)
+                .finish()
         };
 
         let make_buttons = || {
@@ -161,7 +212,11 @@ impl TypedActionView for GeminiEnterpriseCredentialsErrorView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             GeminiEnterpriseCredentialsErrorAction::RefreshCredentials => {
+                self.refresh_requested = true;
+                self.refresh_succeeded = false;
+                self.update_refresh_button("Refreshing...", true, ctx);
                 ctx.emit(GeminiEnterpriseCredentialsErrorEvent::RefreshCredentials);
+                ctx.notify();
             }
             GeminiEnterpriseCredentialsErrorAction::OpenSettings => {
                 ctx.emit(GeminiEnterpriseCredentialsErrorEvent::OpenSettings);
