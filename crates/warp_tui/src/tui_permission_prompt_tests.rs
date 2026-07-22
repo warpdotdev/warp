@@ -14,7 +14,7 @@ use warpui_core::{TuiView as _, TypedActionView as _, ViewHandle};
 
 use super::{
     PERMISSION_PROMPT_ACTIVE, PERMISSION_PROMPT_EDITABLE, TuiPermissionPrompt,
-    TuiPermissionPromptAction, TuiPermissionPromptEvent, render_permission_card,
+    TuiPermissionPromptEvent, render_permission_card,
 };
 use crate::editor_view::TuiEditorView;
 use crate::option_selector::{TuiOptionSelectorAction, TuiOptionSelectorEvent};
@@ -41,6 +41,44 @@ fn add_prompt(app: &mut App, body_editable: bool) -> ViewHandle<TuiPermissionPro
             )
         })
     })
+}
+
+fn dispatch_focused_key(
+    app: &mut App,
+    prompt: &ViewHandle<TuiPermissionPrompt>,
+    key: &str,
+) -> bool {
+    present_prompt(app, prompt);
+    let (window_id, responder_chain) = app.read(|ctx| {
+        let window_id = prompt.window_id(ctx);
+        let focused = ctx
+            .focused_view_id(window_id)
+            .expect("permission interaction has a focused view");
+        let responder_chain = ctx.view_ancestors(window_id, focused);
+        assert!(responder_chain.contains(&prompt.id()));
+        assert!(responder_chain.contains(&prompt.as_ref(ctx).selector.id()));
+        (window_id, responder_chain)
+    });
+    app.dispatch_keystroke(
+        window_id,
+        &responder_chain,
+        &Keystroke::parse(key).expect("valid keystroke"),
+        false,
+    )
+    .expect("keystroke dispatch succeeds")
+}
+
+fn present_prompt(app: &mut App, prompt: &ViewHandle<TuiPermissionPrompt>) {
+    let mut presenter = TuiPresenter::new();
+    app.update(|ctx| {
+        let mut invalidation = WindowInvalidation::default();
+        invalidation.updated.insert(prompt.id());
+        invalidation
+            .updated
+            .extend(prompt.as_ref(ctx).child_view_ids(ctx));
+        presenter.invalidate(&invalidation, ctx, prompt.window_id(ctx));
+        presenter.present(ctx, prompt, TuiRect::new(0, 0, 80, 12));
+    });
 }
 
 fn render_lines(app: &mut App, prompt: &ViewHandle<TuiPermissionPrompt>) -> Vec<String> {
@@ -100,6 +138,7 @@ fn permission_prompt_defaults_to_yes_and_renders_other() {
 #[test]
 fn leading_editor_participates_in_selector_focus_cycle() {
     App::test((), |mut app| async move {
+        app.update(crate::option_selector::init);
         let prompt = add_prompt(&mut app, true);
         let (action_model, action) = app.read(|ctx| {
             let prompt = prompt.as_ref(ctx);
@@ -108,10 +147,9 @@ fn leading_editor_participates_in_selector_focus_cycle() {
         action_model.update(&mut app, |model, ctx| {
             queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
         });
+        render_lines(&mut app, &prompt);
 
-        prompt.update(&mut app, |prompt, ctx| {
-            prompt.handle_action(&TuiPermissionPromptAction::MoveUp, ctx);
-        });
+        assert!(dispatch_focused_key(&mut app, &prompt, "up"));
 
         app.read(|ctx| {
             let prompt = prompt.as_ref(ctx);
@@ -132,9 +170,7 @@ fn leading_editor_participates_in_selector_focus_cycle() {
             );
         });
 
-        prompt.update(&mut app, |prompt, ctx| {
-            prompt.handle_action(&TuiPermissionPromptAction::MoveUp, ctx);
-        });
+        assert!(dispatch_focused_key(&mut app, &prompt, "up"));
         app.read(|ctx| {
             assert_eq!(
                 prompt.as_ref(ctx).selector.as_ref(ctx).highlighted_index(),
@@ -160,17 +196,8 @@ fn editable_prompt_renders_other_and_e_focuses_the_body_editor() {
         action_model.update(&mut app, |model, ctx| {
             queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
         });
-        let (window_id, selector) =
-            app.read(|ctx| (prompt.window_id(ctx), prompt.as_ref(ctx).selector.clone()));
-        let handled = app
-            .dispatch_keystroke(
-                window_id,
-                &[prompt.id(), selector.id()],
-                &Keystroke::parse("e").expect("valid e keystroke"),
-                false,
-            )
-            .expect("e dispatch succeeds");
-        assert!(handled);
+        let selector = app.read(|ctx| prompt.as_ref(ctx).selector.clone());
+        assert!(dispatch_focused_key(&mut app, &prompt, "e"));
         assert!(app.read(|ctx| {
             prompt
                 .as_ref(ctx)
@@ -204,15 +231,7 @@ fn editable_prompt_renders_other_and_e_focuses_the_body_editor() {
                     .is_focused()
             );
         });
-        let handled = app
-            .dispatch_keystroke(
-                window_id,
-                &[prompt.id(), selector.id()],
-                &Keystroke::parse("e").expect("valid e keystroke"),
-                false,
-            )
-            .expect("e dispatch succeeds");
-        assert!(!handled);
+        assert!(!dispatch_focused_key(&mut app, &prompt, "e"));
         assert!(app.read(|ctx| {
             selector.as_ref(ctx).active_custom_text(ctx).is_some()
                 && !prompt

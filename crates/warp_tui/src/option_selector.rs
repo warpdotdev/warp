@@ -12,6 +12,12 @@
 //! through [`TuiOptionSelector::handle_back`].
 use std::collections::{HashMap, HashSet};
 
+use crate::editor_view::{
+    TuiEditorVerticalDirection, TuiEditorView, TuiEditorViewAction, TuiEditorViewEvent,
+};
+use crate::inline_menu::keep_selected_visible;
+use crate::keybindings::TUI_BINDING_GROUP;
+use crate::tui_builder::TuiUiBuilder;
 use warp::tui_export::{OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus};
 use warp_search_core::inline_menu::InlineMenuSelection;
 use warpui_core::elements::MouseStateHandle;
@@ -26,11 +32,6 @@ use warpui_core::{
     AppContext, BlurContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext,
     ViewHandle,
 };
-
-use crate::editor_view::{TuiEditorView, TuiEditorViewEvent};
-use crate::inline_menu::keep_selected_visible;
-use crate::keybindings::TUI_BINDING_GROUP;
-use crate::tui_builder::TuiUiBuilder;
 
 /// Maximum option rows visible at once; longer lists scroll.
 pub(crate) const MAX_VISIBLE_OPTION_ROWS: usize = 6;
@@ -157,6 +158,16 @@ enum SelectorItem {
     Retry,
     /// The custom-text footer entry point.
     CustomText,
+}
+
+/// The selector zone that currently owns real WarpUI focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectorFocusZone {
+    List,
+    Search,
+    CustomText,
+    LeadingEditor,
+    None,
 }
 
 /// Editing phase for the custom-text footer.
@@ -378,18 +389,27 @@ impl TuiOptionSelector {
         self.invalidate_layout(ctx);
     }
 
-    /// Whether the optional search editor currently owns focus.
-    fn search_field_is_focused(&self, ctx: &AppContext) -> bool {
-        self.search_field
+    /// Resolves all selector-owned focus predicates through one exhaustive zone.
+    fn focus_zone(&self, ctx: &AppContext) -> SelectorFocusZone {
+        if self.focused {
+            SelectorFocusZone::List
+        } else if self
+            .search_field
             .as_ref()
             .is_some_and(|field| field.as_ref(ctx).is_focused())
-    }
-
-    /// Whether the host-owned leading editor currently owns focus.
-    fn leading_editor_is_focused(&self, ctx: &AppContext) -> bool {
-        self.leading_editor
+        {
+            SelectorFocusZone::Search
+        } else if self.custom_text.editor.as_ref(ctx).is_focused() {
+            SelectorFocusZone::CustomText
+        } else if self
+            .leading_editor
             .as_ref()
             .is_some_and(|editor| editor.as_ref(ctx).is_focused())
+        {
+            SelectorFocusZone::LeadingEditor
+        } else {
+            SelectorFocusZone::None
+        }
     }
 
     /// The editor that participates in top-of-list focus cycling.
@@ -412,6 +432,7 @@ impl TuiOptionSelector {
 
     /// Resets all transient interaction state for the newly installed page.
     fn reset_interaction_for_page(&mut self, ctx: &mut ViewContext<Self>) {
+        let custom_text_was_focused = matches!(self.focus_zone(ctx), SelectorFocusZone::CustomText);
         self.interaction = SelectorInteractionState::default();
         if let Some(search_field) = self.search_field.as_ref() {
             search_field.update(ctx, |editor, ctx| editor.set_text("", ctx));
@@ -419,6 +440,9 @@ impl TuiOptionSelector {
         self.custom_text.reset_editor(ctx);
         self.select_id(self.page.snapshot.selected_id.clone());
         self.sync_after_items_changed();
+        if custom_text_was_focused {
+            ctx.focus_self();
+        }
     }
 
     /// Replaces the current page and resets its transient interaction state.
@@ -454,9 +478,14 @@ impl TuiOptionSelector {
             .flatten()
     }
 
-    /// Whether keyboard shortcuts for the option list should be active.
-    pub(crate) fn list_is_focused(&self) -> bool {
-        self.focused
+    /// Whether host shortcuts scoped to the bare option list should be active.
+    pub(crate) fn list_is_focused(&self, ctx: &AppContext) -> bool {
+        matches!(self.focus_zone(ctx), SelectorFocusZone::List)
+    }
+
+    /// Whether the host-owned leading editor currently owns focus.
+    pub(crate) fn leading_editor_is_focused(&self, ctx: &AppContext) -> bool {
+        matches!(self.focus_zone(ctx), SelectorFocusZone::LeadingEditor)
     }
 
     /// The highlighted item index, including a trailing custom-text entry.
@@ -470,16 +499,6 @@ impl TuiOptionSelector {
     #[cfg(test)]
     pub(crate) fn search_field_for_test(&self) -> Option<ViewHandle<TuiEditorView>> {
         self.search_field.clone()
-    }
-
-    /// Moves the option highlight upward.
-    pub(crate) fn move_up(&mut self, ctx: &mut ViewContext<Self>) {
-        self.move_selection(false, ctx);
-    }
-
-    /// Moves the option highlight downward.
-    pub(crate) fn move_down(&mut self, ctx: &mut ViewContext<Self>) {
-        self.move_selection(true, ctx);
     }
 
     /// Moves focus and highlight to an item without confirming it.
@@ -539,7 +558,7 @@ impl TuiOptionSelector {
         let target = selected
             .filter(|id| self.page.snapshot.rows.iter().any(|row| &row.id == id))
             .or_else(|| self.page.snapshot.selected_id.clone());
-        if self.search_field_is_focused(ctx) {
+        if matches!(self.focus_zone(ctx), SelectorFocusZone::Search) {
             self.interaction.selection.clear();
         } else {
             self.select_id(target);
@@ -578,7 +597,7 @@ impl TuiOptionSelector {
         if self.custom_text.is_editing() {
             return self.submit_custom_text(ctx);
         }
-        if self.search_field_is_focused(ctx) {
+        if matches!(self.focus_zone(ctx), SelectorFocusZone::Search) {
             if let Some(index) = self.items().iter().position(|item| {
                 matches!(item, SelectorItem::Row(_)) && self.item_is_confirmable(*item)
             }) {
@@ -641,7 +660,9 @@ impl TuiOptionSelector {
     }
     /// Clears focused search text, returning whether it consumed Back.
     fn clear_focused_search(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        if !self.search_field_is_focused(ctx) || self.interaction.search_query.is_empty() {
+        if !matches!(self.focus_zone(ctx), SelectorFocusZone::Search)
+            || self.interaction.search_query.is_empty()
+        {
             return false;
         }
 
@@ -768,21 +789,37 @@ impl TuiOptionSelector {
 
     /// Moves the selection one step, scrolling to keep it visible.
     fn move_selection(&mut self, forward: bool, ctx: &mut ViewContext<Self>) {
-        if self.custom_text.is_editing() {
-            self.cancel_custom_text_editing(ctx);
-        }
         let items_len = self.items().len();
-        if self.search_field_is_focused(ctx) || self.leading_editor_is_focused(ctx) {
-            if items_len > 0 {
-                let target = if forward { 0 } else { items_len - 1 };
-                self.interaction
-                    .selection
-                    .select(target, items_len, |_| true);
-                ctx.focus_self();
-                self.scroll_to_keep_visible(items_len, target, ctx);
+        match self.focus_zone(ctx) {
+            SelectorFocusZone::CustomText => {
+                self.cancel_custom_text_editing(ctx);
             }
-            ctx.notify();
-            return;
+            SelectorFocusZone::Search => {
+                self.focus_list_boundary(forward, items_len, ctx);
+                return;
+            }
+            SelectorFocusZone::LeadingEditor => {
+                let direction = if forward {
+                    TuiEditorVerticalDirection::Down
+                } else {
+                    TuiEditorVerticalDirection::Up
+                };
+                let moved_within_editor = self.leading_editor.as_ref().is_some_and(|editor| {
+                    if !editor.as_ref(ctx).can_move_vertically(direction, ctx) {
+                        return false;
+                    }
+                    editor.update(ctx, |editor, ctx| {
+                        editor.handle_action(&TuiEditorViewAction::Command(direction.into()), ctx);
+                    });
+                    true
+                });
+                if moved_within_editor {
+                    return;
+                }
+                self.focus_list_boundary(forward, items_len, ctx);
+                return;
+            }
+            SelectorFocusZone::List | SelectorFocusZone::None => {}
         }
         let move_to_editor = self.top_editor().is_some()
             && match (forward, self.interaction.selection.selected_index()) {
@@ -806,6 +843,24 @@ impl TuiOptionSelector {
         }
         if let Some(selected) = self.interaction.selection.selected_index() {
             self.scroll_to_keep_visible(items_len, selected, ctx);
+        }
+        ctx.notify();
+    }
+
+    /// Focuses the first or last item when leaving an editor above the list.
+    fn focus_list_boundary(
+        &mut self,
+        forward: bool,
+        items_len: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if items_len > 0 {
+            let target = if forward { 0 } else { items_len - 1 };
+            self.interaction
+                .selection
+                .select(target, items_len, |_| true);
+            ctx.focus_self();
+            self.scroll_to_keep_visible(items_len, target, ctx);
         }
         ctx.notify();
     }
@@ -1213,10 +1268,13 @@ impl TuiView for TuiOptionSelector {
 
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
         let mut context = Self::default_keymap_context();
-        if self.focused
-            || self.search_field_is_focused(app)
-            || self.custom_text.editor.as_ref(app).is_focused()
-        {
+        if matches!(
+            self.focus_zone(app),
+            SelectorFocusZone::List
+                | SelectorFocusZone::Search
+                | SelectorFocusZone::CustomText
+                | SelectorFocusZone::LeadingEditor
+        ) {
             context.set.insert(SELECTOR_NAVIGATION_ACTIVE);
         }
         context
@@ -1255,7 +1313,7 @@ impl TuiView for TuiOptionSelector {
         content.add_child(self.render_list(&builder));
         SelectorInputElement {
             child: content.finish(),
-            list_focused: self.focused,
+            list_focused: matches!(self.focus_zone(app), SelectorFocusZone::List),
             searchable: self.page.searchable,
             row_shortcuts: self.page.row_shortcuts.values().copied().collect(),
         }

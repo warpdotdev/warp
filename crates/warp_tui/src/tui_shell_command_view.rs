@@ -25,9 +25,7 @@ use warpui_core::{
 };
 
 use crate::agent_block_sections::render_fallback_tool_call_section;
-use crate::editor_view::{
-    TuiEditorVerticalDirection, TuiEditorView, TuiEditorViewAction, TuiEditorViewEvent,
-};
+use crate::editor_view::{TuiEditorView, TuiEditorViewEvent};
 use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
 use crate::terminal_block::TerminalBlockElement;
 use crate::terminal_use::user_controls_running_command;
@@ -37,8 +35,7 @@ use crate::tool_call_labels::{
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
 use crate::tui_permission_prompt::{
-    TuiPermissionPrompt, TuiPermissionPromptAction, TuiPermissionPromptEvent,
-    render_permission_card,
+    TuiPermissionPrompt, TuiPermissionPromptEvent, render_permission_card,
 };
 const COMMAND_AUTO_EXPAND_DELAY: Duration = Duration::from_secs(3);
 const SHELL_COMMAND_EDITING: &str = "TuiShellCommandEditing";
@@ -73,25 +70,9 @@ pub(crate) fn init(app: &mut AppContext) {
             "Save the edited shell command",
             TuiShellCommandViewAction::SaveCommandEdit,
         )
-        .with_context_predicate(predicate.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("numpadenter"),
-        EditableBinding::new(
-            "tui:shell-permission:previous",
-            "Move up in the shell command or permission responses",
-            TuiShellCommandViewAction::NavigateUp,
-        )
-        .with_context_predicate(predicate.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("up"),
-        EditableBinding::new(
-            "tui:shell-permission:next",
-            "Move down in the shell command or permission responses",
-            TuiShellCommandViewAction::NavigateDown,
-        )
         .with_context_predicate(predicate)
         .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("down"),
+        .with_key_binding("numpadenter"),
     ]);
     app.register_tui_binding_validator::<TuiShellCommandView>(is_tui_owned_binding);
 }
@@ -156,8 +137,6 @@ pub(super) enum TuiShellCommandViewEvent {
 #[derive(Clone, Debug)]
 pub(super) enum TuiShellCommandViewAction {
     CancelPermission,
-    NavigateUp,
-    NavigateDown,
     SaveCommandEdit,
     ToggleExpanded,
 }
@@ -265,31 +244,6 @@ impl TuiShellCommandView {
         }
         self.permission_prompt
             .update(ctx, |prompt, ctx| prompt.restore_options_focus(ctx));
-        self.invalidate_layout(ctx);
-    }
-
-    fn navigate_command_editor(
-        &self,
-        direction: TuiEditorVerticalDirection,
-        prompt_action: TuiPermissionPromptAction,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if !self.command_editor.as_ref(ctx).is_focused() {
-            return;
-        }
-        if self
-            .command_editor
-            .as_ref(ctx)
-            .can_move_vertically(direction, ctx)
-        {
-            self.command_editor.update(ctx, |editor, ctx| {
-                editor.handle_action(&TuiEditorViewAction::Command(direction.into()), ctx);
-            });
-        } else {
-            self.permission_prompt.update(ctx, |prompt, ctx| {
-                prompt.handle_action(&prompt_action, ctx);
-            });
-        }
         self.invalidate_layout(ctx);
     }
 
@@ -461,7 +415,12 @@ impl TuiView for TuiShellCommandView {
             .as_ref(app)
             .get_action_status(&self.action.id)
             .is_some_and(|status| status.is_blocked());
-        if blocked && self.command_editor.as_ref(app).is_focused() {
+        if blocked
+            && self
+                .permission_prompt
+                .as_ref(app)
+                .body_editor_is_focused(app)
+        {
             context.set.insert(SHELL_COMMAND_EDITING);
         }
         context
@@ -532,16 +491,6 @@ impl TypedActionView for TuiShellCommandView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             TuiShellCommandViewAction::CancelPermission => self.reject(ctx),
-            TuiShellCommandViewAction::NavigateUp => self.navigate_command_editor(
-                TuiEditorVerticalDirection::Up,
-                TuiPermissionPromptAction::MoveUp,
-                ctx,
-            ),
-            TuiShellCommandViewAction::NavigateDown => self.navigate_command_editor(
-                TuiEditorVerticalDirection::Down,
-                TuiPermissionPromptAction::MoveDown,
-                ctx,
-            ),
             TuiShellCommandViewAction::SaveCommandEdit => self.save_command_edit(ctx),
             TuiShellCommandViewAction::ToggleExpanded => {
                 if self.user_controls_command() {

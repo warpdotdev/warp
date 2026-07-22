@@ -46,22 +46,6 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("enter"),
         EditableBinding::new(
-            "tui:permission-prompt:previous",
-            "Select the previous permission response",
-            TuiPermissionPromptAction::MoveUp,
-        )
-        .with_context_predicate(predicate.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("up"),
-        EditableBinding::new(
-            "tui:permission-prompt:next",
-            "Select the next permission response",
-            TuiPermissionPromptAction::MoveDown,
-        )
-        .with_context_predicate(predicate.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("down"),
-        EditableBinding::new(
             "tui:permission-prompt:edit",
             "Edit the requested action",
             TuiPermissionPromptAction::EditBody,
@@ -86,10 +70,6 @@ pub(crate) fn init(app: &mut AppContext) {
 pub(crate) enum TuiPermissionPromptAction {
     /// Confirms the highlighted response.
     Confirm,
-    /// Moves to the previous response, cycling through the optional body editor.
-    MoveUp,
-    /// Moves to the next response, cycling through the optional body editor.
-    MoveDown,
     /// Focuses the optional editable action body.
     EditBody,
     /// Unwinds Other editing, otherwise rejects the request.
@@ -196,6 +176,11 @@ impl TuiPermissionPrompt {
             .as_ref(app)
             .get_action_status(&self.action_id)
             .is_some_and(|status| status.is_blocked())
+    }
+
+    /// Whether the optional action body currently owns focus.
+    pub(crate) fn body_editor_is_focused(&self, app: &AppContext) -> bool {
+        self.selector.as_ref(app).leading_editor_is_focused(app)
     }
 
     /// Focuses the option selector.
@@ -348,13 +333,10 @@ impl TuiView for TuiPermissionPrompt {
 
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
         let mut context = Self::default_keymap_context();
-        let body_editor_focused = self
-            .body_editor
-            .as_ref()
-            .is_some_and(|editor| editor.as_ref(app).is_focused());
+        let body_editor_focused = self.body_editor_is_focused(app);
         if self.is_active(app) && !body_editor_focused {
             context.set.insert(PERMISSION_PROMPT_ACTIVE);
-            if self.body_editor.is_some() && self.selector.as_ref(app).list_is_focused() {
+            if self.body_editor.is_some() && self.selector.as_ref(app).list_is_focused(app) {
                 context.set.insert(PERMISSION_PROMPT_EDITABLE);
             }
         }
@@ -378,14 +360,6 @@ impl TypedActionView for TuiPermissionPrompt {
                 self.selector.update(ctx, |selector, ctx| {
                     selector.confirm_selected(ctx);
                 });
-            }
-            TuiPermissionPromptAction::MoveUp => {
-                self.selector
-                    .update(ctx, |selector, ctx| selector.move_up(ctx));
-            }
-            TuiPermissionPromptAction::MoveDown => {
-                self.selector
-                    .update(ctx, |selector, ctx| selector.move_down(ctx));
             }
             TuiPermissionPromptAction::EditBody => {
                 self.selector
