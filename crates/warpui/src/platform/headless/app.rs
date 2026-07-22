@@ -51,3 +51,30 @@ impl App {
         event_loop::run(ui_app, &mut callbacks, Box::new(init_fn), receiver, sender)
     }
 }
+
+/// Construct a headless [`crate::App`] (with an [`AppContext`]) **without**
+/// running the blocking platform event loop.
+///
+/// This is intended for embeddings that drive the app asynchronously from a
+/// host runtime (e.g. the wasm32-unknown-unknown + Node prototype, REMOTE-2264):
+/// on wasm the foreground/background executors schedule via
+/// `wasm_bindgen_futures::spawn_local`, so a `#[wasm_bindgen] pub async fn`
+/// can spawn work on the returned app's foreground executor and `await` it —
+/// the JS event loop polls the spawned futures as the async fn yields, with no
+/// blocking `event_loop::run` (which would hang the single JS thread).
+///
+/// Platform callbacks that route through the event-loop channel (terminate,
+/// file pickers, notifications) become no-ops when the channel receiver is
+/// dropped (the `EventSender` logs and discards them), which is acceptable for
+/// a headless agent run with no UI.
+pub fn new_headless_app(assets: Box<dyn AssetProvider>) -> anyhow::Result<crate::App> {
+    // Mark this thread as the main thread for DispatchDelegate checks.
+    delegate::mark_current_thread_as_main();
+    let (sender, _receiver) = event_loop::channel();
+
+    let platform_delegate = Box::new(AppDelegate::new(sender.clone()));
+    let window_manager = Box::new(WindowManager::new(sender.clone()));
+    let font_db: Box<dyn platform::FontDB> = Box::new(TestFontDB::new());
+
+    crate::App::new(platform_delegate, window_manager, font_db, assets)
+}

@@ -15355,6 +15355,7 @@ dependencies = [
  "warpui_core",
  "warpui_extras",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "watcher",
  "web-sys",
  "websocket",
@@ -16041,6 +16042,15 @@ dependencies = [
  "warp_errors",
  "warpui_core",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "warp_wasm_node"
+version = "0.1.0"
+dependencies = [
+ "warp",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

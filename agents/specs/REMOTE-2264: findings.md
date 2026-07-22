@@ -1,11 +1,63 @@
 # Findings: wasm32 Oz CLI in a Node runtime (REMOTE-2264)
 
 This is the findings report for the prototype built in `crates/wasm_node_proto` +
-`script/wasm/build-node` + `script/wasm/node-harness.mjs`. It is a deliverable
-of the implementation run, not a spec. The approved spec lives at
-`agents/specs/REMOTE-2264: wasm32 CLI in Node prototype.md`.
+`crates/warp_wasm_node` + `script/wasm/build-node` + `script/wasm/node-harness.mjs`.
+It is a deliverable of the implementation run, not a spec. The approved spec
+lives at `agents/specs/REMOTE-2264: wasm32 CLI in Node prototype.md`.
 
-## TL;DR
+## TL;DR (AgentDriver push)
+
+Following reviewer guidance ("AppContext is very much available on wasm";
+"make TerminalDriver a no-op"), a second pass genuinely pursued the full
+`AgentDriver` path on `wasm32-unknown-unknown`:
+
+- **The `warp` app crate compiles for `wasm32-unknown-unknown`** (headless /
+  default features; ~3 min with `clang` as the wasm C compiler for
+  `arborium-sysroot`). This confirms "AppContext is available on wasm" at the
+  compile level — `AgentDriver`, `agent_sdk`, `ServerApiProvider`, `AuthState`,
+  etc. are all present on the wasm target.
+- **A headless `App` (with `AppContext`) now constructs on wasm in a DOM-free
+  Node runtime without the blocking platform event loop.** New public API
+  `warpui::platform::headless::new_headless_app(assets) -> App` builds the
+  headless platform impls and returns the `App` directly (it does NOT call the
+  blocking `event_loop::run`). On wasm the foreground/background executors
+  schedule via `wasm_bindgen_futures::spawn_local`, so a `#[wasm_bindgen] pub
+  async fn` can drive spawned work by yielding to the JS event loop. A real
+  Node 25 run of the `warp_wasm_node` cdylib confirmed `new_headless_app`
+  succeeds end-to-end (stage `constructed_app` reached).
+- **No-op terminal added.** `TerminalDriver::create_no_op` (wasm-gated)
+  pre-resolves the bootstrap channel to `Ok(())` (the "synthetically advanced
+  to the bootstrapped stage" the reviewer described), satisfying
+  `wait_for_session_bootstrapped` without a real PTY.
+- **Concrete next blocker (precise, surfaced by a real Node run):** the trimmed
+  init reaches `features::init_feature_flags()`, which reads the
+  `PrivatePreferences` singleton; a trimmed init does not register it, so the
+  run panics at `PrivatePreferences::as_ref` →
+  `AppContext::get_singleton_model_as_ref::<PrivatePreferences>`. Because the
+  app crate builds with `panic = "abort"` on wasm, `catch_unwind` cannot catch
+  this — each missing singleton aborts the process. `AgentDriver::new`/`run`
+  read a long tail of such singletons (`PublicPreferences`, `SettingsManager`,
+  `AIExecutionProfilesModel`, `BlocklistAIPermissions`, `UserWorkspaces`,
+  `ApiKeyManager`, skills/MCP/environment managers, …) that `initialize_app`
+  registers and that a trimmed init must reproduce (several are
+  persistence/sqlite-backed, and sqlite is native-only on wasm). Reaching the
+  full `AgentDriver::run` therefore requires either (a) a wasm-headless trimmed
+  `initialize_app` that registers the full singleton surface without
+  native-only backends, or (b) making the missing-singleton reads degrade
+  gracefully. This is the biggest remaining blocker.
+- **Two further concrete blockers** for a fully-successful streamed run (same as
+  the first pass): the `http_client` wasm transport uses `web_sys::window()`
+  (browser-only), so the MAA request needs a host-`fetch` injection to cross
+  the Node boundary; and the production `/ai/*` path is edge-gated for
+  Node/curl (403) with the available API key unauthorized (401 on
+  `/api/v1/*`).
+
+The direct-MAA fallback crate (`crates/wasm_node_proto`) remains as a
+**documented fallback** (it reaches the live endpoint through a host-`fetch`
+boundary with no DOM shim) and is the path that actually returned a structured
+result from this environment.
+
+## TL;DR (first pass — direct MAA fallback)
 
 - **Outcome: partial.** The MAA request/response protocol compiles to
   `wasm32-unknown-unknown`, loads in a DOM-free Node 25 runtime, builds a real
@@ -260,22 +312,28 @@ unchanged for `wasm32-unknown-unknown`.
 - `event_count`/`first_event_ms` are `null`/`0` for the 403 path because no SSE
   events were streamed (the edge rejected before the stream opened).
 
-## Next three engineering steps
+## Next three engineering steps (updated for the AgentDriver push)
 
-1. **Headless `AppContext` for wasm.** Carve a minimal, GUI-free
-   `AppContext`/`ModelContext` bootstrap out of `initialize_app` (auth +
-   `ServerApi` + `BaseClient` only, no persistence/watchers/GUI views) so the
-   `AgentDriver` can be constructed on `wasm32-unknown-unknown`. Provide a
-   no-op/host-backed `TerminalDriver` stub that returns
-   `unsupported_capability` for PTY/shell and routes conversation-consumer
-   events through host callbacks. This unlocks the spec's primary
-   session-sharing path.
+1. **Wasm-headless trimmed `initialize_app`.** The headless `App`/`AppContext`
+   now constructs on wasm (`new_headless_app`) and the no-op `TerminalDriver`
+   exists, so the remaining blocker is the singleton surface `AgentDriver::new`
+   /`run_internal` reads. Carve a wasm-headless `initialize_app` that registers
+   the full singleton set (`PrivatePreferences`, `PublicReferences`,
+   `SettingsManager`, `AIExecutionProfilesModel`, `BlocklistAIPermissions`,
+   `UserWorkspaces`, `ApiKeyManager`, skills/MCP/environment managers, …)
+   without the native-only backends (sqlite persistence, secure-storage reads,
+   watchers) — or make the missing-singleton reads degrade gracefully. Because
+   the app crate builds with `panic = "abort"` on wasm, every missing singleton
+   aborts, so this must be exhaustive. This unlocks constructing `AgentDriver`
+   and driving `run_internal`.
 2. **Integrate the host-`fetch` transport into `http_client`.** Generalize the
    host `fetch(request)->Promise<response>` contract behind the existing
    `http_client` wasm boundary (register a host fetch at module init, used by
-   `Client::execute` and `eventsource` on wasm) so `warp_multi_agent_client`
-   and the app-layer MAA path work in Node without per-call changes. Add
-   host session-sharing connect/send/receive/close callbacks here too.
+   `Client::execute` and `eventsource` on wasm, replacing the
+   `web_sys::window()`-based path) so `warp_multi_agent_client` and the
+   app-layer MAA path work in Node without per-call changes. Add host
+   session-sharing connect/send/receive/close callbacks here too. (The
+   `crates/wasm_node_proto` fallback already proves this contract end-to-end.)
 3. **Solve production egress.** Either (a) get the edge to allowlist a
    wasm-in-Node client identity (coordinate with the server/gateway team —
    likely a registered `X-Warp-Client-ID` + TLS-fingerprint allowlist for
@@ -286,9 +344,17 @@ unchanged for `wasm32-unknown-unknown`.
 
 ## Validation summary
 
+AgentDriver push:
+- `cargo check --target wasm32-unknown-unknown -p warp` (app crate, headless/default): pass (~3 min, `clang` for `arborium-sysroot`).
+- `cargo check --target wasm32-unknown-unknown -p warp_wasm_node` (cdylib + entrypoint + no-op terminal + `new_headless_app`): pass.
+- `cargo clippy --target wasm32-unknown-unknown -p warp_wasm_node -p wasm_node_proto -p warp -- -D warnings`: pass.
+- `cargo build --target wasm32-unknown-unknown -p warp_wasm_node --lib`: pass (234 MB debug wasm; `wasm-bindgen --target nodejs` produces a 147 MB wasm + Node loader).
+- Real Node 25 run of `run_agent_driver_wasm`: stage `constructed_app` reached (headless `App`/`AppContext` constructs on wasm in Node, no DOM); `trimmed_init` panics at `PrivatePreferences::as_ref` (missing singleton; `panic = abort` on wasm so it aborts) — the precise next blocker.
+
+First-pass direct-MAA fallback:
 - `cargo check --target wasm32-unknown-unknown -p wasm_node_proto`: pass.
 - `cargo clippy --target wasm32-unknown-unknown -p wasm_node_proto -- -D warnings`: pass.
 - `cargo test -p wasm_node_proto`: 5/5 pass (decode/accumulate/build-request/input-validation).
-- `./script/wasm/build-node`: pass (produces Node loader + wasm).
+- `./script/wasm/build-node`: pass (produces Node loader + wasm for the direct-MAA crate).
 - `node script/wasm/node-harness.mjs --prompt hello --api-key … --server-root-url https://app.warp.dev`: runs; returns a structured `403` error (edge block) and exits 1 — the structured-failure path is proven; the success path is blocked by credentials/edge as documented above.
-- The existing browser wasm build is untouched (`warp_node_proto` is a new, isolated crate; no shared crate was modified).
+- The existing browser wasm build is untouched (`wasm_node_proto` and `warp_wasm_node` are new, isolated crates; the only shared-crate change is the additive `warpui::platform::headless::new_headless_app` constructor + the wasm-gated `TerminalDriver::create_no_op`).

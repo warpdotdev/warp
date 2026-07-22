@@ -98,6 +98,10 @@ mod vim_registers;
 mod voice;
 mod voltron;
 mod warp_managed_paths_watcher;
+
+#[cfg(target_family = "wasm")]
+mod wasm_node_driver;
+
 #[cfg(target_family = "wasm")]
 mod wasm_nux_dialog;
 mod window_settings;
@@ -178,6 +182,10 @@ pub use util::bindings::cmd_or_ctrl_shift;
 use voice::transcriber::VoiceTranscriber;
 use warp_cli::agent::AgentCommand;
 use warp_cli::{CliCommand, GlobalOptions};
+// Re-export the wasm32 + Node prototype entrypoint so a dedicated cdylib can
+// link it. Narrow (one fn) and wasm-only; see `app/src/wasm_node_driver.rs`.
+#[cfg(target_family = "wasm")]
+pub use wasm_node_driver::run_agent_driver_wasm;
 #[cfg(feature = "local_fs")]
 use watcher::HomeDirectoryWatcher;
 
