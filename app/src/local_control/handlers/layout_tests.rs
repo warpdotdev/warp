@@ -2,7 +2,7 @@ use ::local_control::protocol::TargetSelector;
 use ::local_control::{ErrorCode, InstanceId};
 use warpui::App;
 
-use super::{create_tab, shell_name_looks_like_path};
+use super::create_tab;
 use crate::local_control::LocalControlBridge;
 use crate::workspace::view::tests::{initialize_app, mock_workspace};
 
@@ -41,20 +41,7 @@ fn tab_create_handler_adds_and_activates_terminal_tab() {
 }
 
 #[test]
-fn shell_name_looks_like_path_detects_unix_and_windows_paths() {
-    assert!(shell_name_looks_like_path("/tmp/evil/zsh"));
-    assert!(shell_name_looks_like_path("./zsh"));
-    assert!(shell_name_looks_like_path("../bin/bash"));
-    assert!(shell_name_looks_like_path(r"C:\evil\zsh.exe"));
-    assert!(shell_name_looks_like_path(r"evil\zsh"));
-    assert!(!shell_name_looks_like_path("zsh"));
-    assert!(!shell_name_looks_like_path("bash"));
-    assert!(!shell_name_looks_like_path("pwsh"));
-    assert!(!shell_name_looks_like_path(""));
-}
-
-#[test]
-fn tab_create_rejects_filesystem_path_shell_parameter() {
+fn tab_create_rejects_shell_parameter() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let _workspace = mock_workspace(&mut app);
@@ -65,18 +52,13 @@ fn tab_create_rejects_filesystem_path_shell_parameter() {
             bridge.set_instance_id(instance_id.clone());
             create_tab(
                 &Some(instance_id.clone()),
-                &serde_json::json!({ "shell": "/tmp/evil/zsh" }),
+                &serde_json::json!({ "shell": "zsh" }),
                 &TargetSelector::default(),
                 ctx,
             )
-            .expect_err("path-shaped shell must be rejected")
+            .expect_err("shell parameter must be rejected")
         });
 
         assert_eq!(err.code, ErrorCode::InvalidParams);
-        assert!(
-            err.message.contains("filesystem path"),
-            "unexpected message: {}",
-            err.message
-        );
     });
 }

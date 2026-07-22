@@ -118,7 +118,7 @@ The broker authenticates the OS user, not the calling application. Any same-user
 - Short expiry limits the window for credential reuse.
 - Normal Warp close behavior preserves existing warnings for close actions.
 - No `input.run` action exists, so `warpctrl` cannot be used to execute terminal commands.
-- `tab.create` / `window.create` `shell` parameters accept only bare command names of shells Warp has already discovered. Absolute or relative filesystem paths are rejected so local control cannot be used as a same-user process launcher via path basename tricks.
+- `tab.create` / `window.create` do not accept a `shell` parameter. New terminals use the app's default shell selection; local control cannot choose or spawn an arbitrary shell binary.
 - Protected enablement prevents silent activation of the control surface through ordinary config surfaces; it is not a signed-code isolation boundary against same-user Keychain or secret-service access.
 - App-side bridge enforcement re-checks every credential on every request.
 These mitigations route operations through intentional flows. They do not guarantee that arbitrary same-user software cannot cause Warp-visible actions.
@@ -160,6 +160,7 @@ The catalog contains exactly 84 actions. The following families and actions are 
 - The entire Drive family (all `drive.*` actions).
 - The entire History family (`history.list`).
 - `input.get`, `input.clear`, `input.mode.set`, `input.run`, and any form of terminal command execution.
+- `shell` selection on `tab.create` / `window.create`, and any local-control path that spawns a caller-chosen shell binary.
 - `file.list` and any local file content operations beyond the `file.open` app-state intent.
 - Accepted-command submission and agent-prompt submission.
 - Debug, crash, heap-dump, token-copying, and developer-only helpers.
