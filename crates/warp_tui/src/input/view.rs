@@ -173,7 +173,7 @@ pub struct TuiInputView {
     editor_state: TuiEditorState,
     /// Multiline insertion and six-row viewport policy.
     editor_behavior: TuiEditorBehavior,
-    /// Mouse state for the shell-mode `!` gutter; created once here (not inline
+    /// Mouse state for the input prompt gutter; created once here (not inline
     /// during render) so mouse tracking survives per-frame element rebuilds.
     prefix_mouse_state: MouseStateHandle,
     /// Whether this view is focused, tracked via `on_focus`/`on_blur` like
@@ -331,8 +331,8 @@ impl TuiInputView {
 
     /// Builds this frame's core editor element: editable, scroll-windowed, and
     /// dispatching [`TuiEditorAction`]s back as [`TuiInputAction`]s. `render`
-    /// boxes it (behind the shell-mode `!` gutter when active); tests construct
-    /// it directly to exercise mouse dispatch.
+    /// boxes it (behind the mode-specific prompt gutter when active); tests
+    /// construct it directly to exercise mouse dispatch.
     fn render_element(&self, ctx: &AppContext) -> TuiEditorElement {
         let builder = TuiUiBuilder::from_app(ctx);
         let mut styles = TuiEditorStyles::default();
@@ -465,6 +465,29 @@ impl TuiInputView {
             .flex_child(self.render_input(ctx))
             .finish()
     }
+
+    /// Composes the normal-mode input row: the plain cyan `>` affordance in a
+    /// two-column gutter (glyph plus one column of right padding), then the
+    /// editor filling the remaining width. The gutter is outside the editable
+    /// area; clicking it places the cursor at the start of the buffer.
+    fn normal_element(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let prefix_style = TuiUiBuilder::from_app(ctx).accent_text_style();
+        let prefix = TuiHoverable::new(
+            self.prefix_mouse_state.clone(),
+            TuiContainer::new(TuiText::new(">").with_style(prefix_style).finish())
+                .with_padding_right(1)
+                .finish(),
+        )
+        .on_click(|event_ctx, _| {
+            event_ctx.dispatch_typed_action(TuiInputAction::SetCursor {
+                offset: CharOffset::from(1),
+            });
+        });
+        TuiFlex::row()
+            .child(prefix.finish())
+            .flex_child(self.render_input(ctx))
+            .finish()
+    }
 }
 
 impl TuiView for TuiInputView {
@@ -476,7 +499,7 @@ impl TuiView for TuiInputView {
         if self.is_shell_mode(ctx) {
             self.shell_element(ctx)
         } else {
-            self.render_input(ctx)
+            self.normal_element(ctx)
         }
     }
 
