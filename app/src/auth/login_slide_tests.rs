@@ -1,14 +1,4 @@
-use super::{LoginPurpose, LoginSlideSource};
-
-#[test]
-fn all_login_slide_sources_require_skip_confirmation() {
-    assert!(LoginSlideSource::AccountFirstOnboarding.skip_requires_confirmation());
-    assert!(LoginSlideSource::OnboardingFlow.skip_requires_confirmation());
-    assert!(LoginSlideSource::LoginExistingUserFromWelcome.skip_requires_confirmation());
-    assert!(
-        LoginSlideSource::PrivacySettingsFromTerminalIntentionTheme.skip_requires_confirmation()
-    );
-}
+use super::LoginPurpose;
 
 #[test]
 fn account_first_copy_matches_product_spec() {

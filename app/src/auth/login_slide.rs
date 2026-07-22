@@ -89,12 +89,6 @@ pub fn init(app: &mut AppContext) {
     )]);
 }
 
-impl LoginSlideSource {
-    fn skip_requires_confirmation(self) -> bool {
-        true
-    }
-}
-
 impl LoginPurpose {
     fn copy(self) -> (&'static str, &'static str) {
         match self {
@@ -489,14 +483,12 @@ impl LoginSlideView {
         self.send_account_first_action("create_account", "skip_account", ctx);
         // Send synchronously since this is an important event in the sign up funnel and we
         // don't want to lose events if the user quits before the event queue is flushed.
-        if self.source.skip_requires_confirmation() {
-            send_telemetry_sync_from_ctx!(
-                TelemetryEvent::LoginLaterConfirmationButtonClicked {
-                    source: LoginEventSource::OnboardingSlide,
-                },
-                ctx
-            );
-        }
+        send_telemetry_sync_from_ctx!(
+            TelemetryEvent::LoginLaterConfirmationButtonClicked {
+                source: LoginEventSource::OnboardingSlide,
+            },
+            ctx
+        );
         if FeatureFlag::SkipFirebaseAnonymousUser.is_enabled() {
             AuthManager::handle(ctx).update(ctx, |_, ctx| {
                 ctx.emit(AuthManagerEvent::SkippedLogin);
@@ -1314,12 +1306,8 @@ impl TypedActionView for LoginSlideView {
                     },
                     ctx
                 );
-                if self.source.skip_requires_confirmation() {
-                    self.active_overlay = Some(LoginSlideOverlay::SkipDialog);
-                    ctx.notify();
-                } else {
-                    self.handle_login_later(ctx);
-                }
+                self.active_overlay = Some(LoginSlideOverlay::SkipDialog);
+                ctx.notify();
             }
             LoginSlideAction::ConfirmSkip => {
                 self.active_overlay = None;
