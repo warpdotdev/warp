@@ -8,7 +8,7 @@
 //! keymap instead (see `crate::keybindings::plan_toggle_hint`).
 
 const ASK_AGENT_HINT: &str = "Ask the agent anything";
-const ORCHESTRATION_HINT: &str = "Shift + ↑ sub-agents";
+const ORCHESTRATION_HINT: &str = "Shift + ↑ for other agents";
 const SHELL_MODE_HINT: &str = "! for shell mode";
 const COMMANDS_HINT: &str = "/ for commands";
 const CONVERSATIONS_HINT: &str = "← for conversations";

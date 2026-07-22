@@ -89,7 +89,7 @@ Restructure the normal render tree into:
 
 The alt-screen early return remains unchanged and therefore owns the complete pane. Blocking cards remain inside the normal session column, so the tab bar stays available above them.
 
-When the bar is unfocused, place the conditional `Shift + ↑ sub-agents` shortcut after the empty agent input's `Ask the agent anything` lead-in and before its remaining shortcuts, and retain the normal status footer. When focused, keep the input visible but blurred and replace the normal footer with the PRODUCT (18) navigation footer.
+When the bar is unfocused, place the conditional `Shift + ↑ for other agents` shortcut after the empty agent input's `Ask the agent anything` lead-in and before its remaining shortcuts, and retain the normal status footer. When focused, keep the input visible but blurred and replace the normal footer with the PRODUCT (18) navigation footer.
 
 Tab and overflow interactions emit semantic child-view events subscribed by `TuiTerminalSessionView`:
 - Tab clicks select immediately. The owner preserves tab focus only if it was already active; otherwise it focuses the target session's normal interaction target.

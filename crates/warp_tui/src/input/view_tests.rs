@@ -261,7 +261,7 @@ fn orchestration_hint_is_ghosted_only_while_tabs_are_available_and_input_is_empt
 
         app.read(|ctx| {
             let line = &render_input_buffer(&view, ctx).to_lines()[0];
-            assert!(!line.contains("Shift + ↑ sub-agents"));
+            assert!(!line.contains("Shift + ↑ for other agents"));
         });
 
         orchestration_tabs_available.set(true);
@@ -277,7 +277,7 @@ fn orchestration_hint_is_ghosted_only_while_tabs_are_available_and_input_is_empt
         app.update(|ctx| type_str(&view, ctx, "x"));
         app.read(|ctx| {
             let line = &render_input_buffer(&view, ctx).to_lines()[0];
-            assert!(!line.contains("Shift + ↑ sub-agents"));
+            assert!(!line.contains("Shift + ↑ for other agents"));
         });
     });
 }
