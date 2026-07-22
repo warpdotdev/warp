@@ -1,7 +1,5 @@
 use std::io::Write;
 
-use warp_core::channel::{Channel, ChannelState};
-
 use super::*;
 
 fn touch(dir: &Path, name: &str) -> PathBuf {
@@ -24,28 +22,6 @@ fn zip_entry_names(zip_path: &Path) -> Vec<String> {
 }
 
 #[test]
-fn tui_frontend_maps_all_channels_to_dedicated_filenames() {
-    assert_eq!(
-        logfile_name_for_frontend(LogFrontend::Tui, Channel::Dev),
-        "warp_tui_dev.log"
-    );
-    assert_eq!(
-        logfile_name_for_frontend(LogFrontend::Tui, Channel::Local),
-        "warp_tui_dev.log"
-    );
-    assert_eq!(
-        logfile_name_for_frontend(LogFrontend::Tui, Channel::Preview),
-        "warp_tui_preview.log"
-    );
-    for channel in [Channel::Stable, Channel::Oss, Channel::Integration] {
-        assert_eq!(
-            logfile_name_for_frontend(LogFrontend::Tui, channel),
-            "warp_tui.log"
-        );
-    }
-}
-
-#[test]
 fn frontend_directory_selection_keeps_gui_and_cli_paths_unchanged() {
     let base = PathBuf::from("/tmp/warp-logs");
     assert_eq!(
@@ -65,14 +41,14 @@ fn frontend_directory_selection_keeps_gui_and_cli_paths_unchanged() {
 #[test]
 fn tui_bundle_collection_ignores_legacy_oz_logs() {
     let tmp = tempfile::tempdir().unwrap();
-    let active = touch(tmp.path(), "warp_tui_preview.log");
-    let rotated = touch(tmp.path(), "warp_tui_preview.log.old.0");
-    let current_chunk = touch(tmp.path(), "warp_tui_preview.log.in_session.0");
+    let active = touch(tmp.path(), "warp_preview.log");
+    let rotated = touch(tmp.path(), "warp_preview.log.old.0");
+    let current_chunk = touch(tmp.path(), "warp_preview.log.in_session.0");
     let legacy = tmp.path().join("oz");
     fs::create_dir(&legacy).unwrap();
     touch(&legacy, "warp_preview.log");
 
-    let paths = collect_log_paths_in(tmp.path(), "warp_tui_preview.log").unwrap();
+    let paths = collect_log_paths_in(tmp.path(), "warp_preview.log").unwrap();
 
     assert_eq!(paths, vec![active, current_chunk, rotated]);
     assert!(!paths.iter().any(|path| path.starts_with(&legacy)));
@@ -295,35 +271,21 @@ fn remove_nested_chunks_deletes_every_chunk_of_the_target_slot() {
     assert!(survivor.is_file());
 }
 
-// --- CODE-1902: LOG_STATE consumer regression (spec validation criteria #3–#6, #10–#11) ---
-// The public LOG_STATE consumers (`log_file_path`, `rotate_log_files`,
-// `on_parent_process_crash`, `on_crash_recovery_process_killed`, and
-// `create_log_bundle_zip` — the API `/view-logs` calls) now delegate to the
-// `_in` seams below. These tests drive those seams with an explicit
-// (log_directory, logfile_name) so the resolved-frontend path/rotation/crash/
-// bundle behavior is exercised deterministically without initializing the
-// global logger (which is a OnceLock and can only be set once per process).
-
 #[test]
-fn resolved_active_path_uses_tui_directory_and_mapped_name() {
-    // log_file_path() = main_process_log_file_path(state.log_directory, state.logfile_name).
-    // A resolved TUI LOG_STATE (dev channel) must report <warp_cli_dir>/warp_tui_dev.log,
-    // not the GUI channel name or the legacy oz directory.
+fn resolved_active_path_uses_tui_directory_and_channel_name() {
     let tui_dir = PathBuf::from("/tmp/warp-logs/warp-cli");
     assert_eq!(
-        main_process_log_file_path(&tui_dir, "warp_tui_dev.log"),
-        tui_dir.join("warp_tui_dev.log")
+        main_process_log_file_path(&tui_dir, "warp_dev.log"),
+        tui_dir.join("warp_dev.log")
     );
     assert_eq!(
-        main_process_log_file_path(&tui_dir, "warp_tui.log"),
-        tui_dir.join("warp_tui.log")
+        main_process_log_file_path(&tui_dir, "warp_local.log"),
+        tui_dir.join("warp_local.log")
     );
 }
 
 #[test]
 fn resolved_active_path_keeps_gui_name_and_base_directory() {
-    // GUI LOG_STATE resolves to the base directory with ChannelState::logfile_name();
-    // no tui/oz suffix is appended.
     let base = PathBuf::from("/tmp/warp-logs");
     assert_eq!(
         main_process_log_file_path(&base, "warp_dev.log"),
@@ -341,157 +303,104 @@ fn resolved_active_path_keeps_cli_oz_directory_and_channel_name() {
 }
 
 #[test]
-fn gui_and_cli_frontend_names_still_delegate_to_channel_state_logfile_name() {
-    // GUI and CLI must keep using ChannelState::logfile_name() — the frontend
-    // seam must not hand them a TUI-style name. The TUI name must differ from
-    // the GUI/CLI name, which is the whole point of CODE-1902.
-    let channel_name = ChannelState::logfile_name().to_string();
-    assert_eq!(
-        logfile_name_for_frontend(LogFrontend::Gui, Channel::Dev),
-        channel_name
-    );
-    assert_eq!(
-        logfile_name_for_frontend(LogFrontend::Cli, Channel::Dev),
-        channel_name.clone()
-    );
-    assert_ne!(
-        logfile_name_for_frontend(LogFrontend::Tui, Channel::Dev),
-        channel_name
-    );
-}
-
-#[test]
-fn rotate_files_in_uses_resolved_tui_name_for_startup_rotation() {
-    let tmp = tempfile::tempdir().unwrap();
-    // Previous session left a .old.temp; existing .old.0/.old.1 must shift up.
-    touch(tmp.path(), "warp_tui_dev.log.old.temp");
-    touch(tmp.path(), "warp_tui_dev.log.old.0");
-    touch(tmp.path(), "warp_tui_dev.log.old.1");
-
-    rotate_files_in(tmp.path(), "warp_tui_dev.log", 5).unwrap();
-
-    assert!(tmp.path().join("warp_tui_dev.log.old.0").is_file()); // temp -> old.0
-    assert!(tmp.path().join("warp_tui_dev.log.old.1").is_file()); // old.0 -> old.1
-    assert!(tmp.path().join("warp_tui_dev.log.old.2").is_file()); // old.1 -> old.2
-    assert!(!tmp.path().join("warp_tui_dev.log.old.temp").exists());
-    // GUI/CLI names must not appear from a TUI rotation.
-    assert!(!tmp.path().join("warp.log.old.0").exists());
-    assert!(!tmp.path().join("warp_dev.log.old.0").exists());
-}
-
-#[test]
-fn rotate_files_in_keeps_gui_channel_name_for_gui_rotation() {
+fn rotate_files_in_uses_channel_name_for_tui_startup_rotation() {
     let tmp = tempfile::tempdir().unwrap();
     touch(tmp.path(), "warp_dev.log.old.temp");
     touch(tmp.path(), "warp_dev.log.old.0");
+    touch(tmp.path(), "warp_dev.log.old.1");
 
     rotate_files_in(tmp.path(), "warp_dev.log", 5).unwrap();
 
     assert!(tmp.path().join("warp_dev.log.old.0").is_file());
     assert!(tmp.path().join("warp_dev.log.old.1").is_file());
-    assert!(!tmp.path().join("warp_tui_dev.log.old.0").exists());
+    assert!(tmp.path().join("warp_dev.log.old.2").is_file());
+    assert!(!tmp.path().join("warp_dev.log.old.temp").exists());
 }
 
 #[test]
-fn on_parent_process_crash_in_uses_resolved_tui_name() {
+fn on_parent_process_crash_in_uses_channel_name() {
     let tmp = tempfile::tempdir().unwrap();
-    touch(tmp.path(), "warp_tui_dev.log");
-    touch(tmp.path(), "warp_tui_dev.log.recovery");
+    touch(tmp.path(), "warp_dev.log");
+    touch(tmp.path(), "warp_dev.log.recovery");
 
-    on_parent_process_crash_in(tmp.path(), "warp_tui_dev.log");
+    on_parent_process_crash_in(tmp.path(), "warp_dev.log");
 
-    assert!(tmp.path().join("warp_tui_dev.log.old.temp").is_file()); // active -> temp
-    assert!(tmp.path().join("warp_tui_dev.log").is_file()); // recovery -> active
-    assert!(!tmp.path().join("warp_tui_dev.log.recovery").exists());
+    assert!(tmp.path().join("warp_dev.log.old.temp").is_file());
+    assert!(tmp.path().join("warp_dev.log").is_file());
+    assert!(!tmp.path().join("warp_dev.log.recovery").exists());
 }
 
 #[test]
-fn on_crash_recovery_process_killed_in_removes_tui_recovery_sidecar() {
+fn on_crash_recovery_process_killed_in_removes_recovery_sidecar() {
     let tmp = tempfile::tempdir().unwrap();
-    touch(tmp.path(), "warp_tui_dev.log.recovery");
+    touch(tmp.path(), "warp_dev.log.recovery");
 
-    on_crash_recovery_process_killed_in(tmp.path(), "warp_tui_dev.log");
+    on_crash_recovery_process_killed_in(tmp.path(), "warp_dev.log");
 
-    assert!(!tmp.path().join("warp_tui_dev.log.recovery").exists());
+    assert!(!tmp.path().join("warp_dev.log.recovery").exists());
 }
 
 #[test]
-fn crash_recovery_paths_use_resolved_frontend_name() {
+fn crash_recovery_paths_use_channel_name_in_tui_directory() {
     let tui_dir = PathBuf::from("/tmp/warp-logs/warp-cli");
     assert_eq!(
-        temp_log_file_path(&tui_dir, "warp_tui_dev.log"),
-        tui_dir.join("warp_tui_dev.log.old.temp")
+        temp_log_file_path(&tui_dir, "warp_dev.log"),
+        tui_dir.join("warp_dev.log.old.temp")
     );
     assert_eq!(
-        crash_recovery_process_log_file_path(&tui_dir, "warp_tui_dev.log"),
-        tui_dir.join("warp_tui_dev.log.recovery")
-    );
-    // GUI keeps its existing name in the same helpers.
-    let gui_dir = PathBuf::from("/tmp/warp-logs");
-    assert_eq!(
-        temp_log_file_path(&gui_dir, "warp_dev.log"),
-        gui_dir.join("warp_dev.log.old.temp")
+        crash_recovery_process_log_file_path(&tui_dir, "warp_dev.log"),
+        tui_dir.join("warp_dev.log.recovery")
     );
 }
 
 #[test]
-fn create_log_bundle_zip_in_uses_resolved_tui_stem_and_excludes_legacy_oz_logs() {
+fn create_log_bundle_zip_in_uses_channel_stem_and_excludes_legacy_oz_logs() {
     let tmp = tempfile::tempdir().unwrap();
-    let active = touch(tmp.path(), "warp_tui_dev.log");
+    let active = touch(tmp.path(), "warp_dev.log");
     write_bytes(&active, b"active tui session");
-    let rotated = touch(tmp.path(), "warp_tui_dev.log.old.0");
+    let rotated = touch(tmp.path(), "warp_dev.log.old.0");
     write_bytes(&rotated, b"previous tui session");
-    let chunk = touch(tmp.path(), "warp_tui_dev.log.in_session.0");
+    let chunk = touch(tmp.path(), "warp_dev.log.in_session.0");
     write_bytes(&chunk, b"mid-session tui chunk");
-    // Legacy oz-directory GUI log must NOT be bundled with the TUI bundle.
     let legacy = tmp.path().join("oz");
     fs::create_dir(&legacy).unwrap();
     touch(&legacy, "warp_dev.log");
 
-    let zip_path = create_log_bundle_zip_in(tmp.path(), "warp_tui_dev.log").unwrap();
+    let zip_path = create_log_bundle_zip_in(tmp.path(), "warp_dev.log").unwrap();
 
-    // Zip lives beside the TUI logs and uses the resolved TUI stem.
     assert_eq!(zip_path.parent(), Some(tmp.path()));
     let zip_name = zip_path.file_name().unwrap().to_string_lossy().into_owned();
-    assert!(
-        zip_name.starts_with("warp_tui_dev-"),
-        "zip name was {zip_name}"
-    );
+    assert!(zip_name.starts_with("warp_dev-"), "zip name was {zip_name}");
     assert!(zip_name.ends_with(".zip"));
-
-    // Zip contains exactly the TUI fixtures in collection order — no legacy GUI log.
-    let entries = zip_entry_names(&zip_path);
     assert_eq!(
-        entries,
+        zip_entry_names(&zip_path),
         vec![
-            "warp_tui_dev.log",
-            "warp_tui_dev.log.in_session.0",
-            "warp_tui_dev.log.old.0",
+            "warp_dev.log",
+            "warp_dev.log.in_session.0",
+            "warp_dev.log.old.0",
         ]
     );
 }
 
 #[test]
-fn create_log_bundle_zip_in_uses_gui_channel_stem_and_ignores_tui_files() {
-    // GUI bundle must keep using ChannelState::logfile_name() (e.g. warp_dev.log),
-    // not a TUI name, and ignore TUI files sitting in the same directory.
+fn create_log_bundle_zip_in_ignores_warp_cli_subdirectory() {
     let tmp = tempfile::tempdir().unwrap();
     touch(tmp.path(), "warp_dev.log");
     touch(tmp.path(), "warp_dev.log.old.0");
-    touch(tmp.path(), "warp_tui_dev.log");
+    let tui_dir = tmp.path().join("warp-cli");
+    fs::create_dir(&tui_dir).unwrap();
+    touch(&tui_dir, "warp_dev.log");
 
     let zip_path = create_log_bundle_zip_in(tmp.path(), "warp_dev.log").unwrap();
-    let zip_name = zip_path.file_name().unwrap().to_string_lossy().into_owned();
-    assert!(zip_name.starts_with("warp_dev-"), "zip name was {zip_name}");
 
-    let entries = zip_entry_names(&zip_path);
-    assert_eq!(entries, vec!["warp_dev.log", "warp_dev.log.old.0"]);
+    assert_eq!(
+        zip_entry_names(&zip_path),
+        vec!["warp_dev.log", "warp_dev.log.old.0"]
+    );
 }
 
 #[test]
 fn create_log_bundle_zip_in_uses_cli_oz_stem() {
-    // CLI keeps the oz directory and channel filename; its bundle stem is the
-    // channel name, never a TUI name.
     let tmp = tempfile::tempdir().unwrap();
     touch(tmp.path(), "warp_dev.log");
     touch(tmp.path(), "warp_dev.log.old.0");
@@ -499,5 +408,4 @@ fn create_log_bundle_zip_in_uses_cli_oz_stem() {
     let zip_path = create_log_bundle_zip_in(tmp.path(), "warp_dev.log").unwrap();
     let zip_name = zip_path.file_name().unwrap().to_string_lossy().into_owned();
     assert!(zip_name.starts_with("warp_dev-"), "zip name was {zip_name}");
-    assert!(!zip_name.contains("warp_tui"));
 }

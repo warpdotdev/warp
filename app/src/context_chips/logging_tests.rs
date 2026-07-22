@@ -15,33 +15,6 @@ fn test_prompt_chip_log_filename_uses_channel_logfile_stem() {
 }
 
 #[test]
-fn test_prompt_chip_log_filename_derives_from_resolved_tui_name() {
-    // CODE-1902 spec criterion #8: in TUI mode the sidecar must derive from
-    // the resolved TUI logger filename (`warp_tui*`), not the GUI channel
-    // name. `log_file_path()` joins this filename onto the resolved logger
-    // directory, so the sidecar lands beside the TUI active log.
-    assert_eq!(
-        prompt_chip_log_filename("warp_tui_dev.log"),
-        "warp_tui_dev.prompt_chips.log"
-    );
-    assert_eq!(
-        prompt_chip_log_filename("warp_tui_preview.log"),
-        "warp_tui_preview.prompt_chips.log"
-    );
-    assert_eq!(
-        prompt_chip_log_filename("warp_tui.log"),
-        "warp_tui.prompt_chips.log"
-    );
-    // GUI mode keeps the channel stem (covered above, restated for the
-    // paired invariant): the sidecar must not gain a `tui` stem in GUI mode.
-    assert_eq!(
-        prompt_chip_log_filename("warp.log"),
-        "warp.prompt_chips.log"
-    );
-    assert!(!prompt_chip_log_filename("warp.log").contains("tui"));
-}
-
-#[test]
 fn test_format_log_entry_uses_explicit_empty_and_missing_markers() {
     let entry = format_log_entry(&ChipCommandLogEntry {
         chip_kind: &ContextChipKind::GithubPullRequest,

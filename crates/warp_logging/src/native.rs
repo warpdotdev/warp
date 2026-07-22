@@ -183,8 +183,8 @@ pub async fn rotate_files(channel_file_name: &str, max_rotation: usize) -> Resul
 }
 
 /// Testable core of [`rotate_files`]: performs the startup rotation against the
-/// given `log_directory` using the resolved `channel_file_name` (e.g. a TUI
-/// `warp_tui_dev.log` or the GUI `ChannelState::logfile_name()`). Extracted so
+/// given `log_directory` using the resolved `channel_file_name` from
+/// `ChannelState::logfile_name()`. Extracted so
 /// the rotation flow can be exercised against a temp directory and a resolved
 /// frontend name without initializing the global logger. The body is purely
 /// synchronous I/O, so this core is sync; the public [`rotate_files`] stays
@@ -331,24 +331,6 @@ pub fn init(config: LogConfig) -> Result<()> {
         config.log_destination,
         config.max_file_size_bytes,
     )
-}
-
-fn logfile_name_for_frontend(
-    frontend: LogFrontend,
-    channel: warp_core::channel::Channel,
-) -> String {
-    match frontend {
-        LogFrontend::Gui | LogFrontend::Cli => ChannelState::logfile_name().into_owned(),
-        LogFrontend::Tui => match channel {
-            warp_core::channel::Channel::Dev | warp_core::channel::Channel::Local => {
-                "warp_tui_dev.log".to_owned()
-            }
-            warp_core::channel::Channel::Preview => "warp_tui_preview.log".to_owned(),
-            warp_core::channel::Channel::Stable
-            | warp_core::channel::Channel::Oss
-            | warp_core::channel::Channel::Integration => "warp_tui.log".to_owned(),
-        },
-    }
 }
 
 fn log_directory_for_frontend(base_directory: PathBuf, frontend: LogFrontend) -> PathBuf {
@@ -658,7 +640,7 @@ fn init_internal(
         MAX_FILES_IN_GUI_ROTATION
     };
 
-    let logfile_name = logfile_name_for_frontend(frontend, ChannelState::channel());
+    let logfile_name = ChannelState::logfile_name().into_owned();
     let log_directory = log_directory_for_frontend(init_log_directory()?, frontend);
     if use_logfile {
         let file = setup_log_files_for_current_execution(
