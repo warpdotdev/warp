@@ -765,10 +765,6 @@ impl RenderableAIError {
         matches!(self, Self::AwsBedrockCredentialsExpiredOrInvalid { .. })
     }
 
-    pub fn is_gemini_enterprise_credentials_error(&self) -> bool {
-        matches!(self, Self::GeminiEnterpriseCredentialsExpiredOrInvalid)
-    }
-
     /// Returns true if an automatic resume will be attempted for this error.
     pub fn will_attempt_resume(&self) -> bool {
         matches!(
