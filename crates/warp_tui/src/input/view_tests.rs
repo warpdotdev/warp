@@ -864,7 +864,9 @@ fn multiline_paste_emits_once_and_fallback_inserts_without_submitting() {
                 | TuiInputViewEvent::AcceptedMcp(_)
                 | TuiInputViewEvent::AcceptedPromptHistory(_)
                 | TuiInputViewEvent::BackspaceAtEmptyInput
-                | TuiInputViewEvent::MoveFocusUp => {}
+                | TuiInputViewEvent::MoveFocusUp
+                | TuiInputViewEvent::ClipboardCopySucceeded
+                | TuiInputViewEvent::ClipboardCopyFailed => {}
             });
             (view, pasted, submitted)
         });

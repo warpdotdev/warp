@@ -42,7 +42,7 @@ use warpui_core::{
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::editor_interaction::{
     TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
-    apply_editor_action, follow_editor_cursor,
+    apply_editor_action, apply_editor_clipboard_action, follow_editor_cursor,
 };
 use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, active_inline_menu};
 use crate::input_hints;
@@ -125,6 +125,10 @@ pub enum TuiInputViewEvent {
     /// The user accepted a prompt from the up-arrow prompt-history menu. Carries
     /// the prompt text to fill into the input and submit.
     AcceptedPromptHistory(String),
+    /// Selected prompt text was copied to the host clipboard.
+    ClipboardCopySucceeded,
+    /// Selected prompt text could not be copied to the host clipboard.
+    ClipboardCopyFailed,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -606,6 +610,20 @@ impl TypedActionView for TuiInputView {
                 });
                 TuiEditorInteractionOutcome::FollowCursor
             }
+        };
+        let outcome = match outcome {
+            TuiEditorInteractionOutcome::Clipboard(action) => {
+                match apply_editor_clipboard_action(&self.model, action, ctx) {
+                    Ok(true) => ctx.emit(TuiInputViewEvent::ClipboardCopySucceeded),
+                    Ok(false) => {}
+                    Err(error) => {
+                        log::error!("Failed to copy TUI input selection: {error}");
+                        ctx.emit(TuiInputViewEvent::ClipboardCopyFailed);
+                    }
+                }
+                TuiEditorInteractionOutcome::FollowCursor
+            }
+            outcome => outcome,
         };
         if outcome == TuiEditorInteractionOutcome::FollowCursor {
             self.follow_cursor(ctx);

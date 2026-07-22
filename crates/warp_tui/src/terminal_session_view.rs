@@ -565,6 +565,17 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-v"),
+        EditableBinding::new(
+            PASTE_IMAGE_BINDING_NAME,
+            "Paste from the clipboard",
+            TuiTerminalSessionAction::PasteFromClipboard,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | id!(TuiTerminalSessionView::ui_name()))
+                & id!(SESSION_COMPOSER_OWNS_INPUT_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-shift-V"),
         #[cfg(windows)]
         EditableBinding::new(
             PASTE_IMAGE_BINDING_NAME,
@@ -1220,6 +1231,10 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedPromptHistory(text) => {
                 view.handle_accepted_prompt_history(text.clone(), ctx);
+            }
+            TuiInputViewEvent::ClipboardCopySucceeded => view.show_copy_hint(ctx),
+            TuiInputViewEvent::ClipboardCopyFailed => {
+                view.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
             }
             TuiInputViewEvent::MoveFocusUp => {
                 view.focus_orchestration_tabs(ctx);
