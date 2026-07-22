@@ -349,3 +349,19 @@ fn test_decompose_sara_am() {
     assert_eq!(super::decompose_sara_am('\u{0E32}'), None); // sara aa
     assert_eq!(super::decompose_sara_am('a'), None);
 }
+
+#[test]
+fn test_is_sara_am_base() {
+    // Thai consonants (ก..ฮ) and Lao consonants (ກ..ຮ) are attachable bases.
+    assert!(super::is_sara_am_base('\u{0E01}')); // ก
+    assert!(super::is_sara_am_base('\u{0E19}')); // น
+    assert!(super::is_sara_am_base('\u{0E2E}')); // ฮ
+    assert!(super::is_sara_am_base('\u{0E81}')); // ກ (Lao)
+    // Non-attachable cells a SARA AM must NOT be folded onto.
+    assert!(!super::is_sara_am_base(' '));
+    assert!(!super::is_sara_am_base('a'));
+    assert!(!super::is_sara_am_base('.'));
+    assert!(!super::is_sara_am_base('\u{0E33}')); // sara am itself
+    assert!(!super::is_sara_am_base('\u{0E32}')); // sara aa (a vowel, not a base)
+    assert!(!super::is_sara_am_base('\u{0E4D}')); // nikhahit
+}

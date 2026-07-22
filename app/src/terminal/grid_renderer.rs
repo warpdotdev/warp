@@ -1476,7 +1476,11 @@ fn render_grid_with_ligatures<'a>(
                     match cell.content_for_display() {
                         CharOrStr::Str(s) => {
                             string_builder.append_placeholder(col);
-                            let content = if let Some(sa) = following_sara_am {
+                            // Only fold the SARA AM in when this cell is a Thai/Lao base
+                            // cluster it can attach to; otherwise leave it to render on its own.
+                            let attachable = s.chars().next().is_some_and(is_sara_am_base);
+                            let content = if let Some(sa) = following_sara_am.filter(|_| attachable)
+                            {
                                 skip_sara_am_at = Some(col + 1);
                                 let mut combined = s.to_owned();
                                 combined.push(sa);
@@ -1508,9 +1512,11 @@ fn render_grid_with_ligatures<'a>(
                                 ));
                             }
                         }
-                        // Consonant followed by SARA AM: defer both together so HarfBuzz shapes
-                        // the cluster and positions the nikhahit dot above the consonant via GPOS.
-                        CharOrStr::Char(c) if following_sara_am.is_some() => {
+                        // Thai/Lao consonant followed by SARA AM: defer both together so HarfBuzz
+                        // shapes the cluster and positions the nikhahit dot above the consonant via
+                        // GPOS. Gated on an attachable base so a SARA AM after a space/punctuation/
+                        // Latin cell is not consumed here (it renders standalone instead).
+                        CharOrStr::Char(c) if following_sara_am.is_some() && is_sara_am_base(c) => {
                             let sa = following_sara_am.expect("checked by guard");
                             skip_sara_am_at = Some(col + 1);
                             string_builder.append_placeholder(col);
@@ -1821,6 +1827,14 @@ fn decompose_sara_am(c: char) -> Option<(char, char)> {
         '\u{0EB3}' => Some(('\u{0ECD}', '\u{0EB2}')),
         _ => None,
     }
+}
+
+/// Returns true if `c` is a Thai or Lao consonant that a following SARA AM
+/// (ำ U+0E33 / ຳ U+0EB3) can attach to as its base. Used so a SARA AM after a
+/// non-attachable cell (space, punctuation, Latin, a lone vowel, etc.) is left
+/// to render on its own instead of being folded into the wrong base.
+fn is_sara_am_base(c: char) -> bool {
+    matches!(c, '\u{0E01}'..='\u{0E2E}' | '\u{0E81}'..='\u{0EAE}')
 }
 
 /// Draw the glyph for the cell here, but don't draw the decorations (underlines and strikethroughs)

@@ -22,7 +22,10 @@ pub(super) type PositionedGlyph = (GlyphId, FontId, Vector2F);
 #[derive(Default)]
 pub struct CellGlyphCache {
     glyph_cache: HashMap<(char, FontId), Option<(GlyphId, FontId)>>,
-    string_cache: HashMap<(String, FontId), Vec<PositionedGlyph>>,
+    // Keyed on font_size bits too: the cached positions are baseline-relative
+    // layout offsets that change with the font size, so different sizes must not
+    // share an entry (otherwise zooming reuses stale mark offsets).
+    string_cache: HashMap<(String, FontId, u32), Vec<PositionedGlyph>>,
 }
 
 impl CellGlyphCache {
@@ -51,7 +54,7 @@ impl CellGlyphCache {
     ) -> Vec<PositionedGlyph> {
         let cached = self
             .string_cache
-            .entry((string.to_owned(), font_id))
+            .entry((string.to_owned(), font_id, font_size.to_bits()))
             .or_insert_with(|| {
                 let run_length_chars = string.chars().count();
                 let line = ctx.text_layout_cache.layout_line(
@@ -114,8 +117,10 @@ impl CellGlyphCache {
                     fallback.push((glyph_id, base_font_id, Vector2F::zero()));
                 }
             }
-            self.string_cache
-                .insert((string.to_owned(), font_id), fallback.clone());
+            self.string_cache.insert(
+                (string.to_owned(), font_id, font_size.to_bits()),
+                fallback.clone(),
+            );
             return fallback;
         }
         cached
