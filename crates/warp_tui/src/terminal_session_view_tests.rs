@@ -37,7 +37,7 @@ use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalida
 use super::{
     ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, AUTO_APPROVE_DISABLED_HINT,
     AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION, AUTO_APPROVE_TOGGLE_BINDING_NAME,
-    COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
+    BlockingInputSource, COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
     COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegments,
     INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
     SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
@@ -146,6 +146,7 @@ fn voice_accepts_exact_and_whitespace_only_arguments() {
     assert!(voice_argument_is_empty(Some(&"   ".to_owned())));
     assert!(!voice_argument_is_empty(Some(&"text".to_owned())));
 }
+
 #[test]
 fn voice_slash_command_rejects_arguments_before_prompt_fallback() {
     App::test((), |mut app| async move {
@@ -1361,10 +1362,16 @@ fn long_running_command_keeps_input_hidden() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        view.update(&mut app, |view, _| {
+        view.update(&mut app, |view, ctx| {
             view.terminal_model
                 .lock()
                 .simulate_long_running_block("cat", "");
+            assert!(matches!(
+                view.session_state(ctx)
+                    .expect("session state resolves")
+                    .blocking_input_source(),
+                Some(&BlockingInputSource::LongRunningCommand)
+            ));
         });
 
         let lines = render_session(&mut app, &view, 80, 40);

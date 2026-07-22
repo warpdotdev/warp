@@ -8,7 +8,7 @@ use super::{
     upgrade_terminal_model,
 };
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
-use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::terminal_session_view::{BlockingInputSource, TuiTerminalSessionView};
 use crate::terminal_use::TuiInputTarget;
 
 fn composer_state(mode: TuiComposerMode, orchestration_available: bool) -> TuiTerminalSessionState {
@@ -91,10 +91,11 @@ fn only_composer_interactions_produce_input_hints() {
             TuiInputTarget::Pty,
             TuiInteractionState::Pty(TuiPtyState::Process),
         ),
-        block_state(TuiInteractionState::Blocked),
+        block_state(TuiInteractionState::Blocking(
+            BlockingInputSource::LongRunningCommand,
+        )),
         block_state(TuiInteractionState::StartingShell),
         block_state(TuiInteractionState::Pty(TuiPtyState::Process)),
-        block_state(TuiInteractionState::Pty(TuiPtyState::PlainUserCommand)),
         block_state(TuiInteractionState::Pty(
             TuiPtyState::UserControlledTerminalUse,
         )),
@@ -130,8 +131,11 @@ fn hierarchy_encodes_input_ownership() {
         TuiInputTarget::Pty
     );
     assert_eq!(
-        block_state(TuiInteractionState::Blocked).input_target(),
-        TuiInputTarget::Disabled
+        block_state(TuiInteractionState::Blocking(
+            BlockingInputSource::LongRunningCommand,
+        ))
+        .input_target(),
+        TuiInputTarget::Pty
     );
     assert_eq!(
         block_state(TuiInteractionState::StartingShell).input_target(),

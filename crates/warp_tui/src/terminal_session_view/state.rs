@@ -8,7 +8,7 @@ use warp::tui_export::{BlocklistAIInputModel, CLISubagentController, TerminalMod
 use warpui_core::keymap::Context;
 use warpui_core::{AppContext, Entity, ModelHandle, ViewHandle, WeakModelHandle, WeakViewHandle};
 
-use super::AUTO_APPROVE_TOGGLE_BINDING_NAME;
+use super::{AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource};
 use crate::input_mode_policy;
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{PLAN_TOGGLE_BINDING_NAME, binding_hint};
@@ -165,15 +165,17 @@ impl TuiTerminalSessionStateModel {
                     .as_ref(ctx)
                     .active_target()
                     .map(|target| target.control_state);
-                let interaction = if transcript.as_ref(ctx).active_blocking_child(ctx).is_some() {
-                    TuiInteractionState::Blocked
+                let interaction = if let Some(source) =
+                    transcript.as_ref(ctx).active_blocking_input_source(ctx)
+                {
+                    TuiInteractionState::Blocking(source)
                 } else if terminal_use_control
                     .as_ref()
                     .is_some_and(|control| control.is_user_in_control())
                 {
                     TuiInteractionState::Pty(TuiPtyState::UserControlledTerminalUse)
                 } else if user_owns_running_command {
-                    TuiInteractionState::Pty(TuiPtyState::PlainUserCommand)
+                    TuiInteractionState::Blocking(BlockingInputSource::LongRunningCommand)
                 } else {
                     match input_target {
                         TuiInputTarget::Disabled => TuiInteractionState::StartingShell,
@@ -242,7 +244,7 @@ impl TuiTerminalSessionStateModel {
 ///
 /// Alternate-screen commands can still expose an agent composer beneath the
 /// terminal, so the surface and interaction state are represented separately.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub(crate) enum TuiTerminalSessionState {
     AltScreen {
         input_target: TuiInputTarget,
@@ -255,7 +257,7 @@ pub(crate) enum TuiTerminalSessionState {
 ///
 /// `interaction` is exclusive, while orchestration and plan availability are
 /// additive capabilities that may contribute shortcuts to a composer.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub(crate) struct TuiBlockSessionState {
     pub(super) interaction: TuiInteractionState,
     pub(super) transcript_is_empty: bool,
@@ -264,9 +266,9 @@ pub(crate) struct TuiBlockSessionState {
 }
 
 /// The single interaction that currently owns the block UI's input area.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub(super) enum TuiInteractionState {
-    Blocked,
+    Blocking(BlockingInputSource),
     StartingShell,
     Composer(TuiComposerState),
     Pty(TuiPtyState),
@@ -292,7 +294,6 @@ pub(super) enum TuiComposerMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TuiPtyState {
     Process,
-    PlainUserCommand,
     UserControlledTerminalUse,
 }
 
@@ -309,23 +310,36 @@ pub(crate) struct TuiShortcutSection {
 }
 
 impl TuiTerminalSessionState {
-    fn state(self) -> TuiBlockSessionState {
+    fn state(&self) -> &TuiBlockSessionState {
         match self {
             Self::AltScreen { state, .. } | Self::Block(state) => state,
         }
     }
 
-    fn interaction(self) -> TuiInteractionState {
-        self.state().interaction
+    fn interaction(&self) -> &TuiInteractionState {
+        &self.state().interaction
     }
 
-    pub(crate) fn is_alt_screen(self) -> bool {
+    pub(crate) fn is_alt_screen(&self) -> bool {
         matches!(self, Self::AltScreen { .. })
     }
 
-    pub(crate) fn is_blocked(self) -> bool {
-        matches!(self.interaction(), TuiInteractionState::Blocked)
+    pub(crate) fn has_blocking_interaction(&self) -> bool {
+        matches!(
+            self.interaction(),
+            TuiInteractionState::Blocking(source) if source.is_interactive()
+        )
     }
+
+    pub(super) fn blocking_input_source(&self) -> Option<&BlockingInputSource> {
+        match self.interaction() {
+            TuiInteractionState::Blocking(source) => Some(source),
+            TuiInteractionState::StartingShell
+            | TuiInteractionState::Composer(_)
+            | TuiInteractionState::Pty(_) => None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn for_input(
         input_is_shell: bool,
@@ -351,44 +365,47 @@ impl TuiTerminalSessionState {
         })
     }
 
-    pub(crate) fn input_target(self) -> TuiInputTarget {
+    pub(crate) fn input_target(&self) -> TuiInputTarget {
         match self {
-            Self::AltScreen { input_target, .. } => input_target,
-            Self::Block(state) => match state.interaction {
-                TuiInteractionState::Blocked | TuiInteractionState::StartingShell => {
-                    TuiInputTarget::Disabled
-                }
+            Self::AltScreen { input_target, .. } => *input_target,
+            Self::Block(state) => match &state.interaction {
+                TuiInteractionState::Blocking(source) => match source {
+                    BlockingInputSource::LongRunningCommand => TuiInputTarget::Pty,
+                    BlockingInputSource::AskQuestion(_)
+                    | BlockingInputSource::Permission(_)
+                    | BlockingInputSource::Orchestration(_) => TuiInputTarget::Disabled,
+                },
+                TuiInteractionState::StartingShell => TuiInputTarget::Disabled,
                 TuiInteractionState::Composer(_) => TuiInputTarget::AgentEditor,
                 TuiInteractionState::Pty(_) => TuiInputTarget::Pty,
             },
         }
     }
 
-    pub(crate) fn user_owns_running_command(self) -> bool {
+    pub(crate) fn user_owns_running_command(&self) -> bool {
         matches!(
             self.interaction(),
-            TuiInteractionState::Pty(
-                TuiPtyState::PlainUserCommand | TuiPtyState::UserControlledTerminalUse
-            )
+            TuiInteractionState::Blocking(BlockingInputSource::LongRunningCommand)
+                | TuiInteractionState::Pty(TuiPtyState::UserControlledTerminalUse)
         )
     }
 
-    pub(crate) fn orchestration_available(self) -> bool {
+    pub(crate) fn orchestration_available(&self) -> bool {
         self.state().orchestration_available
     }
 
-    pub(crate) fn plan_available(self) -> bool {
+    pub(crate) fn plan_available(&self) -> bool {
         self.state().plan_available
     }
 
-    pub(crate) fn can_hand_back_terminal_use(self) -> bool {
+    pub(crate) fn can_hand_back_terminal_use(&self) -> bool {
         matches!(
             self.interaction(),
             TuiInteractionState::Pty(TuiPtyState::UserControlledTerminalUse)
         )
     }
 
-    pub(crate) fn composer_owns_input(self) -> bool {
+    pub(crate) fn composer_owns_input(&self) -> bool {
         matches!(
             self.interaction(),
             TuiInteractionState::Composer(TuiComposerState {
@@ -398,9 +415,9 @@ impl TuiTerminalSessionState {
         )
     }
 
-    pub(crate) fn hint_text(self) -> Option<String> {
+    pub(crate) fn hint_text(&self) -> Option<String> {
         let state = self.state();
-        let TuiInteractionState::Composer(composer) = state.interaction else {
+        let TuiInteractionState::Composer(composer) = &state.interaction else {
             return None;
         };
         if matches!(
@@ -417,7 +434,7 @@ impl TuiTerminalSessionState {
         })
     }
 
-    pub(crate) fn should_render_shortcuts(self) -> bool {
+    pub(crate) fn should_render_shortcuts(&self) -> bool {
         matches!(
             self.interaction(),
             TuiInteractionState::Composer(TuiComposerState {
@@ -428,28 +445,34 @@ impl TuiTerminalSessionState {
     }
 
     pub(crate) fn shortcut_sections(
-        self,
+        &self,
         context: &Context,
         ctx: &AppContext,
     ) -> Vec<TuiShortcutSection> {
         let state = self.state();
-        let composer = match state.interaction {
-            TuiInteractionState::Blocked
-            | TuiInteractionState::StartingShell
-            | TuiInteractionState::Pty(TuiPtyState::Process) => return Vec::new(),
-            TuiInteractionState::Pty(pty) => {
-                let (key, description) = match pty {
-                    TuiPtyState::PlainUserCommand => ("ctrl-c", "interrupt command"),
-                    TuiPtyState::UserControlledTerminalUse => {
-                        (HAND_BACK_KEY_BINDING, "hand back control")
-                    }
-                    TuiPtyState::Process => unreachable!(),
-                };
+        let composer = match &state.interaction {
+            TuiInteractionState::Blocking(BlockingInputSource::LongRunningCommand) => {
                 return vec![TuiShortcutSection {
                     title: "Terminal",
                     shortcuts: vec![TuiShortcut {
-                        key: key.to_owned(),
-                        description,
+                        key: "ctrl-c".to_owned(),
+                        description: "interrupt command",
+                    }],
+                }];
+            }
+            TuiInteractionState::Blocking(
+                BlockingInputSource::AskQuestion(_)
+                | BlockingInputSource::Permission(_)
+                | BlockingInputSource::Orchestration(_),
+            )
+            | TuiInteractionState::StartingShell
+            | TuiInteractionState::Pty(TuiPtyState::Process) => return Vec::new(),
+            TuiInteractionState::Pty(TuiPtyState::UserControlledTerminalUse) => {
+                return vec![TuiShortcutSection {
+                    title: "Terminal",
+                    shortcuts: vec![TuiShortcut {
+                        key: HAND_BACK_KEY_BINDING.to_owned(),
+                        description: "hand back control",
                     }],
                 }];
             }

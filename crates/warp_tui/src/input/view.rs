@@ -53,7 +53,7 @@ use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestions
 use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP,
 };
-use crate::terminal_session_view::state::{TuiTerminalSessionState, TuiTerminalSessionStateModel};
+use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
 
@@ -329,7 +329,7 @@ impl TuiInputView {
         self.session_state
             .as_ref(ctx)
             .resolve(ctx)
-            .is_ok_and(TuiTerminalSessionState::plan_available)
+            .is_ok_and(|state| state.plan_available())
     }
     /// Whether the input is in detected or explicitly locked shell mode.
     pub(crate) fn is_shell_mode(&self, ctx: &AppContext) -> bool {
@@ -437,7 +437,7 @@ impl TuiInputView {
                 .as_ref(app)
                 .resolve(app)
                 .ok()
-                .and_then(TuiTerminalSessionState::hint_text)
+                .and_then(|state| state.hint_text())
                 .map(|hint| (hint, TuiUiBuilder::from_app(app).muted_text_style()))
         })
     }
@@ -845,7 +845,7 @@ impl TuiInputView {
         self.session_state
             .as_ref(ctx)
             .resolve(ctx)
-            .is_ok_and(TuiTerminalSessionState::orchestration_available)
+            .is_ok_and(|state| state.orchestration_available())
             && self.single_cursor_on_first_row(ctx)
     }
 

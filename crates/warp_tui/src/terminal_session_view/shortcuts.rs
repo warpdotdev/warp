@@ -28,7 +28,7 @@ fn render_entry(shortcut: &TuiShortcut, builder: &TuiUiBuilder) -> Box<dyn TuiEl
 }
 
 pub(super) fn render(
-    state: TuiTerminalSessionState,
+    state: &TuiTerminalSessionState,
     context: &Context,
     ctx: &AppContext,
 ) -> Box<dyn TuiElement> {
