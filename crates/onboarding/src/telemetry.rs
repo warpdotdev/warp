@@ -29,9 +29,14 @@ pub enum OnboardingEvent {
     /// The onboarding flow was started.
     OnboardingStarted,
     /// A specific slide was viewed.
-    SlideViewed { slide_name: String },
+    SlideViewed {
+        slide_name: String,
+    },
     /// A setting was changed during onboarding.
-    SettingChanged { setting: String, value: String },
+    SettingChanged {
+        setting: String,
+        value: String,
+    },
     /// The onboarding slides were completed.
     OnboardingSlidesCompleted {
         intention: String,
@@ -49,11 +54,15 @@ pub enum OnboardingEvent {
     /// The user selected a folder.
     FolderSelected,
     /// A callout was displayed.
-    CalloutDisplayed { callout: String },
+    CalloutDisplayed {
+        callout: String,
+    },
     /// The user clicked next on a callout.
     CalloutNext,
     /// The user completed the callout flow.
-    CalloutCompleted { completion_type: String },
+    CalloutCompleted {
+        completion_type: String,
+    },
     /// The user navigated to the next slide.
     SlideNavigatedNext,
     /// The user navigated to the previous slide.
@@ -73,6 +82,23 @@ pub enum OnboardingEvent {
         slide_name: String,
         action: String,
         account_class: Option<String>,
+    },
+    OnboardingAuthCompleted {
+        account_class: String,
+        has_team: bool,
+        is_paid: bool,
+        team_discovery_outcome: String,
+    },
+    OnboardingUpgradeStarted {
+        source_slide: String,
+        account_class: String,
+    },
+    OnboardingUpgradeCompleted {
+        source_slide: String,
+        account_class: String,
+    },
+    OnboardingCompleted {
+        completion_type: String,
     },
 }
 
@@ -97,6 +123,10 @@ impl TelemetryEvent for OnboardingEvent {
             OnboardingEvent::AgentSlideUpgradeClicked => "onboarding_agent_slide_upgrade_clicked",
             OnboardingEvent::WelcomeLoginClicked => "onboarding_welcome_login_clicked",
             OnboardingEvent::OnboardingAction { .. } => "onboarding_action",
+            OnboardingEvent::OnboardingAuthCompleted { .. } => "onboarding_auth_completed",
+            OnboardingEvent::OnboardingUpgradeStarted { .. } => "onboarding_upgrade_started",
+            OnboardingEvent::OnboardingUpgradeCompleted { .. } => "onboarding_upgrade_completed",
+            OnboardingEvent::OnboardingCompleted { .. } => "onboarding_completed",
         }
     }
 
@@ -162,6 +192,38 @@ impl TelemetryEvent for OnboardingEvent {
                 }
                 Some(payload)
             }
+            OnboardingEvent::OnboardingAuthCompleted {
+                account_class,
+                has_team,
+                is_paid,
+                team_discovery_outcome,
+            } => Some(json!({
+                "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                "account_class": account_class,
+                "has_team": has_team,
+                "is_paid": is_paid,
+                "team_discovery_outcome": team_discovery_outcome,
+            })),
+            OnboardingEvent::OnboardingUpgradeStarted {
+                source_slide,
+                account_class,
+            } => Some(json!({
+                "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                "source_slide": source_slide,
+                "account_class": account_class,
+            })),
+            OnboardingEvent::OnboardingUpgradeCompleted {
+                source_slide,
+                account_class,
+            } => Some(json!({
+                "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                "source_slide": source_slide,
+                "account_class": account_class,
+            })),
+            OnboardingEvent::OnboardingCompleted { completion_type } => Some(json!({
+                "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                "completion_type": completion_type,
+            })),
         }
     }
 
@@ -196,6 +258,18 @@ impl TelemetryEvent for OnboardingEvent {
             }
             OnboardingEvent::OnboardingAction { .. } => {
                 "User performed an action in the account-first onboarding flow"
+            }
+            OnboardingEvent::OnboardingAuthCompleted { .. } => {
+                "User completed account-first browser authentication"
+            }
+            OnboardingEvent::OnboardingUpgradeStarted { .. } => {
+                "User started an upgrade from account-first onboarding"
+            }
+            OnboardingEvent::OnboardingUpgradeCompleted { .. } => {
+                "User completed an upgrade from account-first onboarding"
+            }
+            OnboardingEvent::OnboardingCompleted { .. } => {
+                "User completed account-first onboarding"
             }
         }
     }
@@ -242,6 +316,12 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
             }
             OnboardingEventDiscriminant::WelcomeLoginClicked => "onboarding_welcome_login_clicked",
             OnboardingEventDiscriminant::OnboardingAction => "onboarding_action",
+            OnboardingEventDiscriminant::OnboardingAuthCompleted => "onboarding_auth_completed",
+            OnboardingEventDiscriminant::OnboardingUpgradeStarted => "onboarding_upgrade_started",
+            OnboardingEventDiscriminant::OnboardingUpgradeCompleted => {
+                "onboarding_upgrade_completed"
+            }
+            OnboardingEventDiscriminant::OnboardingCompleted => "onboarding_completed",
         }
     }
 
@@ -284,6 +364,18 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
             }
             OnboardingEventDiscriminant::OnboardingAction => {
                 "User performed an action in the account-first onboarding flow"
+            }
+            OnboardingEventDiscriminant::OnboardingAuthCompleted => {
+                "User completed account-first browser authentication"
+            }
+            OnboardingEventDiscriminant::OnboardingUpgradeStarted => {
+                "User started an upgrade from account-first onboarding"
+            }
+            OnboardingEventDiscriminant::OnboardingUpgradeCompleted => {
+                "User completed an upgrade from account-first onboarding"
+            }
+            OnboardingEventDiscriminant::OnboardingCompleted => {
+                "User completed account-first onboarding"
             }
         }
     }

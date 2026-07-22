@@ -313,6 +313,10 @@ impl LoginSlideView {
         matches!(self.step, LoginStep::BrowserOpen) && self.show_auth_token_input
     }
 
+    pub fn is_account_first_onboarding(&self) -> bool {
+        matches!(self.source, LoginSlideSource::AccountFirstOnboarding)
+    }
+
     pub fn new(
         ai_enabled: bool,
         uses_third_party_agents: bool,
