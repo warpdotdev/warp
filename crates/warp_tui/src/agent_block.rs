@@ -208,6 +208,18 @@ fn render_failure_section(
             (message.clone(), body_style),
         ])
         .finish(),
+        FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid { title, detail } => {
+            TuiText::from_spans([
+                (FAILURE_WARNING_PREFIX.to_owned(), error_style),
+                (
+                    (*title).to_owned(),
+                    error_style.add_modifier(Modifier::BOLD),
+                ),
+                ("\n  ".to_owned(), body_style),
+                (detail.clone(), body_style),
+            ])
+            .finish()
+        }
         FailedOutputPresentation::InvalidApiKey { title, detail } => TuiText::from_spans([
             (FAILURE_WARNING_PREFIX.to_owned(), error_style),
             (
@@ -294,6 +306,9 @@ fn failure_text(presentation: &FailedOutputPresentation) -> String {
             fallback_message: message,
         }
         | FailedOutputPresentation::ContextWindowExceeded { message } => message.clone(),
+        FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid { title, detail } => {
+            format!("{title}\n{detail}")
+        }
         FailedOutputPresentation::OutOfCredits {
             message,
             can_use_own_api_keys,

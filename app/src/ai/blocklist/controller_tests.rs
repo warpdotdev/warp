@@ -3,14 +3,14 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Local;
 use uuid::Uuid;
-use warp_multi_agent_api::response_event;
+use warp_multi_agent_api::{LlmProvider, response_event};
 use warpui::{App, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    PassiveSuggestionTrigger, RenderableAIError, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{
@@ -39,6 +39,34 @@ fn file_attachment(file_name: &str) -> PendingAttachment {
         file_path: file_name.into(),
         mime_type: "text/plain".to_owned(),
     })
+}
+
+#[test]
+fn invalid_credentials_error_distinguishes_gemini_enterprise_from_google_api_keys() {
+    let gemini_enterprise = super::renderable_invalid_credentials_error(
+        response_event::stream_finished::InvalidApiKey {
+            provider: LlmProvider::GeminiEnterprise as i32,
+            model_name: String::new(),
+        },
+    );
+    assert!(matches!(
+        gemini_enterprise,
+        RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
+    ));
+
+    let google = super::renderable_invalid_credentials_error(
+        response_event::stream_finished::InvalidApiKey {
+            provider: LlmProvider::Google as i32,
+            model_name: "Gemini".to_string(),
+        },
+    );
+    assert!(matches!(
+        google,
+        RenderableAIError::InvalidApiKey {
+            ref provider,
+            ref model_name,
+        } if provider == "Google" && model_name == "Gemini"
+    ));
 }
 
 #[test]

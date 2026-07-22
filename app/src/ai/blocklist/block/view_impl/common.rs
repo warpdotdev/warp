@@ -3080,6 +3080,14 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             // Fallback for contexts that don't have the stateful view (e.g. CLI subagent)
             fallback_message
         }
+        FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid { title, detail } => {
+            return render_gemini_enterprise_credentials_error(
+                title,
+                &detail,
+                props.invalid_api_key_button_handle,
+                app,
+            );
+        }
     };
 
     Flex::row()
@@ -3310,6 +3318,83 @@ fn render_invalid_api_key_error(
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(Shrinkable::new(1., detail_text).finish())
                 .with_child(settings_button)
+                .finish(),
+        )
+        .finish()
+}
+
+fn render_gemini_enterprise_credentials_error(
+    title: &str,
+    detail: &str,
+    state_handle: &MouseStateHandle,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    let alert_icon = ConstrainedBox::new(
+        Icon::AlertTriangle
+            .to_warpui_icon(error_color(theme).into())
+            .finish(),
+    )
+    .with_width(icon_size(app))
+    .with_height(icon_size(app))
+    .finish();
+
+    let alert_text = Text::new(title.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(error_color(theme))
+        .with_selectable(false)
+        .finish();
+
+    let detail_text = Text::new(detail.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+        .with_selectable(false)
+        .finish();
+
+    let refresh_button = appearance
+        .ui_builder()
+        .button(
+            warpui::ui_components::button::ButtonVariant::Outlined,
+            state_handle.clone(),
+        )
+        .with_style(UiComponentStyles {
+            border_color: Some(internal_colors::neutral_4(theme).into()),
+            ..Default::default()
+        })
+        .with_hovered_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
+            ..Default::default()
+        })
+        .with_clicked_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_3(theme).into()),
+            ..Default::default()
+        })
+        .with_text_label("Refresh credentials".to_string())
+        .with_cursor(Some(Cursor::PointingHand))
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(AIBlockAction::RefreshGeminiEnterpriseCredentials);
+        })
+        .finish();
+
+    Flex::column()
+        .with_spacing(16.)
+        .with_child(
+            Flex::row()
+                .with_spacing(8.)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(alert_icon)
+                .with_child(alert_text)
+                .finish(),
+        )
+        .with_child(
+            Flex::row()
+                .with_spacing(8.)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(Shrinkable::new(1., detail_text).finish())
+                .with_child(refresh_button)
                 .finish(),
         )
         .finish()

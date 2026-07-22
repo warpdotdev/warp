@@ -3332,31 +3332,7 @@ impl BlocklistAIController {
                 });
             }
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::InvalidApiKey(details)) => {
-                use warp_multi_agent_api::LlmProvider;
-                let is_aws_bedrock = details
-                    .provider
-                    .try_into()
-                    .ok()
-                    .is_some_and(|p: LlmProvider| p == LlmProvider::AwsBedrock);
-
-                let error = if is_aws_bedrock {
-                    RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid {
-                        model_name: details.model_name,
-                    }
-                } else {
-                    let provider = details.provider.try_into().ok().and_then(|p| match p {
-                        LlmProvider::Google => Some("Google"),
-                        LlmProvider::Anthropic => Some("Anthropic"),
-                        LlmProvider::Openai => Some("OpenAI"),
-                        LlmProvider::Xai => Some("xAI"),
-                        LlmProvider::Openrouter => Some("OpenRouter"),
-                        LlmProvider::AwsBedrock | LlmProvider::Unknown => None,
-                    });
-                    RenderableAIError::InvalidApiKey {
-                        provider: provider.unwrap_or("Unknown").to_string(),
-                        model_name: details.model_name,
-                    }
-                };
+                let error = renderable_invalid_credentials_error(details);
 
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
@@ -3409,6 +3385,37 @@ impl BlocklistAIController {
             LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
                 llm_preferences.refresh_authed_models(ctx);
             });
+        }
+    }
+}
+
+fn renderable_invalid_credentials_error(
+    details: warp_multi_agent_api::response_event::stream_finished::InvalidApiKey,
+) -> RenderableAIError {
+    use warp_multi_agent_api::LlmProvider;
+
+    match details.provider.try_into().ok() {
+        Some(LlmProvider::AwsBedrock) => RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid {
+            model_name: details.model_name,
+        },
+        Some(LlmProvider::GeminiEnterprise) => {
+            RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
+        }
+        provider => {
+            let provider = provider.and_then(|provider| match provider {
+                LlmProvider::Google => Some("Google"),
+                LlmProvider::Anthropic => Some("Anthropic"),
+                LlmProvider::Openai => Some("OpenAI"),
+                LlmProvider::Xai => Some("xAI"),
+                LlmProvider::Openrouter => Some("OpenRouter"),
+                LlmProvider::AwsBedrock | LlmProvider::GeminiEnterprise | LlmProvider::Unknown => {
+                    None
+                }
+            });
+            RenderableAIError::InvalidApiKey {
+                provider: provider.unwrap_or("Unknown").to_string(),
+                model_name: details.model_name,
+            }
         }
     }
 }

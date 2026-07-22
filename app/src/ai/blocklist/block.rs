@@ -6266,6 +6266,8 @@ pub enum AIBlockAction {
     },
     /// Run the configured AWS auth refresh command to fix expired Bedrock credentials
     RunAwsLoginCommand,
+    /// Re-mint Gemini Enterprise credentials after an authentication failure.
+    RefreshGeminiEnterpriseCredentials,
     /// Open settings to configure the AWS auth refresh command
     ConfigureAwsLoginCommand,
     /// Open the screenshot lightbox for a UseComputer action.
@@ -6822,6 +6824,16 @@ impl TypedActionView for AIBlock {
             }
             AIBlockAction::RunAwsLoginCommand => {
                 ctx.emit(AIBlockEvent::RunAwsLoginCommand);
+            }
+            AIBlockAction::RefreshGeminiEnterpriseCredentials => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    use ai::api_keys::ApiKeyManager;
+
+                    ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                        crate::ai::geap_credentials::force_refresh_geap_credentials(manager, ctx);
+                    });
+                }
             }
             AIBlockAction::ToggleAwsBedrockAutoLogin => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {

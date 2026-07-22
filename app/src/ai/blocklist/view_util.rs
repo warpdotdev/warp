@@ -78,6 +78,10 @@ pub enum FailedOutputPresentation {
     AwsBedrockCredentialsExpiredOrInvalid {
         fallback_message: String,
     },
+    GeminiEnterpriseCredentialsExpiredOrInvalid {
+        title: &'static str,
+        detail: String,
+    },
 }
 
 /// Returns the user-facing presentation for an Agent Mode request failure.
@@ -143,6 +147,12 @@ pub fn failed_output_presentation(
                     "{ERROR_APOLOGY_TEXT}\n\nAWS credentials expired or missing for {model_name}. \
                      Please refresh your AWS credentials."
                 ),
+            }
+        }
+        RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => {
+            FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
+                title: "Gemini Enterprise credentials expired or invalid",
+                detail: "Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request.".to_string(),
             }
         }
         RenderableAIError::TransientNetworkError { .. } => {
