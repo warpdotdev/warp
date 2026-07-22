@@ -1,15 +1,18 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
 use instant::Instant;
 use warp::appearance::Appearance;
 use warp::settings::{AISettings, TuiUsageDisplayMode};
 use warp::terminal::model::ansi::{Handler, InputBufferValue};
 use warp::tui_export::{
-    AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin,
-    BlockPadding, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals, Harness,
-    LLMPreferences, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, TranscriptScope,
-    export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId,
+    AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
+    BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals, Harness, LLMPreferences,
+    PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, TaskId, TranscriptScope,
+    export_conversation_markdown, queue_tui_permission_action,
+    register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
@@ -40,7 +43,10 @@ use super::{
     render_status_footer_row,
 };
 use crate::autoupdate::TuiAutoupdater;
+use crate::blocking_interaction::{TuiBlockingInteraction, TuiBlockingInteractionPlacement};
+use crate::editor_interaction::TuiEditorCommand;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
+use crate::input::view::TuiInputAction;
 use crate::keybindings::{
     CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
     PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
@@ -57,6 +63,7 @@ use crate::terminal_use::TuiInputTarget;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
+use crate::tui_permission_prompt::TuiPermissionPrompt;
 use crate::usage::UsageToggle;
 
 struct FocusTestFixture {
@@ -1851,6 +1858,314 @@ fn add_orchestration_session(
         })
     });
     (view, session_id, conversation_id)
+}
+
+fn blocking_action(id: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        action: AIAgentActionType::AskUserQuestion {
+            questions: vec![AskUserQuestionItem {
+                question_id: format!("{id}-question"),
+                question: "Continue?".to_owned(),
+                question_type: AskUserQuestionType::MultipleChoice {
+                    is_multiselect: false,
+                    options: vec![AskUserQuestionOption {
+                        label: "yes".to_owned(),
+                        recommended: false,
+                    }],
+                    supports_other: false,
+                },
+            }],
+        },
+        task_id: TaskId::new("task".to_owned()),
+        requires_result: true,
+    }
+}
+
+fn add_permission_prompt(
+    app: &mut App,
+    view: &ViewHandle<TuiTerminalSessionView>,
+    action_id: &AIAgentActionId,
+) -> ViewHandle<TuiPermissionPrompt> {
+    let window_id = app.read(|ctx| view.window_id(ctx));
+    let action_model = view.read(app, |view, _| view.ai_action_model.clone());
+    let action_id = action_id.clone();
+    app.update(|ctx| {
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiPermissionPrompt::new(action_model, action_id, None, ctx)
+        })
+    })
+}
+
+fn queue_blocking_action(
+    app: &mut App,
+    view: &ViewHandle<TuiTerminalSessionView>,
+    conversation_id: AIConversationId,
+    action: AIAgentAction,
+) {
+    let action_model = view.read(app, |view, _| view.ai_action_model.clone());
+    action_model.update(app, |model, ctx| {
+        queue_tui_permission_action(model, action, conversation_id, ctx);
+    });
+}
+
+fn register_transcript_interaction(
+    app: &mut App,
+    view: &ViewHandle<TuiTerminalSessionView>,
+    action_id: AIAgentActionId,
+    prompt: ViewHandle<TuiPermissionPrompt>,
+) {
+    let blocking_model = view.read(app, |view, _| view.blocking_interaction_model.clone());
+    blocking_model.update(app, |model, ctx| {
+        model.register_action(
+            action_id,
+            TuiBlockingInteraction::Permission(prompt),
+            TuiBlockingInteractionPlacement::Transcript,
+            ctx,
+        );
+    });
+}
+
+fn set_session_interaction(
+    app: &mut App,
+    view: &ViewHandle<TuiTerminalSessionView>,
+    prompt: Option<ViewHandle<TuiPermissionPrompt>>,
+    placement: TuiBlockingInteractionPlacement,
+) {
+    let blocking_model = view.read(app, |view, _| view.blocking_interaction_model.clone());
+    blocking_model.update(app, |model, ctx| {
+        model.set_session_interaction(
+            prompt.map(|prompt| (TuiBlockingInteraction::Permission(prompt), placement)),
+            ctx,
+        );
+    });
+}
+
+fn render_session_with_prompt(
+    app: &mut App,
+    view: &ViewHandle<TuiTerminalSessionView>,
+    prompt: &ViewHandle<TuiPermissionPrompt>,
+    width: u16,
+    height: u16,
+) -> Vec<String> {
+    let mut presenter = TuiPresenter::new();
+    app.update(|ctx| {
+        let mut invalidation = WindowInvalidation::default();
+        invalidation.updated.insert(view.id());
+        invalidation
+            .updated
+            .extend(view.as_ref(ctx).child_view_ids(ctx));
+        invalidation.updated.insert(prompt.id());
+        invalidation
+            .updated
+            .extend(prompt.as_ref(ctx).child_view_ids(ctx));
+        presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+        presenter
+            .present(ctx, view, TuiRect::new(0, 0, width, height))
+            .buffer
+            .to_lines()
+    })
+}
+
+#[test]
+fn transcript_placement_suppresses_input_without_moving_transcript_content() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _, conversation_id) = add_orchestration_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.input_view
+                .update(ctx, |input, ctx| input.set_text("draft text", ctx));
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.block_list_mut().set_bootstrapped();
+            terminal_model.simulate_block("echo transcript-card", "transcript-card\r\n");
+            terminal_model.update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
+        });
+        let action = blocking_action("transcript");
+        let prompt = add_permission_prompt(&mut app, &view, &action.id);
+        queue_blocking_action(&mut app, &view, conversation_id, action);
+        set_session_interaction(
+            &mut app,
+            &view,
+            Some(prompt),
+            TuiBlockingInteractionPlacement::Transcript,
+        );
+
+        let lines = render_session(&mut app, &view, 80, 40);
+        let rendered = lines.join("\n");
+        let compact = rendered.split_whitespace().collect::<String>();
+        assert!(compact.contains("transcript-card"), "{rendered}");
+        assert!(!rendered.contains("draft text"));
+        assert!(!rendered.contains("(1) yes"));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains('┌') || line.contains('─'))
+        );
+    });
+}
+
+#[test]
+fn input_area_placement_renders_interaction_in_the_input_slot() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _, conversation_id) = add_orchestration_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.input_view
+                .update(ctx, |input, ctx| input.set_text("hidden draft", ctx));
+        });
+        let action = blocking_action("input-area");
+        let prompt = add_permission_prompt(&mut app, &view, &action.id);
+        queue_blocking_action(&mut app, &view, conversation_id, action);
+        set_session_interaction(
+            &mut app,
+            &view,
+            Some(prompt.clone()),
+            TuiBlockingInteractionPlacement::InputArea,
+        );
+
+        let lines = render_session_with_prompt(&mut app, &view, &prompt, 80, 40);
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("(1) yes"), "{rendered}");
+        assert!(rendered.contains("(2) no"), "{rendered}");
+        assert!(!rendered.contains("hidden draft"));
+    });
+}
+
+#[test]
+fn composer_state_survives_blocking_interaction_suppression() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _, conversation_id) = add_orchestration_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("preserved draft", ctx);
+                input.handle_action(
+                    &TuiInputAction::EditorCommand(TuiEditorCommand::SelectAll),
+                    ctx,
+                );
+            });
+            view.attachment_bar.update(ctx, |bar, ctx| {
+                bar.set_processing_attachment_for_test("image.png".to_owned(), ctx);
+            });
+        });
+        let before = view.read(&app, |view, ctx| {
+            (
+                view.input_view
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .content()
+                    .as_ref(ctx)
+                    .text()
+                    .into_string(),
+                view.input_view.as_ref(ctx).cursor_offset_for_test(ctx),
+                view.input_view.as_ref(ctx).selection_range_for_test(ctx),
+                view.attachment_bar.as_ref(ctx).snapshot_for_test(ctx),
+                view.model_menu.as_ref(ctx).is_open(ctx),
+            )
+        });
+
+        let action = blocking_action("state");
+        let prompt = add_permission_prompt(&mut app, &view, &action.id);
+        queue_blocking_action(&mut app, &view, conversation_id, action);
+        set_session_interaction(
+            &mut app,
+            &view,
+            Some(prompt),
+            TuiBlockingInteractionPlacement::Transcript,
+        );
+        let during = view.read(&app, |view, ctx| {
+            (
+                view.input_view
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .content()
+                    .as_ref(ctx)
+                    .text()
+                    .into_string(),
+                view.input_view.as_ref(ctx).cursor_offset_for_test(ctx),
+                view.input_view.as_ref(ctx).selection_range_for_test(ctx),
+                view.attachment_bar.as_ref(ctx).snapshot_for_test(ctx),
+                view.model_menu.as_ref(ctx).is_open(ctx),
+            )
+        });
+        assert_eq!(during, before);
+
+        set_session_interaction(
+            &mut app,
+            &view,
+            None,
+            TuiBlockingInteractionPlacement::Transcript,
+        );
+        let after = view.read(&app, |view, ctx| {
+            (
+                view.input_view
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .content()
+                    .as_ref(ctx)
+                    .text()
+                    .into_string(),
+                view.input_view.as_ref(ctx).cursor_offset_for_test(ctx),
+                view.input_view.as_ref(ctx).selection_range_for_test(ctx),
+                view.attachment_bar.as_ref(ctx).snapshot_for_test(ctx),
+                view.model_menu.as_ref(ctx).is_open(ctx),
+            )
+        });
+        assert_eq!(after, before);
+    });
+}
+
+#[test]
+fn focus_transfers_between_consecutive_blockers_and_returns_after_the_last() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _, conversation_id) = add_orchestration_session(&mut app, &fixture, true);
+        let first = blocking_action("first-focus");
+        let second = blocking_action("second-focus");
+        let first_prompt = add_permission_prompt(&mut app, &view, &first.id);
+        let second_prompt = add_permission_prompt(&mut app, &view, &second.id);
+        register_transcript_interaction(&mut app, &view, first.id.clone(), first_prompt.clone());
+        register_transcript_interaction(&mut app, &view, second.id.clone(), second_prompt.clone());
+
+        queue_blocking_action(&mut app, &view, conversation_id, first.clone());
+        queue_blocking_action(&mut app, &view, conversation_id, second.clone());
+        assert!(app.read(|ctx| {
+            ctx.check_view_or_child_focused(fixture.window_id, &first_prompt.id())
+        }));
+
+        view.read(&app, |view, _| view.ai_action_model.clone())
+            .update(&mut app, |model, ctx| {
+                model.cancel_action_with_id(
+                    conversation_id,
+                    &first.id,
+                    warp::tui_export::CancellationReason::ManuallyCancelled,
+                    ctx,
+                );
+            });
+        assert!(app.read(|ctx| {
+            ctx.check_view_or_child_focused(fixture.window_id, &second_prompt.id())
+        }));
+        assert!(!app.read(|ctx| {
+            ctx.check_view_or_child_focused(fixture.window_id, &view.as_ref(ctx).input_view.id())
+        }));
+
+        view.read(&app, |view, _| view.ai_action_model.clone())
+            .update(&mut app, |model, ctx| {
+                model.cancel_action_with_id(
+                    conversation_id,
+                    &second.id,
+                    warp::tui_export::CancellationReason::ManuallyCancelled,
+                    ctx,
+                );
+            });
+        assert!(app.read(|ctx| {
+            ctx.check_view_or_child_focused(fixture.window_id, &view.as_ref(ctx).input_view.id())
+        }));
+    });
 }
 
 /// Registers a child session under a parent conversation.

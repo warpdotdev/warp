@@ -125,6 +125,9 @@ impl TuiGenericToolCallView {
             .filter(|prompt| prompt.as_ref(app).is_active(app))
             .cloned()
     }
+    pub(super) fn permission_prompt(&self) -> Option<ViewHandle<TuiPermissionPrompt>> {
+        self.permission_prompt.clone()
+    }
 
     /// Approves the action, including executor-specific decision channels.
     fn accept(&self, ctx: &mut ViewContext<Self>) {

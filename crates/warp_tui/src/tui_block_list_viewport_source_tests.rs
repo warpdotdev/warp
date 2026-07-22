@@ -24,7 +24,9 @@ use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext};
 use super::{AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource};
 use crate::agent_block::{TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent};
 use crate::terminal_block::should_render_terminal_block;
-use crate::test_fixtures::{TestHostView, add_test_action_model_and_events};
+use crate::test_fixtures::{
+    TestHostView, add_test_action_model_and_events, add_test_blocking_interaction_model,
+};
 
 #[test]
 fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
@@ -760,8 +762,7 @@ fn reasoning_agent_block_source(
                     .block_list_mut()
                     .mark_rich_content_dirty(view_id);
             }
-            TuiAIBlockEvent::BlockingStateChanged
-            | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
         });
     });
     {
@@ -868,6 +869,7 @@ fn add_agent_block_with(
     terminal_model: Arc<FairMutex<TerminalModel>>,
 ) -> ViewHandle<TuiAIBlock> {
     let (action_model, model_events) = add_test_action_model_and_events(app);
+    let blocking_interaction_model = add_test_blocking_interaction_model(app, action_model.clone());
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
             AddWindowOptions {
@@ -882,6 +884,7 @@ fn add_agent_block_with(
                 AIAgentExchangeId::new(),
                 Rc::new(QueryAgentBlockModel { inputs, status }),
                 action_model,
+                blocking_interaction_model,
                 &model_events,
                 terminal_model,
                 ctx,
@@ -905,6 +908,7 @@ fn updating_agent_block_source(
         callback: RefCell::new(None),
     });
     let (action_model, model_events) = add_test_action_model_and_events(app);
+    let blocking_interaction_model = add_test_blocking_interaction_model(app, action_model.clone());
     let terminal_model_for_block = terminal_model.clone();
     let block_model_for_block = block_model.clone();
     let agent_block = app.update(|ctx| {
@@ -921,6 +925,7 @@ fn updating_agent_block_source(
                 AIAgentExchangeId::new(),
                 block_model_for_block,
                 action_model,
+                blocking_interaction_model,
                 &model_events,
                 terminal_model_for_block,
                 ctx,
@@ -937,8 +942,7 @@ fn updating_agent_block_source(
                     .block_list_mut()
                     .mark_rich_content_dirty(view_id);
             }
-            TuiAIBlockEvent::BlockingStateChanged
-            | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
         });
     });
     terminal_model.lock().block_list_mut().append_rich_content(

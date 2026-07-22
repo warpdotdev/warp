@@ -22,13 +22,14 @@ use warpui_core::{
     ViewContext, ViewHandle,
 };
 
-use super::agent_block::{TuiAIBlock, TuiAIBlockEvent, TuiBlockingChild};
+use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
 use super::terminal_block::{block_content_rows, should_render_terminal_block};
 use super::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
 };
 use super::tui_builder::TuiUiBuilder;
 use super::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
+use crate::blocking_interaction::TuiBlockingInteractionModel;
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
 /// via [`TRANSCRIPT_BLOCK_SPACING`]'s `padding_top`; agent blocks apply the
@@ -58,9 +59,6 @@ pub(crate) const TRANSCRIPT_BLOCK_SPACING: BlockSpacing = BlockSpacing {
 pub(super) enum TuiTranscriptViewEvent {
     SelectionStarted,
     SelectionEnded(String),
-    /// An agent block's blocking child changed state; the session surface
-    /// re-derives the active blocker (input replacement).
-    BlockingStateChanged,
     PermissionReplacementGuidanceSubmitted {
         conversation_id: AIConversationId,
         text: String,
@@ -79,6 +77,7 @@ pub(super) struct TuiTranscriptView {
     terminal_surface_id: EntityId,
     model: Arc<FairMutex<TerminalModel>>,
     action_model: ModelHandle<BlocklistAIActionModel>,
+    blocking_interaction_model: ModelHandle<TuiBlockingInteractionModel>,
     model_events: ModelHandle<ModelEventDispatcher>,
     agent_blocks: AgentBlockRegistry,
     cli_subagent_blocks: CLISubagentBlockRegistry,
@@ -87,11 +86,31 @@ pub(super) struct TuiTranscriptView {
 }
 
 impl TuiTranscriptView {
+    #[cfg(test)]
+    pub(super) fn new_for_test(
+        terminal_surface_id: EntityId,
+        model: Arc<FairMutex<TerminalModel>>,
+        action_model: ModelHandle<BlocklistAIActionModel>,
+        model_events: &ModelHandle<ModelEventDispatcher>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        let blocking_interaction_model =
+            ctx.add_model(|ctx| TuiBlockingInteractionModel::new(action_model.clone(), ctx));
+        Self::new(
+            terminal_surface_id,
+            model,
+            action_model,
+            blocking_interaction_model,
+            model_events,
+            ctx,
+        )
+    }
     /// Creates a transcript view for one terminal surface.
     pub(super) fn new(
         terminal_surface_id: EntityId,
         model: Arc<FairMutex<TerminalModel>>,
         action_model: ModelHandle<BlocklistAIActionModel>,
+        blocking_interaction_model: ModelHandle<TuiBlockingInteractionModel>,
         model_events: &ModelHandle<ModelEventDispatcher>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -104,6 +123,7 @@ impl TuiTranscriptView {
             terminal_surface_id,
             model,
             action_model,
+            blocking_interaction_model,
             model_events: model_events.clone(),
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             cli_subagent_blocks: Rc::new(RefCell::new(HashMap::new())),
@@ -393,6 +413,7 @@ impl TuiTranscriptView {
 
         let block_model = Rc::new(block_model);
         let action_model = self.action_model.clone();
+        let blocking_interaction_model = self.blocking_interaction_model.clone();
         let model_events = self.model_events.clone();
         let terminal_model = self.model.clone();
         let view = ctx.add_typed_action_tui_view(|ctx| {
@@ -401,6 +422,7 @@ impl TuiTranscriptView {
                 exchange_id,
                 block_model,
                 action_model,
+                blocking_interaction_model,
                 &model_events,
                 terminal_model,
                 ctx,
@@ -414,10 +436,6 @@ impl TuiTranscriptView {
                     .lock()
                     .block_list_mut()
                     .mark_rich_content_dirty(view_id);
-                ctx.notify();
-            }
-            TuiAIBlockEvent::BlockingStateChanged => {
-                ctx.emit(TuiTranscriptViewEvent::BlockingStateChanged);
                 ctx.notify();
             }
             TuiAIBlockEvent::ReplacementGuidanceSubmitted {
@@ -594,6 +612,11 @@ impl TuiTranscriptView {
                     new_height: 0,
                 });
             }
+            if let Some(agent_block) = self.agent_blocks.borrow().get(&view_id).cloned() {
+                agent_block.update(ctx, |block, ctx| {
+                    block.unregister_blocking_interactions(ctx);
+                });
+            }
             self.agent_blocks.borrow_mut().remove(&view_id);
             self.cli_subagent_blocks.borrow_mut().remove(&view_id);
             self.model
@@ -602,16 +625,6 @@ impl TuiTranscriptView {
                 .remove_rich_content(view_id);
         }
         ctx.notify();
-    }
-
-    /// The front-of-queue blocking interaction across this transcript's
-    /// agent blocks, if any. A pure query over the shared action queue; the
-    /// session surface derives input visibility and focus from it.
-    pub(super) fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
-        self.agent_blocks
-            .borrow()
-            .values()
-            .find_map(|block| block.as_ref(ctx).active_blocking_child(ctx))
     }
 
     /// Clears persistent selection owned by the transcript.
@@ -629,6 +642,11 @@ impl TuiTranscriptView {
             .copied()
             .collect::<Vec<_>>();
         view_ids.extend(self.cli_subagent_blocks.borrow().keys().copied());
+        for agent_block in self.agent_blocks.borrow().values() {
+            agent_block.update(ctx, |block, ctx| {
+                block.unregister_blocking_interactions(ctx);
+            });
+        }
         self.agent_blocks.borrow_mut().clear();
         self.cli_subagent_blocks.borrow_mut().clear();
         self.selection.clear();

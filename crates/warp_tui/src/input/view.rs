@@ -664,6 +664,11 @@ impl TuiInputView {
             .unwrap_or_default()
     }
 
+    #[cfg(test)]
+    pub(crate) fn cursor_offset_for_test(&self, ctx: &AppContext) -> CharOffset {
+        self.cursor_offset(ctx)
+    }
+
     /// The selection as a 1-based gap range, or `None` when the selection is
     /// empty. Rendering reads the selection through the editor element; this
     /// backs cursor-position checks (e.g. shell-mode entry) and tests.
@@ -679,6 +684,11 @@ impl TuiInputView {
             let end = head.max(tail);
             Some(start..end)
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn selection_range_for_test(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
+        self.selection_range(ctx)
     }
 
     /// Whether the cursor sits at the very start of the buffer with no active
