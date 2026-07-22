@@ -69,6 +69,8 @@ struct TuiCodeBlockKey {
 
 /// The focused child view for the front-of-queue blocking interaction.
 pub(super) enum TuiBlockingChild {
+    /// An ask-user-question questionnaire.
+    AskQuestion(ViewHandle<TuiAskQuestionView>),
     /// A standard Yes/No/Other permission request.
     Permission(ViewHandle<TuiPermissionPrompt>),
     /// The specialized orchestration configuration request.
@@ -79,6 +81,7 @@ impl TuiBlockingChild {
     /// Returns the view identity used to detect blocker focus transitions.
     pub(super) fn id(&self) -> EntityId {
         match self {
+            Self::AskQuestion(view) => view.id(),
             Self::Permission(view) => view.id(),
             Self::Orchestration(view) => view.id(),
         }
@@ -453,6 +456,7 @@ impl TuiAIBlock {
                     ) {
                         me.sync_action_views(&action_model, ctx);
                     }
+                    ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
                     me.invalidate_action(event.action_id(), ctx);
                 }
             },
@@ -804,6 +808,10 @@ impl TuiAIBlock {
             return None;
         }
         match self.action_views.get(&action_id)? {
+            TuiToolCallView::AskQuestion(view) => view
+                .as_ref(ctx)
+                .is_awaiting_answers(ctx)
+                .then(|| TuiBlockingChild::AskQuestion(view.clone())),
             TuiToolCallView::OrchestrationBlock(view) => view
                 .as_ref(ctx)
                 .is_awaiting_confirmation(ctx)
@@ -820,8 +828,8 @@ impl TuiAIBlock {
                 .as_ref(ctx)
                 .active_permission_prompt(ctx)
                 .map(TuiBlockingChild::Permission),
-            // These tool views render inline and never replace the input.
-            TuiToolCallView::AskQuestion(_) | TuiToolCallView::Plan(_) => None,
+            // Plan tool views render inline and never replace the input.
+            TuiToolCallView::Plan(_) => None,
         }
     }
 

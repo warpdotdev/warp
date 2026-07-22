@@ -7,22 +7,27 @@
 //! the first accepted submission produces a block and returns whenever the
 //! transcript empties out again.
 
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
+use std::time::Duration;
 
-use ai::project_context::model::ProjectContextModel;
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use warp::tui_export::{
-    ChangelogModel, ChangelogState, SkillManager, TuiMcpConfigState, TuiMcpManager,
-    TuiMcpServerStatus,
+    ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
+    SkillManager, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
 };
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
-use warpui_core::AppContext;
+use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
+use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
-use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater};
+use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
+use crate::zero_state_animation::{StarfieldState, ZeroStateAnimationElement};
 
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
@@ -30,13 +35,100 @@ const MAX_CHANGELOG_BULLETS: usize = 3;
 /// Width cap on the text column so bullets wrap like the mock.
 const LEFT_COLUMN_MAX_COLS: u16 = 48;
 
-/// Renders the zero state for the transcript area. `cwd` is the session's
-/// working directory for the project section.
-pub(crate) fn render_zero_state(cwd: Option<&str>, app: &AppContext) -> Box<dyn TuiElement> {
-    let builder = TuiUiBuilder::from_app(app);
-    TuiConstrainedBox::new(render_left_column(cwd, &builder, app).finish())
-        .with_max_cols(LEFT_COLUMN_MAX_COLS)
-        .finish()
+// ---------------------------------------------------------------------------
+// TuiZeroStateView
+// ---------------------------------------------------------------------------
+
+/// The zero-state view: displayed when the transcript is empty.
+///
+/// Owns the starfield animation state so it persists across view re-renders
+/// (e.g. when MCP connects or a changelog loads).  The animation element
+/// receives an `Rc<RefCell<StarfieldState>>` clone on each render, keeping
+/// the star positions continuous through paint-only animation repaints.
+pub(crate) struct TuiZeroStateView {
+    starfield: Rc<RefCell<StarfieldState>>,
+    clock: AnimationClock,
+    active_session: ModelHandle<ActiveSession>,
+}
+
+impl TuiZeroStateView {
+    pub(crate) fn new(
+        active_session: ModelHandle<ActiveSession>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        // Subscribe to events that change what the zero state displays so
+        // this view re-renders independently of its parent.
+        ctx.subscribe_to_model(
+            &ChangelogModel::handle(ctx),
+            |_, _, event: &ChangelogModelEvent, ctx| {
+                if let ChangelogModelEvent::ChangelogRequestComplete { .. } = event {
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.subscribe_to_model(
+            &TuiAutoupdater::handle(ctx),
+            |_, _, event: &TuiAutoupdaterEvent, ctx| {
+                let TuiAutoupdaterEvent::StatusChanged = event;
+                ctx.notify();
+            },
+        );
+        ctx.subscribe_to_model(
+            &ProjectContextModel::handle(ctx),
+            |_, _, event: &ProjectContextModelEvent, ctx| {
+                if let ProjectContextModelEvent::PathIndexed = event {
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| {
+            let ActiveSessionEvent::UpdatedPwd = event else {
+                return;
+            };
+            ctx.notify();
+        });
+
+        Self {
+            starfield: Rc::new(RefCell::new(StarfieldState::new())),
+            clock: AnimationClock::starting_at(Duration::ZERO),
+            active_session,
+        }
+    }
+}
+
+impl Entity for TuiZeroStateView {
+    type Event = ();
+}
+
+impl TuiView for TuiZeroStateView {
+    fn ui_name() -> &'static str {
+        "TuiZeroStateView"
+    }
+
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(ctx);
+        let session = self.active_session.as_ref(ctx);
+        let cwd = session.current_working_directory().cloned().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.to_string_lossy().into_owned())
+        });
+        let text_column =
+            TuiConstrainedBox::new(render_left_column(cwd.as_deref(), &builder, ctx).finish())
+                .with_max_cols(LEFT_COLUMN_MAX_COLS)
+                .finish();
+        let animation = ZeroStateAnimationElement::new(
+            Rc::clone(&self.starfield),
+            self.clock,
+            builder.accent_color(),
+        )
+        .finish();
+        TuiFlex::row()
+            .child(text_column)
+            .flex_child(animation)
+            .finish()
+    }
 }
 
 /// The left text column: title, version, "What's new", and project context.

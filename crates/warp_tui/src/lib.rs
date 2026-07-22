@@ -74,6 +74,7 @@ mod tui_shell_command_view;
 mod usage;
 mod warping_indicator;
 mod zero_state;
+mod zero_state_animation;
 
 pub use root_view::RootTuiView;
 pub use session::run;

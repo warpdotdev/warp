@@ -98,5 +98,19 @@ fn focus_drives_events() {
             std::mem::take(&mut *events.borrow_mut()),
             vec![TuiSessionsEvent::FocusChanged(first_id)],
         );
+
+        app.update_model(&sessions, |sessions, ctx| sessions.clear(ctx));
+        assert_eq!(app.read_model(&sessions, |sessions, _| sessions.len()), 0);
+        assert_eq!(
+            app.read_model(&sessions, |sessions, _| sessions.focused_session_id()),
+            None
+        );
+        assert_eq!(
+            std::mem::take(&mut *events.borrow_mut()),
+            vec![
+                TuiSessionsEvent::SessionRemoved(first_id),
+                TuiSessionsEvent::SessionRemoved(second_id),
+            ],
+        );
     });
 }

@@ -91,5 +91,10 @@ fn root_projects_only_the_focused_retained_session_view() {
             assert_eq!(root.as_ref(ctx).child_view_ids(ctx), vec![cloud_view.id()]);
             assert!(ctx.check_view_or_child_focused(window_id, &cloud_view.id()));
         });
+        root.update(&mut app, |root, ctx| root.show_auth(ctx));
+        app.read(|ctx| {
+            assert!(root.as_ref(ctx).child_view_ids(ctx).is_empty());
+            assert!(ctx.check_view_or_child_focused(window_id, &root.id()));
+        });
     });
 }

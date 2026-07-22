@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use string_offset::CharOffset;
 use warp::tui_export::{
     Appearance, OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
 };
@@ -14,8 +15,8 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext, TuiView as _, TypedActionView as _, ViewHandle};
 
 use super::{
-    OptionSelectorHeader, OptionSelectorPage, SelectorItem, TuiOptionSelector,
-    TuiOptionSelectorAction, TuiOptionSelectorEvent,
+    OptionSelectorHeader, OptionSelectorPage, SELECTOR_NAVIGATION_ACTIVE, SelectorFocusZone,
+    SelectorItem, TuiOptionSelector, TuiOptionSelectorAction, TuiOptionSelectorEvent,
 };
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::TuiEditorCommand;
@@ -32,6 +33,120 @@ fn row(id: &str) -> OptionRow {
         badge: None,
         disabled_reason: None,
     }
+}
+
+#[test]
+fn focus_zone_tracks_each_selector_surface() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::None
+        );
+
+        set_page(&mut app, &selector, snapshot(&["a"], Some("a")));
+        selector.update(&mut app, |_, ctx| ctx.focus_self());
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::List
+        );
+
+        set_searchable_page(&mut app, &selector, snapshot(&["a"], Some("a")));
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveUp);
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::Search
+        );
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+
+        let mut with_footer = snapshot(&["a"], Some("a"));
+        with_footer.footer = Some(OptionFooter::CustomText {
+            label: "Other".to_string(),
+        });
+        set_page(&mut app, &selector, with_footer);
+        act(&mut app, &selector, TuiOptionSelectorAction::SelectItem(1));
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::CustomText
+        );
+        set_page(&mut app, &selector, snapshot(&["next"], Some("next")));
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::List
+        );
+
+        let leading_editor = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(selector.window_id(ctx), |ctx| {
+                TuiEditorView::single_line(ctx)
+            })
+        });
+        selector.update(&mut app, |selector, ctx| {
+            selector.set_leading_editor(leading_editor.clone(), ctx);
+            ctx.focus(&leading_editor);
+        });
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::LeadingEditor
+        );
+    });
+}
+
+#[test]
+fn leading_editor_arrows_move_within_multiline_before_list_handoff() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        let leading_editor = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(selector.window_id(ctx), |ctx| {
+                TuiEditorView::multiline(4, ctx)
+            })
+        });
+        leading_editor.update(&mut app, |editor, ctx| {
+            editor.set_text("first\nsecond\nthird", ctx);
+        });
+        selector.update(&mut app, |selector, ctx| {
+            selector.set_leading_editor(leading_editor.clone(), ctx);
+            selector.set_page(page(snapshot(&["a", "b"], Some("a")), false), ctx);
+            ctx.focus(&leading_editor);
+        });
+        leading_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+        render_lines(&app, &selector, 60);
+
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+        assert!(leading_editor.read(&app, |editor, _| editor.is_focused()));
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+        assert!(leading_editor.read(&app, |editor, _| editor.is_focused()));
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::List
+        );
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.highlighted_index()),
+            Some(0)
+        );
+
+        leading_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: 1.into(),
+                }),
+                ctx,
+            );
+            ctx.focus_self();
+        });
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveUp);
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.highlighted_index()),
+            Some(1)
+        );
+    });
 }
 
 /// Builds a disabled row carrying `reason`.
@@ -913,9 +1028,8 @@ fn back_cancels_custom_text_editing_before_leaving_the_page() {
     });
 }
 
-/// Arrow navigation leaves list state untouched while custom text owns focus.
 #[test]
-fn arrows_do_not_navigate_the_list_while_editing_custom_text() {
+fn arrows_leave_custom_text_and_navigate_adjacent_options() {
     App::test((), |mut app| async move {
         let (selector, _) = add_selector(&mut app);
         let mut with_footer = snapshot(&["a", "b", "c", "d", "e", "f", "g", "h"], Some("a"));
@@ -924,33 +1038,28 @@ fn arrows_do_not_navigate_the_list_while_editing_custom_text() {
         });
         set_page(&mut app, &selector, with_footer);
         let custom_text_index = 8;
-
-        for action in [
-            TuiOptionSelectorAction::MoveUp,
-            TuiOptionSelectorAction::MoveDown,
+        for (action, expected_index) in [
+            (TuiOptionSelectorAction::MoveUp, 7),
+            (TuiOptionSelectorAction::MoveDown, 0),
         ] {
             act(
                 &mut app,
                 &selector,
                 TuiOptionSelectorAction::SelectItem(custom_text_index),
             );
-            let before = selector.read(&app, |selector, _| {
-                (
-                    selector.interaction.selection.selected_index(),
-                    selector.interaction.scroll_offset,
-                )
-            });
+            assert!(selector.read(&app, |selector, ctx| {
+                selector
+                    .keymap_context(ctx)
+                    .set
+                    .contains(SELECTOR_NAVIGATION_ACTIVE)
+            }));
 
             act(&mut app, &selector, action);
-
-            let after = selector.read(&app, |selector, _| {
-                (
-                    selector.interaction.selection.selected_index(),
-                    selector.interaction.scroll_offset,
-                )
-            });
-            assert_eq!(after, before);
-            assert!(custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
+            assert_eq!(
+                selector.read(&app, |selector, _| selector.highlighted_index()),
+                Some(expected_index)
+            );
+            assert!(!custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
         }
     });
 }
