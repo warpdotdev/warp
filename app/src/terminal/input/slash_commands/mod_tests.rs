@@ -77,6 +77,7 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
         (&commands::AUTO_APPROVE, TuiSlashCommand::AutoApprove),
         (&commands::MCP, TuiSlashCommand::Mcp),
         (&commands::EXIT, TuiSlashCommand::Exit),
+        (&commands::LOGOUT, TuiSlashCommand::Logout),
         (&commands::VIEW_LOGS, TuiSlashCommand::ViewLogs),
     ] {
         assert_eq!(
@@ -124,6 +125,24 @@ fn exit_command_executes_immediately_and_takes_no_argument() {
     );
     // Available in every session context (gated to the TUI at registry level).
     assert_eq!(commands::EXIT.availability, Availability::ALWAYS);
+}
+
+#[test]
+fn logout_command_executes_immediately_and_takes_no_argument() {
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
+
+    assert_eq!(
+        TuiSlashCommand::from_static_command(&commands::LOGOUT),
+        Some(TuiSlashCommand::Logout)
+    );
+    assert!(slash_command_is_supported_in_tui(&commands::LOGOUT));
+    assert!(commands::LOGOUT.argument.is_none());
+    assert!(!slash_command_is_submitted_as_prompt(&commands::LOGOUT));
+    assert_eq!(
+        slash_command_selection_behavior(&commands::LOGOUT),
+        SlashCommandSelectionBehavior::Execute
+    );
+    assert_eq!(commands::LOGOUT.availability, Availability::ALWAYS);
 }
 
 #[test]

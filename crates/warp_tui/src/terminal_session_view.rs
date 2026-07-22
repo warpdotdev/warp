@@ -32,9 +32,10 @@ use warp::tui_export::{
     TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommand, TuiSlashCommandDataSource,
     TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason,
     WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model, build_slash_command_mixer,
-    detect_possible_git_repo, export_conversation_markdown, maybe_build_ai_query_upsert_event,
-    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    detect_possible_git_repo, export_conversation_markdown, log_out_tui,
+    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
+    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::features::FeatureFlag;
@@ -2851,6 +2852,10 @@ impl TuiTerminalSessionView {
             TuiSlashCommand::Exit => {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            }
+            TuiSlashCommand::Logout => {
+                record_static_slash_command_accepted(command.name, true, ctx);
+                log_out_tui(ctx);
             }
             TuiSlashCommand::ViewLogs => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));

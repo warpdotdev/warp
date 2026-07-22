@@ -143,6 +143,7 @@ pub enum TuiSlashCommand {
     AutoApprove,
     Mcp,
     Exit,
+    Logout,
     ViewLogs,
     EnableNaturalLanguageDetection,
     DisableNaturalLanguageDetection,
@@ -165,6 +166,7 @@ impl TuiSlashCommand {
             name if name == commands::AUTO_APPROVE.name => Some(Self::AutoApprove),
             name if name == commands::MCP.name => Some(Self::Mcp),
             name if name == commands::EXIT.name => Some(Self::Exit),
+            name if name == commands::LOGOUT.name => Some(Self::Logout),
             name if name == commands::VIEW_LOGS.name => Some(Self::ViewLogs),
             name if name == commands::ENABLE_NATURAL_LANGUAGE_DETECTION.name => {
                 Some(Self::EnableNaturalLanguageDetection)
