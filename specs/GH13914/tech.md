@@ -129,9 +129,10 @@ rect.width    = (visible_right - visible_left) + 2 * block_padding
 ```
 
 `block_padding` (`font_size / 10.` when a border is present) therefore adds `2 *
-block_padding` (`= font_size / 5`, ≈1.08px at a 13px font) of extra gap on the left
+block_padding` (`= font_size / 5`, ≈2.6px at a 13px font) of extra gap on the left
 only. On its own this would leave the left ink gap `font_size / 5` wider than the
-right, even with ink-anchored edges.
+right, even with ink-anchored edges — a clearly visible imbalance, not a sub-pixel
+one.
 
 **For chip-family runs, this fix compensates that left shift out** so the padding is
 literally equal on both sides. Concretely, in `paint_run_background`:
@@ -164,10 +165,11 @@ rect.width    = (visible_right - visible_left) + 2 * horizontal_block_padding
 **Net result:** the "equal ink padding on both sides" promise (Goal 1 / Success
 Criterion 1) is achieved outright for chips — both the advance-vs-ink asymmetry and
 the `block_padding` left residual are eliminated. As the intended consequence, a
-chip's left edge **tightens** by `2 * block_padding` (≈1px) versus today (product
-spec Goal 2 / Success Criterion 2); this is stated as intended behavior, not a
-regression, and is smaller than the several-pixel advance gap the fix removes on the
-right. Non-chip runs are unchanged.
+chip's left edge **tightens** by `2 * block_padding` (`= font_size / 5`, ≈2.6px at a
+13px font) versus today (product spec Goal 2 / Success Criterion 2); this is stated
+as intended behavior, not a regression. It is clearly visible on its own, though
+still smaller than the several-pixel advance gap the fix removes on the right.
+Non-chip runs are unchanged.
 
 ### Per-glyph ink IS derivable cross-platform (the key finding)
 
@@ -233,8 +235,9 @@ constant is *not* standing in for a missing measurement (the ink edges are exact
 mis-tuning it only changes the uniform padding, and can never re-introduce the
 left/right asymmetry. The exact fraction is a maintainer taste question (product spec
 Open Question #1). Note the deliberate consequence: with the left shift compensated
-out, the chip's left edge sits ~1px (`2 * block_padding`) tighter than today — see
-"Interaction with the legacy `block_padding` offset."
+out, the chip's left edge sits `2 * block_padding` (`= font_size / 5`, ≈2.6px at a
+13px font) tighter than today — see "Interaction with the legacy `block_padding`
+offset."
 
 ### RTL / edge-glyph identification
 
@@ -396,8 +399,10 @@ because that surface does not use this paint path at all:
   characters (`` `foo.bar()` ``, `` `x;` ``) beside wide-ink-ending spans
   (`` `foo_bar` ``) and confirm right-side padding now equals left-side padding, on
   both macOS and a Linux/winit build (also check the macOS AA residual, Open
-  Question #2). Confirm the left edge **tightened** by ~1px (the intended
-  equal-padding consequence), not that it stayed put. Check dark and light themes.
+  Question #2). Confirm the left edge **tightened** by `2 * block_padding`
+  (`= font_size / 5`, ≈2.6px at a 13px font — clearly visible, not sub-pixel; the
+  intended equal-padding consequence), not that it stayed put. Check dark and light
+  themes.
 - `cargo fmt` and `cargo clippy --workspace --all-targets --all-features --tests
   -- -D warnings` must pass, per `CONTRIBUTING.md`.
 - `cargo nextest run -p warpui_core -p warp_editor` (CI parity) must pass with the
