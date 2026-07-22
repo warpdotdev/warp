@@ -17,6 +17,14 @@ use crate::cloud_object::{
 use crate::server::sync_queue::QueueItem;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
+#[cfg(all(feature = "tui", feature = "local_fs"))]
+mod tui_projection;
+#[cfg(all(feature = "tui", feature = "local_fs"))]
+pub use tui_projection::{
+    TuiCloudEnvironment, TuiCloudEnvironmentEvent, TuiCloudEnvironmentProjection,
+    suggest_tui_handoff_environment,
+};
+
 impl StringModel for AmbientAgentEnvironment {
     type CloudObjectType = CloudAmbientAgentEnvironment;
 

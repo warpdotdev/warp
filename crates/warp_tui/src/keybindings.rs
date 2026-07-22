@@ -29,6 +29,7 @@ use crate::attachment_bar::TuiAttachmentBar;
 use crate::cloud_run_view::TuiCloudRunView;
 use crate::editor_interaction::{TuiEditorBindingTarget, TuiEditorCommand, editor_binding_specs};
 use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
+use crate::handoff_block::TuiHandoffBlock;
 use crate::input::TuiInputView;
 use crate::input::view::TuiInputAction;
 use crate::option_selector::TuiOptionSelector;
@@ -87,6 +88,7 @@ pub(crate) fn init(app: &mut AppContext) {
         TuiEditorViewAction::Command,
     );
     crate::orchestration_block::init(app);
+    crate::handoff_block::init(app);
     crate::tui_ask_question_view::init(app);
     crate::tui_permission_prompt::init(app);
     crate::tui_shell_command_view::init(app);
@@ -147,6 +149,7 @@ fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<TuiEditorView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiOrchestrationBlock>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiHandoffBlock>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiOptionSelector>(is_tui_owned_binding);
 }
 

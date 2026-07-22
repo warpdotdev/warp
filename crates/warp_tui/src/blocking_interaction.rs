@@ -8,6 +8,7 @@ use warp::tui_export::{
 use warpui_core::elements::tui::{TuiChildView, TuiElement};
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
+use crate::handoff_block::TuiHandoffBlock;
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::tui_ask_question_view::TuiAskQuestionView;
@@ -28,6 +29,7 @@ pub(crate) enum TuiBlockingInteraction {
     AskQuestion(ViewHandle<TuiAskQuestionView>),
     Permission(ViewHandle<TuiPermissionPrompt>),
     Orchestration(ViewHandle<TuiOrchestrationBlock>),
+    Handoff(ViewHandle<TuiHandoffBlock>),
 }
 
 impl TuiBlockingInteraction {
@@ -36,6 +38,7 @@ impl TuiBlockingInteraction {
             Self::AskQuestion(_) => TuiBlockingInteractionKind::AskQuestion,
             Self::Permission(_) => TuiBlockingInteractionKind::Permission,
             Self::Orchestration(_) => TuiBlockingInteractionKind::Orchestration,
+            Self::Handoff(_) => TuiBlockingInteractionKind::Handoff,
         }
     }
 
@@ -44,6 +47,7 @@ impl TuiBlockingInteraction {
             Self::AskQuestion(view) => view.id(),
             Self::Permission(view) => view.id(),
             Self::Orchestration(view) => view.id(),
+            Self::Handoff(view) => view.id(),
         }
     }
 
@@ -52,6 +56,7 @@ impl TuiBlockingInteraction {
             Self::AskQuestion(view) => view.as_ref(ctx).is_awaiting_answers(ctx),
             Self::Permission(view) => view.as_ref(ctx).is_active(ctx),
             Self::Orchestration(view) => view.as_ref(ctx).is_awaiting_confirmation(ctx),
+            Self::Handoff(view) => view.as_ref(ctx).is_active(),
         }
     }
 
@@ -64,6 +69,9 @@ impl TuiBlockingInteraction {
                 view.update(ctx, |view, ctx| view.focus(ctx));
             }
             Self::Orchestration(view) => ctx.focus(view),
+            Self::Handoff(view) => {
+                view.update(ctx, |view, ctx| view.focus(ctx));
+            }
         }
     }
 
@@ -72,6 +80,7 @@ impl TuiBlockingInteraction {
             Self::AskQuestion(view) => TuiChildView::new(view).finish(),
             Self::Permission(view) => TuiChildView::new(view).finish(),
             Self::Orchestration(view) => TuiChildView::new(view).finish(),
+            Self::Handoff(view) => TuiChildView::new(view).finish(),
         }
     }
 }
@@ -81,6 +90,7 @@ enum TuiBlockingInteractionKind {
     AskQuestion,
     Permission,
     Orchestration,
+    Handoff,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -162,6 +172,27 @@ impl TuiBlockingInteractionModel {
         self.active.clone()
     }
 
+    pub(crate) fn has_session_interaction(&self) -> bool {
+        self.session_interaction.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handoff_for_test(&self) -> Option<ViewHandle<TuiHandoffBlock>> {
+        match self
+            .session_interaction
+            .as_ref()
+            .map(|registration| &registration.interaction)
+        {
+            Some(TuiBlockingInteraction::Handoff(view)) => Some(view.clone()),
+            Some(
+                TuiBlockingInteraction::AskQuestion(_)
+                | TuiBlockingInteraction::Permission(_)
+                | TuiBlockingInteraction::Orchestration(_),
+            )
+            | None => None,
+        }
+    }
+
     pub(crate) fn register_action(
         &mut self,
         action_id: AIAgentActionId,
@@ -188,7 +219,6 @@ impl TuiBlockingInteractionModel {
         self.refresh(ctx);
     }
 
-    #[allow(dead_code)]
     pub(crate) fn set_session_interaction(
         &mut self,
         interaction: Option<(TuiBlockingInteraction, TuiBlockingInteractionPlacement)>,
