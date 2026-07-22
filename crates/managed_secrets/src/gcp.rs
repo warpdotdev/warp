@@ -99,6 +99,12 @@ impl GcpCredentials {
         })
     }
 
+    /// Path to the credential configuration file that GCP SDKs and the
+    /// `gcloud` CLI discover via `GOOGLE_APPLICATION_CREDENTIALS`.
+    pub fn config_file_path(&self) -> &Path {
+        self.config_file.path()
+    }
+
     /// Environment variables to set in a session in order to use this GCP
     /// configuration.
     pub fn env_vars(&self) -> HashMap<OsString, OsString> {
