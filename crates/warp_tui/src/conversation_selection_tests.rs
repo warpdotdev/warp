@@ -10,64 +10,66 @@ use warp::tui_export::{
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, EntityId, ModelHandle};
 
-use super::{TuiConversationSelection, classify_conversation_list_entry};
+use super::{
+    ConversationListEntryContext, TuiConversationSelection, classify_conversation_list_entry,
+};
 
 #[test]
 fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
     let selected_id = AIConversationId::new();
     assert_eq!(
-        classify_conversation_list_entry(
-            Some(selected_id),
-            Some(selected_id),
-            true,
-            false,
-            Some(Harness::Oz),
-            &AgentRunDisplayStatus::ConversationSucceeded,
-        ),
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: Some(selected_id),
+            local_conversation_id: Some(selected_id),
+            has_server_token: true,
+            is_cloud_agent_run: false,
+            harness: Some(Harness::Oz),
+            status: &AgentRunDisplayStatus::ConversationSucceeded,
+        },),
         AgentConversationListEntryState::Selected
     );
     assert_eq!(
-        classify_conversation_list_entry(
-            None,
-            Some(AIConversationId::new()),
-            false,
-            false,
-            Some(Harness::Oz),
-            &AgentRunDisplayStatus::ConversationCancelled,
-        ),
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: None,
+            local_conversation_id: Some(AIConversationId::new()),
+            has_server_token: false,
+            is_cloud_agent_run: false,
+            harness: Some(Harness::Oz),
+            status: &AgentRunDisplayStatus::ConversationCancelled,
+        },),
         AgentConversationListEntryState::Available
     );
     assert_eq!(
-        classify_conversation_list_entry(
-            None,
-            None,
-            true,
-            true,
-            Some(Harness::Oz),
-            &AgentRunDisplayStatus::TaskInProgress,
-        ),
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: None,
+            local_conversation_id: None,
+            has_server_token: true,
+            is_cloud_agent_run: true,
+            harness: Some(Harness::Oz),
+            status: &AgentRunDisplayStatus::TaskInProgress,
+        },),
         AgentConversationListEntryState::Unavailable
     );
     assert_eq!(
-        classify_conversation_list_entry(
-            None,
-            None,
-            true,
-            true,
-            Some(Harness::Claude),
-            &AgentRunDisplayStatus::TaskSucceeded,
-        ),
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: None,
+            local_conversation_id: None,
+            has_server_token: true,
+            is_cloud_agent_run: true,
+            harness: Some(Harness::Claude),
+            status: &AgentRunDisplayStatus::TaskSucceeded,
+        },),
         AgentConversationListEntryState::Unavailable
     );
     assert_eq!(
-        classify_conversation_list_entry(
-            None,
-            None,
-            false,
-            true,
-            Some(Harness::Oz),
-            &AgentRunDisplayStatus::TaskSucceeded,
-        ),
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: None,
+            local_conversation_id: None,
+            has_server_token: false,
+            is_cloud_agent_run: true,
+            harness: Some(Harness::Oz),
+            status: &AgentRunDisplayStatus::TaskSucceeded,
+        },),
         AgentConversationListEntryState::Unavailable
     );
 }
@@ -79,14 +81,14 @@ fn tui_list_policy_ignores_status_for_non_cloud_agent_conversations() {
         AgentRunDisplayStatus::TaskInProgress,
     ] {
         assert_eq!(
-            classify_conversation_list_entry(
-                None,
-                Some(AIConversationId::new()),
-                false,
-                false,
-                Some(Harness::Oz),
-                &status,
-            ),
+            classify_conversation_list_entry(ConversationListEntryContext {
+                selected_id: None,
+                local_conversation_id: Some(AIConversationId::new()),
+                has_server_token: false,
+                is_cloud_agent_run: false,
+                harness: Some(Harness::Oz),
+                status: &status,
+            },),
             AgentConversationListEntryState::Available
         );
     }
@@ -95,25 +97,25 @@ fn tui_list_policy_ignores_status_for_non_cloud_agent_conversations() {
 #[test]
 fn tui_list_policy_requires_terminal_status_for_cloud_agent_runs() {
     assert_eq!(
-        classify_conversation_list_entry(
-            None,
-            Some(AIConversationId::new()),
-            true,
-            true,
-            Some(Harness::Oz),
-            &AgentRunDisplayStatus::TaskInProgress,
-        ),
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: None,
+            local_conversation_id: Some(AIConversationId::new()),
+            has_server_token: true,
+            is_cloud_agent_run: true,
+            harness: Some(Harness::Oz),
+            status: &AgentRunDisplayStatus::TaskInProgress,
+        },),
         AgentConversationListEntryState::Unavailable
     );
     assert_eq!(
-        classify_conversation_list_entry(
-            None,
-            Some(AIConversationId::new()),
-            true,
-            true,
-            Some(Harness::Oz),
-            &AgentRunDisplayStatus::TaskSucceeded,
-        ),
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: None,
+            local_conversation_id: Some(AIConversationId::new()),
+            has_server_token: true,
+            is_cloud_agent_run: true,
+            harness: Some(Harness::Oz),
+            status: &AgentRunDisplayStatus::TaskSucceeded,
+        },),
         AgentConversationListEntryState::Available
     );
 }
