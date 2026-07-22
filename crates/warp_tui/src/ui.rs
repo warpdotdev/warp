@@ -164,7 +164,7 @@ pub(crate) fn login_placeholder(
             );
         }
     }
-    vertically_centered(content)
+    centered_in_viewport(content.finish())
 }
 
 /// Placeholder shown between login completion and terminal session creation.
