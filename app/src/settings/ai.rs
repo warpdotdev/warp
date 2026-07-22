@@ -631,7 +631,7 @@ settings::macros::implement_setting_for_enum!(
     description: "Controls how child-agent messages are displayed.",
 );
 
-/// Which unit the TUI's usage entry displays.
+/// Which unit the usage entry displays in Warp Agent CLI.
 #[derive(
     Default,
     Debug,
@@ -645,7 +645,7 @@ settings::macros::implement_setting_for_enum!(
     settings_value::SettingsValue,
 )]
 #[schemars(
-    description = "Which unit the TUI's usage entry displays.",
+    description = "Which unit the usage entry displays in Warp Agent CLI.",
     rename_all = "snake_case"
 )]
 pub enum TuiUsageDisplayMode {
@@ -664,7 +664,7 @@ settings::macros::implement_setting_for_enum!(
     surface: settings::SettingSurfaces::TUI,
     private: false,
     toml_path: "agents.usage_display_mode",
-    description: "Which unit the TUI's usage entry displays: credits or provider cost.",
+    description: "Which unit the usage entry displays in Warp Agent CLI: credits or provider cost.",
 );
 
 impl TuiUsageDisplayMode {

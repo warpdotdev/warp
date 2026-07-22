@@ -1700,7 +1700,7 @@ impl TuiTerminalSessionView {
             Some(CloudConversationData::CLIAgent(_)) => {
                 self.fail_conversation_restore(
                     request_id,
-                    "The Warp TUI only supports Oz/Warp conversations.".to_owned(),
+                    "Warp Agent CLI only supports Oz/Warp conversations.".to_owned(),
                     ctx,
                 );
                 return;

@@ -1,5 +1,5 @@
 //! The pre-first-interaction "zero state" filling the transcript area: the
-//! Warp Agent title and version, a "What's new" changelog section, and the
+//! Warp Agent CLI title and version, a "What's new" changelog section, and the
 //! session's project context (rules and skills discovered).
 //!
 //! The session view owns visibility: the zero state fills the transcript
@@ -150,7 +150,7 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
 
     let mut column = TuiFlex::column()
         .child(
-            TuiText::new("Warp Agent")
+            TuiText::new("Warp Agent CLI")
                 .with_style(title_style)
                 .truncate()
                 .finish(),

@@ -934,8 +934,8 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
         let lines = frame.buffer.to_lines();
         let title_row = lines
             .iter()
-            .position(|line| line.contains("Warp Agent"))
-            .expect("zero state should render the Warp Agent title");
+            .position(|line| line.contains("Warp Agent CLI"))
+            .expect("zero state should render the Warp Agent CLI title");
         assert!(
             title_row < 28,
             "zero-state title should render in the transcript area:\n{}",
