@@ -839,6 +839,12 @@ mod origin_tests {
         let url = reqwest::Url::parse("https://evil.example.com/graphql/v2").unwrap();
         assert!(!is_warp_server_origin(&url));
     }
+
+    #[test]
+    fn releases_origin_does_not_match() {
+        let url = reqwest::Url::parse("https://releases.warp.dev/dev/artifact.tar.gz").unwrap();
+        assert!(!is_warp_server_origin(&url));
+    }
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]

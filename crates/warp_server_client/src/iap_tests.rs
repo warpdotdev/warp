@@ -6,6 +6,7 @@ use base64::Engine;
 use futures::executor::block_on;
 use instant::Instant;
 use warp_core::channel::{ChannelState, IapConfig};
+use warpui_core::App;
 use warpui_core::r#async::BoxFuture;
 
 use super::*;
@@ -142,6 +143,60 @@ fn get_cached_failed_uses_valid_previous_token() {
     state.set_loaded(cached("prev-token", Some(Duration::from_secs(60))));
     state.set_failed("gcloud blew up".to_string());
     assert_eq!(state.get_cached().as_deref(), Some("prev-token"));
+}
+
+#[test]
+fn challenge_invalidates_loaded_token_before_refreshing() {
+    App::test((), |mut app| async move {
+        let state = Arc::new(test_state());
+        state.set_loaded(cached("rejected-token", Some(Duration::from_secs(60))));
+        let manager = app.add_model({
+            let state = state.clone();
+            move |_| IapManager {
+                state: Some(state),
+                path_resolver: Box::new(|_| Box::pin(futures::future::pending::<Option<String>>())),
+                managed_mint: None,
+                consecutive_failures: 3,
+            }
+        });
+
+        manager.update(&mut app, |manager, ctx| manager.handle_challenge(ctx));
+
+        assert_eq!(state.get_cached(), None);
+        assert!(matches!(
+            state.state(),
+            IapCredentialsState::Refreshing { previous: None }
+        ));
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.consecutive_failures, 0);
+        });
+    });
+}
+
+#[test]
+fn challenge_invalidates_previous_token_during_proactive_refresh() {
+    App::test((), |mut app| async move {
+        let state = Arc::new(test_state());
+        state.set_loaded(cached("rejected-token", Some(Duration::from_secs(60))));
+        state.set_refreshing();
+        let manager = app.add_model({
+            let state = state.clone();
+            move |_| IapManager {
+                state: Some(state),
+                path_resolver: Box::new(|_| Box::pin(futures::future::pending::<Option<String>>())),
+                managed_mint: None,
+                consecutive_failures: 0,
+            }
+        });
+
+        manager.update(&mut app, |manager, ctx| manager.handle_challenge(ctx));
+
+        assert_eq!(state.get_cached(), None);
+        assert!(matches!(
+            state.state(),
+            IapCredentialsState::Refreshing { previous: None }
+        ));
+    });
 }
 
 #[test]

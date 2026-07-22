@@ -28,6 +28,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -36,6 +37,7 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use warp::settings::TuiAutoupdateSettings;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::send_telemetry_from_ctx;
+use warp_server_client::iap::{IapManager, IapManagerEvent};
 use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -71,6 +73,21 @@ const FETCH_VERSIONS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Timeout for downloading the TUI tarball itself.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Debug)]
+struct IapChallenge;
+
+impl std::fmt::Display for IapChallenge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("staging IAP requested refreshed credentials")
+    }
+}
+
+impl std::error::Error for IapChallenge {}
+
+fn is_iap_challenge(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<IapChallenge>().is_some()
+}
 
 /// The managed, versioned install layout the running binary belongs to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,6 +252,11 @@ impl AutoupdateEligibility {
 pub(crate) struct TuiAutoupdater {
     /// Whether (and where) this process runs background updates.
     eligibility: AutoupdateEligibility,
+    /// Reusable client whose staging requests read the current shared IAP token.
+    client: Arc<http_client::Client>,
+    /// Whether a check loop has started. IAP-enabled builds wait for the first
+    /// valid credential before setting this.
+    loop_started: bool,
     /// The user-visible status of the update loop.
     status: TuiAutoupdateStatus,
     /// The outcome kind last reported to telemetry. Consecutive checks
@@ -254,17 +276,62 @@ impl TuiAutoupdater {
     /// this process is eligible (see [`AutoupdateEligibility::determine`]).
     pub(crate) fn register(ctx: &mut AppContext) {
         let eligibility = AutoupdateEligibility::determine(ctx);
-        ctx.add_singleton_model(move |_| TuiAutoupdater {
+        let mut client = http_client::Client::from_client_builder(
+            reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()),
+        )
+        .expect("should not fail to create the TUI autoupdate client");
+        let iap_manager = ctx
+            .has_singleton_model::<IapManager>()
+            .then(|| IapManager::handle(ctx));
+        if let Some(iap_manager) = &iap_manager
+            && let Some(state) = iap_manager.as_ref(ctx).iap_state()
+        {
+            client.set_iap_token_provider(state);
+        }
+        let client = Arc::new(client);
+        let updater = ctx.add_singleton_model(move |_| TuiAutoupdater {
             eligibility,
+            client,
+            loop_started: false,
             status: TuiAutoupdateStatus::Idle,
             last_reported_outcome: None,
         });
-        TuiAutoupdater::handle(ctx).update(ctx, |me, ctx| match me.eligibility.clone() {
-            AutoupdateEligibility::Enabled(layout) => me.check_now(layout, ctx),
+        updater.update(ctx, |updater, ctx| {
+            if let Some(iap_manager) = iap_manager {
+                ctx.subscribe_to_model(&iap_manager, |updater, _, event, ctx| {
+                    if matches!(event, IapManagerEvent::StateChanged) {
+                        updater.start_if_ready(ctx);
+                    }
+                });
+            }
+            updater.start_if_ready(ctx);
+        });
+    }
+
+    fn start_if_ready(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.loop_started {
+            return;
+        }
+        match self.eligibility.clone() {
+            AutoupdateEligibility::Enabled(layout) => {
+                let iap_ready = if ctx.has_singleton_model::<IapManager>() {
+                    let iap_manager = IapManager::as_ref(ctx);
+                    iap_access_ready(iap_manager.is_enabled(), iap_manager.has_valid_token())
+                } else {
+                    true
+                };
+                if !iap_ready {
+                    log::info!("TUI autoupdate waiting for staging IAP credentials");
+                    return;
+                }
+                self.loop_started = true;
+                self.check_now(layout, ctx);
+            }
             AutoupdateEligibility::Disabled { reason } => {
+                self.loop_started = true;
                 log::info!("TUI autoupdate disabled: {reason}");
             }
-        });
+        }
     }
 
     /// The user-visible status of the update loop, for the zero state.
@@ -292,8 +359,9 @@ impl TuiAutoupdater {
         let fallback_status = self.status;
         self.set_status(TuiAutoupdateStatus::Checking, ctx);
         let check_layout = layout.clone();
+        let check_client = self.client.clone();
         ctx.spawn(
-            async move { check_for_update(check_layout).await },
+            async move { check_for_update(check_layout, check_client).await },
             move |me, decision, ctx| match decision {
                 Ok(CheckDecision::Settled(outcome)) => {
                     me.finish_check(Ok(outcome), fallback_status, layout, ctx);
@@ -304,9 +372,16 @@ impl TuiAutoupdater {
                 }) => {
                     me.set_status(TuiAutoupdateStatus::Updating, ctx);
                     let install_layout = layout.clone();
+                    let install_client = me.client.clone();
                     ctx.spawn(
                         async move {
-                            install_update(install_layout, latest_version, already_staged).await
+                            install_update(
+                                install_layout,
+                                latest_version,
+                                already_staged,
+                                install_client,
+                            )
+                            .await
                         },
                         move |me, result, ctx| {
                             me.finish_check(result, fallback_status, layout, ctx);
@@ -334,6 +409,14 @@ impl TuiAutoupdater {
             Err(error) => log::warn!("TUI autoupdate check failed: {error:#}"),
         }
         self.report_outcome(&result, ctx);
+        if result.as_ref().err().is_some_and(is_iap_challenge) {
+            self.loop_started = false;
+            self.set_status(fallback_status, ctx);
+            if ctx.has_singleton_model::<IapManager>() {
+                IapManager::handle(ctx).update(ctx, |manager, ctx| manager.handle_challenge(ctx));
+            }
+            return;
+        }
         let status = match &result {
             Ok(UpdateOutcome::UpToDate { .. }) => TuiAutoupdateStatus::UpToDate,
             Ok(UpdateOutcome::PendingRestart { .. } | UpdateOutcome::Installed { .. }) => {
@@ -400,11 +483,13 @@ enum CheckDecision {
 /// Performs the check phase of an update pass: a single lightweight
 /// `/client_version` request plus local filesystem checks, deciding whether
 /// the (heavier) install phase is needed.
-async fn check_for_update(layout: InstallLayout) -> Result<CheckDecision> {
+async fn check_for_update(
+    layout: InstallLayout,
+    client: Arc<http_client::Client>,
+) -> Result<CheckDecision> {
     let current_version =
         ChannelState::app_version().context("no release version tag baked into this build")?;
 
-    let client = http_client::Client::new();
     let latest_version = fetch_latest_version(&client).await?;
 
     // Version strings become directory names below; reject anything that
@@ -454,6 +539,7 @@ async fn install_update(
     layout: InstallLayout,
     latest_version: String,
     already_staged: bool,
+    client: Arc<http_client::Client>,
 ) -> Result<UpdateOutcome> {
     // Serialize installs across concurrent TUI processes.
     let Some(_lock) = InstallLock::acquire(&layout.root)? else {
@@ -461,7 +547,6 @@ async fn install_update(
     };
 
     if !already_staged {
-        let client = http_client::Client::new();
         let version_dir = layout.versions_dir.join(&latest_version);
         download_and_stage(&layout, &client, &latest_version, &version_dir).await?;
     }
@@ -496,14 +581,18 @@ async fn fetch_latest_version(client: &http_client::Client) -> Result<String> {
             .get(server_url.as_str())
             .timeout(FETCH_VERSIONS_TIMEOUT)
             .send()
-            .await?
-            .error_for_status()?;
+            .await?;
+        if http_client::iap::is_iap_challenge(response.status(), response.headers()) {
+            return Err(IapChallenge.into());
+        }
+        let response = response.error_for_status()?;
         Ok(response.json().await?)
     }
     .await;
 
     let versions = match from_server {
         Ok(versions) => versions,
+        Err(error) if is_iap_challenge(&error) => return Err(error),
         Err(error) => {
             let releases_base_url = ChannelState::releases_base_url();
             if releases_base_url.is_empty() {
@@ -612,8 +701,32 @@ async fn download_and_stage(
     // Stream the tarball straight to disk instead of buffering it in memory
     // (the artifact is tens of MBs), mirroring the GUI's DMG download.
     log::info!("TUI autoupdate: downloading version {version}");
-    let response = client
+    let redirect = client
         .get(url.as_str())
+        .timeout(DOWNLOAD_TIMEOUT)
+        .send()
+        .await
+        .context("failed to resolve the TUI update")?;
+    if http_client::iap::is_iap_challenge(redirect.status(), redirect.headers()) {
+        return Err(IapChallenge.into());
+    }
+    if redirect.status() != http_client::StatusCode::FOUND {
+        let status = redirect.status();
+        redirect
+            .error_for_status()
+            .context("failed to resolve the TUI update")?;
+        bail!("TUI update endpoint returned {status}, expected a redirect");
+    }
+    let artifact_url = redirect
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .context("TUI update endpoint returned a redirect without a valid Location header")?;
+    let artifact_url = validate_artifact_url(artifact_url, download_channel(), version, os, arch)?;
+    drop(redirect);
+
+    let response = client
+        .get(artifact_url)
         .timeout(DOWNLOAD_TIMEOUT)
         .send()
         .await
@@ -704,6 +817,34 @@ async fn download_and_stage(
         .with_context(|| format!("failed to move the staged TUI update into {version_dir:?}"))?;
 
     Ok(())
+}
+
+fn iap_access_ready(iap_enabled: bool, has_valid_token: bool) -> bool {
+    !iap_enabled || has_valid_token
+}
+
+fn validate_artifact_url(
+    url: &str,
+    channel: &str,
+    version: &str,
+    os: &str,
+    arch: &str,
+) -> Result<reqwest::Url> {
+    let url = reqwest::Url::parse(url).context("invalid TUI artifact URL")?;
+    let expected_path =
+        format!("/{channel}/{version}/tui/{os}/{arch}/warp-tui-{channel}-{os}-{arch}.tar.gz");
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.host_str() != Some("releases.warp.dev")
+        || url.port().is_some()
+        || url.path() != expected_path
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        bail!("TUI update endpoint returned an unexpected artifact URL");
+    }
+    Ok(url)
 }
 
 /// Atomically points the `current` symlink at `versions/<version>` by staging
