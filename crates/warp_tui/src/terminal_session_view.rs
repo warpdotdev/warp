@@ -1,6 +1,6 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,11 +12,11 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentPtyWriteMode, AIConversation,
-    AIConversationId, AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent,
-    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
-    AgentInteractionMetadata, AgentViewEntryOrigin, BlockId, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentExchangeId,
+    AIAgentPtyWriteMode, AIConversation, AIConversationId, AcceptSlashCommandOrSavedPrompt,
+    ActiveSession, ActiveSessionEvent, AgentConversationEntryId, AgentConversationListEntryState,
+    AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin, BlockId,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
     CLISubagentEvent, CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel,
     ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
@@ -185,6 +185,11 @@ const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
 const NLD_ENABLED_HINT: &str = "Natural language detection enabled.";
 const NLD_DISABLED_HINT: &str = "Natural language detection disabled.";
 const NLD_PERSISTENCE_FAILED_HINT: &str = "Could not save the natural language detection setting.";
+const COST_NO_ACTIVE_CONVERSATION_HINT: &str =
+    "Cannot show conversation cost: no active conversation";
+const COST_EMPTY_CONVERSATION_HINT: &str = "Cannot show conversation cost: conversation is empty";
+const COST_CONVERSATION_IN_PROGRESS_HINT: &str =
+    "Cannot show conversation cost: conversation is in progress";
 
 fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
@@ -192,6 +197,16 @@ fn log_bundle_success_message(path: &Path) -> String {
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
     (!input.trim().is_empty()).then_some(input)
+}
+fn cost_command_unavailable_hint(
+    selected_conversation: Option<(bool, bool)>,
+) -> Option<&'static str> {
+    match selected_conversation {
+        None => Some(COST_NO_ACTIVE_CONVERSATION_HINT),
+        Some((true, _)) => Some(COST_EMPTY_CONVERSATION_HINT),
+        Some((false, false)) => Some(COST_CONVERSATION_IN_PROGRESS_HINT),
+        Some((false, true)) => None,
+    }
 }
 
 /// Resolved segments for the footer's left-aligned sectioned status row.
@@ -365,6 +380,8 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's usage entry: flips the persisted credits⇄cost
     /// display-mode setting.
     ToggleUsageDisplay,
+    /// Toggle the completed-response summary for the selected conversation.
+    ToggleResponseSummaryVisibility,
     /// Click on the footer's active-model label: toggles the inline model
     /// picker (the same menu `/model` surfaces).
     ToggleModelMenu,
@@ -424,6 +441,10 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
     /// Credits⇄cost display state for the footer's clickable usage entry.
     usage_toggle: UsageToggle,
+    /// Last-response exchanges whose completed summary has been hidden with
+    /// `/cost`. A later response has a new exchange ID and starts visible,
+    /// matching the GUI's per-last-block state.
+    hidden_response_summary_exchange_ids: HashSet<AIAgentExchangeId>,
     /// Hover state for the footer's clickable active-model label, owned here
     /// (not created inline during render) so it survives element-tree rebuilds
     /// — the same `MouseStateHandle` pattern as [`UsageToggle`].
@@ -1416,6 +1437,7 @@ impl TuiTerminalSessionView {
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
             usage_toggle: UsageToggle::default(),
+            hidden_response_summary_exchange_ids: HashSet::new(),
             model_label_hover: MouseStateHandle::default(),
             keyboard_enhancement_supported,
             ai_context_model: context_model,
@@ -2382,6 +2404,56 @@ impl TuiTerminalSessionView {
             }
         });
     }
+    /// Mirrors the GUI `/cost` eligibility checks, then toggles the selected
+    /// conversation's completed-response summary without changing the
+    /// persistent footer's independent credits⇄cost setting.
+    fn toggle_response_summary_visibility(&mut self, ctx: &mut ViewContext<Self>) {
+        let selected_conversation = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation(ctx)
+            .map(|conversation| {
+                (
+                    conversation.latest_exchange().map(|exchange| exchange.id),
+                    conversation.is_empty(),
+                    conversation.status().is_done(),
+                )
+            });
+        if let Some(hint) = cost_command_unavailable_hint(
+            selected_conversation.map(|(_, is_empty, is_done)| (is_empty, is_done)),
+        ) {
+            self.show_transient_hint(hint.to_owned(), ctx);
+            return;
+        }
+        let Some((Some(exchange_id), _, _)) = selected_conversation else {
+            self.show_transient_hint(COST_NO_ACTIVE_CONVERSATION_HINT.to_owned(), ctx);
+            return;
+        };
+        self.toggle_response_summary_visibility_for_exchange(exchange_id);
+        ctx.notify();
+    }
+    fn toggle_response_summary_visibility_for_exchange(&mut self, exchange_id: AIAgentExchangeId) {
+        if !self
+            .hidden_response_summary_exchange_ids
+            .remove(&exchange_id)
+        {
+            self.hidden_response_summary_exchange_ids
+                .insert(exchange_id);
+        }
+    }
+
+    fn render_response_summary_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+        duration: Duration,
+        block_credits: Option<f32>,
+        ctx: &AppContext,
+    ) -> Option<Box<dyn TuiElement>> {
+        (!self
+            .hidden_response_summary_exchange_ids
+            .contains(&exchange_id))
+        .then(|| render_response_summary(duration, block_credits, ctx))
+    }
 
     /// Toggles the inline model picker from the footer's active-model label —
     /// the same menu `/model` surfaces. The model's existing open/dismiss paths
@@ -2798,6 +2870,13 @@ impl TuiTerminalSessionView {
             TuiSlashCommand::AutoApprove => {
                 self.toggle_auto_approve(true, ctx);
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            TuiSlashCommand::Cost => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                ctx.dispatch_typed_action_deferred(
+                    TuiTerminalSessionAction::ToggleResponseSummaryVisibility,
+                );
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::Model => {
@@ -3240,16 +3319,17 @@ impl TuiView for TuiTerminalSessionView {
                     .wall_to_wall_response_time_since_last_query()
                     .and_then(|ms| u64::try_from(ms).ok())
                     .map(Duration::from_millis);
-                if let Some(duration) = wall_to_wall {
-                    content = content.child(
-                        TuiContainer::new(render_response_summary(
-                            duration,
-                            conversation.credits_spent_for_last_block(),
-                            ctx,
-                        ))
-                        .with_padding_top(1)
-                        .finish(),
-                    );
+                if let (Some(duration), Some(exchange_id)) = (
+                    wall_to_wall,
+                    conversation.latest_exchange().map(|exchange| exchange.id),
+                ) && let Some(summary) = self.render_response_summary_for_exchange(
+                    exchange_id,
+                    duration,
+                    conversation.credits_spent_for_last_block(),
+                    ctx,
+                ) {
+                    content =
+                        content.child(TuiContainer::new(summary).with_padding_top(1).finish());
                 }
             }
         }
@@ -3378,6 +3458,9 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.hand_back_terminal_use_control(ctx)
             }
             TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
+            TuiTerminalSessionAction::ToggleResponseSummaryVisibility => {
+                self.toggle_response_summary_visibility(ctx)
+            }
             TuiTerminalSessionAction::ToggleModelMenu => self.toggle_model_menu(ctx),
             TuiTerminalSessionAction::ToggleAutoApprove { show_feedback } => {
                 self.toggle_auto_approve(*show_feedback, ctx)
