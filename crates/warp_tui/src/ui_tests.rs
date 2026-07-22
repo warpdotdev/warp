@@ -55,50 +55,87 @@ fn conversation_loader_is_centered_and_animated() {
 
 #[test]
 fn login_placeholder_is_centered_for_all_states() {
+    const VIEWPORT_COLS: usize = 60;
+    const VIEWPORT_ROWS: usize = 8;
+
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let states = [
-                (None, None, "Opening your browser…"),
+            // Every line the placeholder renders for each login substate, so
+            // per-line centering is checked — not just the longest line. The
+            // shorter lines (e.g. the URI-only and URI+code substates' "Sign in
+            // to continue" and "and enter code" lines) are the ones a
+            // start-aligned column leaves flush with the block's left edge.
+            let states: Vec<(Option<&str>, Option<&str>, Vec<&str>)> = vec![
+                (
+                    None,
+                    None,
+                    vec!["Sign in to continue", "Opening your browser…"],
+                ),
                 (
                     Some("https://warp.dev/device"),
                     None,
-                    "Open https://warp.dev/device in your browser",
+                    vec![
+                        "Sign in to continue",
+                        "Open https://warp.dev/device in your browser",
+                    ],
                 ),
                 (
                     Some("https://warp.dev/device"),
                     Some("ABC-123"),
-                    "and enter code: ABC-123",
+                    vec![
+                        "Sign in to continue",
+                        "Open https://warp.dev/device in your browser",
+                        "and enter code: ABC-123",
+                    ],
                 ),
             ];
 
-            for (verification_uri, user_code, expected_line) in states {
+            for (verification_uri, user_code, expected_lines) in states {
                 let element = login_placeholder(verification_uri, user_code);
                 let mut presenter = TuiPresenter::new();
-                let frame = presenter.present_element(element, TuiRect::new(0, 0, 60, 8), app_ctx);
+                let frame = presenter.present_element(
+                    element,
+                    TuiRect::new(0, 0, VIEWPORT_COLS as u16, VIEWPORT_ROWS as u16),
+                    app_ctx,
+                );
                 let lines = frame.buffer.to_lines();
-                let rendered_line = lines
-                    .iter()
-                    .find(|line| line.contains(expected_line))
-                    .unwrap_or_else(|| {
-                        panic!("login state should render {expected_line:?}: {lines:?}")
-                    });
-                let text_column = rendered_line
-                    .find(expected_line)
-                    .map(|byte_offset| rendered_line[..byte_offset].chars().count())
-                    .expect("expected login text should be present");
-                let row = lines
-                    .iter()
-                    .position(|line| line.contains(expected_line))
-                    .expect("expected login text row should be present");
 
-                assert!(
-                    text_column > 0,
-                    "login text should be horizontally centered: {rendered_line:?}"
-                );
-                assert!(
-                    row > 0 && row < 7,
-                    "login text should remain vertically centered: row={row}, lines={lines:?}"
-                );
+                for expected_line in expected_lines {
+                    let row = lines
+                        .iter()
+                        .position(|line| line.contains(expected_line))
+                        .unwrap_or_else(|| {
+                            panic!("login state should render {expected_line:?}: {lines:?}")
+                        });
+                    let rendered_line = &lines[row];
+                    let left = rendered_line
+                        .find(expected_line)
+                        .map(|byte_offset| rendered_line[..byte_offset].chars().count())
+                        .unwrap_or_else(|| {
+                            panic!("expected login text should be present: {rendered_line:?}")
+                        });
+                    let text_width = expected_line.chars().count();
+                    let right = VIEWPORT_COLS
+                        .saturating_sub(left)
+                        .saturating_sub(text_width);
+
+                    // Centered means symmetric horizontal padding: the blank
+                    // columns on either side of the text differ by at most one
+                    // cell (the flex layout's integer-division slack). A
+                    // start-aligned column leaves shorter lines flush with the
+                    // block's left edge, producing lopsided padding, so this
+                    // catches the per-line centering the ticket requires.
+                    assert!(
+                        left.abs_diff(right) <= 1,
+                        "{expected_line:?} should be horizontally centered with symmetric padding \
+                         (left={left}, right={right}, width={text_width}, viewport={VIEWPORT_COLS}): \
+                         {rendered_line:?}"
+                    );
+                    assert!(
+                        row > 0 && row < VIEWPORT_ROWS,
+                        "{expected_line:?} should remain vertically centered: row={row}, lines={lines:?}"
+                    );
+                }
             }
         });
     });

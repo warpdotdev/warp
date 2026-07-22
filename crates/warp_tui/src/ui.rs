@@ -164,7 +164,11 @@ pub(crate) fn login_placeholder(
             );
         }
     }
-    centered_in_viewport(content.finish())
+    centered_in_viewport(
+        content
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .finish(),
+    )
 }
 
 /// Placeholder shown between login completion and terminal session creation.
