@@ -465,6 +465,16 @@ fn shared_list_navigation_wraps_skips_disabled_rows_and_scrolls() {
 }
 
 #[test]
+fn shared_list_reserves_space_for_scroll_indicators() {
+    let mut list = TuiInlineMenuListState::default();
+
+    list.replace_rows(vec![(); 11], false, Some(10), 10, |_| true);
+
+    assert_eq!(list.selected_index(), Some(10));
+    assert_eq!(list.scroll_offset(), 2);
+}
+
+#[test]
 fn shared_list_preserves_ready_rows_while_a_mixer_query_loads() {
     let mut list = TuiInlineMenuListState::default();
     list.replace_rows(vec!["ready"], false, Some(0), 2, |_| true);

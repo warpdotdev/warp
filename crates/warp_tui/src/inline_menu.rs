@@ -247,18 +247,14 @@ impl<Row> TuiInlineMenuListState<Row> {
     }
 
     fn keep_selected_visible(&mut self, max_visible_rows: usize) {
-        if let Some(selected_index) = self.selection.selected_index() {
-            keep_selected_visible(
-                self.rows.len(),
-                selected_index,
-                max_visible_rows,
-                &mut self.scroll_offset,
-            );
-        } else {
-            self.scroll_offset = self
-                .scroll_offset
-                .min(self.rows.len().saturating_sub(max_visible_rows));
-        }
+        self.scroll_offset = inline_menu_viewport(
+            self.rows.len(),
+            self.selection.selected_index(),
+            self.scroll_offset,
+            max_visible_rows,
+        )
+        .rows
+        .start;
     }
 }
 
@@ -852,7 +848,7 @@ fn inline_menu_viewport_end(rows_len: usize, start: usize, visible_rows: usize) 
 }
 
 /// Clamps stale scroll offsets and moves the viewport only as far as needed to
-/// keep the selected row within a window of `visible_rows`.
+/// keep the selected row within a window of `visible_rows` result rows.
 pub(crate) fn keep_selected_visible(
     rows_len: usize,
     selected_index: usize,
@@ -864,10 +860,13 @@ pub(crate) fn keep_selected_visible(
         return;
     }
 
-    *scroll_offset =
-        inline_menu_viewport(rows_len, Some(selected_index), *scroll_offset, visible_rows)
-            .rows
-            .start;
+    let max_scroll_offset = rows_len.saturating_sub(visible_rows);
+    *scroll_offset = (*scroll_offset).min(max_scroll_offset);
+    if selected_index < *scroll_offset {
+        *scroll_offset = selected_index;
+    } else if selected_index >= *scroll_offset + visible_rows {
+        *scroll_offset = selected_index + 1 - visible_rows;
+    }
 }
 
 fn menu_status_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
