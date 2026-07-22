@@ -907,6 +907,10 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Gates local automations: TOML-defined personal jobs under the user's
+    /// `automations/` data directory with a manual "Run now" execution path.
+    LocalAutomations,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -982,6 +986,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
+    FeatureFlag::LocalAutomations,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

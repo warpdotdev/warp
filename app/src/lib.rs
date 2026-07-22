@@ -42,6 +42,7 @@ mod gpu_state;
 mod input_classifier;
 mod interval_timer;
 mod linear;
+mod local_automations;
 #[cfg(feature = "local_fs")]
 mod local_control;
 #[cfg(any(target_os = "macos", target_os = "windows"))]

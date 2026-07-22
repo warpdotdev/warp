@@ -13,6 +13,7 @@ use crate::ai::custom_model_routers::{
     parse_model_config_yaml, CustomModelRouter, ModelConfigError,
 };
 use crate::launch_configs::launch_config::LaunchConfig;
+use crate::local_automations::{LocalAutomation, LocalAutomationError};
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::{ThemeKind, WarpTheme, WarpThemeConfig};
 use crate::workflows::workflow::Workflow;
@@ -186,6 +187,35 @@ pub(super) fn parse_tab_config_dir_entry(
                 file_path: item.path().into(),
                 error_message: e.to_string(),
             }),
+    )
+}
+
+/// Parses a `DirEntry` as a single local automation (one automation per TOML
+/// file). Returns `None` for non-TOML files, otherwise the parsed automation
+/// or a [`LocalAutomationError`] describing the parse/validation failure.
+pub(super) fn parse_local_automation_dir_entry(
+    item: &DirEntry,
+) -> Option<Result<LocalAutomation, LocalAutomationError>> {
+    let file_name = get_file_name(item)?;
+    if !is_toml_file(&file_name) {
+        return None;
+    }
+    let make_error = |message: String| LocalAutomationError {
+        file_name: file_name.clone(),
+        file_path: item.path().into(),
+        error_message: message,
+    };
+    let contents = match fs::read_to_string(item.path()) {
+        Ok(contents) => contents,
+        Err(e) => return Some(Err(make_error(e.to_string()))),
+    };
+    Some(
+        LocalAutomation::parse(&contents)
+            .map(|mut automation| {
+                automation.source_path = Some(item.path().into());
+                automation
+            })
+            .map_err(make_error),
     )
 }
 

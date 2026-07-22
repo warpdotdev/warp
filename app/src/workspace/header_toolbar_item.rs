@@ -29,6 +29,7 @@ pub enum HeaderToolbarItemKind {
     TabsPanel,
     ToolsPanel,
     AgentManagement,
+    LocalAutomations,
     CodeReview,
     NotificationsMailbox,
 }
@@ -39,6 +40,7 @@ impl HeaderToolbarItemKind {
             Self::TabsPanel => "Tabs Panel",
             Self::ToolsPanel => "Tools Panel",
             Self::AgentManagement => "Agent Management",
+            Self::LocalAutomations => "Automations",
             Self::CodeReview => "Code Review",
             Self::NotificationsMailbox => "Notifications",
         }
@@ -49,6 +51,7 @@ impl HeaderToolbarItemKind {
             Self::TabsPanel => Icon::Menu,
             Self::ToolsPanel => Icon::Tool2,
             Self::AgentManagement => Icon::Grid,
+            Self::LocalAutomations => Icon::ClockRefresh,
             Self::CodeReview => Icon::Diff,
             Self::NotificationsMailbox => Icon::Inbox,
         }
@@ -73,6 +76,7 @@ impl HeaderToolbarItemKind {
                     && FeatureFlag::AgentManagementView.is_enabled()
                     && !is_web_anonymous_user
             }
+            Self::LocalAutomations => FeatureFlag::LocalAutomations.is_enabled(),
             Self::CodeReview => cfg!(feature = "local_fs"),
             Self::NotificationsMailbox => FeatureFlag::HOANotifications.is_enabled(),
         }
@@ -98,7 +102,12 @@ impl HeaderToolbarItemKind {
     }
 
     pub fn default_left() -> Vec<Self> {
-        vec![Self::TabsPanel, Self::ToolsPanel, Self::AgentManagement]
+        vec![
+            Self::TabsPanel,
+            Self::ToolsPanel,
+            Self::AgentManagement,
+            Self::LocalAutomations,
+        ]
     }
 
     pub fn default_right() -> Vec<Self> {
@@ -111,6 +120,7 @@ impl HeaderToolbarItemKind {
             Self::TabsPanel,
             Self::ToolsPanel,
             Self::AgentManagement,
+            Self::LocalAutomations,
             Self::CodeReview,
             Self::NotificationsMailbox,
         ]

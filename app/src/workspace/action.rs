@@ -866,6 +866,25 @@ pub enum WorkspaceAction {
         name: String,
         path: PathBuf,
     },
+    /// Opens Settings → Automations. Gated on `FeatureFlag::LocalAutomations`.
+    OpenLocalAutomationsList,
+    /// Opens a new tab with a Warp agent conversation that creates a local
+    /// automation with the user (the Automations page's "New" action).
+    NewLocalAutomationWithWarpAgent,
+    /// Copies a self-contained automation-creation prompt to the clipboard
+    /// for use with a non-Warp agent (Claude Code, Codex, ...).
+    CopyLocalAutomationPrompt,
+    /// Runs a local automation immediately in a new tab (agent or shell),
+    /// resolving its cwd/worktree first. Gated on
+    /// `FeatureFlag::LocalAutomations`.
+    RunLocalAutomation {
+        automation: crate::local_automations::LocalAutomation,
+    },
+    /// Opens a local automation TOML in the configured editor. Gated on
+    /// `FeatureFlag::LocalAutomations`.
+    OpenLocalAutomationConfig {
+        path: PathBuf,
+    },
     /// Opens the settings.toml file in a code editor pane.
     OpenSettingsFile,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
@@ -1189,6 +1208,11 @@ impl WorkspaceAction {
             | TabConfigSidecarMakeDefault { .. }
             | TabConfigSidecarEditConfig { .. }
             | TabConfigSidecarRemoveConfig { .. }
+            | OpenLocalAutomationsList
+            | NewLocalAutomationWithWarpAgent
+            | CopyLocalAutomationPrompt
+            | RunLocalAutomation { .. }
+            | OpenLocalAutomationConfig { .. }
             | OpenSettingsFile
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }

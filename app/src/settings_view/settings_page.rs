@@ -34,6 +34,7 @@ use super::code_page::CodeSettingsPageView;
 use super::environments_page::EnvironmentsPageView;
 use super::features_page::FeaturesPageView;
 use super::keybindings::KeybindingsView;
+use super::local_automations_page::LocalAutomationsSettingsPageView;
 use super::main_page::MainSettingsPageView;
 use super::mcp_servers_page::MCPServersSettingsPageView;
 use super::privacy_page::PrivacyPageView;
@@ -118,6 +119,7 @@ pub enum SettingsPageViewHandle {
     BillingAndUsage(ViewHandle<BillingAndUsageDispatchView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
+    LocalAutomations(ViewHandle<LocalAutomationsSettingsPageView>),
 }
 
 impl SettingsPageViewHandle {
@@ -142,6 +144,7 @@ impl SettingsPageViewHandle {
             BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
             WarpDrive(view_handle) => ChildView::new(view_handle).finish(),
+            LocalAutomations(view_handle) => ChildView::new(view_handle).finish(),
         }
     }
 }

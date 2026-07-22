@@ -276,8 +276,11 @@ use crate::editor::{
 use crate::env_vars::manager::{EnvVarCollectionManager, EnvVarCollectionSource};
 use crate::env_vars::CloudEnvVarCollection;
 use crate::experiments::{BlockOnboarding, Experiment};
-use crate::launch_configs::launch_config::WindowTemplate;
+use crate::launch_configs::launch_config::{
+    CommandTemplate, PaneMode, PaneTemplateType, WindowTemplate,
+};
 use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
+use crate::local_automations::LocalAutomation;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -5287,7 +5290,6 @@ impl Workspace {
             if FeatureFlag::AgentManagementView.is_enabled() {
                 self.set_is_agent_management_view_open(false, ctx);
             }
-
             self.set_active_tab_index(index, ctx);
             self.focus_active_tab(ctx);
             self.update_window_title(ctx);
@@ -6720,6 +6722,17 @@ impl Workspace {
                         NewSessionMenuItem::CreateNewTabConfig,
                     ))
                     .with_icon(icons::Icon::Plus)
+                    .into_item(),
+            );
+        }
+
+        // Local automations list entry point.
+        if FeatureFlag::LocalAutomations.is_enabled() {
+            menu_items.push(MenuItem::Separator);
+            menu_items.push(
+                MenuItemFields::new("Automations")
+                    .with_on_select_action(WorkspaceAction::OpenLocalAutomationsList)
+                    .with_icon(icons::Icon::ClockRefresh)
                     .into_item(),
             );
         }
@@ -10707,6 +10720,216 @@ impl Workspace {
             });
         });
         ctx.notify();
+    }
+
+    /// Opens Settings → Automations.
+    fn open_local_automations_view(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::LocalAutomations.is_enabled() {
+            return;
+        }
+        self.show_settings_with_section(
+            Some(crate::settings_view::SettingsSection::LocalAutomations),
+            ctx,
+        );
+    }
+
+    /// Opens a new tab and starts a Warp agent conversation that walks the
+    /// user through creating a local automation (the list view's "New → Warp
+    /// agent" action).
+    fn new_local_automation_with_warp_agent(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::LocalAutomations.is_enabled() {
+            return;
+        }
+        self.add_new_session_tab_internal_with_default_session_mode_behavior(
+            NewSessionSource::Tab,
+            Some(ctx.window_id()),
+            None,
+            None,
+            false,
+            DefaultSessionModeBehavior::Ignore,
+            ctx,
+        );
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
+                terminal_view.update(ctx, |view, ctx| {
+                    view.enter_agent_view_for_new_conversation(
+                        Some(crate::local_automations::new_automation_agent_prompt()),
+                        AgentViewEntryOrigin::LocalAutomation,
+                        ctx,
+                    );
+                });
+            }
+        });
+    }
+
+    /// Copies a self-contained automation-creation prompt to the clipboard for
+    /// use with a non-Warp agent (the list view's "New → Copy prompt" action).
+    fn copy_local_automation_prompt(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::LocalAutomations.is_enabled() {
+            return;
+        }
+        ctx.clipboard().write(ClipboardContent::plain_text(
+            crate::local_automations::new_automation_external_prompt(),
+        ));
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::success("Agent prompt copied".to_string()),
+                ctx,
+            );
+        });
+    }
+
+    /// Opens a local automation TOML in the editor, respecting the user's
+    /// configured editor settings.
+    #[cfg(feature = "local_fs")]
+    fn open_local_automation_config(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
+        let settings = EditorSettings::as_ref(ctx);
+        let target = resolve_file_target_with_editor_choice(
+            &path,
+            *settings.open_code_panels_file_editor,
+            *settings.prefer_markdown_viewer,
+            *settings.open_file_layout,
+            None,
+        );
+        self.open_file_with_target(
+            path.clone(),
+            target,
+            None,
+            CodeSource::Link {
+                path,
+                range_start: None,
+                range_end: None,
+            },
+            ctx,
+        );
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    fn open_local_automation_config(&mut self, _path: PathBuf, _ctx: &mut ViewContext<Self>) {
+        report_error!("Cannot open a local automation config without a local filesystem");
+    }
+
+    /// Runs a local automation immediately: resolves its working directory on
+    /// a background thread (creating the git worktree if needed), then opens a
+    /// new tab for the run.
+    #[cfg(feature = "local_fs")]
+    fn run_local_automation(&mut self, automation: LocalAutomation, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::LocalAutomations.is_enabled() {
+            return;
+        }
+        if !automation.enabled {
+            let message = format!(
+                "\"{}\" is disabled for future scheduling; running it now anyway.",
+                automation.name
+            );
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
+            });
+        }
+        let display_name = automation.name.clone();
+        let _ = ctx.spawn(
+            async move {
+                automation
+                    .resolve_working_directory()
+                    .map(|cwd| (automation, cwd))
+            },
+            move |me, result, ctx| match result {
+                Ok((automation, cwd)) => me.open_local_automation_tab(automation, cwd, ctx),
+                Err(error) => {
+                    me.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!(
+                                "Failed to run \"{display_name}\": {error}"
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            },
+        );
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    fn run_local_automation(&mut self, _automation: LocalAutomation, _ctx: &mut ViewContext<Self>) {
+        report_error!("Cannot run a local automation without a local filesystem");
+    }
+
+    /// Opens the tab for a local automation run once its working directory is
+    /// resolved.
+    ///
+    /// - Shell runner: a terminal tab at the resolved cwd running the command.
+    /// - Warp agent runner: an agent tab at the resolved cwd. The session gets
+    ///   a CLI-like unattended execution profile (session-scoped only — the
+    ///   user's default profile is untouched) and the prompt auto-submits.
+    #[cfg(feature = "local_fs")]
+    fn open_local_automation_tab(
+        &mut self,
+        automation: LocalAutomation,
+        cwd: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::local_automations::LocalAutomationRunner;
+
+        let tab_title = Some(automation.name.clone());
+        match automation.runner {
+            LocalAutomationRunner::Shell { command } => {
+                let template = PaneTemplateType::PaneTemplate {
+                    cwd,
+                    commands: vec![CommandTemplate { exec: command }],
+                    is_focused: Some(true),
+                    pane_mode: PaneMode::Terminal,
+                    shell: None,
+                };
+                self.add_tab_with_pane_layout(
+                    PanesLayout::Template(template),
+                    Arc::new(HashMap::new()),
+                    tab_title,
+                    ctx,
+                );
+            }
+            LocalAutomationRunner::WarpAgent { prompt } => {
+                let template = PaneTemplateType::PaneTemplate {
+                    cwd,
+                    commands: Vec::new(),
+                    is_focused: Some(true),
+                    pane_mode: PaneMode::Terminal,
+                    shell: None,
+                };
+                self.add_tab_with_pane_layout(
+                    PanesLayout::Template(template),
+                    Arc::new(HashMap::new()),
+                    tab_title,
+                    ctx,
+                );
+                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                    let Some(terminal_view) = pane_group.active_session_view(ctx) else {
+                        log::warn!("No terminal view found after opening local automation tab");
+                        return;
+                    };
+                    // Give this session (and only this session) a CLI-like
+                    // unattended profile so the run never hangs on
+                    // interactive permission prompts.
+                    let terminal_view_id = terminal_view.id();
+                    AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+                        let mut profile = crate::ai::execution_profiles::AIExecutionProfile::create_default_cli_profile(
+                            false, /* is_sandboxed */
+                            Some(false), /* computer_use_override */
+                        );
+                        profile.name = "Local Automation (unattended)".to_string();
+                        profile.is_default_profile = false;
+                        let profile_id = profiles.register_ephemeral_profile(profile);
+                        profiles.set_active_profile(terminal_view_id, profile_id, ctx);
+                    });
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.enter_agent_view_for_new_conversation(
+                            Some(prompt),
+                            AgentViewEntryOrigin::LocalAutomation,
+                            ctx,
+                        );
+                    });
+                });
+            }
+        }
     }
 
     /// Checks whether the tab config references the special-cased
@@ -20257,6 +20480,37 @@ impl Workspace {
         .finish()
     }
 
+    fn render_local_automations_view_button(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        SavePosition::new(
+            Container::new(
+                Align::new(
+                    self.render_tab_bar_icon_button(
+                        appearance,
+                        icons::Icon::ClockRefresh,
+                        &self.mouse_states.local_automations_view_button,
+                        WorkspaceAction::OpenLocalAutomationsList,
+                        "Automations".to_string(),
+                        keybinding_name_to_display_string(
+                            "workspace:open_local_automations_list",
+                            ctx,
+                        ),
+                        false,
+                        false,
+                    )
+                    .finish(),
+                )
+                .finish(),
+            )
+            .finish(),
+            "workspace:open_local_automations_list",
+        )
+        .finish()
+    }
+
     fn render_left_toggle_button(
         &self,
         appearance: &Appearance,
@@ -20992,6 +21246,9 @@ impl Workspace {
             }
             HeaderToolbarItemKind::AgentManagement => {
                 self.render_agent_management_view_button(appearance, ctx)
+            }
+            HeaderToolbarItemKind::LocalAutomations => {
+                self.render_local_automations_view_button(appearance, ctx)
             }
             HeaderToolbarItemKind::CodeReview => self.render_right_panel_button(appearance, ctx),
             HeaderToolbarItemKind::NotificationsMailbox => {
@@ -22716,6 +22973,7 @@ impl Workspace {
                 Some(ChildView::new(&self.right_panel_view).finish())
             }
             HeaderToolbarItemKind::AgentManagement
+            | HeaderToolbarItemKind::LocalAutomations
             | HeaderToolbarItemKind::NotificationsMailbox => None,
         }
     }
@@ -23956,6 +24214,25 @@ impl TypedActionView for Workspace {
             }
             OpenNewWorktreeRepoPicker => {
                 self.open_repo_picker_for_new_worktree_modal(ctx);
+            }
+            OpenLocalAutomationsList => {
+                self.open_local_automations_view(ctx);
+            }
+            NewLocalAutomationWithWarpAgent => {
+                self.new_local_automation_with_warp_agent(ctx);
+            }
+            CopyLocalAutomationPrompt => {
+                self.copy_local_automation_prompt(ctx);
+            }
+            RunLocalAutomation { automation } => {
+                if FeatureFlag::LocalAutomations.is_enabled() {
+                    self.run_local_automation(automation.clone(), ctx);
+                }
+            }
+            OpenLocalAutomationConfig { path } => {
+                if FeatureFlag::LocalAutomations.is_enabled() {
+                    self.open_local_automation_config(path.clone(), ctx);
+                }
             }
             OpenTabConfigErrorFile {
                 #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]

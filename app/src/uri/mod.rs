@@ -1657,6 +1657,7 @@ fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection>
         "platform" => Some(SettingsSection::OzCloudAPIKeys),
         "appearance" => Some(SettingsSection::Appearance),
         "warp_agent" => Some(SettingsSection::WarpAgent),
+        "automations" | "local_automations" => Some(SettingsSection::LocalAutomations),
         _ => None,
     }
 }

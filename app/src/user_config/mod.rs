@@ -18,6 +18,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
 use crate::launch_configs::launch_config::LaunchConfig;
+use crate::local_automations::{LocalAutomation, LocalAutomationError};
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::{ThemeKind, WarpThemeConfig};
 use crate::workflows::workflow::Workflow;
@@ -68,6 +69,9 @@ pub enum WarpConfigUpdateEvent {
     /// Emitted when one or more `custom_model_routers/` files failed to parse.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     ModelConfigErrors(Vec<ModelConfigError>),
+    /// The local `automations/` local automations were created, modified, or deleted.
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+    LocalAutomations,
     /// The settings file (`settings.toml`) was created, modified, or deleted.
     #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
     Settings,
@@ -100,6 +104,12 @@ pub struct WarpConfig {
     /// Errors for `custom_model_routers/` files that failed to parse.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     custom_model_router_errors: Vec<ModelConfigError>,
+    /// Local automations loaded from the user's `automations/` data directory.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    local_automations: Vec<LocalAutomation>,
+    /// Errors for `automations/` files that failed to parse or validate.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    local_automation_errors: Vec<LocalAutomationError>,
 }
 
 /// Platform-independent parts of WarpConfig.
@@ -141,6 +151,18 @@ impl WarpConfig {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn custom_model_router_errors(&self) -> &Vec<ModelConfigError> {
         &self.custom_model_router_errors
+    }
+
+    /// Local automations loaded from the user's `automations/` data directory.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn local_automations(&self) -> &Vec<LocalAutomation> {
+        &self.local_automations
+    }
+
+    /// Parse/validation errors for `automations/` files that failed to load.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn local_automation_errors(&self) -> &Vec<LocalAutomationError> {
+        &self.local_automation_errors
     }
 
     /// Saving the newly created launch configuration to the WarpConfig that we currently
@@ -221,6 +243,14 @@ pub fn tab_configs_dir() -> PathBuf {
 #[cfg_attr(target_family = "wasm", expect(dead_code))]
 pub fn custom_model_routers_dir() -> PathBuf {
     base_dir().join("custom_model_routers")
+}
+
+/// Returns the path to the directory containing the user's local automations
+/// (`~/.warp/automations/` on stable; channel-aware via `data_dir()`). Each
+/// file defines a single automation.
+#[cfg_attr(target_family = "wasm", expect(dead_code))]
+pub fn automations_dir() -> PathBuf {
+    base_dir().join("automations")
 }
 
 /// Returns the path to the directory containing the built-in default tab configs.

@@ -522,6 +522,9 @@ pub(crate) fn activation_for_bundled_skill(
             BundledSkillActivation::RequiresFile(resources_dir.join("settings_schema.json"))
         }
         "warpctrl" => BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
+        "local-automations" | "create-local-automation" => {
+            BundledSkillActivation::RequiresFeature(FeatureFlag::LocalAutomations)
+        }
         _ => BundledSkillActivation::Always,
     }
 }

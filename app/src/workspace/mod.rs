@@ -1509,6 +1509,15 @@ pub fn init(app: &mut AppContext) {
     .with_mac_key_binding("cmd-shift-M")
     .with_linux_or_windows_key_binding("ctrl-shift-M")
     .with_group(bindings::BindingGroup::WarpAi.as_str())]);
+
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:open_local_automations_list",
+        "Open Settings: Automations",
+        WorkspaceAction::OpenLocalAutomationsList,
+    )
+    .with_enabled(|| FeatureFlag::LocalAutomations.is_enabled())
+    .with_context_predicate(id!("Workspace"))
+    .with_group(bindings::BindingGroup::Settings.as_str())]);
 }
 
 fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
@@ -1547,6 +1556,14 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
             "Open Settings: Features",
             WorkspaceAction::ShowSettingsPage(SettingsSection::Features),
         )
+        .with_group(bindings::BindingGroup::Settings.as_str())
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
+            "workspace:show_settings_local_automations_page",
+            "Open Settings: Automations",
+            WorkspaceAction::ShowSettingsPage(SettingsSection::LocalAutomations),
+        )
+        .with_enabled(|| FeatureFlag::LocalAutomations.is_enabled())
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(

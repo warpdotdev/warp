@@ -8,17 +8,18 @@ use repo_metadata::RepositoryUpdate;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
 use super::util::{
-    for_each_dir_entry, has_name, is_config_file, parse_model_config_dir_entry,
-    parse_multi_launch_config_dir_entry, parse_multi_workflow_dir_entry,
-    parse_single_theme_dir_entry, parse_tab_config_dir_entry,
+    for_each_dir_entry, has_name, is_config_file, parse_local_automation_dir_entry,
+    parse_model_config_dir_entry, parse_multi_launch_config_dir_entry,
+    parse_multi_workflow_dir_entry, parse_single_theme_dir_entry, parse_tab_config_dir_entry,
 };
 use super::{
-    custom_model_routers_dir, launch_configs_dir, tab_configs_dir, themes_dir, workflows_dir,
-    WarpConfigUpdateEvent, LAUNCH_CONFIG_COMMENT,
+    automations_dir, custom_model_routers_dir, launch_configs_dir, tab_configs_dir, themes_dir,
+    workflows_dir, WarpConfigUpdateEvent, LAUNCH_CONFIG_COMMENT,
 };
 use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
+use crate::local_automations::{LocalAutomation, LocalAutomationError};
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::WarpThemeConfig;
 use crate::warp_managed_paths_watcher::{
@@ -72,6 +73,16 @@ impl super::WarpConfig {
                     // Don't emit ModelConfigErrors on startup — like tab configs,
                     // the error toast should only appear when the user saves a
                     // file, not on app restart.
+                },
+            );
+        }
+        if FeatureFlag::LocalAutomations.is_enabled() {
+            let _ = ctx.spawn(
+                async move { load_local_automations(&automations_dir()) },
+                |me, (automations, errors), ctx| {
+                    me.local_automations = automations;
+                    me.local_automation_errors = errors;
+                    ctx.emit(WarpConfigUpdateEvent::LocalAutomations);
                 },
             );
         }
@@ -155,6 +166,20 @@ impl super::WarpConfig {
                     if !errors.is_empty() {
                         ctx.emit(WarpConfigUpdateEvent::ModelConfigErrors(errors));
                     }
+                },
+            );
+        }
+
+        if FeatureFlag::LocalAutomations.is_enabled()
+            && update_touches_dir(update, &automations_dir())
+        {
+            let dir_path = automations_dir();
+            let _ = ctx.spawn(
+                async move { load_local_automations(&dir_path) },
+                |me, (automations, errors), ctx| {
+                    me.local_automations = automations;
+                    me.local_automation_errors = errors;
+                    ctx.emit(WarpConfigUpdateEvent::LocalAutomations);
                 },
             );
         }
@@ -291,6 +316,32 @@ pub fn load_model_configs(dir_path: &Path) -> (Vec<CustomModelRouter>, Vec<Model
             .then_with(|| a.info.display_name.cmp(&b.info.display_name))
     });
     (models, errors)
+}
+
+/// Loads all local automations from `automations_path`. Each automation is an
+/// individual TOML file.
+///
+/// Returns successfully parsed automations (sorted by name) and any errors
+/// for files that failed to parse or validate. If the directory does not
+/// exist, returns empty vecs.
+pub fn load_local_automations(
+    automations_path: &Path,
+) -> (Vec<LocalAutomation>, Vec<LocalAutomationError>) {
+    let results = for_each_dir_entry(automations_path, parse_local_automation_dir_entry);
+    let mut automations = Vec::new();
+    let mut errors = Vec::new();
+    for result in results {
+        match result {
+            Ok(automation) => automations.push(automation),
+            Err(error) => errors.push(error),
+        }
+    }
+    automations.sort_by(|a, b| {
+        let a_name = a.name.to_lowercase();
+        let b_name = b.name.to_lowercase();
+        a_name.cmp(&b_name).then_with(|| a.name.cmp(&b.name))
+    });
+    (automations, errors)
 }
 
 /// Loads all tab configs from `tab_config_path`. Each tab config is an individual TOML file.

@@ -80,8 +80,8 @@ timeout_seconds = 1800
 
 **UI entry points**
 - Minimal list view: name, runner, schedule, enabled, path; actions Open + Run now.
-- Placement: prefer Agent Management adjacent or Settings → AI; keep UI thin (table/list, no history).
-- Command palette: “Local Automations”, “Run Local Automation…” (picker).
+- Placement: Settings → Automations; keep UI thin (table/list, no history).
+- Command palette: “Open Settings: Automations”.
 
 ### 4. Skills
 Add bundled skills (mirror tab-config split):
@@ -99,6 +99,14 @@ Until client Run now exists, the create skill can still write files for dogfood;
 - Repo-local `.warp/automations/`.
 - Daemon / launchd.
 
+## Implementation notes (as landed)
+- Feature flag: `FeatureFlag::LocalAutomations` (cargo feature `local_automations`), enabled for dogfood via `DOGFOOD_FLAGS`.
+- Module: `app/src/local_automations/` (`local_automation.rs` schema/resolution + `list_view.rs` list body). Settings host: `app/src/settings_view/local_automations_page.rs`. Loader/watcher wired into `WarpConfig` (`automations_dir()`, `WarpConfigUpdateEvent::LocalAutomations`).
+- Schema uses `deny_unknown_fields` (fail-closed) plus cross-field validation: exactly one of `cwd` / `[worktree]`, non-empty `name`/`schedule`/`prompt`/`command`. `timeout_seconds` and `env` parse and are stored but are not applied at run time in Slice A.
+- Unattended profile: `AIExecutionProfilesModel` gained ephemeral client-only profiles (`register_ephemeral_profile`); Run now registers a renamed `AIExecutionProfile::create_default_cli_profile(false, Some(false))` and sets it as the active profile for the new session only. Permission checks flow through `get_profile_by_id`, so no AlwaysAsk hangs and the user's default profile is untouched.
+- Run now: `WorkspaceAction::RunLocalAutomation` resolves cwd/worktree on a background task (`git worktree add` when needed, with fallback to checking out an existing branch of the same name), then opens a tab via `add_tab_with_pane_layout`. Shell runner uses a terminal pane template with the command; agent runner opens a terminal pane and enters the agent view with the prompt auto-submitted (`AgentViewEntryOrigin::LocalAutomation`, `AutoTriggerBehavior::Always`).
+- List surface: Settings → Automations (`SettingsSection::LocalAutomations`), opened via Command Palette "Open Settings: Automations" (`workspace:open_local_automations_list` / `ShowSettingsPage(LocalAutomations)`), the header toolbar Automations button, or the new-session menu. Rows show name, runner, schedule, home-relative path, and a disabled tag, with Run now / Open config actions; parse failures render as error rows; empty state explains how to create one. Run / Open config keep Settings open.
+- Skills: bundled `local-automations` (schema reference) + `create-local-automation` (NL → TOML workflow), activation-gated on the feature flag.
 ## Testing and validation
 Map to PRODUCT.md Behavior numbers:
 

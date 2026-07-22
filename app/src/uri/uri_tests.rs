@@ -771,6 +771,14 @@ fn test_settings_section_for_simple_subpage() {
         settings_section_for_simple_subpage("warp_agent"),
         Some(SettingsSection::WarpAgent),
     );
+    assert_eq!(
+        settings_section_for_simple_subpage("automations"),
+        Some(SettingsSection::LocalAutomations),
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("local_automations"),
+        Some(SettingsSection::LocalAutomations),
+    );
     assert!(settings_section_for_simple_subpage("not_a_subpage").is_none());
 }
 

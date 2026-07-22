@@ -124,6 +124,11 @@ pub struct AIExecutionProfilesModel {
     profile_id_to_sync_id: HashMap<ClientProfileId, SyncId>,
     /// Only contains entries for non-default profiles.
     active_profiles_per_session: HashMap<EntityId, ClientProfileId>,
+    /// Ephemeral, client-only profiles that are not backed by cloud objects
+    /// and are never synced or listed in profile-management UIs. Used for
+    /// one-off sessions that need a fixed permission set, such as unattended
+    /// local automation runs.
+    ephemeral_profiles: HashMap<ClientProfileId, AIExecutionProfile>,
 }
 
 impl AIExecutionProfilesModel {
@@ -246,6 +251,7 @@ impl AIExecutionProfilesModel {
             default_profile_state,
             profile_id_to_sync_id,
             active_profiles_per_session,
+            ephemeral_profiles: HashMap::new(),
         };
 
         model.maybe_inherit_from_legacy_settings(ctx);
@@ -360,6 +366,21 @@ impl AIExecutionProfilesModel {
         };
         self.profile_id_to_sync_id.clear();
         self.active_profiles_per_session.clear();
+        self.ephemeral_profiles.clear();
+    }
+
+    /// Registers an ephemeral, client-only profile and returns its ID.
+    ///
+    /// Ephemeral profiles are resolvable via [`Self::get_profile_by_id`] and
+    /// can be activated for a session with [`Self::set_active_profile`], but
+    /// are never synced to the cloud and are not returned from
+    /// [`Self::get_all_profile_ids`], so they don't appear in
+    /// profile-management UIs.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn register_ephemeral_profile(&mut self, profile: AIExecutionProfile) -> ClientProfileId {
+        let profile_id = ClientProfileId::new();
+        self.ephemeral_profiles.insert(profile_id, profile);
+        profile_id
     }
 
     /// Returns the active permissions profile for a specific terminal view.
@@ -453,6 +474,16 @@ impl AIExecutionProfilesModel {
                 }
             }
             DefaultProfileState::Synced { .. } => {}
+        }
+
+        // Handle ephemeral client-only profiles (e.g. unattended local
+        // automation runs).
+        if let Some(profile) = self.ephemeral_profiles.get(&profile_id) {
+            return Some(AIExecutionProfileInfo {
+                id: profile_id,
+                sync_id: None,
+                data: profile.clone(),
+            });
         }
 
         // Handle all synced profiles (default and non-default)

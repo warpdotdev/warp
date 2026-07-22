@@ -187,6 +187,10 @@ pub enum AgentViewEntryOrigin {
     /// returns to the most recent conversation from the terminal.
     JumpToLatestAgentMessage,
 
+    /// Entered agent view by running a local automation ("Run now"). The run
+    /// is unattended, so the initial prompt always auto-submits.
+    LocalAutomation,
+
     // The variants below actually correspond to callsites where the selected conversation is
     // updated, but don't actually correspond to entering the agent view. They exist so we can
     // continue to call `set_pending_query_state_for_(new|existing)_conversation`, but you'll find
@@ -225,6 +229,7 @@ impl AgentViewEntryOrigin {
             }
             AgentViewEntryOrigin::Cli => AutoTriggerBehavior::Always,
             AgentViewEntryOrigin::AcceptedPromptSuggestion => AutoTriggerBehavior::Always,
+            AgentViewEntryOrigin::LocalAutomation => AutoTriggerBehavior::Always,
             AgentViewEntryOrigin::LinearDeepLink => AutoTriggerBehavior::Never,
             _ => AutoTriggerBehavior::InAgentView,
         }

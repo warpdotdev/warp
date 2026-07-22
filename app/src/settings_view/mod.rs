@@ -92,6 +92,7 @@ mod features;
 mod features_page;
 pub(crate) mod handoff_environment_creation_modal;
 pub mod keybindings;
+mod local_automations_page;
 mod main_page;
 pub mod mcp_servers;
 pub mod mcp_servers_page;
@@ -251,6 +252,7 @@ pub enum SettingsSection {
     BillingAndUsage,
     Appearance,
     Features,
+    LocalAutomations,
     Keybindings,
     Privacy,
     Referrals,
@@ -305,6 +307,7 @@ impl Display for SettingsSection {
             SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
             SettingsSection::CloudEnvironments => write!(f, "Environments"),
             SettingsSection::OzCloudAPIKeys => write!(f, "Oz Cloud API Keys"),
+            SettingsSection::LocalAutomations => write!(f, "Automations"),
             _ => write!(f, "{self:?}"),
         }
     }
@@ -389,6 +392,7 @@ impl FromStr for SettingsSection {
             "Appearance" => Ok(Self::Appearance),
             "Code" => Ok(Self::Code),
             "Features" => Ok(Self::Features),
+            "Local Automations" | "Automations" | "LocalAutomations" => Ok(Self::LocalAutomations),
             "Keyboard shortcuts" => Ok(Self::Keybindings),
             "Privacy" => Ok(Self::Privacy),
             "Referrals" => Ok(Self::Referrals),
@@ -1109,6 +1113,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::BillingAndUsage(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpDrive(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::LocalAutomations(handle) => $ctx.update_view(handle, $update),
         }
     };
 }
@@ -1171,6 +1176,10 @@ impl SettingsView {
         ctx.subscribe_to_view(&features_page_handle, |me, _, event, ctx| {
             me.handle_features_page_event(event, ctx);
         });
+
+        // Local Automations page
+        let local_automations_page_handle = ctx
+            .add_typed_action_view(local_automations_page::LocalAutomationsSettingsPageView::new);
 
         // Shared blocks page
         let block_client = ServerApiProvider::as_ref(ctx).get_block_client();
@@ -1310,6 +1319,7 @@ impl SettingsView {
             SettingsPage::new(teams_page_handle),
             SettingsPage::new(appearance_page_handle),
             SettingsPage::new(features_page_handle),
+            SettingsPage::new(local_automations_page_handle),
             SettingsPage::new(keybindings_handle),
             SettingsPage::new(platform_page_handle),
             SettingsPage::new(warpify_page_handle),
@@ -1355,6 +1365,7 @@ impl SettingsView {
             SettingsNavItem::Page(SettingsSection::Teams),
             SettingsNavItem::Page(SettingsSection::Appearance),
             SettingsNavItem::Page(SettingsSection::Features),
+            SettingsNavItem::Page(SettingsSection::LocalAutomations),
             SettingsNavItem::Page(SettingsSection::Keybindings),
             SettingsNavItem::Page(SettingsSection::Warpify),
             SettingsNavItem::Page(SettingsSection::Referrals),
@@ -2140,6 +2151,7 @@ impl SettingsView {
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Code(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::WarpDrive(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::LocalAutomations(v) => v.as_ref(app).should_render(app),
         }
     }
 

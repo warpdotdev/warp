@@ -65,7 +65,7 @@ Figma: none provided
 17. Overwrite vs new file: if a name/filename conflicts, the agent asks before overwriting.
 
 ### Listing and opening config
-18. The user can see their local automations in a simple list surface (settings subsection, agent management adjacent page, or equivalent — exact placement open if needed, but there must be one discoverable list).
+18. The user can see their local automations in Settings → Automations (discoverable list surface).
 19. From the list, the user can:
     - See `name`, runner type, schedule string, enabled flag, and source path (home-relative).
     - Open the TOML config (in Warp’s editor or OS default).
@@ -97,8 +97,8 @@ Figma: none provided
 
 ### Accessibility / discoverability
 36. Run now and Open config are available from the list without memorizing filesystem paths.
-37. Command palette entries (if added in this slice) use clear names: e.g. “Local Automations”, “Run Local Automation”.
+37. Command palette entries use clear names: e.g. “Open Settings: Automations”.
 
 ## Open questions
-- Exact navigation placement for the list (Settings vs Agent Management vs command palette only) can be decided in implementation if it does not block the skill + Run now path.
+- Exact navigation placement for the list: **resolved in implementation** — Settings → Automations, also reachable via Command Palette ("Open Settings: Automations") and the header toolbar Automations button.
 - Whether `enabled = false` blocks Run now hard vs warns: Behavior 23 chooses **warn + allow**; revisit if dogfood finds it confusing.

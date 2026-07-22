@@ -1120,6 +1120,7 @@ pub enum TelemetryAgentViewEntryOrigin {
     ThirdPartyCloudAgent,
     OrchestrationPillBar,
     JumpToLatestAgentMessage,
+    LocalAutomation,
 }
 
 impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
@@ -1172,6 +1173,7 @@ impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
             AgentViewEntryOrigin::LinearDeepLink => Self::LinearDeepLink,
             AgentViewEntryOrigin::OrchestrationPillBar => Self::OrchestrationPillBar,
             AgentViewEntryOrigin::JumpToLatestAgentMessage => Self::JumpToLatestAgentMessage,
+            AgentViewEntryOrigin::LocalAutomation => Self::LocalAutomation,
         }
     }
 }
