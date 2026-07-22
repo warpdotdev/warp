@@ -165,11 +165,14 @@ rect.width    = (visible_right - visible_left) + 2 * horizontal_block_padding
 **Net result:** the "equal ink padding on both sides" promise (Goal 1 / Success
 Criterion 1) is achieved outright for chips — both the advance-vs-ink asymmetry and
 the `block_padding` left residual are eliminated. As the intended consequence, a
-chip's left edge **tightens** by `2 * block_padding` (`= font_size / 5`, ≈2.6px at a
-13px font) versus today (product spec Goal 2 / Success Criterion 2); this is stated
-as intended behavior, not a regression. It is clearly visible on its own, though
-still smaller than the several-pixel advance gap the fix removes on the right.
-Non-chip runs are unchanged.
+chip's left edge **tightens** versus today (product spec Goal 2 / Success
+Criterion 2): the removed `block_padding` residual (`2 * block_padding`, `=
+font_size / 5`, ≈2.6px at a 13px font) is the typical magnitude of one component of
+that shift, but the edge also switches from advance-anchored to ink-anchored, so the
+exact pixel delta is glyph/font-dependent — this is stated as intended behavior, not
+a regression, and not a fixed-pixel guarantee. It is clearly visible on its own,
+though still smaller than the several-pixel advance gap the fix removes on the
+right. Non-chip runs are unchanged.
 
 ### Per-glyph ink IS derivable cross-platform (the key finding)
 
@@ -235,9 +238,11 @@ constant is *not* standing in for a missing measurement (the ink edges are exact
 mis-tuning it only changes the uniform padding, and can never re-introduce the
 left/right asymmetry. The exact fraction is a maintainer taste question (product spec
 Open Question #1). Note the deliberate consequence: with the left shift compensated
-out, the chip's left edge sits `2 * block_padding` (`= font_size / 5`, ≈2.6px at a
-13px font) tighter than today — see "Interaction with the legacy `block_padding`
-offset."
+out, the chip's left edge sits tighter than today — the removed `block_padding`
+residual (`2 * block_padding`, `= font_size / 5`, ≈2.6px at a 13px font) is the
+typical magnitude of one component of that shift, but the exact pixel delta is
+glyph/font-dependent since the edge also switches from advance- to ink-anchoring —
+see "Interaction with the legacy `block_padding` offset."
 
 ### RTL / edge-glyph identification
 
@@ -251,16 +256,17 @@ correct.
 
 ### Fallback rules (no chip collapse)
 
-`ink_left`/`ink_right` are `Option`s. The edge falls back to the advance-based
-`visible_left`/`visible_right` when:
+`ink_left`/`ink_right` are `Option`s. The edge falls back to the advance edge ± `pad`
+(`visible_left - pad` / `visible_right + pad` — the same padding applied to the ink
+edges, not raw `visible_left`/`visible_right`) when:
 
 - the edge glyph has no ink — `glyph_raster_bounds` reports a zero-width box (e.g. a
   trailing space in a code span); or
 - the raster-bounds lookup errors, or the scale factor is non-positive.
 
 This guarantees the chip never collapses to zero/negative width on whitespace-
-terminated spans, and degrades to today's advance-based behavior if ink is ever
-unavailable.
+terminated spans, still gets its normal padding on the fallback edge, and degrades to
+today's advance-based behavior (offset by `pad`) if ink is ever unavailable.
 
 ### Composition with existing truncation clamping
 
@@ -399,10 +405,12 @@ because that surface does not use this paint path at all:
   characters (`` `foo.bar()` ``, `` `x;` ``) beside wide-ink-ending spans
   (`` `foo_bar` ``) and confirm right-side padding now equals left-side padding, on
   both macOS and a Linux/winit build (also check the macOS AA residual, Open
-  Question #2). Confirm the left edge **tightened** by `2 * block_padding`
-  (`= font_size / 5`, ≈2.6px at a 13px font — clearly visible, not sub-pixel; the
-  intended equal-padding consequence), not that it stayed put. Check dark and light
-  themes.
+  Question #2). Confirm the left edge is now **visibly tighter** than today's
+  rendering and no longer carries a `block_padding`-sized residual gap — not that it
+  stayed put. (The exact pixel shift is glyph/font-dependent: it is the legacy
+  `2 * block_padding` residual, `= font_size / 5`, ≈2.6px at a 13px font as a *typical*
+  magnitude, combined with the switch from advance- to ink-anchoring; do not expect a
+  single precise delta across different code spans.) Check dark and light themes.
 - `cargo fmt` and `cargo clippy --workspace --all-targets --all-features --tests
   -- -D warnings` must pass, per `CONTRIBUTING.md`.
 - `cargo nextest run -p warpui_core -p warp_editor` (CI parity) must pass with the
