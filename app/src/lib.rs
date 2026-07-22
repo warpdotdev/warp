@@ -1375,6 +1375,13 @@ pub(crate) fn run_command_line_wasm(launch_mode: LaunchMode) -> anyhow::Result<w
 
     let pre_sentry_errors: Vec<anyhow::Error> = Vec::new();
 
+    // On a DOM-free wasm runtime (e.g. Node) there is no browser `window`, so
+    // `warp_util::assets::make_absolute_url` cannot read `window().location()`.
+    // Register the server root URL as the asset origin so default-theme asset
+    // URL absolutization (reached during `WarpConfig::new` in `initialize_app`)
+    // succeeds. The browser web-GUI path keeps using `window().location()`.
+    warp_util::assets::set_headless_asset_origin(ChannelState::server_root_url().as_ref() as &str);
+
     let mut app = warpui::platform::headless::new_headless_app(Box::new(ASSETS))?;
     app.update(|ctx| {
         run_app_init(
