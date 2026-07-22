@@ -685,17 +685,19 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       fi
   }
 
-  # Strips prompt constructs that zsh counts as visible "glitch" columns even when they appear
-  # inside a %{...%} zero-width region, returning the result in $REPLY. The explicit-width form %n{
-  # is rewritten to %{ (preserving the brace pairing), and the %G, %nG, and %-nG forms are removed
-  # entirely. Neither change affects the rendered prompt bytes, only zsh's internal width
-  # accounting. Literal %% escapes are matched first so that they cannot form false positives (e.g.
-  # %%1{ renders as literal text and must be left alone).
+  # Strips prompt constructs that zsh counts as visible "glitch" columns even
+  # when they appear inside a %{...%} zero-width region, returning the result
+  # in $REPLY. The explicit-width form %n{ is rewritten to %{ (preserving the
+  # brace pairing), and the %G, %nG, and %-nG forms are removed entirely.
+  # Neither change affects the rendered prompt bytes, only zsh's internal
+  # width accounting. Literal %% escapes are matched first so that they cannot
+  # form false positives (e.g. %%1{ renders as literal text and must be left
+  # alone).
   function warp_strip_glitch_width_constructs() {
     setopt localoptions extendedglob
     local match mbegin mend
     REPLY=${1:-}
-    REPLY=${REPLY//(#b)(%%|%<->\{|%(-|)(<->|)G)/${${match[1]:#%(-|)(<->|)G}/(#s)%<->\{(#e)/%\{}}}}
+    REPLY=${REPLY//(#b)(%%|%<->\{|%(-|)(<->|)G)/${${match[1]:#%(-|)(<->|)G}/(#s)%<->\{(#e)/%\{}}}
   }
 
   # Called live via PROMPT_SUBST on every prompt render. Evaluates _WARP_RAW_PROMPT using shell-only
@@ -704,7 +706,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
   # zsh's countprompt() sees zero columns for the prompt, keeping its cursor-column model in sync
   # with the physical cursor (which stays at 0 because Warp routes prompt bytes to a separate grid).
   # Using PROMPT_SUBST means async prompt updates that call zle reset-prompt automatically
-# re-evaluate and re-strip without waiting for the next precmd.
+  # re-evaluate and re-strip without waiting for the next precmd.
   function _warp_stripped_prompt() {
     [[ -z "${_WARP_RAW_PROMPT:-}" ]] && return
     local REPLY
