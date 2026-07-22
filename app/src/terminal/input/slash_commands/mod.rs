@@ -44,7 +44,9 @@ use crate::ai::blocklist::{
 use crate::ai::conversation_rename::rename_conversation;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
+#[cfg(not(target_family = "wasm"))]
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
 use crate::search::slash_command_menu::static_commands::{Availability, SlashCommandKind};
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::server::ids::SyncId;
