@@ -4,8 +4,8 @@ use std::rc::Rc;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    TuiLoginEvent, TuiLoginModel, TuiLoginPhase, handle_received_device_authorization_code,
-    set_login_phase,
+    TuiLoginEvent, TuiLoginModel, TuiLoginPhase, handle_auth_failure,
+    handle_received_device_authorization_code, set_login_phase,
 };
 
 #[test]
@@ -97,6 +97,26 @@ fn ignores_late_device_code_when_login_is_already_complete() {
                 "CODE",
                 ctx,
             );
+        });
+
+        app.update(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::LoggedIn
+            ));
+        });
+    });
+}
+
+#[test]
+fn ignores_late_auth_failure_when_login_is_already_complete() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| TuiLoginModel {
+            phase: TuiLoginPhase::LoggedIn,
+        });
+
+        app.update(|ctx| {
+            handle_auth_failure("stale auth failure".to_owned(), ctx);
         });
 
         app.update(|ctx| {

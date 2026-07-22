@@ -105,12 +105,9 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
             set_login_phase(ctx, TuiLoginPhase::LoggedIn);
             activate_global_mcp_servers(ctx);
         }
-        AuthManagerEvent::AuthFailed(err) => set_login_phase(
-            ctx,
-            TuiLoginPhase::Failed {
-                message: format!("{err:#}"),
-            },
-        ),
+        AuthManagerEvent::AuthFailed(err) => {
+            handle_auth_failure(format!("{err:#}"), ctx);
+        }
         _ => {}
     });
 
@@ -149,6 +146,17 @@ fn handle_received_device_authorization_code(
             user_code: Some(user_code.to_owned()),
         },
     );
+}
+
+fn handle_auth_failure(message: String, ctx: &mut AppContext) {
+    // Refresh/auth work started before an already-authenticated TUI mounted
+    // may report a late failure. Do not replace the live session with the
+    // login page; failures after an explicit logout are still shown because
+    // the phase has returned to `AwaitingLogin`.
+    if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
+        return;
+    }
+    set_login_phase(ctx, TuiLoginPhase::Failed { message });
 }
 
 /// Logs out the current TUI user and starts a fresh device-authorization flow.
