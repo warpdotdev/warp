@@ -1,6 +1,6 @@
 use std::borrow::Cow;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use wgpu::util::BufferInitDescriptor;
 use wgpu::{
@@ -10,13 +10,13 @@ use wgpu::{
 };
 
 use self::shaders::{ColorModifier, ImageInstanceData};
-use super::util::create_buffer_init;
 use super::WGPUContext;
+use super::util::create_buffer_init;
+use crate::Scene;
 use crate::image_cache::StaticImage;
 use crate::rendering::texture_cache::{TextureCache, TextureCacheIndex};
 use crate::rendering::wgpu::{resources, shader_types};
 use crate::scene::Layer;
-use crate::Scene;
 
 pub(super) struct Pipeline {
     render_pipeline: RenderPipeline,
@@ -306,8 +306,8 @@ mod shaders {
     use pathfinder_color::ColorU;
     use pathfinder_geometry::rect::RectF;
 
-    use crate::rendering::wgpu::shader_types::{vec4f, ColorF, Vector4F};
     use crate::rendering::CornerRadius;
+    use crate::rendering::wgpu::shader_types::{ColorF, Vector4F, vec4f};
 
     /// Icons support overriding the color, whereas images only allow setting the opacity.
     pub(super) enum ColorModifier {

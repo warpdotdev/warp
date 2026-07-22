@@ -145,6 +145,10 @@ impl FileDataSource {
 
             for chunk in contents.chunks(50) {
                 for item in chunk {
+                    if item.is_directory {
+                        continue;
+                    }
+
                     let mut file_ranking = if git_changed_files.contains(&item.path) {
                         FileRanking::ChangedInGit
                     } else {
@@ -255,16 +259,15 @@ impl FileDataSource {
             // allow the main thread to abort the search if needed.
             for chunk in contents.chunks(CHUNK_SIZE) {
                 for item in chunk {
+                    if item.is_directory {
+                        continue;
+                    }
+
                     let Some(mut match_result) =
                         FileSearchModel::fuzzy_match_path(&item.path, &query_file_content)
                     else {
                         continue;
                     };
-
-                    // Never show directories -- there's no way to open them currently.
-                    if item.is_directory {
-                        continue;
-                    }
 
                     if opened_files
                         .as_ref()
@@ -295,14 +298,16 @@ impl FileDataSource {
 
             // If no files matched and we have a valid query and current directory,
             // add a "Create a file named <filename>..." option
-            if allow_create_file && results.is_empty() && !query_file_name.trim().is_empty() {
-                if let Some(current_dir) = current_directory {
-                    let create_item = CreateFileSearchItem {
-                        file_name: query_file_name,
-                        current_directory: current_dir,
-                    };
-                    results.push(QueryResult::from(create_item));
-                }
+            if allow_create_file
+                && results.is_empty()
+                && !query_file_name.trim().is_empty()
+                && let Some(current_dir) = current_directory
+            {
+                let create_item = CreateFileSearchItem {
+                    file_name: query_file_name,
+                    current_directory: current_dir,
+                };
+                results.push(QueryResult::from(create_item));
             }
 
             Ok(results)
@@ -313,3 +318,7 @@ impl FileDataSource {
 impl Entity for FileDataSource {
     type Event = ();
 }
+
+#[cfg(test)]
+#[path = "data_source_tests.rs"]
+mod tests;

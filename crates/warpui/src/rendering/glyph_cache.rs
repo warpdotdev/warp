@@ -5,7 +5,7 @@ use ordered_float::OrderedFloat;
 use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::vector::{Vector2F, Vector2I};
 
-use crate::fonts::{canvas, RasterizedGlyph, SubpixelAlignment};
+use crate::fonts::{RasterizedGlyph, SubpixelAlignment, canvas};
 use crate::rendering;
 use crate::rendering::atlas::{self, AllocatedRegion, TextureId};
 use crate::scene::GlyphKey;

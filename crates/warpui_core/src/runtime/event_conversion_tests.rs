@@ -6,7 +6,7 @@ use ratatui::crossterm::event::{
     MouseEvent, MouseEventKind,
 };
 
-use super::{crossterm_event_to_tui_event, ClickTracker};
+use super::{ClickTracker, crossterm_event_to_tui_event};
 use crate::elements::tui::{TuiEvent, TuiPoint};
 use crate::keymap::Keystroke;
 
@@ -61,6 +61,14 @@ fn arrow_keys_map_to_direction_names() {
     );
     assert_eq!(keystroke(KeyCode::Up, KeyModifiers::empty()).key, "up");
     assert_eq!(keystroke(KeyCode::Down, KeyModifiers::empty()).key, "down");
+}
+
+#[test]
+fn tab_maps_to_the_canonical_keybinding_name() {
+    assert_eq!(keystroke(KeyCode::Tab, KeyModifiers::empty()).key, "tab");
+    let back_tab = keystroke(KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert_eq!(back_tab.key, "tab");
+    assert!(back_tab.shift);
 }
 
 #[test]
@@ -243,26 +251,34 @@ fn mouse_moved_maps_to_tui_mouse_moved_event() {
 
 #[test]
 fn unsupported_mouse_up_and_drag_buttons_are_ignored() {
-    assert!(mouse(
-        MouseEventKind::Up(MouseButton::Right),
-        KeyModifiers::empty()
-    )
-    .is_none());
-    assert!(mouse(
-        MouseEventKind::Up(MouseButton::Middle),
-        KeyModifiers::empty()
-    )
-    .is_none());
-    assert!(mouse(
-        MouseEventKind::Drag(MouseButton::Right),
-        KeyModifiers::empty()
-    )
-    .is_none());
-    assert!(mouse(
-        MouseEventKind::Drag(MouseButton::Middle),
-        KeyModifiers::empty()
-    )
-    .is_none());
+    assert!(
+        mouse(
+            MouseEventKind::Up(MouseButton::Right),
+            KeyModifiers::empty()
+        )
+        .is_none()
+    );
+    assert!(
+        mouse(
+            MouseEventKind::Up(MouseButton::Middle),
+            KeyModifiers::empty()
+        )
+        .is_none()
+    );
+    assert!(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Right),
+            KeyModifiers::empty()
+        )
+        .is_none()
+    );
+    assert!(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Middle),
+            KeyModifiers::empty()
+        )
+        .is_none()
+    );
 }
 
 /// Builds a `button` mouse-down at `(x, y)` via the real conversion (so it

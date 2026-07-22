@@ -22,11 +22,11 @@ use warp_multi_agent_api as api;
 use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
 
 use crate::ai::agent::api::convert_from::{
-    convert_user_query_mode, ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    MaybeAIAgentOutputMessage,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
+    convert_user_query_mode,
 };
 use crate::ai::agent::conversation::{
-    update_todo_list_from_todo_op, AIConversation, AIConversationId, ServerAIConversationMetadata,
+    AIConversation, AIConversationId, ServerAIConversationMetadata, update_todo_list_from_todo_op,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::todos::AIAgentTodoList;
@@ -37,12 +37,12 @@ use crate::ai::agent::{
     DocumentContext, EditDocumentsResult, FileContext, FileGlobResult, FileGlobV2Match,
     FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch, GrepResult,
     ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
-    PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult, ReadFilesResult,
-    ReadMCPResourceResult, ReadShellCommandOutputResult, RequestCommandOutputResult,
-    RequestFileEditsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId,
-    Shared, ShellCommandCompletedTrigger, ShellCommandError, SuggestNewConversationResult,
-    SuggestPromptResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
-    UploadArtifactResult, UserQueryMode, WriteToLongRunningShellCommandResult,
+    PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult,
+    ReadFilesFailedFile, ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult,
+    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseFailureReason,
+    SearchCodebaseResult, ServerOutputId, Shared, ShellCommandCompletedTrigger, ShellCommandError,
+    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
+    UpdatedFileContext, UploadArtifactResult, UserQueryMode, WriteToLongRunningShellCommandResult,
 };
 use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -243,8 +243,8 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             };
 
             // Convert binary data to base64
-            use base64::engine::general_purpose;
             use base64::Engine;
+            use base64::engine::general_purpose;
             let data = general_purpose::STANDARD.encode(&image.data);
 
             result.push(AIAgentContext::Image(ImageContext {
@@ -465,8 +465,8 @@ impl ConvertToExchanges for &api::Task {
                     false
                 }
                 api::message::Message::InvokeSkill(invoke_skill) => {
-                    if let Some(api_skill) = invoke_skill.skill.clone() {
-                        if let Ok(parsed_skill) = ParsedSkill::try_from_api_with_origin(
+                    if let Some(api_skill) = invoke_skill.skill.clone()
+                        && let Ok(parsed_skill) = ParsedSkill::try_from_api_with_origin(
                             api_skill,
                             &SkillPathOrigin::RestoredDisplayOnly,
                         ) {
@@ -487,7 +487,6 @@ impl ConvertToExchanges for &api::Task {
                             };
                             current_inputs.push(input);
                         };
-                    };
 
                     true
                 }
@@ -524,8 +523,8 @@ impl ConvertToExchanges for &api::Task {
                 | api::message::Message::OrchestrationConfigSnapshot(_) => false,
             };
 
-            if !added_message_as_exchange_input {
-                if let Ok(MaybeAIAgentOutputMessage::Message(output_msg)) = (*api_message)
+            if !added_message_as_exchange_input
+                && let Ok(MaybeAIAgentOutputMessage::Message(output_msg)) = (*api_message)
                     .clone()
                     .to_client_output_message(ConversionParams {
                         current_todo_list: todo_lists.last(),
@@ -534,9 +533,8 @@ impl ConvertToExchanges for &api::Task {
                         task_id: &TaskId::new(api_message.task_id.clone()),
                         skill_path_origin: &SkillPathOrigin::Unavailable,
                     })
-                {
-                    current_outputs.push(output_msg);
-                }
+            {
+                current_outputs.push(output_msg);
             }
         }
 
@@ -670,8 +668,19 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .iter()
                         .map(|file| FileContext::from(file.clone()))
                         .collect();
+                    let failed_files = success
+                        .failed_reads
+                        .iter()
+                        .map(|failed_file| ReadFilesFailedFile {
+                            path: failed_file.path.clone(),
+                            message: failed_file.message.clone(),
+                        })
+                        .collect();
 
-                    ReadFilesResult::Success { files }
+                    ReadFilesResult::Success {
+                        files,
+                        failed_files,
+                    }
                 }
                 Some(api::read_files_result::Result::TextFilesSuccess(success)) => {
                     let files = success
@@ -679,7 +688,18 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .iter()
                         .map(|file| FileContext::from(file.clone()))
                         .collect();
-                    ReadFilesResult::Success { files }
+                    let failed_files = success
+                        .failed_reads
+                        .iter()
+                        .map(|failed_file| ReadFilesFailedFile {
+                            path: failed_file.path.clone(),
+                            message: failed_file.message.clone(),
+                        })
+                        .collect();
+                    ReadFilesResult::Success {
+                        files,
+                        failed_files,
+                    }
                 }
                 Some(api::read_files_result::Result::Error(error)) => {
                     ReadFilesResult::Error(error.message.clone())
@@ -1607,6 +1627,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                             environment_id: remote.environment_id.clone(),
                             worker_host: remote.worker_host.clone(),
                             computer_use_enabled: remote.computer_use_enabled,
+                            runner_id: remote.runner_id.clone(),
                         },
                         Some(api::run_agents_result::launched::ResolvedExecutionMode::Local(_))
                         | None => RunAgentsLaunchedExecutionMode::Local,

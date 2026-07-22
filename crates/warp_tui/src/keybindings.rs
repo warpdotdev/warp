@@ -19,10 +19,19 @@
 //! would otherwise match everywhere and, for multi-keystroke chords, swallow
 //! prefix keys via a pending match.
 
-use warpui_core::keymap::{BindingLens, IsBindingValid, Trigger};
-use warpui_core::AppContext;
+use warpui_core::keymap::macros::*;
+use warpui_core::keymap::{
+    BindingLens, Context, ContextPredicate, EditableBinding, IsBindingValid, Trigger,
+};
+use warpui_core::{Action, AppContext, TuiView};
 
+use crate::attachment_bar::TuiAttachmentBar;
+use crate::editor_interaction::{TuiEditorBindingTarget, TuiEditorCommand, editor_binding_specs};
+use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
 use crate::input::TuiInputView;
+use crate::input::view::TuiInputAction;
+use crate::option_selector::TuiOptionSelector;
+use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::root_view::RootTuiView;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::transcript_view::TuiTranscriptView;
@@ -30,15 +39,96 @@ use crate::transcript_view::TuiTranscriptView;
 /// Group tag set on every TUI-registered binding. The validators treat it (or
 /// a `tui:` name prefix) as proof of TUI ownership.
 pub(crate) const TUI_BINDING_GROUP: &str = "tui";
+pub(crate) const ATTACHMENTS_AVAILABLE_FLAG: &str = "TuiAttachmentsAvailable";
+pub(crate) const PLAN_TOGGLE_AVAILABLE_FLAG: &str = "TuiPlanToggleAvailable";
+pub(crate) const KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG: &str = "TuiKeyboardEnhancementAvailable";
+pub(crate) const PLAN_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_plan";
+pub(crate) const CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME: &str =
+    "tui:session:toggle_plan_when_available";
+pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
+    let mut context = Context::default();
+    context.set.insert(TuiTerminalSessionView::ui_name());
+    ctx.editable_bindings()
+        .find(|binding| binding.name == PLAN_TOGGLE_BINDING_NAME && binding.in_context(&context))
+        .and_then(|binding| match binding.trigger {
+            Trigger::Keystrokes(keystrokes) if !keystrokes.is_empty() => Some(
+                keystrokes
+                    .iter()
+                    .map(|keystroke| keystroke.displayed_expanded())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            Trigger::Keystrokes(_) | Trigger::Standard(_) | Trigger::Custom(_) | Trigger::Empty => {
+                None
+            }
+        })
+}
 
 /// Registers all TUI view keybindings and the cross-surface binding
 /// validators. Called once at TUI startup, before the driver starts.
 pub(crate) fn init(app: &mut AppContext) {
     crate::root_view::init(app);
     crate::terminal_session_view::init(app);
+    crate::attachment_bar::init(app);
     crate::input::init(app);
+    register_editor_bindings(
+        app,
+        TuiEditorBindingTarget::Input,
+        id!("TuiInputView"),
+        TuiInputAction::EditorCommand,
+    );
+    register_editor_bindings(
+        app,
+        TuiEditorBindingTarget::Editor,
+        id!("TuiEditorView"),
+        TuiEditorViewAction::Command,
+    );
+    crate::orchestration_block::init(app);
+    crate::tui_ask_question_view::init(app);
 
     register_binding_validators(app);
+}
+
+/// Registers one editor binding target from interaction-owned metadata.
+fn register_editor_bindings<A>(
+    app: &mut AppContext,
+    target: TuiEditorBindingTarget,
+    context: ContextPredicate,
+    action_for: impl Fn(TuiEditorCommand) -> A,
+) where
+    A: Action,
+{
+    let action_for = &action_for;
+    let bindings = editor_binding_specs(target).flat_map(|spec| {
+        let context = context.clone();
+        spec.keys.iter().filter_map(move |key| {
+            let context = context_for_editor_binding(target, spec.command, key, &context)?;
+            Some(
+                EditableBinding::new(spec.name, spec.description, action_for(spec.command))
+                    .with_context_predicate(context)
+                    .with_group(TUI_BINDING_GROUP)
+                    .with_key_binding(key),
+            )
+        })
+    });
+    app.register_editable_bindings(bindings);
+}
+
+fn context_for_editor_binding(
+    target: TuiEditorBindingTarget,
+    command: TuiEditorCommand,
+    key: &str,
+    default_context: &ContextPredicate,
+) -> Option<ContextPredicate> {
+    match (target, command, key) {
+        // The input editor reserves ctrl-d for session-level EOF and exit handling.
+        (TuiEditorBindingTarget::Input, TuiEditorCommand::DeleteForward, "ctrl-d") => None,
+        (TuiEditorBindingTarget::Input, TuiEditorCommand::MoveUp, "ctrl-p") => Some(
+            default_context.clone()
+                & (!id!(PLAN_TOGGLE_AVAILABLE_FLAG) | id!(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)),
+        ),
+        _ => Some(default_context.clone()),
+    }
 }
 
 /// Debug-time guard (no-op in release): every keystroke binding that matches a
@@ -46,11 +136,15 @@ pub(crate) fn init(app: &mut AppContext) {
 fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<RootTuiView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTerminalSessionView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiAttachmentBar>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiInputView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiEditorView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiOrchestrationBlock>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiOptionSelector>(is_tui_owned_binding);
 }
 
-fn is_tui_owned_binding(binding: BindingLens) -> IsBindingValid {
+pub(crate) fn is_tui_owned_binding(binding: BindingLens) -> IsBindingValid {
     // Non-keystroke triggers (palette-only `Empty`, `Standard`, `Custom`)
     // can never fire from TUI keyboard input, so they are exempt.
     if !matches!(binding.trigger, Trigger::Keystrokes(_)) {

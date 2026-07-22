@@ -111,6 +111,17 @@ pub enum AIAgentActionResultType {
     /// resume.
     WaitForEvents(WaitForEventsResult),
 }
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ReadFilesFailedFile {
+    pub path: String,
+    pub message: String,
+}
+
+impl Display for ReadFilesFailedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path, self.message)
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum StartAgentVersion {
@@ -417,7 +428,10 @@ impl From<&FileContext> for FileLocations {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ReadFilesResult {
-    Success { files: Vec<FileContext> },
+    Success {
+        files: Vec<FileContext>,
+        failed_files: Vec<ReadFilesFailedFile>,
+    },
     Error(String),
     Cancelled,
 }
@@ -425,8 +439,15 @@ pub enum ReadFilesResult {
 impl Display for ReadFilesResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReadFilesResult::Success { files } => {
-                write!(f, "Read files: {}", files.iter().format(", "))
+            ReadFilesResult::Success {
+                files,
+                failed_files,
+            } => {
+                write!(f, "Read files: {}", files.iter().format(", "))?;
+                if !failed_files.is_empty() {
+                    write!(f, " (failed: {})", failed_files.iter().format(", "))?;
+                }
+                Ok(())
             }
             ReadFilesResult::Error(error) => write!(f, "Read files error: {error}"),
             ReadFilesResult::Cancelled => write!(f, "Read files cancelled"),
@@ -1381,6 +1402,9 @@ pub enum RunAgentsLaunchedExecutionMode {
         environment_id: String,
         worker_host: String,
         computer_use_enabled: bool,
+        /// Resolved runner UID the batch committed to; empty when none.
+        #[serde(default)]
+        runner_id: String,
     },
 }
 

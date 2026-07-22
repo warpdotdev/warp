@@ -80,10 +80,10 @@ fn diff_pipeline_computes_added_lines_and_ghost_blocks() {
         app.update(|ctx| {
             let mut tx = Some(tx);
             ctx.subscribe_to_model(&editor, move |_, event, _| {
-                if matches!(event, CodeEditorModelEvent::DiffUpdated) {
-                    if let Some(tx) = tx.take() {
-                        let _ = tx.send(());
-                    }
+                if matches!(event, CodeEditorModelEvent::DiffUpdated)
+                    && let Some(tx) = tx.take()
+                {
+                    let _ = tx.send(());
                 }
             });
             editor.update(ctx, |editor, ctx| {

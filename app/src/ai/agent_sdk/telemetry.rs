@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
@@ -564,7 +564,7 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
                 EnablementState::Flag(FeatureFlag::APIKeyManagement)
             }
             Self::RunnerList | Self::RunnerCreate | Self::RunnerUpdate | Self::RunnerDelete => {
-                EnablementState::Flag(FeatureFlag::CloudAgentRunnerCLICommands)
+                EnablementState::Flag(FeatureFlag::CloudAgentRunners)
             }
             Self::RunMessageWatch
             | Self::RunMessageSend

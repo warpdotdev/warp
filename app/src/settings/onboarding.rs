@@ -52,12 +52,16 @@ pub fn apply_onboarding_settings(
                     apply_ui_customization_settings(ui, false, app);
                 }
                 AISettings::handle(app).update(app, |settings, ctx| {
-                    report_if_error!(settings
-                        .should_render_cli_agent_footer
-                        .set_value(*cli_agent_toolbar_enabled, ctx));
-                    report_if_error!(settings
-                        .show_agent_notifications
-                        .set_value(*show_agent_notifications, ctx));
+                    report_if_error!(
+                        settings
+                            .should_render_cli_agent_footer
+                            .set_value(*cli_agent_toolbar_enabled, ctx)
+                    );
+                    report_if_error!(
+                        settings
+                            .show_agent_notifications
+                            .set_value(*show_agent_notifications, ctx)
+                    );
                 });
                 false
             }
@@ -83,27 +87,37 @@ fn apply_ui_customization_settings(
         return;
     }
     TabSettings::handle(app).update(app, |settings, ctx| {
-        report_if_error!(settings
-            .use_vertical_tabs
-            .set_value(ui.use_vertical_tabs, ctx));
-        report_if_error!(settings
-            .show_code_review_button
-            .set_value(ui.show_code_review_button, ctx));
+        report_if_error!(
+            settings
+                .use_vertical_tabs
+                .set_value(ui.use_vertical_tabs, ctx)
+        );
+        report_if_error!(
+            settings
+                .show_code_review_button
+                .set_value(ui.show_code_review_button, ctx)
+        );
     });
 
     WarpDriveSettings::handle(app).update(app, |settings, ctx| {
-        report_if_error!(settings
-            .enable_warp_drive
-            .set_value(ui.show_warp_drive, ctx));
+        report_if_error!(
+            settings
+                .enable_warp_drive
+                .set_value(ui.show_warp_drive, ctx)
+        );
     });
 
     CodeSettings::handle(app).update(app, |settings, ctx| {
-        report_if_error!(settings
-            .show_project_explorer
-            .set_value(ui.show_project_explorer, ctx));
-        report_if_error!(settings
-            .show_global_search
-            .set_value(ui.show_global_search, ctx));
+        report_if_error!(
+            settings
+                .show_project_explorer
+                .set_value(ui.show_project_explorer, ctx)
+        );
+        report_if_error!(
+            settings
+                .show_global_search
+                .set_value(ui.show_global_search, ctx)
+        );
     });
 
     // For agent intent, configure showing conversation history.
@@ -111,9 +125,11 @@ fn apply_ui_customization_settings(
     // It will be hidden anyway because AI is off, but we want to keep the default in case they enable AI later.
     if is_agent_intent {
         AISettings::handle(app).update(app, |settings, ctx| {
-            report_if_error!(settings
-                .show_conversation_history
-                .set_value(ui.show_conversation_history, ctx));
+            report_if_error!(
+                settings
+                    .show_conversation_history
+                    .set_value(ui.show_conversation_history, ctx)
+            );
         });
     }
 }
@@ -125,20 +141,26 @@ fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut App
         SessionDefault::Terminal => DefaultSessionMode::Terminal,
     };
     AISettings::handle(app).update(app, |settings, ctx| {
-        report_if_error!(settings
-            .default_session_mode_internal
-            .set_value(default_mode, ctx));
+        report_if_error!(
+            settings
+                .default_session_mode_internal
+                .set_value(default_mode, ctx)
+        );
     });
 
     let workspace_autonomy_settings = UserWorkspaces::as_ref(app).ai_autonomy_settings();
 
     AISettings::handle(app).update(app, |settings, ctx| {
-        report_if_error!(settings
-            .should_render_cli_agent_footer
-            .set_value(agent_settings.cli_agent_toolbar_enabled, ctx));
-        report_if_error!(settings
-            .show_agent_notifications
-            .set_value(agent_settings.show_agent_notifications, ctx));
+        report_if_error!(
+            settings
+                .should_render_cli_agent_footer
+                .set_value(agent_settings.cli_agent_toolbar_enabled, ctx)
+        );
+        report_if_error!(
+            settings
+                .show_agent_notifications
+                .set_value(agent_settings.show_agent_notifications, ctx)
+        );
     });
 
     AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {

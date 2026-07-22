@@ -170,10 +170,12 @@ where
 {
     let theme = appearance.theme();
     let font_color = theme.foreground().into_solid();
-    let mut label_children = vec![ConstrainedBox::new(icon.to_warpui_icon(color).finish())
-        .with_width(PROVIDER_BUTTON_ICON_SIZE)
-        .with_height(PROVIDER_BUTTON_ICON_SIZE)
-        .finish()];
+    let mut label_children = vec![
+        ConstrainedBox::new(icon.to_warpui_icon(color).finish())
+            .with_width(PROVIDER_BUTTON_ICON_SIZE)
+            .with_height(PROVIDER_BUTTON_ICON_SIZE)
+            .finish(),
+    ];
     label_children.push(
         Container::new(
             Span::new(

@@ -10,8 +10,10 @@ use warp::tui_export::{
     StartAgentExecutionMode, SuggestNewConversationResult,
 };
 use warp_core::command::ExitCode;
+use warpui_core::elements::tui::TuiStyle;
 
 use self::ToolCallDisplayState as State;
+use crate::tui_builder::TuiUiBuilder;
 
 /// Ground-truth state of the terminal block backing a shell-command tool
 /// call, resolved by the caller. When a block exists, its state supersedes
@@ -42,27 +44,54 @@ pub(crate) struct ResolvedCommandBlock {
 /// so tool-call rows stay scannable one-liners.
 const MAX_INLINE_LEN: usize = 80;
 
-/// The coarse display state of a tool call, derived from its action status.
-///
-/// TUI-local presentation collapse of the shared [`AIActionStatus`]; the GUI
-/// has no equivalent enum — its per-tool views consume `AIActionStatus`
-/// directly and re-derive per-site booleans (queued/cancelled/streaming).
+/// Coarse presentation state for a tool call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ToolCallDisplayState {
-    /// The tool call's arguments are still streaming in: it has no action
-    /// status yet and the exchange output is still streaming, so argument
-    /// fields may be empty or partial and must not be interpolated.
+    /// The tool call's arguments are still streaming and may be incomplete.
     Constructing,
-    /// No status yet (stream finished), preprocessing, or queued behind
-    /// other actions.
+    /// The tool call is waiting to begin execution.
     Pending,
-    /// Blocked on user confirmation.
-    AwaitingApproval,
-    /// Executing asynchronously.
+    /// The tool call is blocked on user confirmation.
+    Blocked,
+    /// The tool call is executing asynchronously.
     Running,
     Succeeded,
     Failed,
     Cancelled,
+}
+
+impl ToolCallDisplayState {
+    /// The compact leading glyph for this state.
+    pub(crate) fn glyph(self) -> &'static str {
+        match self {
+            Self::Constructing | Self::Pending => "○",
+            Self::Blocked | Self::Cancelled => "■",
+            Self::Running => "●",
+            Self::Succeeded => "✓",
+            Self::Failed => "×",
+        }
+    }
+
+    /// The semantic theme style for this state's glyph.
+    pub(crate) fn glyph_style(self, builder: &TuiUiBuilder) -> TuiStyle {
+        match self {
+            Self::Constructing | Self::Pending => builder.dim_text_style(),
+            Self::Blocked | Self::Running => builder.attention_glyph_style(),
+            Self::Succeeded => builder.success_glyph_style(),
+            Self::Failed => builder.error_text_style(),
+            Self::Cancelled => builder.muted_text_style(),
+        }
+    }
+
+    /// The semantic text style paired with this state.
+    pub(crate) fn label_style(self, builder: &TuiUiBuilder) -> TuiStyle {
+        match self {
+            Self::Constructing | Self::Pending => builder.dim_text_style(),
+            Self::Blocked | Self::Running | Self::Succeeded | Self::Failed | Self::Cancelled => {
+                builder.primary_text_style()
+            }
+        }
+    }
 }
 
 /// Collapses an optional action status into the coarse display state.
@@ -94,7 +123,7 @@ pub(crate) fn tool_call_display_state(
     match status {
         None if output_streaming => State::Constructing,
         None | Some(AIActionStatus::Preprocessing | AIActionStatus::Queued) => State::Pending,
-        Some(AIActionStatus::Blocked) => State::AwaitingApproval,
+        Some(AIActionStatus::Blocked) => State::Blocked,
         Some(AIActionStatus::RunningAsync) => State::Running,
         Some(finished @ AIActionStatus::Finished(_)) => {
             if finished.is_cancelled() {
@@ -105,21 +134,6 @@ pub(crate) fn tool_call_display_state(
                 State::Succeeded
             }
         }
-    }
-}
-
-/// The leading status glyph for a tool-call row; the caller colors it to
-/// mirror the GUI's inline action icons (`action_icon` in the GUI's
-/// `output.rs`): grey circle while pending, yellow block awaiting approval,
-/// yellow dot running, green check on success, red x on failure, grey block
-/// on cancellation.
-pub(crate) fn tool_call_glyph(state: ToolCallDisplayState) -> &'static str {
-    match state {
-        State::Constructing | State::Pending => "○",
-        State::AwaitingApproval | State::Cancelled => "■",
-        State::Running => "●",
-        State::Succeeded => "✓",
-        State::Failed => "✗",
     }
 }
 
@@ -136,7 +150,7 @@ pub(crate) fn tool_call_label(
         .map(|result| &result.result);
     let label = label_for_action(&action.action, state, result, block);
     match state {
-        State::AwaitingApproval => format!("{label} (awaiting approval)"),
+        State::Blocked => format!("{label} (awaiting approval)"),
         State::Constructing
         | State::Pending
         | State::Running
@@ -155,7 +169,7 @@ pub(crate) fn tool_call_label(
 /// view's "Generating command...").
 fn label_for_action(
     action: &AIAgentActionType,
-    state: ToolCallDisplayState,
+    state: State,
     result: Option<&AIAgentActionResultType>,
     block: Option<&ResolvedCommandBlock>,
 ) -> String {
@@ -171,7 +185,7 @@ fn label_for_action(
             let cmd = single_line(executed.unwrap_or(command));
             match state {
                 State::Constructing => "Generating command…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Run `{cmd}`"),
+                State::Pending | State::Blocked => format!("Run `{cmd}`"),
                 State::Running => format!("Running `{cmd}`"),
                 State::Succeeded => match block_state {
                     Some(CommandBlockState::Finished { .. }) => format!("Ran `{cmd}`"),
@@ -204,7 +218,7 @@ fn label_for_action(
         }
         AIAgentActionType::WriteToLongRunningShellCommand { .. } => match state {
             State::Constructing => "Writing command input…".to_owned(),
-            State::Pending | State::AwaitingApproval => "Write input to running command".to_owned(),
+            State::Pending | State::Blocked => "Write input to running command".to_owned(),
             State::Running => "Writing input to running command…".to_owned(),
             State::Succeeded => "Wrote input to running command".to_owned(),
             State::Failed => "Failed to write to running command".to_owned(),
@@ -214,7 +228,7 @@ fn label_for_action(
             let files = files_summary(request.locations.iter().map(|location| &location.name));
             match state {
                 State::Constructing => "Reading files…".to_owned(),
-                State::Pending | State::AwaitingApproval | State::Succeeded => {
+                State::Pending | State::Blocked | State::Succeeded => {
                     format!("Read {files}")
                 }
                 State::Running => format!("Reading {files}"),
@@ -226,7 +240,7 @@ fn label_for_action(
             let file = single_line(&request.file_path);
             match state {
                 State::Constructing => "Preparing upload…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Upload {file}"),
+                State::Pending | State::Blocked => format!("Upload {file}"),
                 State::Running => format!("Uploading {file}"),
                 State::Succeeded => format!("Uploaded {file}"),
                 State::Failed => format!("Upload of {file} failed"),
@@ -242,7 +256,7 @@ fn label_for_action(
                 .unwrap_or_default();
             match state {
                 State::Constructing => "Searching codebase…".to_owned(),
-                State::Pending | State::AwaitingApproval => {
+                State::Pending | State::Blocked => {
                     format!("Search for \"{query}\"{scope}")
                 }
                 State::Running => format!("Searching for \"{query}\"{scope}"),
@@ -285,7 +299,7 @@ fn label_for_action(
             let path = display_path(path);
             match state {
                 State::Constructing => "Grepping…".to_owned(),
-                State::Pending | State::AwaitingApproval => {
+                State::Pending | State::Blocked => {
                     format!("Grep for {queries} in {path}")
                 }
                 State::Running => format!("Grepping for {queries} in {path}"),
@@ -326,7 +340,7 @@ fn label_for_action(
                 // GUI's "Reading \"{name}\" MCP resource..." loading text.
                 State::Constructing if name.is_empty() => "Reading MCP resource…".to_owned(),
                 State::Constructing => format!("Reading \"{name}\" MCP resource…"),
-                State::Pending | State::AwaitingApproval | State::Succeeded => {
+                State::Pending | State::Blocked | State::Succeeded => {
                     format!("Read MCP resource {resource}")
                 }
                 State::Running => format!("Reading MCP resource {resource}"),
@@ -341,7 +355,7 @@ fn label_for_action(
                 // text; the tool name is available before its args finish.
                 State::Constructing if name.is_empty() => "Calling MCP tool…".to_owned(),
                 State::Constructing => format!("Calling \"{name}\" MCP tool…"),
-                State::Pending | State::AwaitingApproval => format!("Call MCP tool {name}"),
+                State::Pending | State::Blocked => format!("Call MCP tool {name}"),
                 State::Running => format!("Calling MCP tool {name}"),
                 State::Succeeded => format!("Called MCP tool {name}"),
                 State::Failed => format!("MCP tool {name} failed"),
@@ -350,7 +364,7 @@ fn label_for_action(
         }
         AIAgentActionType::SuggestNewConversation { .. } => match state {
             State::Constructing => "Suggesting a new conversation…".to_owned(),
-            State::Pending | State::AwaitingApproval | State::Running | State::Failed => {
+            State::Pending | State::Blocked | State::Running | State::Failed => {
                 "Suggested starting a new conversation".to_owned()
             }
             State::Succeeded => match result {
@@ -368,7 +382,7 @@ fn label_for_action(
             let documents = count_label(request.document_ids.len(), "document", "documents");
             match state {
                 State::Constructing => "Reading documents…".to_owned(),
-                State::Pending | State::AwaitingApproval | State::Succeeded => {
+                State::Pending | State::Blocked | State::Succeeded => {
                     format!("Read {documents}")
                 }
                 State::Running => format!("Reading {documents}"),
@@ -377,7 +391,7 @@ fn label_for_action(
             }
         }
         AIAgentActionType::EditDocuments(request) => match state {
-            State::Pending | State::AwaitingApproval => "Update plan".to_owned(),
+            State::Pending | State::Blocked => "Update plan".to_owned(),
             State::Constructing | State::Running => "Updating plan…".to_owned(),
             State::Succeeded => format!(
                 "Updated plan ({})",
@@ -387,7 +401,7 @@ fn label_for_action(
             State::Cancelled => "Update plan cancelled".to_owned(),
         },
         AIAgentActionType::CreateDocuments(request) => match state {
-            State::Pending | State::AwaitingApproval => "Create plan".to_owned(),
+            State::Pending | State::Blocked => "Create plan".to_owned(),
             State::Constructing | State::Running => "Generating plan…".to_owned(),
             State::Succeeded => {
                 let count = request.documents.len();
@@ -401,9 +415,7 @@ fn label_for_action(
             State::Cancelled => "Create plan cancelled".to_owned(),
         },
         AIAgentActionType::ReadShellCommandOutput { .. } => match state {
-            State::Pending | State::AwaitingApproval | State::Succeeded => {
-                "Read command output".to_owned()
-            }
+            State::Pending | State::Blocked | State::Succeeded => "Read command output".to_owned(),
             State::Constructing | State::Running => "Reading command output…".to_owned(),
             State::Failed => "Failed to read command output".to_owned(),
             State::Cancelled => "Read command output cancelled".to_owned(),
@@ -413,7 +425,7 @@ fn label_for_action(
             let comments = count_label(comments.len(), "review comment", "review comments");
             match state {
                 State::Constructing => "Preparing review comments…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Insert {comments}"),
+                State::Pending | State::Blocked => format!("Insert {comments}"),
                 State::Running => format!("Inserting {comments}…"),
                 State::Succeeded => format!("Inserted {comments}"),
                 State::Failed => "Failed to insert review comments".to_owned(),
@@ -424,14 +436,14 @@ fn label_for_action(
             summary_label(&request.task_summary, state)
         }
         AIAgentActionType::StartRecording { .. } => match state {
-            State::Pending | State::AwaitingApproval => "Start recording".to_owned(),
+            State::Pending | State::Blocked => "Start recording".to_owned(),
             State::Constructing | State::Running => "Starting recording…".to_owned(),
             State::Succeeded => "Started screen recording".to_owned(),
             State::Failed => "Recording failed to start".to_owned(),
             State::Cancelled => "Start recording cancelled".to_owned(),
         },
         AIAgentActionType::StopRecording { .. } => match state {
-            State::Pending | State::AwaitingApproval => "Stop recording".to_owned(),
+            State::Pending | State::Blocked => "Stop recording".to_owned(),
             State::Constructing | State::Running => "Stopping recording…".to_owned(),
             State::Succeeded => "Saved screen recording".to_owned(),
             State::Failed => "Failed to save recording".to_owned(),
@@ -441,7 +453,7 @@ fn label_for_action(
             let skill = single_line(&request.skill.display_label());
             match state {
                 State::Constructing => "Reading skill…".to_owned(),
-                State::Pending | State::AwaitingApproval | State::Succeeded => {
+                State::Pending | State::Blocked | State::Succeeded => {
                     format!("Read skill {skill}")
                 }
                 State::Running => format!("Reading skill {skill}"),
@@ -450,7 +462,7 @@ fn label_for_action(
             }
         }
         AIAgentActionType::FetchConversation { .. } => match state {
-            State::Pending | State::AwaitingApproval => "Fetch conversation".to_owned(),
+            State::Pending | State::Blocked => "Fetch conversation".to_owned(),
             State::Constructing | State::Running => "Fetching conversation…".to_owned(),
             State::Succeeded => "Fetched conversation".to_owned(),
             State::Failed => "Fetch conversation failed".to_owned(),
@@ -468,7 +480,7 @@ fn label_for_action(
             };
             match state {
                 State::Constructing => "Configuring agent…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Start {agent}"),
+                State::Pending | State::Blocked => format!("Start {agent}"),
                 State::Running => format!("Starting {agent}…"),
                 State::Succeeded => format!("Started agent {name}"),
                 State::Failed => format!("Failed to start agent {name}"),
@@ -481,7 +493,7 @@ fn label_for_action(
             let subject = single_line(subject);
             match state {
                 State::Constructing => "Composing message…".to_owned(),
-                State::Pending | State::AwaitingApproval => format!("Send message: {subject}"),
+                State::Pending | State::Blocked => format!("Send message: {subject}"),
                 State::Running => format!(
                     "Sending message to {}: {subject}",
                     count_label(addresses.len(), "agent", "agents")
@@ -493,7 +505,7 @@ fn label_for_action(
         }
         AIAgentActionType::TransferShellCommandControlToUser { reason } => match state {
             State::Constructing => "Handing control to you…".to_owned(),
-            State::Pending | State::AwaitingApproval | State::Running => {
+            State::Pending | State::Blocked | State::Running => {
                 format!("Handing control to you: {}", single_line(reason))
             }
             State::Succeeded => "You are in control".to_owned(),
@@ -502,7 +514,7 @@ fn label_for_action(
         },
         AIAgentActionType::AskUserQuestion { questions } => match state {
             State::Constructing => "Preparing question…".to_owned(),
-            State::Pending | State::AwaitingApproval | State::Running => format!(
+            State::Pending | State::Blocked | State::Running => format!(
                 "Asking {}",
                 count_label(questions.len(), "question", "questions")
             ),
@@ -533,7 +545,7 @@ fn label_for_action(
         AIAgentActionType::RunAgents(request) => {
             let total = request.agent_run_configs.len();
             match state {
-                State::Constructing | State::Pending | State::AwaitingApproval => {
+                State::Constructing | State::Pending | State::Blocked => {
                     "Configuring agents…".to_owned()
                 }
                 State::Running => {
@@ -576,7 +588,7 @@ fn label_for_action(
             }
         }
         AIAgentActionType::WaitForEvents { .. } => match state {
-            State::Constructing | State::Pending | State::AwaitingApproval | State::Running => {
+            State::Constructing | State::Pending | State::Blocked | State::Running => {
                 "Waiting for agent events…".to_owned()
             }
             State::Succeeded => "Done waiting for agent events".to_owned(),
@@ -591,14 +603,14 @@ fn label_for_action(
 fn file_glob_label(
     patterns: &[String],
     path: Option<&str>,
-    state: ToolCallDisplayState,
+    state: State,
     matched_count: Option<usize>,
 ) -> String {
     let patterns = single_line(&patterns.join(", "));
     let path = display_path(path.unwrap_or("."));
     match state {
         State::Constructing => "Finding files…".to_owned(),
-        State::Pending | State::AwaitingApproval => {
+        State::Pending | State::Blocked => {
             format!("Find files matching {patterns} in {path}")
         }
         State::Running => format!("Finding files matching {patterns} in {path}"),
@@ -617,11 +629,11 @@ fn file_glob_label(
 /// Labels computer-use calls with their agent-supplied summary, marking only
 /// terminal non-success states (matching the GUI, which shows the summary
 /// verbatim).
-fn summary_label(summary: &str, state: ToolCallDisplayState) -> String {
+fn summary_label(summary: &str, state: State) -> String {
     let summary = single_line(summary);
     match state {
         State::Constructing => "Preparing computer use…".to_owned(),
-        State::Pending | State::AwaitingApproval | State::Running | State::Succeeded => summary,
+        State::Pending | State::Blocked | State::Running | State::Succeeded => summary,
         State::Failed => format!("{summary} — failed"),
         State::Cancelled => format!("{summary} — cancelled"),
     }
@@ -629,10 +641,10 @@ fn summary_label(summary: &str, state: ToolCallDisplayState) -> String {
 
 /// Generic label for action types without bespoke text, derived from the
 /// action's user-friendly name.
-fn fallback_label(action: &AIAgentActionType, state: ToolCallDisplayState) -> String {
+fn fallback_label(action: &AIAgentActionType, state: State) -> String {
     let name = action.user_friendly_name();
     match state {
-        State::Pending | State::AwaitingApproval => name,
+        State::Pending | State::Blocked => name,
         State::Constructing | State::Running => format!("{name}…"),
         State::Succeeded => format!("{name} — done"),
         State::Failed => format!("{name} — failed"),

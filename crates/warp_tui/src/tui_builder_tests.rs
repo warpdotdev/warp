@@ -1,8 +1,8 @@
 use warp::tui_export::light_theme;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
-use warpui_core::elements::tui::{Color, Modifier};
 use warpui_core::elements::Fill as CoreFill;
+use warpui_core::elements::tui::{Color, Modifier};
 
 use super::TuiUiBuilder;
 
@@ -43,6 +43,7 @@ fn text_styles_follow_light_theme_foreground() {
         builder.slash_command_text_style().fg,
         Some(slash_command_color)
     );
+    assert_eq!(builder.link_text_style().fg, Some(slash_command_color));
     assert_eq!(
         builder.slash_command_selection_background(),
         selection_background

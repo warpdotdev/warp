@@ -70,13 +70,13 @@ impl SearchItem for InlineItem {
         let mut name_text = Text::new_inline(self.name.clone(), self.font_family, font_size)
             .with_color(primary_text_color.into());
 
-        if let Some(name_match) = &self.name_match_result {
-            if !name_match.matched_indices.is_empty() {
-                name_text = name_text.with_single_highlight(
-                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
-                    name_match.matched_indices.clone(),
-                );
-            }
+        if let Some(name_match) = &self.name_match_result
+            && !name_match.matched_indices.is_empty()
+        {
+            name_text = name_text.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                name_match.matched_indices.clone(),
+            );
         }
 
         let keystroke = if highlight_state.is_selected()
@@ -138,14 +138,13 @@ impl SearchItem for InlineItem {
                     .with_color(secondary_color.into());
 
             // Add bold highlighting for matching characters in the description
-            if let Some(description_match) = &self.description_match_result {
-                if !description_match.matched_indices.is_empty() {
-                    description_text = description_text.with_single_highlight(
-                        Highlight::new()
-                            .with_properties(Properties::default().weight(Weight::Bold)),
-                        description_match.matched_indices.clone(),
-                    );
-                }
+            if let Some(description_match) = &self.description_match_result
+                && !description_match.matched_indices.is_empty()
+            {
+                description_text = description_text.with_single_highlight(
+                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                    description_match.matched_indices.clone(),
+                );
             }
 
             row.add_child(Expanded::new(1., description_text.finish()).finish());

@@ -3,11 +3,11 @@ use warp_core::features::FeatureFlag;
 use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warpui_core::{App, ModelHandle};
 
+use crate::OnboardingIntention;
 use crate::model::{
     AiSetupChoice, NoAiConfirmationSource, OnboardingAuthState, OnboardingStateModel,
     OnboardingStep, SelectedSettings,
 };
-use crate::OnboardingIntention;
 
 fn add_test_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
     app.update(MockTelemetryContextProvider::register);

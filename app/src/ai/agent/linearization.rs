@@ -50,14 +50,13 @@ pub fn compute_active_task_ids<'a>(
                 Some(api::message::Message::ToolCall(tool_call)) => {
                     // Check if this is a subagent call.
                     if let Some(api::message::tool_call::Tool::Subagent(subagent)) = &tool_call.tool
+                        && !subagent.task_id.is_empty()
                     {
-                        if !subagent.task_id.is_empty() {
-                            // Add subtask to the queue.
-                            queue.push(subagent.task_id.as_str());
-                            // Track this subagent call so we can remove it when we see the result.
-                            pending_subagents
-                                .insert(tool_call.tool_call_id.as_str(), subagent.task_id.as_str());
-                        }
+                        // Add subtask to the queue.
+                        queue.push(subagent.task_id.as_str());
+                        // Track this subagent call so we can remove it when we see the result.
+                        pending_subagents
+                            .insert(tool_call.tool_call_id.as_str(), subagent.task_id.as_str());
                     }
                 }
                 Some(api::message::Message::ToolCallResult(result)) => {

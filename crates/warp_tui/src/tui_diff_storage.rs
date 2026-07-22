@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use ai::agent::action_result::RequestFileEditsResult;
 use ai::diff_validation::{DiffDelta, DiffType};
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warp::tui_export::{
-    changed_lines_from_op, DiffSessionType, DiffStorage, DiffStorageHelper, FileDiff, FileSnapshot,
-    RegisteredDiffStorage, SaveFuture, UpdatedFileState,
+    DiffSessionType, DiffStorage, DiffStorageHelper, FileDiff, FileSnapshot, RegisteredDiffStorage,
+    SaveFuture, UpdatedFileState, changed_lines_from_op,
 };
 use warp_files::FileModel;
 use warp_util::content_version::ContentVersion;

@@ -233,10 +233,10 @@ pub trait Actor: Send + Sync + 'static {
 
 /// Returns a recorder that can capture a video of the computer-use display.
 ///
-/// A real recorder is only available on Linux (X11); every other platform, and
-/// any `test-util` build, gets a no-op recorder that reports recording as
-/// unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a mock
-/// recorder for UI testing (see `mock`).
+/// A real recorder is available on Linux (X11) and macOS (avfoundation); every
+/// other platform, and any `test-util` build, gets a no-op recorder that reports
+/// recording as unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a
+/// mock recorder for UI testing (see `mock`).
 pub fn create_recorder() -> Box<dyn Recorder> {
     #[cfg(macos)]
     if std::env::var_os("WARP_MOCK_RECORDER").is_some() {
@@ -296,6 +296,14 @@ pub struct RecordingConfig {
     pub max_duration: Duration,
     /// Maximum output size in bytes before the runtime auto-stops recording.
     pub max_size_bytes: u64,
+    /// How many times faster the output video should play back relative to real
+    /// time. For example, 4.0 makes a 4-minute recording play in 1 minute. A
+    /// value of 0.0 or 1.0 means real-time (no speedup). Applied via an ffmpeg
+    /// presentation-timestamp rescale filter on the output video.
+    pub playback_speed_multiplier: f32,
+    /// The surface to capture. `Screen` records the whole X display (legacy behavior);
+    /// `Window` records the targeted window after making it foreground-visible when supported.
+    pub target: Target,
 }
 
 impl Default for RecordingConfig {
@@ -306,6 +314,11 @@ impl Default for RecordingConfig {
             // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
             max_duration: Duration::from_secs(10 * 60),
             max_size_bytes: 1024 * 1024 * 1024,
+            // NOTE: 4x playback speed keeps demo videos short and watchable. A 4-minute
+            // recording plays in 1 minute. The server can override via the StartRecording
+            // tool call's playback_speed_multiplier field.
+            playback_speed_multiplier: 4.0,
+            target: Target::Screen,
         }
     }
 }
@@ -318,17 +331,17 @@ pub struct RecordingHandle {
     height: u32,
     exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
-    // populated by the real Linux recorder; the no-op recorders never construct
-    // a handle.
-    #[cfg(linux)]
+    // populated by the real Linux and macOS recorders; the no-op recorders never
+    // construct a handle.
+    #[cfg(any(linux, macos))]
     path: PathBuf,
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     started_at: instant::Instant,
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     process: Option<tokio::process::Child>,
     // The handle owns and deletes partial output until `Recorder::stop`
     // validates the file and transfers its path to `RecordingOutput`.
-    #[cfg(linux)]
+    #[cfg(any(linux, macos))]
     cleanup_on_drop: bool,
 }
 
@@ -353,7 +366,7 @@ impl RecordingHandle {
             return Some(kind);
         }
 
-        #[cfg(linux)]
+        #[cfg(any(linux, macos))]
         if let Some(process) = self.process.as_mut()
             && let Ok(Some(status)) = process.try_wait()
         {
@@ -379,20 +392,20 @@ impl RecordingHandle {
             width,
             height,
             exit_state: exit_state.clone(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             path: PathBuf::new(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             started_at: instant::Instant::now(),
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             process: None,
-            #[cfg(linux)]
+            #[cfg(any(linux, macos))]
             cleanup_on_drop: false,
         };
         (handle, exit_state)
     }
 }
 
-#[cfg(linux)]
+#[cfg(any(linux, macos))]
 impl Drop for RecordingHandle {
     fn drop(&mut self) {
         // A handle can be abandoned without reaching `Recorder::stop`, notably

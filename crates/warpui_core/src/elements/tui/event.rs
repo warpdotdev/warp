@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use super::{
     TuiElement, TuiLocalPoint, TuiPoint, TuiScene, TuiScreenPoint, TuiScreenRect, TuiSize,
-    TuiViewMapContext,
+    TuiViewMapContext, TuiZIndex,
 };
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
@@ -168,12 +168,24 @@ impl<'a> TuiEventContext<'a> {
 
     /// Returns whether a pointer is inside visible, uncovered element bounds.
     pub fn hit_test(&self, origin: TuiScreenPoint, size: TuiSize, position: TuiPoint) -> bool {
+        self.hit_test_with_z_index(origin, size, origin.z_index, position)
+    }
+
+    /// Returns whether a pointer is inside visible element bounds and uncovered
+    /// above `coverage_z_index`.
+    pub fn hit_test_with_z_index(
+        &self,
+        origin: TuiScreenPoint,
+        size: TuiSize,
+        coverage_z_index: TuiZIndex,
+        position: TuiPoint,
+    ) -> bool {
         self.visible_rect(origin, size)
             .is_some_and(|rect| rect.contains(position))
             && !self.is_covered(TuiScreenPoint::new(
                 i32::from(position.x),
                 i32::from(position.y),
-                origin.z_index,
+                coverage_z_index,
             ))
     }
     /// Queues a typed action to dispatch from the view currently being

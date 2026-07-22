@@ -11,17 +11,17 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
 use warp::tui_export::{
-    should_close_slash_command_menu_for_exact_match, slash_command_query,
     AcceptSlashCommandOrSavedPrompt, ParsedSlashCommandInput, SlashCommandDataSource as _,
     SlashCommandMixer, TuiSlashCommandDataSource, UpdatedActiveCommands,
+    should_close_slash_command_menu_for_exact_match, slash_command_query,
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InputDrivenInlineMenuLifecycle};
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
-    result_row_capacity, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
-    TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 

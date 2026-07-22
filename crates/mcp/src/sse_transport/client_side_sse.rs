@@ -6,11 +6,11 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Poll};
+use std::task::{Poll, ready};
 use std::time::Duration;
 
-use futures::stream::BoxStream;
 use futures::Stream;
+use futures::stream::BoxStream;
 use rmcp::model::ServerJsonRpcMessage;
 use sse_stream::{Error as SseError, Sse};
 
@@ -28,10 +28,10 @@ pub struct FixedInterval {
 
 impl SseRetryPolicy for FixedInterval {
     fn retry(&self, current_times: usize) -> Option<Duration> {
-        if let Some(max_times) = self.max_times {
-            if current_times >= max_times {
-                return None;
-            }
+        if let Some(max_times) = self.max_times
+            && current_times >= max_times
+        {
+            return None;
         }
         Some(self.duration)
     }
@@ -71,10 +71,10 @@ impl Default for ExponentialBackoff {
 
 impl SseRetryPolicy for ExponentialBackoff {
     fn retry(&self, current_times: usize) -> Option<Duration> {
-        if let Some(max_times) = self.max_times {
-            if current_times >= max_times {
-                return None;
-            }
+        if let Some(max_times) = self.max_times
+            && current_times >= max_times
+        {
+            return None;
         }
         Some(self.base_duration * (2u32.pow(current_times as u32)))
     }

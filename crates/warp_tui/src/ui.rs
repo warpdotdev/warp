@@ -1,12 +1,12 @@
 //! Small presentation helpers for the `warp-tui` front-end's TUI views.
 use std::time::Duration;
 
+use warpui_core::AppContext;
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
     Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiStyle, TuiText,
 };
-use warpui_core::elements::CrossAxisAlignment;
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 use crate::warping_indicator::render_spinner;
@@ -15,10 +15,10 @@ use crate::warping_indicator::render_spinner;
 pub(crate) fn abbreviate_home_prefix(path: &str) -> String {
     if let Some(home) = dirs::home_dir() {
         let home = home.to_string_lossy();
-        if let Some(rest) = path.strip_prefix(&*home) {
-            if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
-                return format!("~{rest}");
-            }
+        if let Some(rest) = path.strip_prefix(&*home)
+            && (rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\'))
+        {
+            return format!("~{rest}");
         }
     }
     path.to_owned()

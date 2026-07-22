@@ -12,6 +12,7 @@ use std::sync::Arc;
 use ai::agent::action::{
     RequestComputerUseRequest, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
+use ai::agent::document_action_presentation::DocumentActionPresentation;
 use ai::agent::file_locations::group_file_contexts_for_display;
 use ai::skills::{ParsedSkill, SkillReference};
 use indexmap::IndexMap;
@@ -19,7 +20,7 @@ use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
 use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
@@ -40,17 +41,17 @@ use warpui::{
 };
 
 use super::common::{
-    render_debug_footer, render_failed_output, render_informational_footer,
-    render_output_status_text, render_scrollable_collapsible_content, render_text_sections,
-    DebugFooterProps, FailedOutputProps, FindContext, TextSectionsProps,
-    STATUS_FOOTER_VERTICAL_PADDING, STATUS_ICON_SIZE_DELTA,
+    DebugFooterProps, FailedOutputProps, FindContext, STATUS_FOOTER_VERTICAL_PADDING,
+    STATUS_ICON_SIZE_DELTA, TextSectionsProps, render_debug_footer, render_failed_output,
+    render_informational_footer, render_output_status_text, render_scrollable_collapsible_content,
+    render_text_sections,
 };
 use super::imported_comments::render_imported_comments;
 use super::todos::{render_completed_todo_items, render_todos};
 use super::{
+    CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN, WithContentItemSpacing,
     add_highlights_to_rich_text, orchestration, render_autonomy_checkbox_setting_speedbump_footer,
-    render_citation_chips, WithContentItemSpacing, CONTENT_HORIZONTAL_PADDING,
-    CONTENT_ITEM_VERTICAL_MARGIN,
+    render_citation_chips,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
@@ -60,19 +61,19 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome,
-    CreateDocumentsResult, EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult,
-    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-    StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
-    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome, MessageId,
+    ReadFilesFailedFile, ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult,
+    SearchCodebaseFailureReason, SearchCodebaseResult, StartRecordingResult, StopRecordingResult,
+    SubagentCall, SubagentType, SuggestNewConversationResult, SummarizationType, TodoOperation,
+    UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::block::model::{AIBlockModel, AIBlockModelHelper, AIBlockOutputStatus};
 use crate::ai::blocklist::block::view_impl::common::{
-    MaybeShimmeringText, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
-    BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
+    BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB, BLOCKED_ACTION_MESSAGE_FOR_READING_FILES,
+    BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE, MaybeShimmeringText,
 };
 use crate::ai::blocklist::block::{
     AIBlock, AIBlockAction, AIBlockStateHandles, ActionButtons, AutonomySettingSpeedbump,
@@ -84,12 +85,13 @@ use crate::ai::blocklist::inline_action::ask_user_question_view::AskUserQuestion
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
 use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
-    INLINE_ACTION_HORIZONTAL_PADDING,
+    HeaderConfig, INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
+    InteractionMode,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::{
-    render_requested_action_body_text, render_requested_action_row_for_text, RenderableAction,
+    FormattedTextOrElement, RenderableAction, render_requested_action_body_text,
+    render_requested_action_row, render_requested_action_row_for_text,
 };
 use crate::ai::blocklist::inline_action::requested_command::RequestedCommand;
 use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
@@ -104,22 +106,22 @@ use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
 use crate::ai::skills::{
-    icon_override_for_skill_name, render_skill_button, skill_path_from_location, SkillManager,
-    SkillOpenOrigin,
+    SkillManager, SkillOpenOrigin, icon_override_for_skill_name, render_skill_button,
+    skill_path_from_location,
 };
 use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
 use crate::settings_view::SettingsSection;
+use crate::terminal::ShellLaunchData;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::shared_session::SharedSessionStatus;
-use crate::terminal::ShellLaunchData;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::link_detection::{DetectedLinksState, add_link_detection_mouse_interactions};
 use crate::util::time_format::format_elapsed_seconds;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::ActionButton;
@@ -472,13 +474,14 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
 
                                 // checks if the read file action result is completed and successful.
                                 // if successful, we have FileContext with pre-computed line counts that we use to clamp displayed file ranges to the length of the file
-                                let file_names = match agent_action_results {
+                                let (file_names, result_failed_files) = match agent_action_results {
                                     // if completed and successful, generate a user message with file info + line count
                                     Some(AIAgentActionResult {
                                         result:
                                             AIAgentActionResultType::ReadFiles(
                                                 ReadFilesResult::Success {
                                                     files: file_contexts,
+                                                    failed_files,
                                                 },
                                             ),
                                         ..
@@ -505,23 +508,29 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                                 .add_child(renderable_action.render(app).finish());
                                             continue;
                                         }
-                                        group_file_contexts_for_display(
-                                            file_contexts,
-                                            props.shell_launch_data,
-                                            props.current_working_directory,
+                                        (
+                                            group_file_contexts_for_display(
+                                                file_contexts,
+                                                props.shell_launch_data,
+                                                props.current_working_directory,
+                                            ),
+                                            failed_files.clone(),
                                         )
                                     }
                                     // if not completed/successful, generate a user message without line count
-                                    _ => files
-                                        .iter()
-                                        .map(|file| {
-                                            file.to_user_message(
-                                                props.shell_launch_data,
-                                                props.current_working_directory,
-                                                None,
-                                            )
-                                        })
-                                        .collect_vec(),
+                                    _ => (
+                                        files
+                                            .iter()
+                                            .map(|file| {
+                                                file.to_user_message(
+                                                    props.shell_launch_data,
+                                                    props.current_working_directory,
+                                                    None,
+                                                )
+                                            })
+                                            .collect_vec(),
+                                        vec![],
+                                    ),
                                 };
 
                                 let file_locations = files
@@ -548,6 +557,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     app,
                                     skill,
                                     action_index,
+                                    &result_failed_files,
                                 ));
                             }
                         }
@@ -562,22 +572,23 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             let is_preprocessing = action_status
                                 .clone()
                                 .is_some_and(|status| status.is_preprocessing());
-                            if !is_preprocessing && !status.is_streaming() {
-                                if let Some(requested_edit) = props.requested_edits.get(id) {
-                                    // Don't render the requested edit if the diffs are empty for passive code diffs.
-                                    if request_type.is_passive_code_diff()
-                                        && requested_edit.view.as_ref(app).is_pending_diffs_empty()
-                                    {
-                                        continue;
-                                    }
-
-                                    output_items.add_child(render_requested_edits_output_message(
-                                        requested_edit,
-                                        action_status,
-                                        request_type.is_passive_code_diff(),
-                                        app,
-                                    ));
+                            if !is_preprocessing
+                                && !status.is_streaming()
+                                && let Some(requested_edit) = props.requested_edits.get(id)
+                            {
+                                // Don't render the requested edit if the diffs are empty for passive code diffs.
+                                if request_type.is_passive_code_diff()
+                                    && requested_edit.view.as_ref(app).is_pending_diffs_empty()
+                                {
+                                    continue;
                                 }
+
+                                output_items.add_child(render_requested_edits_output_message(
+                                    requested_edit,
+                                    action_status,
+                                    request_type.is_passive_code_diff(),
+                                    app,
+                                ));
                             }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
@@ -701,18 +712,17 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                         }
                         AIAgentOutputMessageType::TodoOperation(todo) => match todo {
                             TodoOperation::UpdateTodos { todos } if !todos.is_empty() => {
-                                if let Some(conversation) = props.model.conversation(app) {
-                                    if let Some(state) =
+                                if let Some(conversation) = props.model.conversation(app)
+                                    && let Some(state) =
                                         props.todo_list_states.get(&output_message.id)
-                                    {
-                                        output_items.add_child(render_todos(
-                                            &output_message.id,
-                                            todos,
-                                            conversation,
-                                            state,
-                                            app,
-                                        ));
-                                    }
+                                {
+                                    output_items.add_child(render_todos(
+                                        &output_message.id,
+                                        todos,
+                                        conversation,
+                                        state,
+                                        app,
+                                    ));
                                 }
                             }
                             TodoOperation::MarkAsCompleted { completed_todos } => {
@@ -736,36 +746,24 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                         }) => {
                             if let Some(unit_test_suggestion_view) =
                                 props.unit_test_suggestions.get(id)
+                                && !unit_test_suggestion_view.as_ref(app).is_hidden()
                             {
-                                if !unit_test_suggestion_view.as_ref(app).is_hidden() {
-                                    output_items.add_child(render_unit_test_suggestion(
-                                        unit_test_suggestion_view,
-                                        app,
-                                    ));
-                                }
+                                output_items.add_child(render_unit_test_suggestion(
+                                    unit_test_suggestion_view,
+                                    app,
+                                ));
                             }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::CreateDocuments { .. },
+                            action:
+                                action @ (AIAgentActionType::CreateDocuments(_)
+                                | AIAgentActionType::EditDocuments(_)),
                             id,
                             ..
                         }) => {
                             should_render_footer = false;
-                            if let Some(create_document) =
-                                maybe_render_create_document(props, id, app)
-                            {
-                                output_items.add_child(create_document);
-                            }
-                        }
-                        AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::EditDocuments { .. },
-                            id,
-                            ..
-                        }) => {
-                            should_render_footer = false;
-                            if let Some(edit_document) = maybe_render_edit_document(props, id, app)
-                            {
-                                output_items.add_child(edit_document);
+                            if let Some(document) = maybe_render_document(props, id, action, app) {
+                                output_items.add_child(document);
                             }
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
@@ -977,23 +975,23 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             );
                         }
                         AIAgentOutputMessageType::DebugOutput { text } => {
-                            if ChannelState::enable_debug_features() {
-                                if let Some(element) = render_collapsible_debug_output(
+                            if ChannelState::enable_debug_features()
+                                && let Some(element) = render_collapsible_debug_output(
                                     output_message,
                                     text,
                                     props,
                                     app,
-                                ) {
-                                    output_items.add_child(element);
-                                }
+                                )
+                            {
+                                output_items.add_child(element);
                             }
                         }
                         AIAgentOutputMessageType::Subagent(SubagentCall {
                             subagent_type:
                                 SubagentType::ConversationSearch {
-                                    ref query,
-                                    ref conversation_id,
-                                    ref agent_run_id,
+                                    query,
+                                    conversation_id,
+                                    agent_run_id,
                                 },
                             task_id: subagent_task_id,
                         }) => {
@@ -1152,11 +1150,11 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 }
 
                 // Only render suggested rules and prompts if the response is complete.
-                if should_render_suggestions && FeatureFlag::SuggestedRules.is_enabled() {
-                    if let Some(suggestions) = render_suggested_rules_and_prompts_footer(props, app)
-                    {
-                        output_items.add_child(suggestions);
-                    }
+                if should_render_suggestions
+                    && FeatureFlag::SuggestedRules.is_enabled()
+                    && let Some(suggestions) = render_suggested_rules_and_prompts_footer(props, app)
+                {
+                    output_items.add_child(suggestions);
                 }
 
                 if should_render_references_section {
@@ -1226,72 +1224,72 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
         }
     }
 
-    if request_type.is_active() {
-        if let AIBlockOutputStatus::Failed { error, .. } = &status {
-            // While an automatic resume is still in flight, keep the failed exchange
-            // quiet: skip the error banner, the "won't count towards usage" notice, and
-            // the debug footer. The full failure UI is surfaced only once recovery has
-            // actually failed. Dogfood builds (Local/Dev) opt out so developers still see
-            // every transport failure aggressively.
-            if !error.should_suppress_during_recovery() {
+    if request_type.is_active()
+        && let AIBlockOutputStatus::Failed { error, .. } = &status
+    {
+        // While an automatic resume is still in flight, keep the failed exchange
+        // quiet: skip the error banner, the "won't count towards usage" notice, and
+        // the debug footer. The full failure UI is surfaced only once recovery has
+        // actually failed. Dogfood builds (Local/Dev) opt out so developers still see
+        // every transport failure aggressively.
+        if !error.should_suppress_during_recovery() {
+            output_items.add_child(
+                render_failed_output(
+                    FailedOutputProps {
+                        error,
+                        is_ai_input_enabled: props.is_ai_input_enabled,
+                        invalid_api_key_button_handle: &props
+                            .state_handles
+                            .invalid_api_key_button_handle,
+                        subscribe_button_handle: &props.state_handles.subscribe_button_handle,
+                        aws_bedrock_credentials_error_view: props
+                            .aws_bedrock_credentials_error_view,
+                        icon_right_margin: 16.,
+                    },
+                    app,
+                )
+                .with_content_item_spacing()
+                .finish(),
+            );
+
+            if props.model.is_latest_visible_exchange_in_root_task(app)
+                && !has_expanded_last_requested_command
+                && !props.model.is_restored()
+                && !error.is_invalid_api_key()
+            {
                 output_items.add_child(
-                    render_failed_output(
-                        FailedOutputProps {
-                            error,
-                            is_ai_input_enabled: props.is_ai_input_enabled,
-                            invalid_api_key_button_handle: &props
-                                .state_handles
-                                .invalid_api_key_button_handle,
-                            subscribe_button_handle: &props.state_handles.subscribe_button_handle,
-                            aws_bedrock_credentials_error_view: props
-                                .aws_bedrock_credentials_error_view,
-                            icon_right_margin: 16.,
-                        },
+                    render_informational_footer(
                         app,
+                        "This response won't count towards your usage.".to_string(),
                     )
-                    .with_content_item_spacing()
+                    .with_agent_output_item_spacing(app)
                     .finish(),
                 );
 
-                if props.model.is_latest_visible_exchange_in_root_task(app)
-                    && !has_expanded_last_requested_command
-                    && !props.model.is_restored()
-                    && !error.is_invalid_api_key()
-                {
-                    output_items.add_child(
-                        render_informational_footer(
-                            app,
-                            "This response won't count towards your usage.".to_string(),
-                        )
-                        .with_agent_output_item_spacing(app)
-                        .finish(),
-                    );
-
-                    output_items.add_child(
-                        render_debug_footer(
-                            DebugFooterProps {
-                                conversation: props.model.conversation(app),
-                                model: props.model,
-                                debug_copy_button_handle: props
-                                    .state_handles
-                                    .debug_copy_button_handle
-                                    .clone(),
-                                submit_issue_button_handle: props
-                                    .state_handles
-                                    .submit_issue_button_handle
-                                    .clone(),
-                                should_render_feedback_below: false,
-                            },
-                            |debug_id, ctx| {
-                                ctx.dispatch_typed_action(AIBlockAction::CopyDebugId(debug_id))
-                            },
-                            |ctx| ctx.dispatch_typed_action(AIBlockAction::OpenFeedbackDocs),
-                            app,
-                        )
-                        .with_agent_output_item_spacing(app)
-                        .finish(),
-                    );
-                }
+                output_items.add_child(
+                    render_debug_footer(
+                        DebugFooterProps {
+                            conversation: props.model.conversation(app),
+                            model: props.model,
+                            debug_copy_button_handle: props
+                                .state_handles
+                                .debug_copy_button_handle
+                                .clone(),
+                            submit_issue_button_handle: props
+                                .state_handles
+                                .submit_issue_button_handle
+                                .clone(),
+                            should_render_feedback_below: false,
+                        },
+                        |debug_id, ctx| {
+                            ctx.dispatch_typed_action(AIBlockAction::CopyDebugId(debug_id))
+                        },
+                        |ctx| ctx.dispatch_typed_action(AIBlockAction::OpenFeedbackDocs),
+                        app,
+                    )
+                    .with_agent_output_item_spacing(app)
+                    .finish(),
+                );
             }
         }
     }
@@ -1621,6 +1619,7 @@ fn render_search_codebase(
                                     app,
                                     skill,
                                     0,
+                                    &[],
                                 ));
                             }
                         }
@@ -1861,32 +1860,31 @@ fn render_read_skill(
         renderable_action.with_icon(action_icon(id, props.action_model, props.model, app).finish());
 
     // Renders the 'open skill' button for known, non-bundled skills.
-    if let Some(skill) = skill {
-        if !skill.is_bundled() {
-            if let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned() {
-                let source = CodeSource::Skill {
-                    reference: skill_reference.clone(),
-                    location: skill.path.clone(),
-                    origin: SkillOpenOrigin::ReadSkill,
-                };
+    if let Some(skill) = skill
+        && !skill.is_bundled()
+        && let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned()
+    {
+        let source = CodeSource::Skill {
+            reference: skill_reference.clone(),
+            location: skill.path.clone(),
+            origin: SkillOpenOrigin::ReadSkill,
+        };
 
-                let skill_icon_override = icon_override_for_skill_name(&skill.name);
-                let open_button = render_skill_button(
-                    "Open skill",
-                    button_handle,
-                    appearance,
-                    skill.provider,
-                    skill_icon_override,
-                    move |ctx| {
-                        ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
-                            source: source.clone(),
-                        });
-                    },
-                );
+        let skill_icon_override = icon_override_for_skill_name(&skill.name);
+        let open_button = render_skill_button(
+            "Open skill",
+            button_handle,
+            appearance,
+            skill.provider,
+            skill_icon_override,
+            move |ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                    source: source.clone(),
+                });
+            },
+        );
 
-                renderable_action = renderable_action.with_action_button(open_button);
-            }
-        }
+        renderable_action = renderable_action.with_action_button(open_button);
     }
 
     renderable_action.render(app).finish()
@@ -1914,6 +1912,94 @@ fn render_inline_action_secondary_button(
     )
 }
 
+/// Renders successful and failed file reads as separate sections in one widget.
+fn render_read_files_partial(
+    props: Props,
+    id: &AIAgentActionId,
+    file_names: impl IntoIterator<Item = impl AsRef<str>>,
+    failed_files: &[ReadFilesFailedFile],
+    app: &AppContext,
+    parsed_skill: Option<&ai::skills::ParsedSkill>,
+    action_index: usize,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    let skill_button = parsed_skill.and_then(|skill| {
+        props
+            .state_handles
+            .skill_button_handles
+            .get(id)
+            .cloned()
+            .map(|button_handle| {
+                let reference = SkillManager::handle(app)
+                    .as_ref(app)
+                    .reference_for_skill_path(&skill.path);
+                let source = CodeSource::Skill {
+                    reference,
+                    location: skill.path.clone(),
+                    origin: SkillOpenOrigin::ReadFiles,
+                };
+                let skill_icon_override = icon_override_for_skill_name(&skill.name);
+                render_skill_button(
+                    &format!("/{}", skill.name),
+                    button_handle,
+                    appearance,
+                    skill.provider,
+                    skill_icon_override,
+                    move |ctx| {
+                        ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                            source: source.clone(),
+                        });
+                    },
+                )
+            })
+    });
+
+    let success_text =
+        render_read_files_text(props.into(), file_names, app, appearance, action_index);
+    let success_row = render_requested_action_row(
+        FormattedTextOrElement::FormattedText(Box::new(success_text)),
+        Some(inline_action_icons::green_check_icon(appearance).finish()),
+        skill_button,
+        true,
+        false,
+        app,
+    );
+
+    let failed_paths = failed_files
+        .iter()
+        .map(|file| {
+            shell_native_absolute_path(
+                &file.path,
+                props.shell_launch_data,
+                props.current_working_directory,
+            )
+        })
+        .join("\n");
+    let failed_row = render_requested_action_row_for_text(
+        failed_paths.into(),
+        appearance.ui_font_family(),
+        Some(inline_action_icons::red_x_icon(appearance).finish()),
+        None,
+        true,
+        false,
+        app,
+    );
+
+    let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+    content.add_child(success_row);
+    content.add_child(failed_row);
+
+    Container::new(content.finish())
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_background_color(internal_colors::neutral_2(theme))
+        .with_border(Border::all(1.).with_border_fill(theme.surface_2()))
+        .finish()
+        .with_agent_output_item_spacing(app)
+        .finish()
+}
+
 fn render_read_files(
     props: Props,
     id: &AIAgentActionId,
@@ -1921,9 +2007,25 @@ fn render_read_files(
     app: &AppContext,
     parsed_skill: Option<&ai::skills::ParsedSkill>,
     action_index: usize,
+    failed_files: &[ReadFilesFailedFile],
 ) -> Box<dyn Element> {
     let status = props.action_model.as_ref(app).get_action_status(id);
     let appearance = Appearance::as_ref(app);
+
+    // For partial reads (some files succeeded, some failed) show a two-section
+    // layout once the action is done.
+    if !failed_files.is_empty() && status.as_ref().is_some_and(|s| s.is_done()) {
+        return render_read_files_partial(
+            props,
+            id,
+            file_names,
+            failed_files,
+            app,
+            parsed_skill,
+            action_index,
+        );
+    }
+
     let formatted_files =
         render_read_files_text(props.into(), file_names, app, appearance, action_index);
 
@@ -1988,31 +2090,31 @@ fn render_read_files(
     };
 
     // Renders the 'open skill' button if all files belong to the same skill directory.
-    if let Some(skill) = parsed_skill {
-        if let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned() {
-            let reference = SkillManager::handle(app)
-                .as_ref(app)
-                .reference_for_skill_path(&skill.path);
-            let source = CodeSource::Skill {
-                reference,
-                location: skill.path.clone(),
-                origin: SkillOpenOrigin::ReadFiles,
-            };
-            let skill_icon_override = icon_override_for_skill_name(&skill.name);
-            let open_button = render_skill_button(
-                &format!("/{}", skill.name),
-                button_handle,
-                appearance,
-                skill.provider,
-                skill_icon_override,
-                move |ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
-                        source: source.clone(),
-                    });
-                },
-            );
-            renderable_action = renderable_action.with_action_button(open_button);
-        }
+    if let Some(skill) = parsed_skill
+        && let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned()
+    {
+        let reference = SkillManager::handle(app)
+            .as_ref(app)
+            .reference_for_skill_path(&skill.path);
+        let source = CodeSource::Skill {
+            reference,
+            location: skill.path.clone(),
+            origin: SkillOpenOrigin::ReadFiles,
+        };
+        let skill_icon_override = icon_override_for_skill_name(&skill.name);
+        let open_button = render_skill_button(
+            &format!("/{}", skill.name),
+            button_handle,
+            appearance,
+            skill.provider,
+            skill_icon_override,
+            move |ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                    source: source.clone(),
+                });
+            },
+        );
+        renderable_action = renderable_action.with_action_button(open_button);
     }
 
     renderable_action.render(app).finish()
@@ -2034,9 +2136,10 @@ fn parsed_skill_for_common_locations(
         .flatten()
 }
 
-fn maybe_render_edit_document(
+fn maybe_render_document(
     props: Props,
     id: &AIAgentActionId,
+    action: &AIAgentActionType,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
     let status = props.action_model.as_ref(app).get_action_status(id);
@@ -2046,64 +2149,16 @@ fn maybe_render_edit_document(
         todo!("Implement granular permissions for AI documents.");
     }
 
-    let agent_action_results = props
+    let result = props
         .action_model
         .as_ref(app)
         .get_action_result(id)
-        .map(|action_result| action_result.as_ref());
-
-    let Some(AIAgentActionResult {
-        result:
-            AIAgentActionResultType::EditDocuments(EditDocumentsResult::Success { updated_documents }),
-        ..
-    }) = agent_action_results
-    else {
-        return None;
-    };
-
-    let document = updated_documents.first()?;
+        .map(|result| &result.result);
+    let presentation = DocumentActionPresentation::resolve(action, result)?;
+    let document = presentation.documents.first()?;
     let action = CreateOrEditDocumentAction::new(
-        document.document_id,
-        document.document_version,
-        props.state_handles.ai_document_handle.clone(),
-        app,
-    )?;
-    Some(action.render(app))
-}
-
-fn maybe_render_create_document(
-    props: Props,
-    id: &AIAgentActionId,
-    app: &AppContext,
-) -> Option<Box<dyn Element>> {
-    let status = props.action_model.as_ref(app).get_action_status(id);
-
-    // Document operations are always auto-executed for now
-    if status.as_ref().is_some_and(|status| status.is_blocked()) {
-        todo!("Implement granular permissions for AI documents.");
-    }
-
-    let agent_action_results = props
-        .action_model
-        .as_ref(app)
-        .get_action_result(id)
-        .map(|action_result| action_result.as_ref());
-
-    let Some(AIAgentActionResult {
-        result:
-            AIAgentActionResultType::CreateDocuments(CreateDocumentsResult::Success {
-                created_documents,
-            }),
-        ..
-    }) = agent_action_results
-    else {
-        return None;
-    };
-
-    let document = created_documents.first()?;
-    let action = CreateOrEditDocumentAction::new(
-        document.document_id,
-        document.document_version,
+        document.document_id?,
+        document.document_version?,
         props.state_handles.ai_document_handle.clone(),
         app,
     )?;
@@ -2123,19 +2178,19 @@ fn render_stopped_output(props: Props, app: &AppContext) -> Box<dyn Element> {
             let history = BlocklistAIHistoryModel::as_ref(app);
             let conversation = history.conversation(&conversation_id)?;
 
-            if let Some(todo_list) = conversation.active_todo_list() {
-                if let Some((item, item_index)) = todo_list.in_progress_item().and_then(|item| {
+            if let Some(todo_list) = conversation.active_todo_list()
+                && let Some((item, item_index)) = todo_list.in_progress_item().and_then(|item| {
                     todo_list
                         .get_item_index(&item.id)
                         .map(|index| (item, index))
-                }) {
-                    return Some(format!(
-                        "Stopped task {}/{}: \"{}\"",
-                        item_index + 1,
-                        todo_list.len(),
-                        item.title
-                    ));
-                }
+                })
+            {
+                return Some(format!(
+                    "Stopped task {}/{}: \"{}\"",
+                    item_index + 1,
+                    todo_list.len(),
+                    item.title
+                ));
             }
 
             conversation
@@ -3123,22 +3178,22 @@ fn render_stop_recording(
             _ => None,
         });
     let mut action_button = None;
-    if let Some(StopRecordingResult::Success(stopped)) = result {
-        if !stopped.artifact_uid.trim().is_empty() {
-            let artifact_uid = stopped.artifact_uid.clone();
-            action_button = props.open_recording_buttons.get(action_id).map(|btn| {
-                render_inline_action_secondary_button(
-                    appearance,
-                    btn,
-                    "Open recording",
-                    Box::new(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(AIBlockAction::OpenRecordingArtifact {
-                            artifact_uid: artifact_uid.clone(),
-                        });
-                    }),
-                )
-            });
-        }
+    if let Some(StopRecordingResult::Success(stopped)) = result
+        && !stopped.artifact_uid.trim().is_empty()
+    {
+        let artifact_uid = stopped.artifact_uid.clone();
+        action_button = props.open_recording_buttons.get(action_id).map(|btn| {
+            render_inline_action_secondary_button(
+                appearance,
+                btn,
+                "Open recording",
+                Box::new(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AIBlockAction::OpenRecordingArtifact {
+                        artifact_uid: artifact_uid.clone(),
+                    });
+                }),
+            )
+        });
     }
 
     recording_card(stop_recording_card_text(result), action_button, app)
@@ -3156,11 +3211,11 @@ fn render_use_computer(
     let mut renderable_action = RenderableAction::new(&request.action_summary, app)
         .with_icon(action_icon(action_id, props.action_model, props.model, app).finish());
 
-    if should_decorate_recorded_use_computer(request) {
-        if let Some(recording_span) = recording_span {
-            renderable_action =
-                renderable_action.with_footer(render_recording_footer(recording_span.status, app));
-        }
+    if should_decorate_recorded_use_computer(request)
+        && let Some(recording_span) = recording_span
+    {
+        renderable_action =
+            renderable_action.with_footer(render_recording_footer(recording_span.status, app));
     }
 
     // Add a "View screenshot" button if the action result contains a screenshot.

@@ -9,8 +9,8 @@ use warpui::prelude::{Container, MouseStateHandle};
 use warpui::text_layout::ClipConfig;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::terminal::view::PADDING_LEFT;
 use crate::terminal::CLIAgent;
+use crate::terminal::view::PADDING_LEFT;
 use crate::ui_components::icons::Icon;
 
 const CHEVRON_SIZE: f32 = 14.;

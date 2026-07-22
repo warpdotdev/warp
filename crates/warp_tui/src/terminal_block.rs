@@ -8,13 +8,13 @@ use warp::tui_export::{
     Block, BlockGrid, BlockId, BlockList, GridHandler, TermMode, TerminalColorList, TerminalModel,
 };
 use warp_terminal::model::ansi::{Color, NamedColor};
-use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
+use warp_terminal::model::grid::cell::{Cell, Flags};
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     Color as TuiColor, Modifier, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
-use warpui_core::AppContext;
 
 use crate::terminal_use::user_controls_running_command;
 
@@ -196,7 +196,7 @@ impl TuiElement for TerminalBlockElement {
 /// command/output cell. Block-list padding outside the grids is intentionally
 /// excluded because an inline command body already gets its spacing from the
 /// surrounding tool-call section.
-fn block_content_rows(block: &Block) -> Range<usize> {
+pub(super) fn block_content_rows(block: &Block) -> Range<usize> {
     let mut start = usize::MAX;
     let mut end = 0;
     let mut include_grid = |hidden: bool, offset: f64, displayed_rows: usize| {

@@ -2,12 +2,12 @@ use fuzzy_match::match_indices_case_insensitive;
 use warpui::AppContext;
 
 use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::search::SyncDataSource;
+use crate::search::command_palette::conversations::DataSource;
 use crate::search::command_palette::conversations::search_item::{
     ConversationAction, ConversationSearchItem,
 };
-use crate::search::command_palette::conversations::DataSource;
 use crate::search::data_source::QueryResult;
-use crate::search::SyncDataSource;
 
 /// A conversation that was fuzzy matched against a search term.
 #[derive(Debug)]

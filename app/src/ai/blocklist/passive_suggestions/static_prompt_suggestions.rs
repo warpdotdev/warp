@@ -68,24 +68,21 @@ static STATIC_RULES: &[StaticPromptSuggestion] = &[
         name: "GIT_CHECKOUT_NEW_BRANCH",
         pattern: r"^git\s+checkout\s+-b\s+(\S+)\s*$",
         label_template: Some("Code a feature or fix a bug in {1}"),
-        query_template:
-            "Implement a feature or fix a bug in {1}. Ask me for all the details you need.",
+        query_template: "Implement a feature or fix a bug in {1}. Ask me for all the details you need.",
     },
     // git clone <repo>: Clones a repository named <repo>.
     StaticPromptSuggestion {
         name: "GIT_CLONE",
         pattern: r"^git\s+clone\s+(\S+)\s*$",
         label_template: Some("Help me code a feature or fix a bug in {1}"),
-        query_template:
-            "Implement a feature or fix a bug in {1}. Ask me for all the details you need.",
+        query_template: "Implement a feature or fix a bug in {1}. Ask me for all the details you need.",
     },
     // git switch -c <branch>: Creates and switches to a new branch named <branch>.
     StaticPromptSuggestion {
         name: "GIT_SWITCH_NEW_BRANCH",
         pattern: r"^git\s+switch\s+-c\s+(\S+)\s*$",
         label_template: Some("Code a feature or fix a bug in {1}"),
-        query_template:
-            "Implement a feature or fix a bug in {1}. Ask me for all the details you need.",
+        query_template: "Implement a feature or fix a bug in {1}. Ask me for all the details you need.",
     },
     // git push: Pushes changes to a remote repository.
     StaticPromptSuggestion {
@@ -113,40 +110,35 @@ static STATIC_RULES: &[StaticPromptSuggestion] = &[
         name: "NPX_CREATE_REACT_APP",
         pattern: r"^npx\s+create-react-app\s+(\S+)\s*$",
         label_template: Some("Help me create a new React app"),
-        query_template:
-            "Help me create a new React app called {1}. Ask me for all the details you need.",
+        query_template: "Help me create a new React app called {1}. Ask me for all the details you need.",
     },
     // npx create-next-app <project>: Creates a new Next.js app called <project>.
     StaticPromptSuggestion {
         name: "NPX_CREATE_NEXT_APP",
         pattern: r"^npx\s+create-next-app\s+(\S+)\s*$",
         label_template: Some("Help me create a new Next.js app"),
-        query_template:
-            "Help me create a new Next.js app called {1}. Ask me for all the details you need.",
+        query_template: "Help me create a new Next.js app called {1}. Ask me for all the details you need.",
     },
     // cargo new <project>: Creates a new Rust package named <project>.
     StaticPromptSuggestion {
         name: "CARGO_NEW_PROJECT",
         pattern: r"^cargo\s+new\s+(\S+)\s*$",
         label_template: Some("Help me start a Rust project for {1}"),
-        query_template:
-            "Help me start a Rust project for {1}. Ask me for all the details you need.",
+        query_template: "Help me start a Rust project for {1}. Ask me for all the details you need.",
     },
     // poetry new <project>: Creates a new Poetry-based Python project named <project>.
     StaticPromptSuggestion {
         name: "POETRY_NEW_PROJECT",
         pattern: r"^poetry\s+new\s+(\S+)\s*$",
         label_template: Some("Help me start a Poetry project for {1}"),
-        query_template:
-            "Help me start a Poetry project for {1}. Ask me for all the details you need.",
+        query_template: "Help me start a Poetry project for {1}. Ask me for all the details you need.",
     },
     // django-admin startproject <project>: Creates a new Django project named <project>.
     StaticPromptSuggestion {
         name: "DJANGO_START_PROJECT",
         pattern: r"^django-admin\s+startproject\s+(\S+)\s*$",
         label_template: Some("Help me start a Django project for {1}"),
-        query_template:
-            "Help me start a Django project for {1}. Ask me for all the details you need.",
+        query_template: "Help me start a Django project for {1}. Ask me for all the details you need.",
     },
     // rails new <app>: Creates a new Rails app named <app>.
     StaticPromptSuggestion {
@@ -160,8 +152,7 @@ static STATIC_RULES: &[StaticPromptSuggestion] = &[
         name: "JAVA_PROJECT_INIT",
         pattern: r"^(gradle\s+init|mvn\s+archetype:generate)\s*$",
         label_template: Some("Help me start a Gradle/Maven project"),
-        query_template:
-            "Help me start a Gradle/Maven project. Ask me for all the details you need.",
+        query_template: "Help me start a Gradle/Maven project. Ask me for all the details you need.",
     },
     // go mod init <module>: Initializes a new Go module named <module>.
     StaticPromptSuggestion {
@@ -182,8 +173,7 @@ static STATIC_RULES: &[StaticPromptSuggestion] = &[
         name: "TERRAFORM_INIT",
         pattern: r"^terraform\s+init\s*$",
         label_template: Some("Help me start a Terraform configuration"),
-        query_template:
-            "Help me start a Terraform configuration. Ask me for all the details you need.",
+        query_template: "Help me start a Terraform configuration. Ask me for all the details you need.",
     },
     // prisma init: Initializes Prisma in the current project.
     StaticPromptSuggestion {

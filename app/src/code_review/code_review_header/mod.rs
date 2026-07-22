@@ -16,8 +16,8 @@ use warpui::{AppContext, Element, ModelHandle, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::code_review::code_review_view::{
-    get_discard_button_disabled_tooltip, CodeReviewAction, CodeReviewHeaderFields, CodeReviewView,
-    LoadedState, CONTENT_TOP_MARGIN,
+    CONTENT_TOP_MARGIN, CodeReviewAction, CodeReviewHeaderFields, CodeReviewView, LoadedState,
+    get_discard_button_disabled_tooltip,
 };
 use crate::code_review::diff_state::DiffStateModel;
 use crate::menu::Menu;

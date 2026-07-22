@@ -26,9 +26,9 @@ use warpui::elements::{
 use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::platform::keyboard::KeyCode;
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::platform::Cursor;
+use warpui::platform::keyboard::KeyCode;
 use warpui::text::SelectionType;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
@@ -42,6 +42,7 @@ use super::blockgrid_renderer::GridRenderParams;
 use super::find::{BlockFindRenderData, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
 use super::meta_shortcuts::handle_keystroke_despite_composing;
+use super::model::SecretHandle;
 use super::model::block::BlockId;
 use super::model::blocks::{RichContentItem, SelectionRange};
 use super::model::grid::grid_handler::{Link, TermMode};
@@ -49,18 +50,17 @@ use super::model::image_map::StoredImageMetadata;
 use super::model::mouse::{MouseAction, MouseButton, MouseState};
 use super::model::session::SessionId;
 use super::model::terminal_model::{SelectedBlocks, WithinBlock, WithinModel};
-use super::model::SecretHandle;
 use super::shared_session::presence_manager::{
-    text_selection_color, PresenceManager, MUTED_PARTICIPANT_COLOR,
+    MUTED_PARTICIPANT_COLOR, PresenceManager, text_selection_color,
 };
 use super::shared_session::render_util::SHARED_SESSION_AVATAR_DIAMETER;
 use super::view::{
-    BlocklistAIRenderContext, InlineBannerId, RichContentMetadata, SeparatorId,
-    SharedSessionBanners, TerminalEditor, TerminalViewRenderContext, BLOCK_BANNER_HEIGHT,
+    BLOCK_BANNER_HEIGHT, BlocklistAIRenderContext, InlineBannerId, RichContentMetadata,
+    SeparatorId, SharedSessionBanners, TerminalEditor, TerminalViewRenderContext,
 };
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
-use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
-use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
+use super::{HEIGHT_FUDGE_FACTOR_LINES, TerminalModel, heights_approx_eq};
+use crate::ai::blocklist::{ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, ai_brand_color};
 use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
 use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
@@ -78,7 +78,7 @@ use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, TotalIndex,
 };
 use crate::terminal::model::escape_sequences::{
-    maybe_kitty_keyboard_escape_sequence, KeystrokeWithDetails, ToEscapeSequence,
+    KeystrokeWithDetails, ToEscapeSequence, maybe_kitty_keyboard_escape_sequence,
 };
 use crate::terminal::model::index::Point as IndexPoint;
 use crate::terminal::model::selection::{SelectAction, SelectionPoint};
@@ -86,7 +86,7 @@ use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::{grid_renderer, SizeInfo};
+use crate::terminal::{SizeInfo, grid_renderer};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
 use crate::util::color::Opacity;
@@ -1356,34 +1356,34 @@ impl BlockListElement {
             let model = self.model.lock();
             let viewport = self.viewport_state_after_layout(model.block_list());
 
-            if let Some(blocklist_point) = blocklist_point {
-                if let Some(block_index) = viewport.block_index_from_point(blocklist_point) {
-                    let on_long_running_block = model
-                        .block_list()
-                        .block_at(block_index)
-                        .is_some_and(|block| block.is_active_and_long_running());
+            if let Some(blocklist_point) = blocklist_point
+                && let Some(block_index) = viewport.block_index_from_point(blocklist_point)
+            {
+                let on_long_running_block = model
+                    .block_list()
+                    .block_at(block_index)
+                    .is_some_and(|block| block.is_active_and_long_running());
 
-                    if on_long_running_block && !should_intercept_scroll(&model, app) {
-                        // Send scroll event to PTY as mouse wheel action.
-                        // Convert Lines to i32 by rounding to nearest non-zero integer.
-                        let delta = round_nonzero(delta_lines.as_f64());
-                        if delta != 0 {
-                            let mouse_state = MouseState::new(
-                                MouseButton::Wheel,
-                                MouseAction::Scrolled { delta },
-                                Default::default(),
-                            );
-                            let grid_point = IndexPoint::new(
-                                blocklist_point.row.as_f64().round() as usize,
-                                blocklist_point.column,
-                            );
+                if on_long_running_block && !should_intercept_scroll(&model, app) {
+                    // Send scroll event to PTY as mouse wheel action.
+                    // Convert Lines to i32 by rounding to nearest non-zero integer.
+                    let delta = round_nonzero(delta_lines.as_f64());
+                    if delta != 0 {
+                        let mouse_state = MouseState::new(
+                            MouseButton::Wheel,
+                            MouseAction::Scrolled { delta },
+                            Default::default(),
+                        );
+                        let grid_point = IndexPoint::new(
+                            blocklist_point.row.as_f64().round() as usize,
+                            blocklist_point.column,
+                        );
 
-                            drop(model);
-                            ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
-                                mouse_state.set_point(grid_point),
-                            ));
-                            return true;
-                        }
+                        drop(model);
+                        ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
+                            mouse_state.set_point(grid_point),
+                        ));
+                        return true;
                     }
                 }
             }
@@ -1711,7 +1711,7 @@ impl BlockListElement {
             ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(BlockTextSelectAction::End));
         }
 
-        let handled = if self.is_mouse_position_within_bounds(position) {
+        if self.is_mouse_position_within_bounds(position) {
             if let Some(point) = self.coord_to_point(
                 SnackbarPoint::within_snackbar(position),
                 ClampingMode::ReturnNoneIfNotInGrid,
@@ -1778,9 +1778,7 @@ impl BlockListElement {
             true
         } else {
             false
-        };
-
-        handled
+        }
     }
 
     /// Handle a mouse move event when we've determined the mouse is over the block list (and not
@@ -1971,20 +1969,20 @@ impl BlockListElement {
             let side = self
                 .size_info
                 .get_mouse_side(position - vec2f(bounds.origin().x(), snackbar_bottom));
-            if !is_selecting_blocks {
-                if let Some(point) = self.coord_to_point(
+            if !is_selecting_blocks
+                && let Some(point) = self.coord_to_point(
                     SnackbarPoint::underneath_snackbar(position),
                     ClampingMode::ClampToGrid,
-                ) {
-                    ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
-                        BlockTextSelectAction::Update {
-                            point,
-                            delta: delta_y.into_lines(),
-                            side,
-                            position,
-                        },
-                    ));
-                }
+                )
+            {
+                ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
+                    BlockTextSelectAction::Update {
+                        point,
+                        delta: delta_y.into_lines(),
+                        side,
+                        position,
+                    },
+                ));
             }
 
             if let Some(point) = self.coord_to_point(
@@ -2380,13 +2378,12 @@ impl BlockListElement {
         }
 
         let mut did_render_ai_stripe = false;
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(ai_context_stripe_color) =
+        if !FeatureFlag::AgentView.is_enabled()
+            && let Some(ai_context_stripe_color) =
                 ai_render_context.context_color_for_block(block, warp_theme)
-            {
-                draw_flag_pole(grid_origin, block_height, ai_context_stripe_color, ctx);
-                did_render_ai_stripe = true;
-            }
+        {
+            draw_flag_pole(grid_origin, block_height, ai_context_stripe_color, ctx);
+            did_render_ai_stripe = true;
         }
 
         if block.has_failed() {
@@ -3058,13 +3055,13 @@ impl BlockListElement {
     ) -> bool {
         use crate::terminal::view::TerminalAction;
 
-        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code {
-            if *key_code == voice_input_toggle_key_code {
-                ctx.dispatch_typed_action(TerminalAction::ToggleCLIAgentVoiceInput(
-                    voice_input::VoiceInputToggledFrom::Key { state: *state },
-                ));
-                return true;
-            }
+        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code
+            && *key_code == voice_input_toggle_key_code
+        {
+            ctx.dispatch_typed_action(TerminalAction::ToggleCLIAgentVoiceInput(
+                voice_input::VoiceInputToggledFrom::Key { state: *state },
+            ));
+            return true;
         }
         false
     }
@@ -3185,7 +3182,7 @@ impl Element for BlockListElement {
 
         // Use a macro for creating a viewport, to ensure that callers use consistent parameters
         macro_rules! create_viewport {
-            ($block_list:expr) => {
+            ($block_list:expr_2021) => {
                 ViewportState::new(
                     $block_list,
                     self.snackbar_header_state.clone(),
@@ -3560,7 +3557,8 @@ impl Element for BlockListElement {
 
                     let total_lines = grid_storage_lines + flat_storage_lines;
                     let total_bytes = grid_storage_bytes + flat_storage_bytes;
-                    let text = format!("\
+                    let text = format!(
+                        "\
                             Lines: {total_lines} (grid: {grid_storage_lines}, flat: {flat_storage_lines}); \
                             Size: {:#.1} (grid: {:#.1}, flat: {:#.1})\
                         ",
@@ -3746,16 +3744,15 @@ impl Element for BlockListElement {
         let mut visible_selected_blocks = HashSet::new();
         let mut start_of_continuous_selected_blocks = HashSet::new();
         let mut end_of_continuous_selected_blocks = HashSet::new();
-        if let Some(visible_blocks) = &self.visible_blocks {
-            if !visible_blocks.is_empty() {
-                let visible_blocks_inclusive_range =
-                    visible_blocks.start..=(visible_blocks.end - 1.into());
-                for range in self.selected_blocks.ranges() {
-                    visible_selected_blocks
-                        .extend(range.intersection(&visible_blocks_inclusive_range));
-                    start_of_continuous_selected_blocks.insert(range.start());
-                    end_of_continuous_selected_blocks.insert(range.end());
-                }
+        if let Some(visible_blocks) = &self.visible_blocks
+            && !visible_blocks.is_empty()
+        {
+            let visible_blocks_inclusive_range =
+                visible_blocks.start..=(visible_blocks.end - 1.into());
+            for range in self.selected_blocks.ranges() {
+                visible_selected_blocks.extend(range.intersection(&visible_blocks_inclusive_range));
+                start_of_continuous_selected_blocks.insert(range.start());
+                end_of_continuous_selected_blocks.insert(range.end());
             }
         }
 
@@ -3968,7 +3965,9 @@ impl Element for BlockListElement {
                                     - SPACE_BETWEEN_SELECTED_BLOCK_AVATARS,
                             );
                         } else {
-                            log::warn!("Should show avatar for shared session participant at selected block but avatar element was not found")
+                            log::warn!(
+                                "Should show avatar for shared session participant at selected block but avatar element was not found"
+                            )
                         }
                     }
 
@@ -4083,10 +4082,9 @@ impl Element for BlockListElement {
 
                     if let Some(snackbar_toggle_button_origin) =
                         self.compute_snackbar_toggle_button_draw_location(&block_grid_params)
+                        && let Some(snackbar_toggle_button) = self.snackbar_toggle_button.as_mut()
                     {
-                        if let Some(snackbar_toggle_button) = self.snackbar_toggle_button.as_mut() {
-                            snackbar_toggle_button.paint(snackbar_toggle_button_origin, ctx, app);
-                        }
+                        snackbar_toggle_button.paint(snackbar_toggle_button_origin, ctx, app);
                     }
 
                     // The block buttons might overlap with the prompt. If that's the case,
@@ -4816,33 +4814,33 @@ where
         };
         let mut stack = Stack::new().with_child(container.finish());
 
-        if let Some(tooltip_info) = tooltip_info {
-            if state.is_hovered() {
-                let tool_tip = ui_builder.tool_tip(tooltip_info.label).build().finish();
-                // Adjust the position of the tooltip depending on whether it is showing on the snackbar header
-                let (parent_anchor, child_anchor, offset) = if tooltip_info.tool_tip_below_button {
-                    (
-                        ParentAnchor::BottomRight,
-                        ChildAnchor::TopRight,
-                        vec2f(0., 5.),
-                    )
-                } else {
-                    (
-                        ParentAnchor::TopRight,
-                        ChildAnchor::BottomRight,
-                        vec2f(0., -5.),
-                    )
-                };
-                stack.add_positioned_overlay_child(
-                    tool_tip,
-                    OffsetPositioning::offset_from_parent(
-                        offset,
-                        ParentOffsetBounds::Unbounded,
-                        parent_anchor,
-                        child_anchor,
-                    ),
-                );
-            }
+        if let Some(tooltip_info) = tooltip_info
+            && state.is_hovered()
+        {
+            let tool_tip = ui_builder.tool_tip(tooltip_info.label).build().finish();
+            // Adjust the position of the tooltip depending on whether it is showing on the snackbar header
+            let (parent_anchor, child_anchor, offset) = if tooltip_info.tool_tip_below_button {
+                (
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::TopRight,
+                    vec2f(0., 5.),
+                )
+            } else {
+                (
+                    ParentAnchor::TopRight,
+                    ChildAnchor::BottomRight,
+                    vec2f(0., -5.),
+                )
+            };
+            stack.add_positioned_overlay_child(
+                tool_tip,
+                OffsetPositioning::offset_from_parent(
+                    offset,
+                    ParentOffsetBounds::Unbounded,
+                    parent_anchor,
+                    child_anchor,
+                ),
+            );
         }
 
         stack.finish()

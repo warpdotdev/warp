@@ -10,7 +10,7 @@ use crate::clipboard::ClipboardContent;
 use crate::integration::TestDriver;
 use crate::notification::RequestPermissionsOutcome;
 use crate::platform::{self, NotificationInfo, TerminationMode};
-use crate::{keymap, AppContext, AssetProvider, WindowId};
+use crate::{AppContext, AssetProvider, WindowId, keymap};
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub static WINDOWING_SYSTEM: OnceLock<WindowingSystem> = OnceLock::new();

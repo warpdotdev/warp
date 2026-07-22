@@ -1,7 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 use ai::agent::action_result::StopRecordingResult;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, ModelContext};
@@ -12,11 +12,11 @@ use crate::ai::agent::AIAgentActionType;
 use crate::ai::{
     agent::AIAgentActionResultType,
     blocklist::{
+        BlocklistAIHistoryModel,
         action_model::{
             recording_controller::{RecordingController, StopRecordingControllerError},
-            recording_finalize::{finalize_recording_by_id, FinalizeReason},
+            recording_finalize::{FinalizeReason, finalize_recording_by_id},
         },
-        BlocklistAIHistoryModel,
     },
 };
 

@@ -1,6 +1,6 @@
 use super::*;
-use crate::keymap::macros::*;
 use crate::keymap::ContextPredicate;
+use crate::keymap::macros::*;
 
 #[test]
 fn test_matcher() -> anyhow::Result<()> {

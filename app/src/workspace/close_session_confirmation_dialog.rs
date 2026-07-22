@@ -16,7 +16,7 @@ use warpui::{
 
 use crate::appearance::Appearance;
 use crate::pane_group::PaneId;
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::workspace::TabMovement;
 
 #[allow(clippy::enum_variant_names)]
