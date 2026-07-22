@@ -259,6 +259,10 @@ pub struct RunAgentsAgentRunConfig {
     /// meaningful for factory agents dispatching sibling factory agents;
     /// requires remote execution and is enforced server-side at dispatch.
     pub agent_identity_uid: String,
+    /// Optional model override for this specific child agent. When non-empty,
+    /// overrides the batch-level `model_id` for this child only. When empty,
+    /// the child inherits the batch-level model.
+    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

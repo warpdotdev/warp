@@ -1412,6 +1412,11 @@ pub enum RunAgentsLaunchedExecutionMode {
 pub struct RunAgentsAgentOutcome {
     pub name: String,
     pub kind: RunAgentsAgentOutcomeKind,
+    /// The model that was actually used for this child agent. Set from the
+    /// per-agent `model_id` override when present; otherwise from the
+    /// batch-level resolved model. Empty when the server did not populate it.
+    #[serde(default)]
+    pub resolved_model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

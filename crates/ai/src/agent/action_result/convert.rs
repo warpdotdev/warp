@@ -1391,6 +1391,7 @@ impl From<RunAgentsAgentOutcome> for api::run_agents_result::AgentOutcome {
         api::run_agents_result::AgentOutcome {
             name: outcome.name,
             result: Some(result),
+            resolved_model_id: outcome.resolved_model_id,
         }
     }
 }

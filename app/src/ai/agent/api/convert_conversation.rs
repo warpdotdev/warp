@@ -1638,6 +1638,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .iter()
                         .map(|outcome| RunAgentsAgentOutcome {
                             name: outcome.name.clone(),
+                            resolved_model_id: outcome.resolved_model_id.clone(),
                             kind: match &outcome.result {
                                 Some(api::run_agents_result::agent_outcome::Result::Launched(
                                     launched_agent,

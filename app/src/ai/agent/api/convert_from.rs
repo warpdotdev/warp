@@ -165,6 +165,7 @@ fn convert_run_agents(
                 prompt: config.prompt,
                 title: config.title,
                 agent_identity_uid: config.agent_identity_uid,
+                model_id: config.model_id,
             })
             .collect(),
         plan_id,
