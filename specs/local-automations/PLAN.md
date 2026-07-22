@@ -61,13 +61,15 @@ flowchart TD
 ### Slice B — Client scheduler MVP
 **Depends on:** A stable schema + Run now path
 
+**Specs:** [`PRODUCT-B.md`](./PRODUCT-B.md), [`TECH-B.md`](./TECH-B.md)
+
 **Delivers**
 - In-process cron evaluator while Warp is running
-- Catch-up on launch (coalesce/stale rules TBD in B PRODUCT)
+- Catch-up on launch (coalesce within 6h; older → missed)
 - Missed/skipped visibility on the list (not a full history product)
 - `enabled` respected for schedule (Run now still available)
 - Clear copy: requires Warp running / machine awake
-- Timeout enforcement using `timeout_seconds` if present
+- Timeout enforcement using `timeout_seconds` if present (shell best-effort)
 
 **Does not deliver**
 - Background daemon / launchd
@@ -77,11 +79,6 @@ flowchart TD
 **Exit criteria**
 - Schedule fires while app open; after sleep/quit, catch-up or missed is honest and visible
 - No double-fire storms on wake
-
-**Spec debt to resolve in B PRODUCT**
-- Catch-up window (e.g. run if due < N hours else mark missed)
-- Overlap policy if previous run still open
-- Notification policy (optional OS notify on fail)
 
 ---
 
@@ -114,6 +111,14 @@ flowchart TD
 ### Slice D — Polish and upsell
 **Depends on:** B and/or C
 
+**Must have**
+- Telemetry across the on-ramp funnel:
+  - Create: automation created, by source (skill, manual file drop, empty-state example install)
+  - Routing: create-automation skill destination choice (local / cloud schedule / GitHub trigger) and runner/agent choice (warp_agent vs personal CLI)
+  - Run: Run now invoked, run outcome (completed / failed / hung on permission)
+  - Schedule: fire, catch-up, miss (once B lands)
+  - Promote: wizard start / complete (once C lands)
+
 **Candidates (prioritize after dogfood)**
 - Missed-run upsell UI (“3 misses → try cloud”)
 - Respect existing auto-handoff-to-cloud settings + credits when applicable
@@ -121,8 +126,7 @@ flowchart TD
 - Richer list filters; optional light run log without a dedicated history IA
 - First-class runner presets (Claude Code / Codex) as sugar over shell
 - Agent-assisted “adapt this shell automation for cloud”
-- Templates gallery (morning brief, bug hunt, dependency audit)
-- Telemetry: create, run now, schedule fire, miss, promote start/complete
+- Templates gallery (morning brief, bug hunt, dependency audit, factory stages: issue triage / PR review / spec)
 
 **Out of scope unless strategy changes**
 - Full local event bus (Slack/GitHub triggers on laptop)
@@ -150,4 +154,6 @@ flowchart TD
 ## Document index
 - Slice A product: [`PRODUCT.md`](./PRODUCT.md)
 - Slice A tech: [`TECH.md`](./TECH.md)
+- Slice B product: [`PRODUCT-B.md`](./PRODUCT-B.md)
+- Slice B tech: [`TECH-B.md`](./TECH-B.md)
 - This plan: [`PLAN.md`](./PLAN.md)

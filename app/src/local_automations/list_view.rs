@@ -17,7 +17,10 @@ use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::appearance::Appearance;
-use crate::local_automations::{LocalAutomation, LocalAutomationError};
+use crate::local_automations::{
+    LocalAutomation, LocalAutomationError, LocalAutomationsScheduler,
+    LocalAutomationsSchedulerEvent,
+};
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields};
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::view_components::action_button::{
@@ -69,6 +72,14 @@ impl LocalAutomationsView {
                 me.refresh(ctx);
             }
         });
+        ctx.subscribe_to_model(
+            &LocalAutomationsScheduler::handle(ctx),
+            |me, _, event, ctx| {
+                if matches!(event, LocalAutomationsSchedulerEvent::StatusUpdated) {
+                    me.refresh(ctx);
+                }
+            },
+        );
 
         let new_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("New", PrimaryTheme)
@@ -163,7 +174,9 @@ impl LocalAutomationsView {
         let theme = appearance.theme();
 
         let description = Text::new(
-            "Jobs that run on this machine. Schedules are saved but don't fire yet; use Run now."
+            "Jobs that run on this machine. Schedules fire while Warp is open and the machine is \
+             awake. If Warp was closed, a due job catches up within about 6 hours; older gaps are \
+             marked missed. Use Run now anytime."
                 .to_string(),
             appearance.ui_font_family(),
             DESCRIPTION_FONT_SIZE,
@@ -190,6 +203,7 @@ impl LocalAutomationsView {
         &self,
         row: &AutomationRow,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let automation = &row.automation;
@@ -203,6 +217,12 @@ impl LocalAutomationsView {
         }
         if !automation.enabled {
             subtitle_parts.push("disabled".to_string());
+        }
+        let status = LocalAutomationsScheduler::handle(app)
+            .as_ref(app)
+            .status_for(automation);
+        if let Some(fragment) = status.subtitle_fragment() {
+            subtitle_parts.push(fragment);
         }
         let subtitle = subtitle_parts.join(" · ");
 
@@ -337,7 +357,7 @@ impl View for LocalAutomationsView {
             content.add_child(self.render_empty_state(appearance));
         } else {
             for row in &self.rows {
-                content.add_child(self.render_automation_row(row, appearance));
+                content.add_child(self.render_automation_row(row, appearance, app));
             }
             for row in &self.error_rows {
                 content.add_child(self.render_error_row(row, appearance));

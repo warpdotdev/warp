@@ -7,10 +7,12 @@ description: Reference the Warp local automation TOML schema, path conventions, 
 
 Canonical reference for Warp local automations: personal jobs defined as TOML files on the user's machine.
 
-## Current limitations (important)
+## Scheduling (important)
 
-- **Schedules do not fire yet.** The `schedule` field is required and stored for forward compatibility, but Warp does not run automations on a timer in this version. The only supported execution path is **Run now** (from Settings → Automations, also opened via Command Palette "Open Settings: Automations").
-- Never tell the user their automation "will run" at the scheduled time. Be explicit that scheduling activates in a future release and that Run now is how to execute it today.
+- Schedules fire **only while the Warp app is open** and the machine is awake. There is no background daemon.
+- If Warp was closed when a tick was due: within about **6 hours** of reopen Warp runs a single catch-up; older gaps are marked **missed** on the list (not auto-run).
+- **Run now** always works from Settings → Automations (also Command Palette "Open Settings: Automations"), including for disabled automations (with a warning).
+- Be honest: do not claim runs while the laptop is asleep or Warp is quit.
 
 ## Where automations live
 
@@ -31,8 +33,8 @@ name = "Morning repo brief"
 # scheduling. Run now still works on disabled automations (with a warning).
 enabled = true
 
-# Required: cron expression or preset string (e.g. "@daily"). Stored as an
-# opaque string; NOT fired on a timer yet.
+# Required: cron expression or preset (@hourly/@daily/@weekly/@monthly/@yearly).
+# Fires while Warp is open (local timezone).
 schedule = "0 9 * * 1-5"
 
 # Exactly ONE of `cwd` or `[worktree]` is required.
@@ -54,7 +56,7 @@ type = "warp_agent"   # or "shell"
 prompt = "Summarize commits on main from the last 24h."
 # command = "gh pr list --author @me"   # required instead of prompt when type = "shell"
 
-# Optional: stored now, enforced/applied in a future release.
+# Optional: shell runs best-effort enforce timeout_seconds when `timeout` is on PATH.
 # timeout_seconds = 1800
 # [env]
 # FOO = "bar"
@@ -76,4 +78,4 @@ prompt = "Summarize commits on main from the last 24h."
 ## Billing and trust
 
 - Warp agent runs consume the user's normal local agent usage/billing; there is no separate automation meter and no cloud schedule is created.
-- Running requires the Warp app to be open; nothing runs in the background or while the machine is asleep.
+- Scheduled runs require the Warp app to be open; nothing runs in the background or while the machine is asleep.

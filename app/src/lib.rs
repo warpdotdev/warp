@@ -2232,6 +2232,9 @@ pub(crate) fn initialize_app(
     if FeatureFlag::ScheduledAmbientAgents.is_enabled() {
         ctx.add_singleton_model(ScheduledAgentManager::new);
     }
+    if FeatureFlag::LocalAutomations.is_enabled() {
+        ctx.add_singleton_model(crate::local_automations::LocalAutomationsScheduler::new);
+    }
 
     AutoupdateState::register(ctx, server_api.clone());
 

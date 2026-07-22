@@ -32,6 +32,6 @@ A local automation is a plain TOML file on the user's machine. Creating one neve
 5. Determine the correct automations directory for the user's Warp build (see the `local-automations` skill for how) and create the `automations/` subdirectory if needed. Write the file with a descriptive snake_case filename ending in `.toml`.
 6. If the intended filename or automation name conflicts with an existing file, ask before overwriting (use the `ask_user_question` tool). Editing an existing automation the user referred to is fine without asking.
 7. Confirm to the user: the file path, name, schedule string, runner, and how to run it. Be explicit that:
-   - **the schedule does not fire yet** — scheduling activates in a future release
-   - **Run now** is how to execute it today: Settings → Automations → Run now (or Command Palette → "Open Settings: Automations")
+   - **schedules fire only while Warp is open** and the machine is awake (catch-up within ~6 hours after reopen; older gaps marked missed)
+   - **Run now** is always available: Settings → Automations → Run now (or Command Palette → "Open Settings: Automations")
 8. Offer to run it once now as a smoke test if the user wants (they trigger Run now from the list).

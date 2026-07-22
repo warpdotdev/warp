@@ -100,8 +100,8 @@ pub struct LocalAutomation {
     pub worktree: Option<LocalAutomationWorktree>,
     /// How the automation executes.
     pub runner: LocalAutomationRunner,
-    /// Optional run timeout. Stored in Slice A; enforced once scheduling
-    /// lands.
+    /// Optional run timeout. Shell runs best-effort enforce when `timeout`/
+    /// `gtimeout` is on PATH; warp_agent does not hard-kill in Slice B.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
     /// Optional environment variables for the run. Stored in Slice A; applied

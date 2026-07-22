@@ -280,7 +280,9 @@ use crate::launch_configs::launch_config::{
     CommandTemplate, PaneMode, PaneTemplateType, WindowTemplate,
 };
 use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
-use crate::local_automations::LocalAutomation;
+use crate::local_automations::{
+    LocalAutomation, LocalAutomationsScheduler, LocalAutomationsSchedulerEvent,
+};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -3133,6 +3135,17 @@ impl Workspace {
         ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cli_agent_sessions_event(event, ctx);
         });
+
+        if FeatureFlag::LocalAutomations.is_enabled() {
+            ctx.subscribe_to_model(
+                &LocalAutomationsScheduler::handle(ctx),
+                |me, _, event, ctx| {
+                    if matches!(event, LocalAutomationsSchedulerEvent::PendingUpdated) {
+                        me.drain_scheduled_local_automations(ctx);
+                    }
+                },
+            );
+        }
 
         ctx.subscribe_to_model(
             &AgentNotificationsModel::handle(ctx),
@@ -10809,15 +10822,45 @@ impl Workspace {
         report_error!("Cannot open a local automation config without a local filesystem");
     }
 
+    /// Drains scheduled automation starts from the singleton scheduler (one
+    /// consumer across windows via `pop_pending`).
+    fn drain_scheduled_local_automations(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::LocalAutomations.is_enabled() {
+            return;
+        }
+        loop {
+            let Some(pending) = LocalAutomationsScheduler::handle(ctx)
+                .update(ctx, |scheduler, _| scheduler.pop_pending())
+            else {
+                break;
+            };
+            self.run_local_automation_inner(
+                pending.automation,
+                /*warn_if_disabled*/ false,
+                ctx,
+            );
+        }
+    }
+
     /// Runs a local automation immediately: resolves its working directory on
     /// a background thread (creating the git worktree if needed), then opens a
     /// new tab for the run.
     #[cfg(feature = "local_fs")]
     fn run_local_automation(&mut self, automation: LocalAutomation, ctx: &mut ViewContext<Self>) {
+        self.run_local_automation_inner(automation, /*warn_if_disabled*/ true, ctx);
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn run_local_automation_inner(
+        &mut self,
+        automation: LocalAutomation,
+        warn_if_disabled: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if !FeatureFlag::LocalAutomations.is_enabled() {
             return;
         }
-        if !automation.enabled {
+        if warn_if_disabled && !automation.enabled {
             let message = format!(
                 "\"{}\" is disabled for future scheduling; running it now anyway.",
                 automation.name
@@ -10827,23 +10870,31 @@ impl Workspace {
             });
         }
         let display_name = automation.name.clone();
+        let source_path = automation.source_path.clone();
         let _ = ctx.spawn(
             async move {
                 automation
                     .resolve_working_directory()
                     .map(|cwd| (automation, cwd))
             },
-            move |me, result, ctx| match result {
-                Ok((automation, cwd)) => me.open_local_automation_tab(automation, cwd, ctx),
-                Err(error) => {
-                    me.toast_stack.update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(format!(
-                                "Failed to run \"{display_name}\": {error}"
-                            )),
-                            ctx,
-                        );
+            move |me, result, ctx| {
+                if let Some(path) = source_path.as_ref() {
+                    LocalAutomationsScheduler::handle(ctx).update(ctx, |scheduler, ctx| {
+                        scheduler.clear_in_flight(path, ctx);
                     });
+                }
+                match result {
+                    Ok((automation, cwd)) => me.open_local_automation_tab(automation, cwd, ctx),
+                    Err(error) => {
+                        me.toast_stack.update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::error(format!(
+                                    "Failed to run \"{display_name}\": {error}"
+                                )),
+                                ctx,
+                            );
+                        });
+                    }
                 }
             },
         );
@@ -10852,6 +10903,16 @@ impl Workspace {
     #[cfg(not(feature = "local_fs"))]
     fn run_local_automation(&mut self, _automation: LocalAutomation, _ctx: &mut ViewContext<Self>) {
         report_error!("Cannot run a local automation without a local filesystem");
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    fn run_local_automation_inner(
+        &mut self,
+        automation: LocalAutomation,
+        _warn_if_disabled: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.run_local_automation(automation, ctx);
     }
 
     /// Opens the tab for a local automation run once its working directory is
@@ -10873,9 +10934,10 @@ impl Workspace {
         let tab_title = Some(automation.name.clone());
         match automation.runner {
             LocalAutomationRunner::Shell { command } => {
+                let exec = shell_command_with_optional_timeout(command, automation.timeout_seconds);
                 let template = PaneTemplateType::PaneTemplate {
                     cwd,
-                    commands: vec![CommandTemplate { exec: command }],
+                    commands: vec![CommandTemplate { exec }],
                     is_focused: Some(true),
                     pane_mode: PaneMode::Terminal,
                     shell: None,
@@ -10888,6 +10950,12 @@ impl Workspace {
                 );
             }
             LocalAutomationRunner::WarpAgent { prompt } => {
+                if let Some(timeout_seconds) = automation.timeout_seconds {
+                    log::info!(
+                        "Local automation \"{}\" warp_agent timeout_seconds={timeout_seconds} is not hard-enforced in Slice B",
+                        automation.name
+                    );
+                }
                 let template = PaneTemplateType::PaneTemplate {
                     cwd,
                     commands: Vec::new(),
@@ -29652,4 +29720,30 @@ fn set_opencode_warp_plugin(new_entry: &str) -> String {
         },
         Err(e) => format!("Failed to serialize opencode.json: {e}"),
     }
+}
+
+/// Best-effort shell timeout wrapper for local automation runs.
+///
+/// Prefers GNU `timeout` / `gtimeout` when present on PATH. When unavailable,
+/// returns the original command and logs that the limit could not be enforced.
+#[cfg(feature = "local_fs")]
+fn shell_command_with_optional_timeout(command: String, timeout_seconds: Option<u64>) -> String {
+    let Some(secs) = timeout_seconds.filter(|s| *s > 0) else {
+        return command;
+    };
+    let timeout_bin = ["timeout", "gtimeout"].into_iter().find(|bin| {
+        std::process::Command::new("which")
+            .arg(bin)
+            .output()
+            .ok()
+            .is_some_and(|o| o.status.success())
+    });
+    let Some(bin) = timeout_bin else {
+        log::warn!(
+            "Local automation timeout_seconds={secs} requested but neither timeout nor gtimeout is on PATH; running without enforcement"
+        );
+        return command;
+    };
+    let quoted = shell_words::quote(&command);
+    format!("{bin} {secs}s sh -c {quoted}")
 }
