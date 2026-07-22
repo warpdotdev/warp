@@ -1437,9 +1437,63 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
 
             let rendered = render_block_lines(block, 40, app_ctx);
             assert_eq!(rendered[0], "Thinking... ▾");
-            // Body lines are indented four spaces beneath the header.
-            assert_eq!(rendered[1], "    line one");
-            assert_eq!(rendered[2], "    line two");
+            // Body lines are left-aligned with the header (no four-space
+            // indent). `render_block_lines` trims the blank header/body gap,
+            // which `thinking_section_inserts_blank_line_between_header_and_body`
+            // checks separately against the raw buffer.
+            assert_eq!(rendered[1], "line one");
+            assert_eq!(rendered[2], "line two");
+        });
+    });
+}
+
+/// When expanded, the thinking block renders a blank line between the header
+/// and the body, and the body is left-aligned with the header (no indent).
+/// `render_block_lines` filters empty rows, so this test inspects the raw
+/// buffer to confirm the gap and the alignment together.
+#[test]
+fn thinking_section_inserts_blank_line_between_header_and_body() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: reasoning_status(None, "line one\nline two"),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            // Render at the block's desired height so blank rows survive, then
+            // drop only trailing empty rows. `render_block_lines` filters all
+            // empty rows, so it can't see the header/body gap this test guards.
+            let height = desired_height(block, 40, app_ctx).max(1) as u16;
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                block.render_element(app_ctx),
+                TuiRect::new(0, 0, 40, height),
+                app_ctx,
+            );
+            let mut lines = frame.buffer.to_lines();
+            while lines
+                .last()
+                .map(|line| line.trim_end().is_empty())
+                .unwrap_or(false)
+            {
+                lines.pop();
+            }
+
+            // The block pads its top with a blank row, so locate the header
+            // rather than assuming it sits at index 0.
+            let header_idx = lines
+                .iter()
+                .position(|line| line.trim_end() == "Thinking... ▾")
+                .expect("thinking header is rendered");
+            // Exactly one blank row separates the header from the body.
+            assert_eq!(lines[header_idx + 1].trim_end(), "");
+            // The body is left-aligned with the header (no four-space indent).
+            assert_eq!(lines[header_idx + 2].trim_end(), "line one");
+            assert_eq!(lines[header_idx + 3].trim_end(), "line two");
         });
     });
 }
@@ -1688,7 +1742,8 @@ fn multiple_reasoning_blocks_render_independent_collapse_state() {
             let rendered = render_block_lines(block, 40, app_ctx);
             assert_eq!(rendered[0], "Thought for 3 seconds ▸");
             assert_eq!(rendered[1], "Thinking... ▾");
-            assert_eq!(rendered[2], "    still going");
+            // Streaming thinking body is left-aligned with its header.
+            assert_eq!(rendered[2], "still going");
             assert!(rendered.iter().all(|line| !line.contains("done body")));
         });
     });
