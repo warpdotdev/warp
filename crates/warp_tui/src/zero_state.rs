@@ -21,8 +21,8 @@ use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::animation::AnimationClock;
-use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
+use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
 use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::tui_builder::TuiUiBuilder;
@@ -83,7 +83,9 @@ impl TuiZeroStateView {
         );
         ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&active_session, |_, _, event, ctx| {
-            let ActiveSessionEvent::UpdatedPwd = event else { return };
+            let ActiveSessionEvent::UpdatedPwd = event else {
+                return;
+            };
             ctx.notify();
         });
 
@@ -107,14 +109,25 @@ impl TuiView for TuiZeroStateView {
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(ctx);
         let session = self.active_session.as_ref(ctx);
-        let cwd = session.current_working_directory().map(String::as_str);
+        let cwd = session.current_working_directory().cloned().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.to_string_lossy().into_owned())
+        });
         let text_column =
-            TuiConstrainedBox::new(render_left_column(cwd, &builder, ctx).finish())
+            TuiConstrainedBox::new(render_left_column(cwd.as_deref(), &builder, ctx).finish())
                 .with_max_cols(LEFT_COLUMN_MAX_COLS)
                 .finish();
-        let animation =
-            ZeroStateAnimationElement::new(Rc::clone(&self.starfield), self.clock).finish();
-        TuiFlex::row().child(text_column).flex_child(animation).finish()
+        let animation = ZeroStateAnimationElement::new(
+            Rc::clone(&self.starfield),
+            self.clock,
+            builder.accent_color(),
+        )
+        .finish();
+        TuiFlex::row()
+            .child(text_column)
+            .flex_child(animation)
+            .finish()
     }
 }
 

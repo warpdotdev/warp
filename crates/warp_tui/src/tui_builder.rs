@@ -127,9 +127,15 @@ impl TuiUiBuilder {
 
     /// Full-strength accent text, distinct from translucent accent borders.
     pub(crate) fn accent_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
+        TuiStyle::default().fg(self.accent_color())
+    }
+
+    /// The accent/cyan color as a raw `Color`, for contexts that need it
+    /// directly (e.g. the zero-state animation glow).
+    pub(crate) fn accent_color(&self) -> Color {
+        cell_color(ThemeFill::from(
             self.warp_theme.terminal_colors().normal.cyan,
-        )))
+        ))
     }
 
     /// Theme-blue link text, matching linked filenames in tool-call headers.

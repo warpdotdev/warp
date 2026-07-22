@@ -42,11 +42,6 @@ pub(crate) const WARP_INITIAL: f64 = 0.15;
 /// Warp factor the spring converges to.
 pub(crate) const WARP_TARGET: f64 = 0.85;
 
-/// Lavender accent colour for glowing stars (`#D0D1FE`).
-const GLOW_R: u8 = 208;
-const GLOW_G: u8 = 209;
-const GLOW_B: u8 = 254;
-
 /// Minimum width / height for the animation to render.
 const MIN_ANIMATION_COLS: u16 = 4;
 const MIN_ANIMATION_ROWS: u16 = 2;
@@ -93,11 +88,11 @@ pub(crate) fn xorshift_f64(s: &mut u64) -> f64 {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct Star {
-    pub(crate) angle: f64,   // radians, direction from centre
-    pub(crate) r: f64,       // current radius from centre
+    pub(crate) angle: f64, // radians, direction from centre
+    pub(crate) r: f64,     // current radius from centre
     pub(crate) r_prev: f64,
-    pub(crate) speed: f64,   // per-star speed multiplier in [0.5, 1.5]
-    glow: bool,              // lavender highlight
+    pub(crate) speed: f64, // per-star speed multiplier in [0.5, 1.5]
+    glow: bool,            // lavender highlight
 }
 
 fn new_star(rng: &mut u64, max_r: f64) -> Star {
@@ -131,7 +126,12 @@ impl StarfieldState {
         let stars = (0..NUM_STARS)
             .map(|_| new_star(&mut rng, init_max_r))
             .collect();
-        Self { stars, rng, sim_secs: 0.0, max_r: init_max_r }
+        Self {
+            stars,
+            rng,
+            sim_secs: 0.0,
+            max_r: init_max_r,
+        }
     }
 
     /// Advances simulation by one 1/60s step.
@@ -185,13 +185,24 @@ struct GridGeometry {
 pub struct ZeroStateAnimationElement {
     state: Rc<RefCell<StarfieldState>>,
     clock: AnimationClock,
+    glow_color: Color,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
 
 impl ZeroStateAnimationElement {
-    pub(crate) fn new(state: Rc<RefCell<StarfieldState>>, clock: AnimationClock) -> Self {
-        Self { state, clock, size: None, origin: None }
+    pub(crate) fn new(
+        state: Rc<RefCell<StarfieldState>>,
+        clock: AnimationClock,
+        glow_color: Color,
+    ) -> Self {
+        Self {
+            state,
+            clock,
+            glow_color,
+            size: None,
+            origin: None,
+        }
     }
 }
 
@@ -238,9 +249,16 @@ impl TuiElement for ZeroStateAnimationElement {
         sf.set_max_r(max_r);
         sf.simulate_to(elapsed);
 
-        let geo = GridGeometry { cx, cy, max_r, cols, rows };
+        let geo = GridGeometry {
+            cx,
+            cy,
+            max_r,
+            cols,
+            rows,
+        };
+        let glow_color = self.glow_color;
         for star in &sf.stars {
-            draw_star_streak(surface, origin, star, &geo);
+            draw_star_streak(surface, origin, star, &geo, glow_color);
         }
 
         ctx.repaint_after(REPAINT_INTERVAL);
@@ -264,6 +282,7 @@ fn draw_star_streak(
     origin: TuiScreenPosition,
     star: &Star,
     geo: &GridGeometry,
+    glow_color: Color,
 ) {
     if star.r <= 0.0 || geo.max_r <= 0.0 {
         return;
@@ -273,7 +292,7 @@ fn draw_star_streak(
     let steps = (length as usize).max(1);
 
     let color = if star.glow {
-        Color::Rgb(GLOW_R, GLOW_G, GLOW_B)
+        glow_color
     } else {
         Color::Rgb(255, 255, 255)
     };
