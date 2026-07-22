@@ -53,7 +53,27 @@ fn account_first_path_is_linear_and_reversible() {
 }
 
 #[test]
-fn post_auth_offer_entry_supports_both_variants_without_navigation() {
+fn post_auth_offer_is_unclassified_until_selected_and_does_not_switch() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.read(&app, |model, _| {
+            assert_eq!(model.offer_variant(), None);
+        });
+        model.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::HeadStart, ctx);
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+        });
+
+        assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
+        model.read(&app, |model, _| {
+            assert_eq!(model.offer_variant(), Some(OfferVariant::HeadStart));
+        });
+    });
+}
+
+#[test]
+fn post_auth_offer_supports_back_to_theme_and_no_direct_next() {
     let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
     App::test((), |mut app| async move {
         app.update(MockTelemetryContextProvider::register);
@@ -65,12 +85,15 @@ fn post_auth_offer_entry_supports_both_variants_without_navigation() {
 
             assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
             model.read(&app, |model, _| {
-                assert_eq!(model.offer_variant(), variant);
+                assert_eq!(model.offer_variant(), Some(variant));
                 assert_eq!(model.progress(), (0, 0));
             });
 
+            model.update(&mut app, |model, ctx| model.back(ctx));
+            assert_eq!(step(&app, &model), OnboardingStep::ThemePicker);
+
             model.update(&mut app, |model, ctx| {
-                model.back(ctx);
+                model.show_post_auth_offer(variant, ctx);
                 model.next(ctx);
             });
             assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);

@@ -201,7 +201,7 @@ pub(crate) struct OnboardingStateModel {
     /// Auth / billing state of the user.
     auth_state: OnboardingAuthState,
     /// Which account-first offer is currently presented after authentication.
-    offer_variant: OfferVariant,
+    offer_variant: Option<OfferVariant>,
     /// When set, the "Are you sure you don't want AI?" confirmation modal is
     /// shown; the value records which entry point triggered it.
     no_ai_confirmation: Option<NoAiConfirmationSource>,
@@ -228,7 +228,7 @@ impl OnboardingStateModel {
             ai_setup_choice: AiSetupChoice::default(),
             ai_access_choice: AiAccessChoice::default(),
             auth_state,
-            offer_variant: OfferVariant::default(),
+            offer_variant: None,
             no_ai_confirmation: None,
         }
     }
@@ -237,7 +237,7 @@ impl OnboardingStateModel {
         self.auth_state
     }
 
-    pub(crate) fn offer_variant(&self) -> OfferVariant {
+    pub(crate) fn offer_variant(&self) -> Option<OfferVariant> {
         self.offer_variant
     }
 
@@ -246,7 +246,10 @@ impl OnboardingStateModel {
         variant: OfferVariant,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.offer_variant = variant;
+        if self.step == OnboardingStep::PostAuthOffer {
+            return;
+        }
+        self.offer_variant = Some(variant);
         self.set_step(OnboardingStep::PostAuthOffer, ctx);
     }
 
@@ -833,7 +836,7 @@ impl OnboardingStateModel {
                 OnboardingStep::Intro => None,
                 OnboardingStep::Customize => Some(OnboardingStep::Intro),
                 OnboardingStep::ThemePicker => Some(OnboardingStep::Customize),
-                OnboardingStep::PostAuthOffer => None,
+                OnboardingStep::PostAuthOffer => Some(OnboardingStep::ThemePicker),
                 OnboardingStep::Intention
                 | OnboardingStep::AiSetup
                 | OnboardingStep::Agent
@@ -1015,9 +1018,12 @@ impl OnboardingStateModel {
                 );
             }
             OnboardingStep::PostAuthOffer => {
+                let variant = self
+                    .offer_variant
+                    .expect("offer variant is selected before entering the post-auth offer");
                 send_telemetry_from_ctx!(
                     OnboardingEvent::SlideViewed {
-                        slide_name: self.offer_variant.slide_name().to_string(),
+                        slide_name: variant.slide_name().to_string(),
                     },
                     ctx
                 );
@@ -1172,7 +1178,10 @@ impl OnboardingStateModel {
             OnboardingStep::AiAccess => "ai_access",
             OnboardingStep::ThirdParty => "third_party",
             OnboardingStep::Project => "project",
-            OnboardingStep::PostAuthOffer => self.offer_variant.slide_name(),
+            OnboardingStep::PostAuthOffer => self
+                .offer_variant
+                .expect("offer variant is selected before entering the post-auth offer")
+                .slide_name(),
         };
         send_telemetry_from_ctx!(
             OnboardingEvent::OnboardingAction {
