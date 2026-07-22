@@ -232,8 +232,9 @@ fn agent_mode_placeholder_hint_renders_only_while_empty() {
             let buffer = render_input_buffer(&view, ctx);
             let line = &buffer.to_lines()[0];
             // One pad cell separates the cursor from the hint.
+            let hint = crate::input_hints::agent_input_hint(true, false);
             assert!(
-                line.starts_with(&format!(" {}", crate::input_hints::ZERO_STATE_AGENT_HINT)),
+                line.starts_with(&format!(" {hint}")),
                 "unexpected line: {line:?}"
             );
             let expected = TuiUiBuilder::from_app(ctx)
@@ -247,6 +248,36 @@ fn agent_mode_placeholder_hint_renders_only_while_empty() {
             let line = &buffer.to_lines()[0];
             assert!(line.starts_with('x'), "unexpected line: {line:?}");
             assert!(!line.contains("for conversations"));
+        });
+    });
+}
+#[test]
+fn orchestration_hint_is_ghosted_only_while_tabs_are_available_and_input_is_empty() {
+    App::test((), |mut app| async move {
+        let orchestration_tabs_available = Rc::new(Cell::new(false));
+        let view = app.update(|ctx| {
+            build_view_with_orchestration_tabs(ctx, orchestration_tabs_available.clone())
+        });
+
+        app.read(|ctx| {
+            let line = &render_input_buffer(&view, ctx).to_lines()[0];
+            assert!(!line.contains("Shift + ↑ sub-agents"));
+        });
+
+        orchestration_tabs_available.set(true);
+        app.read(|ctx| {
+            let line = &render_input_buffer(&view, ctx).to_lines()[0];
+            let hint = crate::input_hints::agent_input_hint(true, true);
+            assert!(
+                line.starts_with(&format!(" {hint}")),
+                "unexpected line: {line:?}"
+            );
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "x"));
+        app.read(|ctx| {
+            let line = &render_input_buffer(&view, ctx).to_lines()[0];
+            assert!(!line.contains("Shift + ↑ sub-agents"));
         });
     });
 }
@@ -435,6 +466,13 @@ fn recognized_slash_command_prefix_matches_menu_color_after_menu_closes() {
 }
 
 fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
+    build_view_with_orchestration_tabs(ctx, Rc::new(Cell::new(false)))
+}
+
+fn build_view_with_orchestration_tabs(
+    ctx: &mut AppContext,
+    orchestration_tabs_available: Rc<Cell<bool>>,
+) -> ViewHandle<TuiInputView> {
     // `CodeEditorModel::new_tui` reads syntax colors from the `Appearance`
     // singleton, so register a mock one before constructing the editor.
     ctx.add_singleton_model(|_| Appearance::mock());
@@ -443,6 +481,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
     let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Closed);
     let prompt_history_menu = add_prompt_history_menu(ctx, &input_model, &suggestions_mode);
+    let orchestration_tabs_available_for_view = orchestration_tabs_available.clone();
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,
@@ -454,7 +493,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
                 input_mode,
                 suggestions_mode,
                 vec![TuiInlineMenu::new(prompt_history_menu)],
-                |_| false,
+                move |_| orchestration_tabs_available_for_view.get(),
                 ctx,
             )
         },
@@ -904,32 +943,10 @@ fn dispatch(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, actions: &[Tu
 #[test]
 fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
     App::test((), |mut app| async move {
-        let (view, requests, available) = app.update(|ctx| {
-            ctx.add_singleton_model(|_| Appearance::mock());
-            add_test_semantic_selection(ctx);
-            let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
-            let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Closed);
-            let available = Rc::new(Cell::new(false));
-            let available_for_view = available.clone();
-            let (_window_id, view) = ctx.add_tui_window(
-                AddWindowOptions {
-                    window_style: WindowStyle::NotStealFocus,
-                    ..Default::default()
-                },
-                move |ctx| {
-                    let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-                    let prompt_history_menu =
-                        add_prompt_history_menu(ctx, &model, &suggestions_mode);
-                    TuiInputView::new_for_test(
-                        model,
-                        input_mode,
-                        suggestions_mode,
-                        vec![TuiInlineMenu::new(prompt_history_menu)],
-                        move |_| available_for_view.get(),
-                        ctx,
-                    )
-                },
-            );
+        let (view, requests, orchestration_tabs_available) = app.update(|ctx| {
+            let orchestration_tabs_available = Rc::new(Cell::new(false));
+            let view =
+                build_view_with_orchestration_tabs(ctx, orchestration_tabs_available.clone());
             let requests = Rc::new(RefCell::new(0usize));
             let captured = requests.clone();
             ctx.subscribe_to_view(&view, move |_, event, _| {
@@ -937,7 +954,7 @@ fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
                     *captured.borrow_mut() += 1;
                 }
             });
-            (view, requests, available)
+            (view, requests, orchestration_tabs_available)
         });
 
         app.update(|ctx| {
@@ -949,7 +966,7 @@ fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
         });
         assert_eq!(*requests.borrow(), 0);
 
-        available.set(true);
+        orchestration_tabs_available.set(true);
         app.update(|ctx| {
             dispatch(
                 &view,
