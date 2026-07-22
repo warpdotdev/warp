@@ -23,13 +23,29 @@ from the parallel trimmed init to reusing the REAL app init path:
 - Flipped `launch()`'s `LaunchMode::CommandLine` wasm arm from `panic!` to route
   to `agent_sdk::run` (gated out `std::process::exit`).
 
-**Concrete blocker (precise, from a real Node 25 run):** the real
-`run_app_init`/`initialize_app` path panics with `Error: Can't find the global
-Window` from `gloo_utils::window()` (`gloo-utils-0.2.0/src/lib.rs:14`). The
-standard wasm init path assumes a **browser** environment — it reaches
-`gloo::utils::window()` (a browser global) during model construction, which is
-unavailable in a DOM-free Node runtime. This is the `web_sys::window()` blocker
-surfaced at the init stage (not `agent_sdk`). Additionally, `ai::agent_sdk`
+**First browser-global blocker (FIXED):** the real `run_app_init`/`initialize_app`
+path panicked with `Error: Can't find the global Window` from `gloo_utils::window()`
+reached via `warp_util::assets::make_absolute_url` → `WarpThemeConfig::new` →
+`WarpConfig::new` (in `initialize_app`). Per requester direction, fixed by adding
+`warp_util::assets::set_headless_asset_origin(origin)` (a `OnceLock`-backed
+runtime origin, since `warp_util` cannot depend on `warp_core`/`ChannelState` —
+cycle); `run_command_line_wasm` registers `ChannelState::server_root_url()` as
+the asset origin before `run_app_init`. `make_absolute_url` now prefers the
+headless origin, falls back to `window().location().origin()` (browser path
+unchanged), then to an empty origin. The Node run now passes this panic.
+
+**Next concrete blocker (precise, from a real Node 25 run after the fix):** a
+different browser-global — `Error: no window` from
+`gloo_storage::local_storage::LocalStorage::raw` (`gloo-storage-0.3.0/src/local_storage.rs:12`),
+reached via `warpui_extras::user_preferences::local_storage::LocalStoragePreferences::read_value`
+→ `settings::init::register_all_settings` → `BlockListSettings::register` →
+`ShowJumpToBottomOfBlockButton::read_from_preferences` in `initialize_app`. The
+wasm settings backend (`LocalStoragePreferences`) assumes browser `localStorage`,
+unavailable in a DOM-free Node runtime. Same class of browser-global assumption,
+now at the settings-init stage. Full backtrace captured with
+`--stack-trace-limit=1000` + `--keep-debug`.
+
+Additionally, `ai::agent_sdk`
 (the in-process CLI/agent path `LaunchMode::CommandLine` routes to) is itself
 gated `#[cfg(not(target_family="wasm"))]` because it transitively depends on a
 large native-only surface (`comfy_table`, `inquire`, `command::r#async`,
