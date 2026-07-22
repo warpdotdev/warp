@@ -180,8 +180,8 @@ pub struct TuiInputView {
     /// construction always provides this; isolated input tests omit it.
     transcript: Option<ViewHandle<TuiTranscriptView>>,
     keyboard_enhancement_supported: bool,
-    /// Consults the owner live before Shift+Up leaves the first visual row.
-    can_move_focus_up: Rc<dyn Fn(&AppContext) -> bool>,
+    /// Consults the owner live for whether orchestration tabs are available.
+    orchestration_tabs_available: Rc<dyn Fn(&AppContext) -> bool>,
     /// Consults the owner live before an inline-menu Enter can accept an item.
     can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
 }
@@ -210,7 +210,7 @@ impl TuiInputView {
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
         transcript: ViewHandle<TuiTranscriptView>,
-        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
+        orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         Self::new_internal(
@@ -219,7 +219,7 @@ impl TuiInputView {
             suggestions_mode,
             inline_menus,
             Some(transcript),
-            can_move_focus_up,
+            orchestration_tabs_available,
             ctx,
         )
     }
@@ -230,7 +230,7 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
-        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
+        orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         Self::new_internal(
@@ -239,7 +239,7 @@ impl TuiInputView {
             suggestions_mode,
             inline_menus,
             None,
-            can_move_focus_up,
+            orchestration_tabs_available,
             ctx,
         )
     }
@@ -250,7 +250,7 @@ impl TuiInputView {
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
         transcript: Option<ViewHandle<TuiTranscriptView>>,
-        can_move_focus_up: impl Fn(&AppContext) -> bool + 'static,
+        orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
@@ -273,7 +273,7 @@ impl TuiInputView {
             focused: false,
             transcript,
             keyboard_enhancement_supported: false,
-            can_move_focus_up: Rc::new(can_move_focus_up),
+            orchestration_tabs_available: Rc::new(orchestration_tabs_available),
             can_accept_inline_menu: Rc::new(|_| true),
         }
     }
@@ -364,21 +364,22 @@ impl TuiInputView {
         // state.
         let input_mode = self.input_mode.clone();
         let transcript = self.transcript.clone();
+        let orchestration_tabs_available = self.orchestration_tabs_available.clone();
         element.with_placeholder_ghost_text(move |app| {
             let hint = if input_mode_policy::is_shell_mode(input_mode.as_ref(app)) {
-                input_hints::SHELL_HINT
+                input_hints::SHELL_HINT.to_owned()
             } else {
                 // Inputs constructed without a transcript (isolated tests)
                 // count as zero-state.
                 let transcript_is_empty = transcript
                     .as_ref()
                     .is_none_or(|transcript| transcript.as_ref(app).is_empty());
-                input_hints::agent_input_hint(transcript_is_empty)
+                input_hints::agent_input_hint(
+                    transcript_is_empty,
+                    orchestration_tabs_available(app),
+                )
             };
-            Some((
-                hint.to_owned(),
-                TuiUiBuilder::from_app(app).muted_text_style(),
-            ))
+            Some((hint, TuiUiBuilder::from_app(app).muted_text_style()))
         })
     }
     /// Collapses the current text selection to its head without changing text.
@@ -670,7 +671,7 @@ impl TuiInputView {
 
     /// Whether Shift+Up should leave the input instead of extending selection.
     fn can_focus_above(&self, ctx: &AppContext) -> bool {
-        (self.can_move_focus_up)(ctx) && self.single_cursor_on_first_row(ctx)
+        (self.orchestration_tabs_available)(ctx) && self.single_cursor_on_first_row(ctx)
     }
 
     /// Whether the single caret sits on the first visual row of the input with

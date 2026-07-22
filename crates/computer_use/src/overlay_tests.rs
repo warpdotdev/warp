@@ -162,10 +162,11 @@ fn bottom_center_pill_style_and_dimensions() {
     assert!(ass.contains("PlayResX: 1920"));
     assert!(ass.contains("PlayResY: 1080"));
     assert!(ass.contains("Style: Pill,DejaVu Sans Mono,48"));
-    // The single segment is [500, 2500] (output_start 0); the group's
-    // [1000, 2000] interval remaps to [500, 1500] ms on the output timeline.
+    // The single segment is [750, 3000] (output_start 0); the group displays
+    // [1000, 3000] (lingering 1000 ms past finish) and remaps to [250, 2250] ms
+    // on the output timeline.
     assert!(
-        ass.contains("Dialogue: 0,0:00:00.50,0:00:01.50,Pill,,0,0,0,,{\\an2\\pos(960,990)}ctrl+a")
+        ass.contains("Dialogue: 0,0:00:00.25,0:00:02.25,Pill,,0,0,0,,{\\an2\\pos(960,990)}ctrl+a")
     );
 }
 
@@ -185,7 +186,7 @@ fn labels_in_a_group_share_timing_and_position() {
     assert!(
         dialogue_lines
             .iter()
-            .all(|line| line.contains("0:00:00.50,0:00:01.50"))
+            .all(|line| line.contains("0:00:00.25,0:00:02.25"))
     );
     assert!(dialogue_lines[0].contains("\\pos(715,990)}ctrl+a"));
     assert!(dialogue_lines[1].contains("\\pos(959,990)}typing…"));
@@ -211,19 +212,19 @@ fn build_keep_segments_empty_when_no_entries() {
 fn build_action_segments_uses_finish_offsets_and_drops_blocked_gaps() {
     // Two real action groups separated by a long blocked gap. The segment
     // builder must use each group's finish offset (not a fixed duration), apply
-    // the 500 ms margin on both sides, leave the gap removed, and assign
-    // ordered output starts.
+    // the asymmetric pre/post margins, leave the gap removed, and assign ordered
+    // output starts.
     let entries = vec![entry(1000, 2000, &["a"]), entry(5000, 6000, &["b"])];
     let segments = build_keep_segments(&entries, SOURCE_TEN_SECS, FRAME_RATE_15);
 
     assert_eq!(
         segments,
         vec![
-            // Group A: [1000, 2000] expanded by 500 ms on each side.
-            seg(500, 2500, 0),
+            // Group A: [1000, 2000] expanded by 250 ms before / 1000 ms after.
+            seg(750, 3000, 0),
             // Group B: [5000, 6000] expanded; output starts after A's kept
-            // duration (2000 ms), so the [2500, 4500] gap is removed.
-            seg(4500, 6500, 2000),
+            // duration (2250 ms), so the [3000, 4750] gap is removed.
+            seg(4750, 7000, 2250),
         ]
     );
     // The blocked gap is absent from the output timeline: B's output start
@@ -238,13 +239,13 @@ fn build_action_segments_uses_finish_offsets_and_drops_blocked_gaps() {
 fn one_group_produces_one_segment() {
     let segments =
         build_keep_segments(&[entry(1000, 2000, &["a"])], SOURCE_TEN_SECS, FRAME_RATE_15);
-    assert_eq!(segments, vec![seg(500, 2500, 0)]);
+    assert_eq!(segments, vec![seg(750, 3000, 0)]);
 }
 
 #[test]
 fn start_at_zero_clamps_margin_to_source_start() {
     let segments = build_keep_segments(&[entry(0, 500, &["a"])], SOURCE_TEN_SECS, FRAME_RATE_15);
-    assert_eq!(segments, vec![seg(0, 1000, 0)]);
+    assert_eq!(segments, vec![seg(0, 1500, 0)]);
 }
 
 #[test]
@@ -254,37 +255,38 @@ fn finish_after_source_end_clamps_to_source_duration() {
         SOURCE_TEN_SECS,
         FRAME_RATE_15,
     );
-    assert_eq!(segments, vec![seg(9000, 10000, 0)]);
+    assert_eq!(segments, vec![seg(9250, 10000, 0)]);
 }
 
 #[test]
 fn out_of_order_groups_are_sorted_by_source_start() {
     let entries = vec![entry(5000, 6000, &["b"]), entry(1000, 2000, &["a"])];
     let segments = build_keep_segments(&entries, SOURCE_TEN_SECS, FRAME_RATE_15);
-    assert_eq!(segments, vec![seg(500, 2500, 0), seg(4500, 6500, 2000)]);
+    assert_eq!(segments, vec![seg(750, 3000, 0), seg(4750, 7000, 2250)]);
 }
 
 #[test]
 fn duplicate_starts_merge_into_one_segment() {
     let entries = vec![entry(1000, 2000, &["a"]), entry(1000, 1500, &["b"])];
     let segments = build_keep_segments(&entries, SOURCE_TEN_SECS, FRAME_RATE_15);
-    assert_eq!(segments, vec![seg(500, 2500, 0)]);
+    assert_eq!(segments, vec![seg(750, 3000, 0)]);
 }
 
 #[test]
 fn adjacent_margin_windows_merge() {
-    // The two expanded windows touch at 2500 ms (2000 + 500 == 3000 - 500), so
-    // they merge into one contiguous segment with no removed gap.
+    // With a 250 ms pre-margin and 1000 ms post-margin the windows overlap
+    // (A ends at 3000, B starts at 2750), so they merge into one contiguous
+    // segment with no removed gap.
     let entries = vec![entry(1000, 2000, &["a"]), entry(3000, 4000, &["b"])];
     let segments = build_keep_segments(&entries, SOURCE_TEN_SECS, FRAME_RATE_15);
-    assert_eq!(segments, vec![seg(500, 4500, 0)]);
+    assert_eq!(segments, vec![seg(750, 5000, 0)]);
 }
 
 #[test]
 fn overlapping_margin_windows_merge() {
     let entries = vec![entry(1000, 2500, &["a"]), entry(2000, 3000, &["b"])];
     let segments = build_keep_segments(&entries, SOURCE_TEN_SECS, FRAME_RATE_15);
-    assert_eq!(segments, vec![seg(500, 3500, 0)]);
+    assert_eq!(segments, vec![seg(750, 4000, 0)]);
 }
 
 #[test]
@@ -295,11 +297,11 @@ fn equal_frame_start_finish_enforces_one_frame_minimum() {
     let segments =
         build_keep_segments(&[entry(1000, 1000, &["a"])], SOURCE_TEN_SECS, FRAME_RATE_15);
     assert_eq!(segments.len(), 1);
-    assert_eq!(segments[0].source_start, Duration::from_millis(500));
-    // source_end == start + one frame + trailing margin.
+    assert_eq!(segments[0].source_start, Duration::from_millis(750));
+    // source_end == action finish (start + one frame) + trailing post-margin.
     assert_eq!(
         segments[0].source_end,
-        Duration::from_millis(1000) + frame + Duration::from_millis(500)
+        Duration::from_millis(1000) + frame + Duration::from_millis(1000)
     );
 }
 
@@ -377,11 +379,30 @@ fn overlay_remaps_pill_timings_through_cut_segments() {
     // Single-char pills on 1280x720: pill width 61, left = (1280-61)/2 = 609,
     // x = 609 + 30 = 639, y = 720 - 90 = 630.
     assert!(
-        ass.contains("Dialogue: 0,0:00:00.50,0:00:01.50,Pill,,0,0,0,,{\\an2\\pos(639,630)}a"),
+        ass.contains("Dialogue: 0,0:00:00.25,0:00:02.25,Pill,,0,0,0,,{\\an2\\pos(639,630)}a"),
         "{ass}"
     );
     assert!(
-        ass.contains("Dialogue: 0,0:00:02.50,0:00:03.50,Pill,,0,0,0,,{\\an2\\pos(639,630)}b"),
+        ass.contains("Dialogue: 0,0:00:02.50,0:00:04.50,Pill,,0,0,0,,{\\an2\\pos(639,630)}b"),
         "{ass}"
     );
+}
+
+#[test]
+fn instantaneous_action_pill_lingers_past_finish() {
+    // An instantaneous action (finish == offset) must still show a readable
+    // pill, not a single frame: the overlay lingers the 1000 ms post-action
+    // margin past the action. Segment [750, 2000+frame]; display interval
+    // [1000, 2000] remaps to [250, 1250] ms (~1000 ms visible).
+    let ass = build_overlay_ass(
+        &[entry(1000, 1000, &["Return"])],
+        (1280, 720),
+        SOURCE_TEN_SECS,
+        FRAME_RATE_15,
+    );
+    let dialogue = ass
+        .lines()
+        .find(|line| line.starts_with("Dialogue:"))
+        .expect("expected one pill dialogue");
+    assert!(dialogue.contains("0:00:00.25,0:00:01.25"), "{ass}");
 }

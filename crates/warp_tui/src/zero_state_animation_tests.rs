@@ -1,4 +1,7 @@
-use super::{StarfieldState, WARP_INITIAL, WARP_TARGET, warp_at, xorshift_f64, xorshift64};
+use super::{
+    StarfieldState, WARP_INITIAL, WARP_TARGET, star_count_for_max_r, warp_at, xorshift_f64,
+    xorshift64,
+};
 
 // ---------------------------------------------------------------------------
 // xorshift64 PRNG
@@ -141,7 +144,7 @@ fn starfield_stars_reset_when_they_leave_screen() {
     let mut sf = StarfieldState::new();
     // Override max_r to something tiny so stars leave immediately.
     let tiny_max_r = 5.0;
-    sf.set_max_r(tiny_max_r);
+    sf.set_dimensions(tiny_max_r, star_count_for_max_r(tiny_max_r));
     sf.simulate_to(5.0); // 5 seconds
     // All stars should be back near centre (r < tiny_max_r).
     for (i, star) in sf.stars.iter().enumerate() {

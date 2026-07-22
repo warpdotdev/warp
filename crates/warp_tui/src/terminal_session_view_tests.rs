@@ -8,7 +8,7 @@ use warp::terminal::model::ansi::{Handler, InputBufferValue};
 use warp::tui_export::{
     AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin,
     BlockPadding, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals, Harness,
-    InputType, LLMPreferences, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, TranscriptScope,
+    LLMPreferences, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, TranscriptScope,
     export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::settings::Setting as _;
@@ -1142,14 +1142,10 @@ fn zero_state_transitions_through_bootstrap_lifecycle() {
 fn render_footer_lines(
     app: &mut App,
     view: &ViewHandle<super::TuiTerminalSessionView>,
-    orchestration_tabs_available: bool,
     width: u16,
 ) -> Vec<String> {
     app.update(|ctx| {
-        let footer = view
-            .as_ref(ctx)
-            .render_footer(orchestration_tabs_available, ctx)
-            .finish();
+        let footer = view.as_ref(ctx).render_footer(ctx).finish();
         render_element(footer, ctx, width).to_lines()
     })
 }
@@ -1388,7 +1384,7 @@ fn footer_transient_state_replaces_all_sections() {
         view.update(&mut app, |view, _| {
             view.exit_confirmation.arm(Instant::now());
         });
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         assert_eq!(lines, vec![CTRL_C_EXIT_HINT]);
         assert_footer_segments_absent(&lines);
 
@@ -1401,7 +1397,7 @@ fn footer_transient_state_replaces_all_sections() {
                 future: None,
             };
         });
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         assert_eq!(lines, vec![LOADING_CONVERSATION_HINT]);
         assert_footer_segments_absent(&lines);
 
@@ -1410,7 +1406,7 @@ fn footer_transient_state_replaces_all_sections() {
             view.conversation_restore_state = ConversationRestoreState::Idle;
             view.show_transient_hint("transient notice".to_owned(), ctx);
         });
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         assert_eq!(lines, vec!["transient notice"]);
         assert_footer_segments_absent(&lines);
 
@@ -1425,40 +1421,8 @@ fn footer_transient_state_replaces_all_sections() {
             };
             view.show_transient_hint("transient notice".to_owned(), ctx);
         });
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         assert_eq!(lines, vec![CTRL_C_EXIT_HINT]);
-    });
-}
-
-#[test]
-fn footer_orchestration_callout_replaces_sections() {
-    App::test((), |mut app| async move {
-        let fixture = focus_test_fixture(&mut app);
-        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-
-        // With orchestration tabs available and the session in agent mode, the
-        // callout replaces the entire status row.
-        let lines = render_footer_lines(&mut app, &view, true, 80);
-        assert_eq!(lines, vec!["Shift + ↑ sub-agents"]);
-        assert_footer_segments_absent(&lines);
-
-        // Shell mode wins over the orchestration callout: the bash row leads
-        // with the shell-mode indicator instead.
-        view.update(&mut app, |view, ctx| {
-            view.ai_input_model.update(ctx, |input_mode, ctx| {
-                input_mode.set_input_type(InputType::Shell, None, ctx);
-            });
-        });
-        let lines = render_footer_lines(&mut app, &view, true, 80);
-        let row = lines.join("\n");
-        assert!(
-            row.starts_with(SHELL_MODE_HINT),
-            "shell mode wins over the orchestration callout: {row}"
-        );
-        assert!(
-            !row.contains("Shift + ↑ sub-agents"),
-            "the orchestration callout yields to shell mode: {row}"
-        );
     });
 }
 
@@ -1472,7 +1436,7 @@ fn footer_conversations_callout_no_longer_renders() {
         // left-aligned sectioned row — never the obsolete `← for conversations`
         // callout (render_left_footer_hint and the show_conversations_hint
         // branch are removed, not merely unreachable).
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         let row = lines.join("\n");
         assert!(
             !row.contains("← for conversations"),

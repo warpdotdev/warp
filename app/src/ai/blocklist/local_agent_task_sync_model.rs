@@ -501,6 +501,13 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::AuthenticationRequired,
             )),
         ),
+        RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                "Gemini Enterprise credentials expired or invalid.",
+                PlatformErrorCode::AuthenticationRequired,
+            )),
+        ),
         RenderableAIError::TransientNetworkError { .. } => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(

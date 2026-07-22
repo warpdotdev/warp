@@ -2229,18 +2229,16 @@ impl TuiTerminalSessionView {
     /// Builds the status footer under the input box. The row is left-aligned:
     /// in agent mode `[model] [cwd ↬ branch] • [usage] • [+N -M]`, and in shell
     /// mode `[shell mode] [cwd ↬ branch] • [+N -M]` (model and usage hidden).
-    /// A replacing hint — the ctrl-c exit
-    /// confirmation while armed, the conversation-list loading hint, an active
-    /// transient notice, or the `Shift + ↑ sub-agents` orchestration callout
-    /// in agent mode — occupies the whole row instead; shell mode wins over
-    /// the orchestration callout so its indicator keeps leading. Every child
-    /// truncates to a single row, so the row lays out one row tall.
-    fn render_footer(&self, orchestration_tabs_available: bool, ctx: &AppContext) -> TuiFlex {
+    /// A replacing hint — the ctrl-c exit confirmation while armed, the
+    /// conversation-list loading hint, or an active transient notice — occupies
+    /// the whole row instead. Every child truncates to a single row, so the row
+    /// lays out one row tall.
+    fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
         let muted = builder.muted_text_style();
 
         // Replacing hints occupy the entire status row, in the existing
-        // priority order: ctrl-c → loading → transient → orchestration callout.
+        // priority order: ctrl-c → loading → transient.
         if self.exit_confirmation.is_armed() {
             return TuiFlex::row().child(
                 TuiText::new(CTRL_C_EXIT_HINT)
@@ -2275,17 +2273,7 @@ impl TuiTerminalSessionView {
                     .finish(),
             );
         }
-        // The orchestration-tab callout replaces the status row in agent mode;
-        // shell mode wins so its first segment remains the shell indicator.
         let shell_mode = self.is_shell_mode(ctx);
-        if orchestration_tabs_available && !shell_mode {
-            return TuiFlex::row().child(
-                TuiText::new("Shift + ↑ sub-agents")
-                    .with_style(muted)
-                    .truncate()
-                    .finish(),
-            );
-        }
 
         // Normal left-aligned sectioned status row.
         let git_metadata = self.git_status_metadata(ctx);
@@ -3407,13 +3395,11 @@ impl TuiView for TuiTerminalSessionView {
                 .finish(),
             );
             let footer = if matches!(input_target, TuiInputTarget::Disabled) {
-                self.render_footer(orchestration_tabs_available, ctx)
-                    .finish()
+                self.render_footer(ctx).finish()
             } else if self.orchestration_tabs_focused {
                 self.render_orchestration_tab_footer(&builder)
             } else {
-                self.render_footer(orchestration_tabs_available, ctx)
-                    .finish()
+                self.render_footer(ctx).finish()
             };
             content = content.child(TuiConstrainedBox::new(footer).with_max_rows(1).finish());
         }
