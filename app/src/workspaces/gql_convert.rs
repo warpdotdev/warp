@@ -224,7 +224,6 @@ impl From<GqlWarpAiPolicy> for WarpAiPolicy {
     fn from(gql_warp_ai_policy: GqlWarpAiPolicy) -> WarpAiPolicy {
         Self {
             limit: i64::from(gql_warp_ai_policy.limit),
-            disable_premium_models: gql_warp_ai_policy.disable_premium_models,
             is_code_suggestions_toggleable: gql_warp_ai_policy.is_code_suggestions_toggleable,
             is_prompt_suggestions_toggleable: gql_warp_ai_policy.is_prompt_suggestions_toggleable,
             is_next_command_enabled: gql_warp_ai_policy.is_next_command_enabled,
