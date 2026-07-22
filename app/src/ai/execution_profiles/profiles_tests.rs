@@ -2,9 +2,12 @@ use chrono::{DateTime, Utc};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_graphql::object_permissions::AccessLevel;
-use warpui::{App, SingletonEntity};
+use warp_util::path::EscapeChar;
+use warpui::{App, EntityId, SingletonEntity};
 
 use crate::LaunchMode;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, ExecutionProfileId,
@@ -22,7 +25,7 @@ use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, ServerIdAndType, SyncId};
 use crate::server::sync_queue::SyncQueue;
-use crate::settings::{AISettings, PrivacySettings};
+use crate::settings::{AISettings, AgentModeCommandExecutionPredicate, PrivacySettings};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -167,6 +170,59 @@ fn tui_missing_collection_seeds_agent_decides_for_execute_commands() {
             assert_eq!(
                 profile.mcp_permissions,
                 expected_legacy_seed.mcp_permissions
+            );
+        });
+    })
+}
+
+#[test]
+fn tui_default_denylist_overrides_agent_decides_command_execution() {
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_for_test());
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(
+                &LaunchMode::Tui {
+                    mount: Box::new(|_| {}),
+                    api_key: None,
+                },
+                ctx,
+            )
+        });
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+        let permissions = app.add_singleton_model(BlocklistAIPermissions::new);
+        let terminal_view_id = EntityId::new();
+        let conversation_id = AIConversationId::new();
+
+        profile_model.update(&mut app, |model, ctx| {
+            let profile_id = model.default_profile_id();
+            model.add_to_command_denylist(
+                &profile_id,
+                &AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
+                ctx,
+            );
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            assert_eq!(
+                model.default_profile(ctx).data().execute_commands,
+                ActionPermission::AgentDecides
+            );
+        });
+
+        permissions.read(&app, |model, ctx| {
+            let result = model.can_autoexecute_command(
+                &conversation_id,
+                "rm important.txt",
+                EscapeChar::Backslash,
+                false,
+                Some(false),
+                Some(terminal_view_id),
+                ctx,
+            );
+            assert!(!result.is_allowed());
+            assert!(
+                format!("{result:?}").contains("ExplicitlyDenylisted"),
+                "TUI denylist should take precedence over AgentDecides: {result:?}"
             );
         });
     })
