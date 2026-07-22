@@ -58,11 +58,12 @@ fn auto_approve_is_an_exact_no_argument_command() {
 }
 
 #[test]
-fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
+fn tui_supports_the_selected_low_effort_commands_but_not_orchestrate() {
     for (command, expected) in [
         (&*commands::AGENT, TuiSlashCommand::Agent),
         (&*commands::NEW, TuiSlashCommand::New),
         (&*commands::COMPACT, TuiSlashCommand::Compact),
+        (&commands::COST, TuiSlashCommand::Cost),
         (&*commands::PLAN, TuiSlashCommand::Plan),
         (&commands::MODEL, TuiSlashCommand::Model),
         (
@@ -92,10 +93,9 @@ fn tui_supports_the_selected_low_effort_commands_but_not_cost_or_orchestrate() {
         );
     }
 
-    for command in [&commands::COST, &*commands::ORCHESTRATE] {
-        assert_eq!(TuiSlashCommand::from_static_command(command), None);
-        assert!(!slash_command_is_supported_in_tui(command));
-    }
+    let command = &*commands::ORCHESTRATE;
+    assert_eq!(TuiSlashCommand::from_static_command(command), None);
+    assert!(!slash_command_is_supported_in_tui(command));
 }
 
 #[test]

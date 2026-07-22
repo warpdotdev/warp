@@ -2832,6 +2832,11 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
+            TuiSlashCommand::Cost => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                ctx.dispatch_typed_action_deferred(TuiTerminalSessionAction::ToggleUsageDisplay);
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
             TuiSlashCommand::Model => {
                 self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);

@@ -289,6 +289,35 @@ fn auto_approve_slash_command_toggles_selected_conversation_off_on_off() {
 }
 
 #[test]
+fn cost_slash_command_toggles_usage_display_mode() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).usage_display_mode),
+            TuiUsageDisplayMode::Credits
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COST, None, ctx);
+        });
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).usage_display_mode),
+            TuiUsageDisplayMode::Cost
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COST, None, ctx);
+        });
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).usage_display_mode),
+            TuiUsageDisplayMode::Credits
+        );
+    });
+}
+
+#[test]
 fn auto_approve_actions_control_transient_color_feedback() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
