@@ -382,6 +382,10 @@ impl AuthManager {
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                     usage_model.refresh_request_usage_async(ctx);
+                    // Fetch the server-authoritative credit availability on login/signup.
+                    // The periodic workspace metadata poll also carries this, but we
+                    // want the value as soon as the user logs in.
+                    usage_model.refresh_ai_credit_availability_async(ctx);
                 });
 
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {

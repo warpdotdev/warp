@@ -4,6 +4,9 @@ use crate::request_context::RequestContext;
 use crate::schema;
 use crate::user::DiscoverableTeamData;
 use crate::workspace::Workspace;
+pub use super::get_ai_credit_availability::{
+    AICreditAvailability, AICreditAvailabilityDenialReason, AICreditAvailabilitySource,
+};
 
 /*
 query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
@@ -160,6 +163,11 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
           stripeCustomerId
           isEligibleForDiscovery
         }
+        aiCreditAvailability {
+          available
+          denialReason
+          creditSource
+        }
         experiments
         discoverableTeams {
           teamUid
@@ -223,6 +231,7 @@ pub enum PricingInfoResult {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct User {
     pub workspaces: Vec<Workspace>,
+    pub ai_credit_availability: AICreditAvailability,
     pub experiments: Option<Vec<Experiment>>,
     pub discoverable_teams: Vec<DiscoverableTeamData>,
 }

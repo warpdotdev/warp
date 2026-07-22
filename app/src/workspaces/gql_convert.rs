@@ -65,7 +65,15 @@ use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
+use crate::ai::request_usage_model::{
+    AICreditAvailability, AICreditDenialReason, AICreditSource,
+};
 use crate::ai::{BonusGrant, BonusGrantScope};
+use warp_graphql::queries::get_workspaces_metadata_for_user::{
+    AICreditAvailability as GqlAICreditAvailability,
+    AICreditAvailabilityDenialReason as GqlDenialReason,
+    AICreditAvailabilitySource as GqlCreditSource,
+};
 use crate::auth::UserUid;
 use crate::convert_to_server_experiment;
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
@@ -1144,13 +1152,47 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             .experiments
             .and_then(|experiments| convert_to_server_experiment!(experiments));
 
+        let ai_credit_availability =
+            Some(convert_ai_credit_availability(gql_user.ai_credit_availability));
+
         // TODO(skambashi) refactor to return back workspaces, and not teams
         WorkspacesMetadataResponse {
             workspaces,
             joinable_teams,
             experiments,
             feature_model_choices,
+            ai_credit_availability,
         }
+    }
+}
+
+/// Convert the GQL `AICreditAvailability` to the domain type.
+fn convert_ai_credit_availability(gql: GqlAICreditAvailability) -> AICreditAvailability {
+    let denial_reason = match gql.denial_reason {
+        GqlDenialReason::None => AICreditDenialReason::None,
+        GqlDenialReason::OutOfCredits => AICreditDenialReason::OutOfCredits,
+        GqlDenialReason::Delinquent => AICreditDenialReason::Delinquent,
+        GqlDenialReason::EnterpriseTeamSpendLimitHit => {
+            AICreditDenialReason::EnterpriseTeamSpendLimitHit
+        }
+        GqlDenialReason::EnterprisePerUserSpendLimitHit => {
+            AICreditDenialReason::EnterprisePerUserSpendLimitHit
+        }
+        GqlDenialReason::EnterpriseWorkspaceSpendLimitHit => {
+            AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit
+        }
+    };
+    let credit_source = gql.credit_source.map(|s| match s {
+        GqlCreditSource::BaseLimit => AICreditSource::BaseLimit,
+        GqlCreditSource::BonusGrant => AICreditSource::BonusGrant,
+        GqlCreditSource::Payg => AICreditSource::Payg,
+        GqlCreditSource::Overage => AICreditSource::Overage,
+        GqlCreditSource::AmbientBonusGrant => AICreditSource::AmbientBonusGrant,
+    });
+    AICreditAvailability {
+        available: gql.available,
+        denial_reason,
+        credit_source,
     }
 }
 

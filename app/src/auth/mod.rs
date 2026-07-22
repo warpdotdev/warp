@@ -26,6 +26,7 @@ use warp_errors::{report_error, report_if_error};
 use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
 use warpui::{AppContext, SingletonEntity};
 
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
@@ -222,6 +223,11 @@ pub fn log_out(app: &mut AppContext) {
 
     AuthManager::handle(app).update(app, |auth_manager, ctx| {
         auth_manager.log_out(ctx);
+    });
+    // Clear the server-authoritative availability state so stale data is not
+    // shown to the next logged-in user.
+    AIRequestUsageModel::handle(app).update(app, |usage_model, ctx| {
+        usage_model.reset_ai_credit_availability(ctx);
     });
     AIExecutionProfilesModel::handle(app).update(app, |ai_execution_profiles_model, _| {
         ai_execution_profiles_model.reset();
