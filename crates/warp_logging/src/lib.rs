@@ -22,11 +22,8 @@ pub enum LogFrontend {
 /// Configuration for initializing the logger.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogConfig {
-    /// Whether the caller is the CLI. When true, logs are written to a separate subdirectory
-    /// with a higher rotation limit so that CLI invocations don't evict GUI application logs.
-    pub is_cli: bool,
-    /// Frontend-specific directory and filename selection. This is independent from `is_cli`,
-    /// which controls only the existing rotation policy.
+    /// Frontend-specific directory and rotation policy. Filenames continue to come from the
+    /// active channel configuration.
     pub frontend: LogFrontend,
     /// The destination for log output. If `None`, the destination is inferred from the environment.
     pub log_destination: Option<LogDestination>,

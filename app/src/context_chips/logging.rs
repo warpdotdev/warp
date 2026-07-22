@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write as _},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use chrono::{Local, SecondsFormat};
@@ -134,14 +134,16 @@ impl PromptChipLogger {
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn log_file_path() -> anyhow::Result<PathBuf> {
     let log_path = warp_logging::log_file_path()?;
-    let log_directory = log_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Resolved log path has no parent directory"))?;
+    prompt_chip_log_file_path(&log_path)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn prompt_chip_log_file_path(log_path: &Path) -> anyhow::Result<PathBuf> {
     let channel_logfile_name = log_path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| anyhow::anyhow!("Resolved log path has no filename"))?;
-    Ok(log_directory.join(prompt_chip_log_filename(channel_logfile_name)))
+    Ok(log_path.with_file_name(prompt_chip_log_filename(channel_logfile_name)))
 }
 
 #[cfg(not(target_family = "wasm"))]

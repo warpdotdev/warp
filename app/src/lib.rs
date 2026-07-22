@@ -834,7 +834,6 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             let launch_mode = LaunchMode::RemoteServerProxy;
             let mut tracing_initialization = tracing::init()?;
             warp_logging::init(warp_logging::LogConfig {
-                is_cli: true,
                 frontend: launch_mode.log_frontend(),
                 log_destination: launch_mode.log_destination(),
                 ..Default::default()
@@ -973,7 +972,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
-    let is_cli = log_destination.is_some();
 
     cfg_if::cfg_if! {
         if #[cfg(enable_crash_recovery)] {
@@ -981,7 +979,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
                 warp_logging::init_for_crash_recovery_process()?;
             } else {
                 warp_logging::init(warp_logging::LogConfig {
-                    is_cli,
                     frontend: launch_mode.log_frontend(),
                     log_destination,
                     ..Default::default()
@@ -989,7 +986,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             }
         } else {
             warp_logging::init(warp_logging::LogConfig {
-                is_cli,
                 frontend: launch_mode.log_frontend(),
                 log_destination,
                 ..Default::default()
