@@ -9,6 +9,8 @@ mod imp;
 mod mock;
 mod noop;
 mod overlay;
+#[cfg(any(macos, linux))]
+mod recording_metadata;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 
@@ -297,6 +299,20 @@ pub async fn burn_in_action_log(
     {
         let _ = (entries, dimensions, source_duration, frame_rate);
         Ok(input.to_path_buf())
+    }
+}
+/// Reads the duration encoded in a finalized recording's media timeline.
+pub async fn finalized_video_duration(input: &Path) -> Result<Duration, RecordingError> {
+    #[cfg(any(macos, linux))]
+    {
+        recording_metadata::video_duration(input).await
+    }
+    #[cfg(not(any(macos, linux)))]
+    {
+        let _ = input;
+        Err(RecordingError::Finalize {
+            reason: "video duration probing is unsupported on this platform".to_string(),
+        })
     }
 }
 
