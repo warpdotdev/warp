@@ -1,61 +1,115 @@
-# Mid-session file attachment for Cloud Claude Code follow-ups
+# File attachment for Cloud Claude Code runs
 
 ## Context
 
-Users can send follow-up prompts to an active cloud CC session via the ambient agent pane, but currently there is no way to attach a file to those follow-up messages. This is a pure Warp client change — no server or oz binary changes are needed.
+Cloud Warp (Oz) sessions support file attachment in two ways: while the session is live (via session sharing), and when the VM is down (via follow-up). Cloud Claude Code sessions support neither. This spec covers both gaps.
 
-**Why no server changes are needed:** each follow-up triggers a new execution on the remote worker. The oz binary calls [`fetch_and_download_attachments`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/ai/agent_sdk/driver/attachments.rs#L36) at the start of every execution, which fetches all current task attachments via GraphQL and downloads them to `attachments_dir`. The server's `POST /api/v1/agent/runs/:runId/attachments/prepare` endpoint already works on in-progress tasks with no state guard — so uploading a new file between follow-ups is sufficient. The next execution picks it up automatically.
+**Why Oz works but CC doesn't — the fundamental difference:**
+
+Oz runs in-process inside the Warp application on the worker VM. When a user sends a message with an attachment, it arrives as a structured `AgentPromptRequest { prompt, attachments }` over the session-sharing WebSocket. On the VM, Oz downloads the file references from GCS to VM-local paths and feeds them as typed `AIAgentAttachment::FilePathReference` objects into `AIAgentInput::UserQuery`. This is a structured, typed protocol.
+
+CC is an external PTY process. The session-sharing message arrives with the same structured payload, but at [`terminal_view_adaptor.rs:1357`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/local_tty/terminal_view_adaptor.rs#L1357), the CC branch does:
+
+```rust
+if cli_agent_active {
+    submit_text_to_cli_agent_pty(request.prompt.clone(), ...);
+    return;  // request.attachments is never read
+}
+// Oz branch follows — handles request.attachments
+```
+
+Attachments are silently discarded. CC's only input interface is raw PTY bytes.
+
+**For follow-ups (VM down):**
+
+[`RunFollowupRequest`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/server/server_api/ai.rs#L327) is `{ pub message: String }` — no attachment field. The code at [`input.rs:14064`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/input.rs#L14064) explicitly drops queued attachments with a warning when routing to a cloud follow-up. Each follow-up spawns a new execution which runs `fetch_and_download_attachments` at startup — so attachments just need to be in the task definition before the new execution starts.
 
 **Relevant code:**
 
-- [`submit_cloud_followup` (L1101)](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/view/ambient_agent/model.rs#L1101) — current follow-up entry point; takes only `prompt: String`, no attachments
-- [`spawn_agent` (L1248)](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/view/ambient_agent/model.rs#L1248) — the initial-run equivalent; already accepts `Vec<AttachmentInput>`
-- [`prepare_attachments_for_upload` (L1415)](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/server/server_api/ai.rs#L1415) — calls `POST .../attachments/prepare`, returns presigned GCS upload URLs
-- [`process_attachment` (L279)](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/ai/agent_sdk/driver/attachments.rs#L279) — encodes a local file as `AttachmentInput`; used today for initial-run attachments
-- [`MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY` (L25)](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/ai/agent_sdk/driver/attachments.rs#L25) — limit of 25 attachments per task (cumulative across all follow-ups)
-- [`request_attachments` building (L4438)](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/input.rs#L4438) — how the initial-run UI processes files into `AttachmentInput` before send
+- [`terminal_view_adaptor.rs:1357–1401`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/local_tty/terminal_view_adaptor.rs#L1357) — the decisive branch: CC takes PTY-only path, Oz takes structured path with full attachment download
+- [`shared_session.rs:669–815`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/ai/blocklist/controller/shared_session.rs#L669) — Oz: downloads FileReferences, builds `AIAgentAttachment::FilePathReference`, calls `send_user_query_in_conversation_with_attachments`
+- [`input.rs:14474–14839`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/input.rs#L14474) — viewer-side: uploads files via `prepare` endpoint, creates `AgentAttachment::FileReference { attachment_id, file_name }`
+- [`input.rs:14064–14080`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/input.rs#L14064) — explicit drop of queued attachments on cloud follow-up path
+- [`model.rs:1101`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/view/ambient_agent/model.rs#L1101) — `submit_cloud_followup(prompt: String)` — text only
+- [`fetch_and_download_attachments` (L36)](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/ai/agent_sdk/driver/attachments.rs#L36) — called at every new execution startup; downloads all task attachments fresh via GraphQL
+- [`terminal.rs:266–273`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/ai/agent_sdk/driver/terminal.rs#L266) — `set_attachments_download_dir` set on VM controller at session start
+- [`MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY` (L25)](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/ai/agent_sdk/driver/attachments.rs#L25) — 25 attachments per task cumulative
 
 ## Proposed changes
 
-All changes are in `app/src/terminal/` and its dependencies.
+### Fix 1: Follow-up (VM down)
 
-### 1. Follow-up input UI
+Each follow-up triggers a new execution, and `fetch_and_download_attachments` runs at every new execution startup. So the fix is: upload the file to the task definition before submitting the follow-up text. No changes to `RunFollowupRequest` or the server are needed.
 
-Add a file-attach button (paperclip or similar) to the follow-up prompt composer in the cloud agent pane — the input that appears after a CC session is running. This mirrors the file picker already present on the initial-run prompt (`FileAttachmentInput` pattern). Single-file or multi-file selection; respect `MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY`.
+**a. File picker on follow-up input UI**
 
-### 2. Upload before send
+Add a file-attach button to the follow-up prompt composer (the input that appears after a CC session ends). Mirror the pattern in `input.rs:4438–4471` for initial runs.
 
-When the user hits send with a file attached:
-1. Call `prepare_attachments_for_upload` for each file — gets presigned GCS upload URLs
-2. `PUT` each file's bytes to its GCS URL (same presigned-upload path used for initial-run attachments)
-3. Block the send button and show an upload progress indicator during this step
-4. Only after all uploads complete, call `submit_cloud_followup`
+**b. Upload before send**
 
-The upload must finish before the follow-up is submitted, otherwise the new execution may start before the attachment metadata is written to the task definition. `prepare_attachments_for_upload` writes the attachment metadata to the task definition synchronously before returning the presigned URL, so the race window is only between the GCS PUT completing and the follow-up being submitted — blocking send until PUT completes eliminates it.
+When the user sends a follow-up with a file:
+1. Call `prepare_attachments_for_upload` — writes attachment metadata to task definition, returns presigned GCS URL
+2. `PUT` file bytes to GCS (block the send button; show progress indicator)
+3. Remove the attachment-drop at `input.rs:14064` so queued attachments aren't silently discarded
+4. Submit the text follow-up normally via `submit_cloud_followup`
 
-### 3. `submit_cloud_followup` — no signature change needed
+The file is in the task definition before the follow-up is submitted. The new execution's `fetch_and_download_attachments` picks it up automatically. Race-free: GCS PUT completes before submit; new execution starts after submit with seconds of container-startup delay.
 
-The function itself does not need to change. The upload is a client-side pre-step; once the files are in GCS and the metadata is in the task definition, the follow-up can be submitted with the existing text-only API. The next execution's `fetch_and_download_attachments` call picks up the new files.
+**c. No changes to `submit_cloud_followup` or `RunFollowupRequest`**
 
-The only optional improvement: pass the uploaded attachment IDs alongside the follow-up message text as a hint to the user prompt (e.g. "I've attached: `filename.py`"). This is a UX nicety, not a requirement — the agent will reference the file via the "Attached files:" block in its system prompt regardless.
+The function signature and server API stay text-only. The attachment is delivered via the task definition, not the follow-up message itself.
+
+---
+
+### Fix 2: Live session (VM running)
+
+The viewer-side upload + session-sharing transport already works correctly: files are uploaded to GCS, `AgentAttachment::FileReference { attachment_id, file_name }` is built at `input.rs:14474`, and `AgentPromptRequest { prompt, attachments }` is sent over the WebSocket. The gap is entirely on the VM/sharer side in `terminal_view_adaptor.rs`.
+
+**Change `terminal_view_adaptor.rs:1357–1381`:**
+
+Currently the CC branch calls `submit_text_to_cli_agent_pty(request.prompt.clone())` and returns, discarding `request.attachments`. Replace with:
+
+1. If `request.attachments` is non-empty, for each `FileReference { attachment_id, file_name }`:
+   - Call `download_task_attachments` to get a fresh presigned download URL
+   - Download the file to a deterministic VM-local path using the `attachments_dir` already set on the controller at `terminal.rs:266–273`
+   - Append a file-path note to the prompt text: `\n\nThe following file(s) have been placed on the filesystem:\n- {file_name} → {path}`
+2. Send the augmented prompt text to CC via PTY
+
+**`HarnessRunner` does not need a new method.** The augmented text goes through the same `submit_text_to_cli_agent_pty` path — file path injection is string concatenation before the PTY write. The CC plugin's `on-prompt-submit` hook fires normally.
+
+---
 
 ## Testing and validation
 
-**Manual:**
-1. Start a cloud CC run.
-2. Once the session is running (shared session visible), attach a Python file to the follow-up input and send "Summarize this file."
-3. Confirm CC reads the file and produces a summary — the "Attached files:" block should appear in the new execution's prompt.
-4. Attach a second file in a third follow-up; confirm both the first and second files are still available (cumulative).
-5. Confirm the send button is disabled while the upload is in progress and re-enables on failure.
+**Fix 1 (follow-up):**
+1. Start a cloud CC run and wait for execution to end.
+2. Attach a Python file to the follow-up input and send "Summarize this file."
+3. Confirm the new execution's "Attached files:" block includes the file and CC produces a summary.
+4. Attach a second file in a subsequent follow-up; confirm both files are available (cumulative).
+5. Confirm send is blocked during upload; on failure, an error toast appears and the follow-up is not submitted.
 
-**Error path:**
-- Upload fails (network error): show an error toast, do not submit the follow-up, allow retry.
-- Attachment limit exceeded: disable the attach button or show an inline error when the 25-file task limit is reached.
+**Fix 2 (live session):**
+1. Start a cloud CC run and wait for the session to be live (CC actively running).
+2. Attach a Python file to the active session input and send "Summarize this file."
+3. Confirm CC receives a message with the local file path appended and reads the file.
+4. Confirm the file is present at the deterministic path on the VM.
+5. Confirm no raw attachment ID or marker text appears in the CC conversation.
 
-**Existing behavior:**
-- Follow-up sends without attachments still work (no regression).
-- Initial-run file attachment behavior is unchanged.
+**Regressions:**
+- Follow-up without attachments still works.
+- Initial-run attachments unchanged.
+- Oz live session and Oz follow-up attachment behavior unchanged.
+
+## Risks and mitigations
+
+**PTY injection for live session:** File paths injected as text work for any file type — CC reads the file via its `Read` tool using the path. Same mechanism as pre-session attachments already in prod.
+
+**Attachment download latency on live session:** Downloading from GCS on the VM before sending to PTY adds latency. The viewer UI should show "uploading…" so the user knows the message is in flight.
+
+**Cumulative 25-file limit:** Attachments from live-session messages persist in the task definition. The UI should track and enforce the cumulative limit.
 
 ## Parallelization
 
-Not warranted — this is a focused UI change in one module with a clear sequential flow (UI → upload → submit). Single developer, single PR.
+Two PRs, can be developed in parallel since they touch different code paths:
+- **PR 1** — Follow-up: file picker UI + upload-before-submit + remove attachment drop (`input.rs`, `model.rs`)
+- **PR 2** — Live session: CC attachment download + PTY injection (`terminal_view_adaptor.rs`)
