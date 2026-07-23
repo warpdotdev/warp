@@ -308,6 +308,23 @@ impl AgentDriver {
                                     debug!("MAA response event: {:?}", response_event.r#type);
                                 }
                                 Err(err) => {
+                                    // Instrument the 403 capture: log the full
+                                    // error detail (status, headers, body) for
+                                    // the prototype investigation (REMOTE-2264).
+                                    if let warp_multi_agent_client::Error::EventSource(es_err) = &err
+                                        && let reqwest_eventsource::Error::InvalidStatusCode(status, response) =
+                                            es_err.as_ref()
+                                    {
+                                        error!("MAA 403 capture — status: {}", status);
+                                        error!(
+                                            "MAA 403 capture — response headers: {:?}",
+                                            response.headers()
+                                        );
+                                        error!("MAA 403 capture — response url: {}", response.url());
+                                        // The response body can't be read synchronously
+                                        // here; it would need an async spawn. The
+                                        // headers + status + url are logged above.
+                                    }
                                     error!("MAA stream error: {:?}", err);
                                     break;
                                 }
