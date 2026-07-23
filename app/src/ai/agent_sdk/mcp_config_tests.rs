@@ -244,7 +244,10 @@ fn validation_rejects_invalid_entries() {
     // owns the set of recognized non-UUID ids).
     let spec = json!({ "mcpServers": { "bad": { "warp_id": "" } } }).to_string();
     let err = build_mcp_servers_from_specs(&[MCPSpec::Json(spec)]).unwrap_err();
-    assert!(err.to_string().contains("field 'warp_id' must be non-empty"));
+    assert!(
+        err.to_string()
+            .contains("field 'warp_id' must be non-empty")
+    );
 
     // args must be array.
     let spec = json!({ "mcpServers": { "bad": { "command": "npx", "args": "nope" } } }).to_string();
