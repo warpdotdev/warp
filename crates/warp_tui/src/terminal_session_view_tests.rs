@@ -731,7 +731,7 @@ fn empty_typeahead_event_leaves_the_tui_input_unchanged() {
 }
 
 #[test]
-fn nld_slash_commands_execute_and_report_their_effects() {
+fn nld_slash_command_toggles_and_reports_its_effects() {
     App::test((), |mut app| async move {
         let _agent_mode = warp_core::features::FeatureFlag::AgentMode.override_enabled(true);
         let fixture = focus_test_fixture(&mut app);
@@ -740,13 +740,9 @@ fn nld_slash_commands_execute_and_report_their_effects() {
 
         view.update(&mut app, |view, ctx| {
             view.input_view.update(ctx, |input, ctx| {
-                input.set_text("/enable-natural-language-detection", ctx);
+                input.set_text("/natural-language-detection", ctx);
             });
-            view.execute_tui_slash_command(
-                &slash_commands::ENABLE_NATURAL_LANGUAGE_DETECTION,
-                None,
-                ctx,
-            );
+            view.execute_tui_slash_command(&slash_commands::NATURAL_LANGUAGE_DETECTION, None, ctx);
         });
 
         assert!(app.read(|ctx| {
@@ -769,13 +765,9 @@ fn nld_slash_commands_execute_and_report_their_effects() {
 
         view.update(&mut app, |view, ctx| {
             view.input_view.update(ctx, |input, ctx| {
-                input.set_text("/disable-natural-language-detection", ctx);
+                input.set_text("/natural-language-detection", ctx);
             });
-            view.execute_tui_slash_command(
-                &slash_commands::DISABLE_NATURAL_LANGUAGE_DETECTION,
-                None,
-                ctx,
-            );
+            view.execute_tui_slash_command(&slash_commands::NATURAL_LANGUAGE_DETECTION, None, ctx);
         });
         futures_lite::future::yield_now().await;
 
