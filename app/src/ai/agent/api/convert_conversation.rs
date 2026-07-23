@@ -1690,8 +1690,10 @@ pub(crate) fn convert_tool_call_result_to_input(
                         completion_status: convert_recording_completion_status(
                             success.completion_status,
                         ),
+                        // Read from field 8 (typed enum); field 7 is the deprecated
+                        // string and is intentionally ignored.
                         termination_reason: convert_recording_termination_reason(
-                            success.termination_reason,
+                            success.termination_reason_enum,
                         ),
                     })
                 }
@@ -1733,14 +1735,20 @@ fn convert_recording_termination_reason(
 ) -> ai::agent::action_result::RecordingTerminationReason {
     use ai::agent::action_result::RecordingTerminationReason;
     use api::stop_recording_result::TerminationReason;
-    match TerminationReason::try_from(reason) {
-        Ok(TerminationReason::MaxDuration) => RecordingTerminationReason::MaxDuration,
-        Ok(TerminationReason::MaxSize) => RecordingTerminationReason::MaxSize,
-        Ok(TerminationReason::ClientCanceled) => RecordingTerminationReason::ClientCanceled,
-        Ok(TerminationReason::EncodingFailed) => RecordingTerminationReason::EncodingFailed,
-        Ok(TerminationReason::UploadFailed) => RecordingTerminationReason::UploadFailed,
-        Ok(TerminationReason::Other) => RecordingTerminationReason::Other,
-        _ => RecordingTerminationReason::Unspecified,
+    // Split Err (unknown wire value) from Ok-but-unrecognized so newly added
+    // proto enum values cause a compile error until they are mapped here.
+    let Ok(variant) = TerminationReason::try_from(reason) else {
+        return RecordingTerminationReason::Unspecified;
+    };
+    match variant {
+        TerminationReason::Unspecified => RecordingTerminationReason::Unspecified,
+        TerminationReason::MaxDuration => RecordingTerminationReason::MaxDuration,
+        TerminationReason::MaxSize => RecordingTerminationReason::MaxSize,
+        TerminationReason::ClientCanceled => RecordingTerminationReason::ClientCanceled,
+        TerminationReason::EncodingFailed => RecordingTerminationReason::EncodingFailed,
+        TerminationReason::UploadFailed => RecordingTerminationReason::UploadFailed,
+        TerminationReason::Other => RecordingTerminationReason::Other,
+        TerminationReason::EarlyFinish => RecordingTerminationReason::EarlyFinish,
     }
 }
 

@@ -1267,8 +1267,13 @@ pub enum StopRecordingResult {
 }
 
 /// The stable reason a recording ended. Mirrors the `TerminationReason` enum
-/// in `StopRecordingResult` of `warp-proto-apis`; kept in sync so the
-/// conversion to proto can use a direct integer cast.
+/// in `StopRecordingResult.termination_reason_enum` (field 8) of `warp-proto-apis`.
+/// The integer discriminants are intentionally identical so the conversion to
+/// the proto field is a direct `as i32` cast — if the proto enum gains a new
+/// value, add it here first and update `convert_recording_termination_reason`
+/// in `convert_conversation.rs` to match.
+///
+/// See also `RecordingCompletionStatus` in `computer_use` for the same pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordingTerminationReason {
     Unspecified = 0,
@@ -1278,6 +1283,10 @@ pub enum RecordingTerminationReason {
     EncodingFailed = 4,
     UploadFailed = 5,
     Other = 6,
+    /// The agent/conversation finished before an explicit `StopRecording` call
+    /// could be issued (e.g. task completed, conversation cancelled, or a
+    /// stop/finalize race where the capture ended before the agent's stop).
+    EarlyFinish = 7,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
