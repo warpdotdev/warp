@@ -119,7 +119,6 @@ enum TuiAIBlockSection {
     },
     Summarization {
         message_id: MessageId,
-        finished: bool,
         body: Vec<TuiRichTextSection>,
     },
     /// The agent's task list (todo list), rendered as a collapsible block.
@@ -1212,15 +1211,10 @@ impl TuiAIBlock {
                 self.render_rich_text_sections(body, true, app),
                 app,
             ),
-            TuiAIBlockSection::Summarization {
-                message_id,
-                finished,
-                body,
-            } => render_summarization_section(
+            TuiAIBlockSection::Summarization { message_id, body } => render_summarization_section(
                 &self.collapsible_states,
                 message_id,
-                *finished,
-                self.render_rich_text_sections(body, false, app),
+                self.render_rich_text_sections(body, true, app),
                 app,
             ),
             TuiAIBlockSection::TodoList { message_id, todos } => {
@@ -1335,7 +1329,6 @@ impl TuiAIBlock {
                     }
                     AIAgentOutputMessageType::Summarization {
                         text,
-                        finished_duration,
                         summarization_type: SummarizationType::ConversationSummary,
                         ..
                     } => {
@@ -1343,7 +1336,6 @@ impl TuiAIBlock {
                         if !body.is_empty() {
                             sections.push(TuiAIBlockSection::Summarization {
                                 message_id: message.id.clone(),
-                                finished: finished_duration.is_some(),
                                 body,
                             });
                         }
@@ -1582,17 +1574,14 @@ impl TuiAIBlock {
                     self.render_rich_text_sections(body, true, app),
                     app,
                 ),
-                TuiAIBlockSection::Summarization {
-                    message_id,
-                    finished,
-                    body,
-                } => render_summarization_section(
-                    &self.collapsible_states,
-                    message_id,
-                    *finished,
-                    self.render_rich_text_sections(body, false, app),
-                    app,
-                ),
+                TuiAIBlockSection::Summarization { message_id, body } => {
+                    render_summarization_section(
+                        &self.collapsible_states,
+                        message_id,
+                        self.render_rich_text_sections(body, true, app),
+                        app,
+                    )
+                }
                 TuiAIBlockSection::TodoList { message_id, todos } => {
                     // Statuses resolve against the conversation's todo
                     // history at render time, so superseded lists restyle
