@@ -46,7 +46,7 @@ fn submitting_the_other_row_focuses_the_other_input() {
             highlighted_index: Some(1),
             active_other_text: None,
         }),
-        AskUserQuestionEffect::FocusOtherInput
+        AskUserQuestionEffect::FocusCustomAnswerInput
     );
 }
 
@@ -100,8 +100,8 @@ fn submitting_blank_other_input_submits_the_last_question_immediately() {
     let mut session = build_session(vec![build_question("q1", "Only", false, true, &["Stable"])]);
 
     assert_eq!(
-        session.apply(AskUserQuestionAction::OpenOtherInput),
-        AskUserQuestionEffect::FocusOtherInput
+        session.apply(AskUserQuestionAction::EnterCustomAnswerEditing),
+        AskUserQuestionEffect::FocusCustomAnswerInput
     );
 
     assert_eq!(
@@ -120,8 +120,8 @@ fn submitting_active_other_text_schedules_auto_advance() {
     let mut session = build_session(vec![build_question("q1", "Only", false, true, &["Stable"])]);
 
     assert_eq!(
-        session.apply(AskUserQuestionAction::OpenOtherInput),
-        AskUserQuestionEffect::FocusOtherInput
+        session.apply(AskUserQuestionAction::EnterCustomAnswerEditing),
+        AskUserQuestionEffect::FocusCustomAnswerInput
     );
     assert_eq!(
         session.apply(AskUserQuestionAction::SubmitAnswer {
@@ -136,6 +136,22 @@ fn submitting_active_other_text_schedules_auto_advance() {
     );
 }
 
+#[test]
+fn exiting_custom_answer_editing_preserves_the_draft_without_auto_advancing() {
+    let mut session = build_session(vec![build_question("q1", "Only", false, true, &["Stable"])]);
+    session.apply(AskUserQuestionAction::SaveOtherText {
+        text: Some("nightly".to_string()),
+    });
+    session.apply(AskUserQuestionAction::EnterCustomAnswerEditing);
+
+    assert_eq!(
+        session.apply(AskUserQuestionAction::ExitCustomAnswerEditing),
+        AskUserQuestionEffect::RefreshCurrent
+    );
+    let draft = current_draft(&session).expect("draft should remain");
+    assert_eq!(draft.other_text.as_deref(), Some("nightly"));
+    assert!(!draft.is_other_input_active);
+}
 #[test]
 fn submitting_single_select_option_toggles_it_and_schedules_auto_advance() {
     let mut session = build_session(vec![build_question(
@@ -153,7 +169,9 @@ fn submitting_single_select_option_toggles_it_and_schedules_auto_advance() {
         }),
         AskUserQuestionEffect::ScheduleAutoAdvance
     );
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1))
+    );
 }
 
 #[test]
@@ -170,7 +188,9 @@ fn submitting_non_last_multi_select_option_toggles_it_and_schedules_auto_advance
         }),
         AskUserQuestionEffect::ScheduleAutoAdvance
     );
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1))
+    );
 }
 
 #[test]
@@ -207,7 +227,9 @@ fn single_select_non_last_toggle_schedules_auto_advance() {
 
     assert_eq!(effect, AskUserQuestionEffect::ScheduleAutoAdvance);
     assert_eq!(session.current_question_index(), 0);
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1))
+    );
     assert!(matches!(session.phase(), AskUserQuestionPhase::Editing));
 }
 
@@ -222,7 +244,9 @@ fn multi_select_non_last_toggle_does_not_auto_advance() {
 
     assert_eq!(effect, AskUserQuestionEffect::RefreshCurrent);
     assert_eq!(session.current_question_index(), 0);
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1))
+    );
     assert!(matches!(session.phase(), AskUserQuestionPhase::Editing));
 }
 
@@ -240,7 +264,9 @@ fn last_multi_select_toggle_schedules_auto_advance() {
 
     assert_eq!(effect, AskUserQuestionEffect::ScheduleAutoAdvance);
     assert_eq!(session.current_question_index(), 0);
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0))
+    );
 }
 
 #[test]
@@ -298,8 +324,8 @@ fn drafts_survive_navigation_and_submit_skips_only_unanswered_questions() {
         AskUserQuestionEffect::ShowQuestion
     );
     assert_eq!(
-        session.apply(AskUserQuestionAction::OpenOtherInput),
-        AskUserQuestionEffect::FocusOtherInput
+        session.apply(AskUserQuestionAction::EnterCustomAnswerEditing),
+        AskUserQuestionEffect::FocusCustomAnswerInput
     );
     assert_eq!(
         session.apply(AskUserQuestionAction::SaveOtherText {
@@ -342,8 +368,8 @@ fn multi_select_other_text_does_not_auto_advance_before_last_question() {
     ]);
 
     assert_eq!(
-        session.apply(AskUserQuestionAction::OpenOtherInput),
-        AskUserQuestionEffect::FocusOtherInput
+        session.apply(AskUserQuestionAction::EnterCustomAnswerEditing),
+        AskUserQuestionEffect::FocusCustomAnswerInput
     );
     assert_eq!(
         session.apply(AskUserQuestionAction::SaveOtherText {
@@ -367,7 +393,7 @@ fn skip_all_moves_session_to_completed_with_skipped_answers() {
 
     session.apply(AskUserQuestionAction::ToggleOption { option_index: 0 });
     session.apply(AskUserQuestionAction::NavigateNext);
-    session.apply(AskUserQuestionAction::OpenOtherInput);
+    session.apply(AskUserQuestionAction::EnterCustomAnswerEditing);
     session.apply(AskUserQuestionAction::SaveOtherText {
         text: Some("nightly".to_string()),
     });
@@ -396,8 +422,8 @@ fn other_text_submission_exits_input_and_submits_last_question() {
     let mut session = build_session(vec![build_question("q1", "Only", false, true, &["Stable"])]);
 
     assert_eq!(
-        session.apply(AskUserQuestionAction::OpenOtherInput),
-        AskUserQuestionEffect::FocusOtherInput
+        session.apply(AskUserQuestionAction::EnterCustomAnswerEditing),
+        AskUserQuestionEffect::FocusCustomAnswerInput
     );
     assert!(current_draft(&session).is_some_and(|draft| draft.is_other_input_active));
 
@@ -443,5 +469,7 @@ fn navigating_next_on_last_question_is_a_noop() {
         AskUserQuestionEffect::Noop
     );
     assert!(matches!(session.phase(), AskUserQuestionPhase::Editing));
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0)));
+    assert!(
+        current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0))
+    );
 }

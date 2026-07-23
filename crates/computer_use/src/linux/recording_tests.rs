@@ -16,6 +16,7 @@ use x11rb::rust_connection::RustConnection;
 
 use super::Recorder;
 // The `Recorder` trait provides `start`/`stop` on the concrete `super::Recorder` struct.
+use crate::overlay::KeepSegment;
 use crate::{Recorder as _, RecordingConfig, Target};
 
 // 24-bit TrueColor pixel values (0xRRGGBB) for the two solid-color test windows.
@@ -289,4 +290,319 @@ async fn records_full_display_for_screen_target() {
     );
 
     let _ = std::fs::remove_file(&output.path);
+}
+
+/// Returns whether ffmpeg is available (no X11/display required).
+async fn ffmpeg_available() -> bool {
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Parses the container duration (seconds) from `ffmpeg -i` stderr.
+async fn probe_duration(path: &Path) -> f64 {
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-i"])
+        .arg(path)
+        .output()
+        .await
+        .expect("run ffmpeg probe");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for token in stderr.split([',', '\n']) {
+        let token = token.trim();
+        if let Some(rest) = token.strip_prefix("Duration:") {
+            let dur = rest.trim();
+            let parts: Vec<&str> = dur.split(':').collect();
+            if parts.len() == 3 {
+                let h: f64 = parts[0].parse().unwrap_or(0.0);
+                let m: f64 = parts[1].parse().unwrap_or(0.0);
+                let s: f64 = parts[2].parse().unwrap_or(0.0);
+                return h * 3600.0 + m * 60.0 + s;
+            }
+        }
+    }
+    f64::NAN
+}
+
+/// Builds the ffmpeg argv (after the program name) for a 1920x1080 screen capture.
+fn capture_argv(config: &RecordingConfig) -> Vec<String> {
+    let command = super::new_ffmpeg_capture_command(config, ":99", 1920, 1080, None);
+    command
+        .as_std()
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// The Linux master is captured at 1x: the live `setpts` speed filter is gone,
+/// `-t` stays an input option before `-i`, and `-fs` stays present with the
+/// configured byte limit.
+#[test]
+fn linux_capture_command_captures_at_1x_without_setpts() {
+    let config = RecordingConfig {
+        playback_speed_multiplier: 4.0,
+        ..RecordingConfig::default()
+    };
+    let args = capture_argv(&config);
+
+    assert!(
+        !args.iter().any(|arg| arg.starts_with("setpts=")),
+        "argv should not contain a live setpts speed filter, got {args:?}"
+    );
+    assert!(
+        !args.iter().any(|arg| arg == "-vf"),
+        "argv should not contain -vf, got {args:?}"
+    );
+
+    let t_index = args
+        .iter()
+        .position(|arg| arg == "-t")
+        .expect("argv should contain -t");
+    let i_index = args
+        .iter()
+        .position(|arg| arg == "-i")
+        .expect("argv should contain -i");
+    assert!(
+        t_index < i_index,
+        "-t should precede -i (input option), got {args:?}"
+    );
+    assert_eq!(
+        args.get(t_index + 1),
+        Some(&format!("{:.3}", config.max_duration.as_secs_f64())),
+        "duration after -t should match max_duration, got {args:?}"
+    );
+
+    let fs_index = args
+        .iter()
+        .position(|arg| arg == "-fs")
+        .expect("argv should contain -fs");
+    assert_eq!(
+        args.get(fs_index + 1),
+        Some(&config.max_size_bytes.to_string()),
+        "-fs value should match max_size_bytes, got {args:?}"
+    );
+}
+
+/// The cut-only filtergraph emits one `trim`+`setpts=PTS-STARTPTS` branch per
+/// retained segment, concatenates them video-only, and maps the result to
+/// `[vout]`. It contains no overlay/subtitles logic, which is handled in a
+/// separate `burn_overlays_into_cut` pass.
+#[test]
+fn build_cut_only_filtergraph_constructs_trim_setpts_concat() {
+    let segments = vec![
+        KeepSegment {
+            source_start: Duration::from_millis(500),
+            source_end: Duration::from_millis(2500),
+            output_start: Duration::ZERO,
+        },
+        KeepSegment {
+            source_start: Duration::from_millis(4500),
+            source_end: Duration::from_millis(6500),
+            output_start: Duration::from_millis(2000),
+        },
+    ];
+    let filter = super::build_cut_only_filtergraph(&segments);
+
+    assert!(filter.contains("[0:v]trim=start=0.500000:end=2.500000,setpts=PTS-STARTPTS[v0]"));
+    assert!(filter.contains("[0:v]trim=start=4.500000:end=6.500000,setpts=PTS-STARTPTS[v1]"));
+    assert!(filter.contains("[v0][v1]concat=n=2:v=1:a=0[vout]"));
+    // Cut-only filtergraph must not contain subtitles/overlay logic.
+    assert!(
+        !filter.contains("subtitles"),
+        "cut-only filtergraph should not contain subtitles filter, got {filter}"
+    );
+    assert!(
+        filter.ends_with("[vout]"),
+        "filter should end with [vout], got {filter}"
+    );
+}
+
+const FIXTURE_FRAME_RATE: u32 = 10;
+// Two trailing frames beyond the last retained interval keep the final kept
+// frame off the source boundary, where some muxer/decoder paths drop a
+// frame that has no defined duration.
+const FIXTURE_FRAMES: usize = 12;
+const FIXTURE_W: u32 = 64;
+const FIXTURE_H: u32 = 64;
+
+/// Encodes a source frame's index in its red channel with a 24-step so a
+/// decoded frame can be mapped back to its source index even after
+/// rgb24 -> yuv420p -> rgb24 round-trip and libx264 ultrafast re-encoding.
+fn fixture_frame_color(index: usize) -> (u8, u8, u8) {
+    let r = (12 + (index as u32) * 24).min(240) as u8;
+    (r, 128, 128)
+}
+
+/// Writes a deterministic source mp4 of `FIXTURE_FRAMES` uniquely colored frames.
+async fn write_fixture_source(path: &Path) {
+    let frame_len = (FIXTURE_W as usize) * (FIXTURE_H as usize) * 3;
+    let mut raw = Vec::with_capacity(FIXTURE_FRAMES * frame_len);
+    for index in 0..FIXTURE_FRAMES {
+        let (r, g, b) = fixture_frame_color(index);
+        for _ in 0..(FIXTURE_W as usize * FIXTURE_H as usize) {
+            raw.push(r);
+            raw.push(g);
+            raw.push(b);
+        }
+    }
+    let raw_path = path.with_extension("raw");
+    std::fs::write(&raw_path, &raw).expect("write raw source");
+    let output = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-f", "rawvideo", "-pix_fmt", "rgb24"])
+        .args(["-video_size", &format!("{}x{}", FIXTURE_W, FIXTURE_H)])
+        .args(["-framerate", &FIXTURE_FRAME_RATE.to_string()])
+        .arg("-i")
+        .arg(&raw_path)
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(path)
+        .output()
+        .await
+        .expect("run ffmpeg source encode");
+    let _ = std::fs::remove_file(&raw_path);
+    assert!(
+        output.status.success(),
+        "ffmpeg source encode failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Maps a decoded frame back to its source index by nearest red-channel value.
+fn identify_fixture_frame(frame: &[u8]) -> usize {
+    let n = (FIXTURE_W as usize) * (FIXTURE_H as usize);
+    let mut sum_r = 0u32;
+    for px in 0..n {
+        sum_r += frame[px * 3] as u32;
+    }
+    let avg_r = (sum_r / n as u32) as i32;
+    let mut best = 0usize;
+    let mut best_dist = u32::MAX;
+    for index in 0..FIXTURE_FRAMES {
+        let (r, _, _) = fixture_frame_color(index);
+        let dist = (avg_r - r as i32).unsigned_abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best = index;
+        }
+    }
+    assert!(
+        best_dist <= 12,
+        "decoded frame did not match any source frame (avg_r={avg_r}, best_dist={best_dist})"
+    );
+    best
+}
+
+/// Cuts a deterministic source video to two retained intervals and asserts the
+/// output contains exactly the selected frames in source order, with no black
+/// frames and a duration equal to the sum of the retained intervals.
+#[tokio::test]
+async fn smart_cut_retains_only_selected_frames_in_order() {
+    if !ffmpeg_available().await {
+        eprintln!("skipping smart_cut_retains_only_selected_frames_in_order: no ffmpeg");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("warp-cut-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let source = dir.join("source.mp4");
+    write_fixture_source(&source).await;
+
+    // Keep frames 1-3 (PTS 0.1-0.4 s) and 7-9 (PTS 0.7-1.0 s); frames 0, 4, 5,
+    // 6 are removed. At 10 fps each frame is 100 ms.
+    let segments = vec![
+        KeepSegment {
+            source_start: Duration::from_millis(100),
+            source_end: Duration::from_millis(400),
+            output_start: Duration::ZERO,
+        },
+        KeepSegment {
+            source_start: Duration::from_millis(700),
+            source_end: Duration::from_millis(1000),
+            output_start: Duration::from_millis(300),
+        },
+    ];
+    let filter = super::build_cut_only_filtergraph(&segments);
+    let output = dir.join("cut.mp4");
+    // Mirror the production cut encode, including the constant output frame
+    // rate that ensures the cut's final frame is written.
+    let cut = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-i"])
+        .arg(&source)
+        .args(["-filter_complex", &filter])
+        .args(["-map", "[vout]"])
+        .args(["-r", &FIXTURE_FRAME_RATE.to_string()])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&output)
+        .output()
+        .await
+        .expect("run ffmpeg cut");
+    assert!(
+        cut.status.success(),
+        "ffmpeg cut failed: {}",
+        String::from_utf8_lossy(&cut.stderr)
+    );
+
+    // Decode the cut output back to raw rgb24 and identify each frame.
+    // `-vsync 0` (passthrough) avoids CFR duplication so the decoded frame count
+    // is exact.
+    let raw_out = dir.join("cut.raw");
+    let decode = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-i"])
+        .arg(&output)
+        .args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-vsync", "0"])
+        .arg(&raw_out)
+        .output()
+        .await
+        .expect("run ffmpeg decode");
+    assert!(
+        decode.status.success(),
+        "ffmpeg decode failed: {}",
+        String::from_utf8_lossy(&decode.stderr)
+    );
+    let data = std::fs::read(&raw_out).expect("read decoded rawvideo");
+    let frame_len = (FIXTURE_W as usize) * (FIXTURE_H as usize) * 3;
+    let frame_count = data.len() / frame_len;
+    let indices: Vec<usize> = (0..frame_count)
+        .map(|i| identify_fixture_frame(&data[i * frame_len..(i + 1) * frame_len]))
+        .collect();
+
+    // Exactly the selected frames, in source order, with no duplicates or
+    // inserted gap frames.
+    assert_eq!(
+        indices,
+        vec![1, 2, 3, 7, 8, 9],
+        "cut should retain exactly frames 1,2,3,7,8,9 in order, got {indices:?}"
+    );
+
+    // No black frames: every retained frame is a solid color.
+    for i in 0..frame_count {
+        let frame = &data[i * frame_len..(i + 1) * frame_len];
+        let sum: u32 = frame.iter().map(|b| *b as u32).sum();
+        assert!(sum > 0, "retained frame {i} is black");
+    }
+
+    // Output duration equals the sum of retained intervals (6 frames * 100 ms).
+    let duration = probe_duration(&output).await;
+    assert!(
+        (duration - 0.6).abs() < 0.08,
+        "output duration should be ~0.6s (6 frames at 10fps), got {duration}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

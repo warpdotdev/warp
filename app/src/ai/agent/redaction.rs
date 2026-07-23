@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::super::blocklist::block::secret_redaction::{
-    find_secrets_in_text, SECRET_REDACTION_REPLACEMENT_CHARACTER,
+    SECRET_REDACTION_REPLACEMENT_CHARACTER, find_secrets_in_text,
 };
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent,
@@ -243,9 +243,6 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     // which were already redacted before being sent as client inputs.
                     // (client inputs -> redaction -> server request -> task messages)
                     AIAgentActionResultType::FetchConversation(_) => {}
-
-                    // StartAgent results contain only an agent ID string, no secrets
-                    AIAgentActionResultType::StartAgent(_) => {}
 
                     // SendMessageToAgent results contain only a message ID or error string, no secrets
                     AIAgentActionResultType::SendMessageToAgent(_) => {}

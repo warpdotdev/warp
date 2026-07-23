@@ -7,8 +7,8 @@ use ordered_float::OrderedFloat;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon as WarpIcon;
+use warp_core::ui::appearance::Appearance;
 #[cfg(not(target_family = "wasm"))]
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::fonts::FamilyId;
@@ -19,19 +19,19 @@ use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISuba
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::skills::{SkillDescriptor, SkillManager};
 use crate::search::slash_command_menu::fuzzy_match::SlashCommandFuzzyMatchResult;
-use crate::search::slash_command_menu::static_commands::{commands, Availability};
+use crate::search::slash_command_menu::static_commands::{Availability, commands};
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::input::slash_command_model::{
-    slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
-    ParsedSlashCommandInput,
+    DetectedCommand, DetectedSkillCommand, ParsedSlashCommandInput,
+    slash_command_composition_filter,
 };
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
-use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::model::session::SessionType;
+use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Event emitted when the set of active slash commands changes.
@@ -54,6 +54,24 @@ fn split_command_and_argument(buffer: &str) -> (&str, Option<&str>) {
         })
 }
 
+/// Returns whether an NLD toggle slash command should be shown given the current
+/// autodetection state.
+///
+/// `/enable-natural-language-detection` is hidden when NLD is already on (there is
+/// nothing to enable), and `/disable-natural-language-detection` is hidden when NLD
+/// is already off. Any other command is unaffected. Both commands are TUI-only, so
+/// this is only consulted on the TUI surface where the commands exist in the
+/// registry.
+fn nld_toggle_command_is_visible(command_name: &str, is_ai_autodetection_enabled: bool) -> bool {
+    if command_name == commands::ENABLE_NATURAL_LANGUAGE_DETECTION.name {
+        return !is_ai_autodetection_enabled;
+    }
+    if command_name == commands::DISABLE_NATURAL_LANGUAGE_DETECTION.name {
+        return is_ai_autodetection_enabled;
+    }
+    true
+}
+
 /// Command availability gates whose inputs are identical on every surface.
 ///
 /// These do not depend on GUI-only concepts such as cloud mode or the agent view;
@@ -63,6 +81,7 @@ pub struct CommonCommandGates {
     is_cloud_handoff_enabled: bool,
     has_default_host: bool,
     is_cli_agent_input: bool,
+    is_ai_autodetection_enabled: bool,
 }
 
 /// Subscribe a concrete surface data source to dependencies that affect both GUI and TUI command
@@ -94,6 +113,7 @@ pub(super) fn subscribe_to_shared_dependencies<T>(
             event,
             AISettingsChangedEvent::IsAnyAIEnabled { .. }
                 | AISettingsChangedEvent::ShouldForceDisableCloudHandoff { .. }
+                | AISettingsChangedEvent::AIAutoDetectionEnabled { .. }
         ) {
             recompute_active_commands(me, ctx);
         }
@@ -114,10 +134,9 @@ pub(super) fn subscribe_to_shared_dependencies<T>(
                 terminal_view_id: event_terminal_view_id,
                 ..
             } = event
+                && *event_terminal_view_id == terminal_view_id
             {
-                if *event_terminal_view_id == terminal_view_id {
-                    recompute_active_commands(me, ctx);
-                }
+                recompute_active_commands(me, ctx);
             }
         },
     );
@@ -405,6 +424,14 @@ pub trait SlashCommandDataSource {
         if gates.is_cli_agent_input && !CLI_AGENT_INPUT_ALLOWED_COMMANDS.contains(&command.name) {
             return false;
         }
+        // Only surface the NLD toggle command that matches the current state: hide
+        // /enable-natural-language-detection when NLD is already on, and hide
+        // /disable-natural-language-detection when it is already off. Both commands
+        // are TUI-only (registered only in Tui settings mode), so this gate is a
+        // no-op on the GUI surface where neither command exists in the registry.
+        if !nld_toggle_command_is_visible(command.name, gates.is_ai_autodetection_enabled) {
+            return false;
+        }
         true
     }
 
@@ -421,6 +448,7 @@ pub trait SlashCommandDataSource {
             is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),
             has_default_host,
             is_cli_agent_input: self.is_cli_agent_input_open(ctx),
+            is_ai_autodetection_enabled: ai_settings.is_ai_autodetection_enabled(ctx),
         }
     }
 
@@ -617,7 +645,7 @@ fn prefix_match_bonus(query: &str, name: &str) -> f64 {
 #[derive(Debug, Clone)]
 pub struct InlineItem {
     pub action: AcceptSlashCommandOrSavedPrompt,
-    pub icon_path: &'static str,
+    pub icon_path: Option<&'static str>,
     pub name: String,
     pub description: Option<String>,
     pub font_family: FamilyId,
@@ -636,7 +664,7 @@ impl InlineItem {
         let appearance = Appearance::as_ref(app);
         Self {
             action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: *command_id },
-            icon_path: command.icon_path,
+            icon_path: command.supported_surfaces.gui_icon_path(),
             name: command.name.to_owned(),
             description: Some(command.description.to_owned()),
             font_family: appearance.monospace_font_family(),
@@ -656,7 +684,7 @@ impl InlineItem {
             action: AcceptSlashCommandOrSavedPrompt::SavedPrompt {
                 id: saved_prompt.id,
             },
-            icon_path: "bundled/svg/prompt.svg",
+            icon_path: Some("bundled/svg/prompt.svg"),
             name: saved_prompt.model().data.name().to_owned(),
             description: None,
             font_family: appearance.ui_font_family(),
@@ -689,7 +717,7 @@ impl InlineItem {
                 reference: skill.reference.clone(),
                 name: skill.name.clone(),
             },
-            icon_path: icon.into(),
+            icon_path: Some(icon.into()),
             name: format!("/{}", &skill.name),
             description: Some(skill.description.clone()),
             font_family: appearance.monospace_font_family(),

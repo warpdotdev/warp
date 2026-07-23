@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use channel_versions::{Changelog, ChannelVersions};
 use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng as _};
+use rand::{Rng as _, thread_rng};
 use warp_errors::report_error;
 
 use super::channel_versions::fetch_channel_versions;

@@ -53,11 +53,11 @@ use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::blended_colors;
 use crate::ui_components::breadcrumb::{self, BreadcrumbState};
 use crate::ui_components::buttons::icon_button;
-use crate::ui_components::dialog::{dialog_styles, Dialog};
-use crate::ui_components::icons::{self, Icon, ICON_DIMENSIONS};
-use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
-use crate::workflows::workflow::{Argument, Workflow};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
+use crate::ui_components::icons::{self, ICON_DIMENSIONS, Icon};
+use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_menu};
 use crate::workflows::CloudWorkflow;
+use crate::workflows::workflow::{Argument, Workflow};
 
 const BREADCRUMBS_VERTICAL_MARGIN: f32 = 6.;
 const MODAL_WIDTH: f32 = 900.;
@@ -86,8 +86,7 @@ const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
 const TITLE_PLACEHOLDER_TEXT: &str = "Untitled workflow";
 const DESCRIPTION_PLACEHOLDER_TEXT: &str = "Add a description";
-const COMMAND_EDITOR_PLACEHOLDER_TEXT: &str =
-    "echo \"Hello {{your_name}}\" # insert arguments with curly braces\n# enter a single-line command or an entire shell script";
+const COMMAND_EDITOR_PLACEHOLDER_TEXT: &str = "echo \"Hello {{your_name}}\" # insert arguments with curly braces\n# enter a single-line command or an entire shell script";
 const ARGUMENT_BUTTON_TEXT: &str = "New argument";
 const ARGUMENT_DESCRIPTION_PLACEHOLDER_TEXT: &str = "Description";
 const ARGUMENT_DEFAULT_VALUE_PLACEHOLDER_TEXT: &str = "Default value (optional)";
@@ -733,7 +732,12 @@ impl WorkflowModal {
         match (self.workflow_id, self.owner) {
             (Some(workflow_id), None) => {
                 UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
-                    update_manager.update_workflow(workflow, workflow_id, self.revision_ts.clone(), ctx);
+                    update_manager.update_workflow(
+                        workflow,
+                        workflow_id,
+                        self.revision_ts.clone(),
+                        ctx,
+                    );
                 });
                 ctx.emit(WorkflowModalEvent::UpdatedWorkflow(workflow_id));
             }
@@ -750,7 +754,9 @@ impl WorkflowModal {
                     );
                 });
             }
-            _ => report_error!("Only one of a workflow ID or space can be specified for saving workflows, but both or neither were specified instead")
+            _ => report_error!(
+                "Only one of a workflow ID or space can be specified for saving workflows, but both or neither were specified instead"
+            ),
         }
 
         self.close(true, ctx);
@@ -809,14 +815,14 @@ impl WorkflowModal {
             if let Some(enum_data) = type_selector
                 .get_selected_enum()
                 .and_then(|id| self.all_workflow_enums.get(&id))
+                && enum_data.new_data.is_some()
+                && !sent_requests.contains(&enum_data.id)
             {
-                if enum_data.new_data.is_some() && !sent_requests.contains(&enum_data.id) {
-                    workflow_arg_type_helpers::save_enum(enum_data, owner, ctx);
+                workflow_arg_type_helpers::save_enum(enum_data, owner, ctx);
 
-                    // Make sure we aren't sending duplicate requests
-                    // We choose to do it this way so we don't end up creating/updating enums that aren't used
-                    sent_requests.insert(enum_data.id);
-                }
+                // Make sure we aren't sending duplicate requests
+                // We choose to do it this way so we don't end up creating/updating enums that aren't used
+                sent_requests.insert(enum_data.id);
             }
         });
     }

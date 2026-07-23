@@ -29,7 +29,7 @@ use crate::menu::Menu;
 use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::icons::Icon;
-use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_menu};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::util::truncation::truncate_from_end;
 use crate::workspace::view::conversation_list::view::ConversationListViewAction;
@@ -211,19 +211,17 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
     )
     .with_color(theme.main_text_color(theme.background()).into());
 
-    if let Some(indices) = highlight_indices {
-        if !indices.is_empty() {
-            let highlight = Highlight::new()
-                .with_properties(Properties::default().weight(Weight::Bold))
-                .with_text_style(
-                    TextStyle::new()
-                        .with_foreground_color(theme.main_text_color(theme.background()).into())
-                        .with_background_color(
-                            internal_colors::accent_overlay_3(theme).into_solid(),
-                        ),
-                );
-            title_text = title_text.with_single_highlight(highlight, indices.clone());
-        }
+    if let Some(indices) = highlight_indices
+        && !indices.is_empty()
+    {
+        let highlight = Highlight::new()
+            .with_properties(Properties::default().weight(Weight::Bold))
+            .with_text_style(
+                TextStyle::new()
+                    .with_foreground_color(theme.main_text_color(theme.background()).into())
+                    .with_background_color(internal_colors::accent_overlay_3(theme).into_solid()),
+            );
+        title_text = title_text.with_single_highlight(highlight, indices.clone());
     }
 
     let title_element: Box<dyn Element> =

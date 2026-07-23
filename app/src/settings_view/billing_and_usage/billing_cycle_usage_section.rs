@@ -20,11 +20,11 @@ use crate::auth::{AuthManager, AuthStateProvider};
 use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::admin_actions::AdminActions;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
-    filter_legacy_buckets, has_non_viewer_data, legend_cost_types, BillingUsageMouseStates,
+    BillingUsageMouseStates, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
-    has_cloud_usage, render_own_usage_solo_row, render_own_usage_with_workspace_row, render_rows,
-    SourceFilter,
+    SourceFilter, has_cloud_usage, render_own_usage_solo_row, render_own_usage_with_workspace_row,
+    render_rows,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_team_totals::render_team_totals_block;
 use crate::settings_view::billing_and_usage_page_v2::{
@@ -291,10 +291,8 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
 
-        if is_admin {
-            if let Some(banner) = self.render_visibility_cta_banner(workspace, appearance) {
-                column.add_child(Container::new(banner).with_margin_top(16.).finish());
-            }
+        if is_admin && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance) {
+            column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
 
         column.add_child(

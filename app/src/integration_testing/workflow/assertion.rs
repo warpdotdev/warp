@@ -1,5 +1,5 @@
 use warpui::integration::{AssertionCallback, AssertionWithDataCallback};
-use warpui::{async_assert, async_assert_eq, App, ViewHandle};
+use warpui::{App, ViewHandle, async_assert, async_assert_eq};
 
 use crate::integration_testing::cloud_object::assert_metadata_revision;
 use crate::integration_testing::view_getters::workflow_view;

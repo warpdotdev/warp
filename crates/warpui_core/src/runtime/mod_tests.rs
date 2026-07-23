@@ -7,14 +7,14 @@ use std::time::Duration;
 use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
+use crate::elements::MouseStateHandle;
 use crate::elements::tui::{
     TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiFlex, TuiHoverable,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiScreenPoint,
     TuiScreenPosition, TuiText,
 };
-use crate::elements::MouseStateHandle;
-use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
+use crate::keymap::macros::*;
 use crate::platform::WindowStyle;
 use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, ViewContext};
 
@@ -550,15 +550,19 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
 fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
     let mut enter_output = Vec::new();
     enter_terminal_screen(&mut enter_output, false).unwrap();
-    assert!(!enter_output
-        .windows(b"\x1b[>1u".len())
-        .any(|window| window == b"\x1b[>1u"));
+    assert!(
+        !enter_output
+            .windows(b"\x1b[>1u".len())
+            .any(|window| window == b"\x1b[>1u")
+    );
 
     let mut leave_output = Vec::new();
     leave_terminal_screen(&mut leave_output, false).unwrap();
-    assert!(!leave_output
-        .windows(b"\x1b[<1u".len())
-        .any(|window| window == b"\x1b[<1u"));
+    assert!(
+        !leave_output
+            .windows(b"\x1b[<1u".len())
+            .any(|window| window == b"\x1b[<1u")
+    );
 }
 #[test]
 fn raw_mode_guard_restores_on_drop() {

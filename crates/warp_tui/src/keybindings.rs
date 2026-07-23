@@ -25,10 +25,12 @@ use warpui_core::keymap::{
 };
 use warpui_core::{Action, AppContext, TuiView};
 
-use crate::editor_interaction::{editor_binding_specs, TuiEditorBindingTarget, TuiEditorCommand};
+use crate::attachment_bar::TuiAttachmentBar;
+use crate::cloud_run_view::TuiCloudRunView;
+use crate::editor_interaction::{TuiEditorBindingTarget, TuiEditorCommand, editor_binding_specs};
 use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
-use crate::input::view::TuiInputAction;
 use crate::input::TuiInputView;
+use crate::input::view::TuiInputAction;
 use crate::option_selector::TuiOptionSelector;
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::root_view::RootTuiView;
@@ -38,6 +40,7 @@ use crate::transcript_view::TuiTranscriptView;
 /// Group tag set on every TUI-registered binding. The validators treat it (or
 /// a `tui:` name prefix) as proof of TUI ownership.
 pub(crate) const TUI_BINDING_GROUP: &str = "tui";
+pub(crate) const ATTACHMENTS_AVAILABLE_FLAG: &str = "TuiAttachmentsAvailable";
 pub(crate) const PLAN_TOGGLE_AVAILABLE_FLAG: &str = "TuiPlanToggleAvailable";
 pub(crate) const KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG: &str = "TuiKeyboardEnhancementAvailable";
 pub(crate) const PLAN_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_plan";
@@ -66,8 +69,11 @@ pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
 /// validators. Called once at TUI startup, before the driver starts.
 pub(crate) fn init(app: &mut AppContext) {
     crate::root_view::init(app);
+    crate::cloud_run_view::init(app);
     crate::terminal_session_view::init(app);
+    crate::attachment_bar::init(app);
     crate::input::init(app);
+    crate::option_selector::init(app);
     register_editor_bindings(
         app,
         TuiEditorBindingTarget::Input,
@@ -82,6 +88,8 @@ pub(crate) fn init(app: &mut AppContext) {
     );
     crate::orchestration_block::init(app);
     crate::tui_ask_question_view::init(app);
+    crate::tui_permission_prompt::init(app);
+    crate::tui_shell_command_view::init(app);
 
     register_binding_validators(app);
 }
@@ -132,7 +140,9 @@ fn context_for_editor_binding(
 /// TUI view's default keymap context must be TUI-owned.
 fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<RootTuiView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiCloudRunView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTerminalSessionView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiAttachmentBar>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiInputView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiEditorView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);

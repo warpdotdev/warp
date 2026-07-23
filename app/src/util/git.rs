@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use warp_core::safe_warn;
 use warp_util::git::run_git_command;
 #[cfg(feature = "local_fs")]
@@ -294,21 +294,20 @@ pub async fn get_file_change_entries(
     }
 
     // Also include untracked files when showing all changes.
-    if include_unstaged {
-        if let Ok(untracked) =
+    if include_unstaged
+        && let Ok(untracked) =
             run_git_command(repo_path, &["ls-files", "--others", "--exclude-standard"]).await
-        {
-            for file_name in untracked.lines() {
-                if file_name.is_empty() {
-                    continue;
-                }
-                let additions = count_lines_if_text_file(&repo_path.join(file_name)) as usize;
-                entries.push(FileChangeEntry {
-                    path: file_name.to_string(),
-                    additions,
-                    deletions: 0,
-                });
+    {
+        for file_name in untracked.lines() {
+            if file_name.is_empty() {
+                continue;
             }
+            let additions = count_lines_if_text_file(&repo_path.join(file_name)) as usize;
+            entries.push(FileChangeEntry {
+                path: file_name.to_string(),
+                additions,
+                deletions: 0,
+            });
         }
     }
 
@@ -585,60 +584,59 @@ pub async fn get_diff_for_commit_message(
     // `git diff HEAD` only shows changes to already-tracked files. New files that
     // haven't been staged yet are invisible to it, so we synthesise diff hunks for
     // them here — mirroring the logic in `get_file_change_entries`.
-    if include_unstaged {
-        if let Ok(untracked) = run_git_command(
+    if include_unstaged
+        && let Ok(untracked) = run_git_command(
             repo_path,
             &["ls-files", "--others", "--exclude-standard", "-z"],
         )
         .await
-        {
-            // `-z` separates paths with NUL bytes and disables C-style
-            // quoting, so paths containing spaces or non-ASCII characters
-            // round-trip intact.
-            // Cap the read to cover both the binary-check window and the
-            // synthesised-hunk budget.
-            let read_cap = BINARY_CHECK_BYTES.max(MAX_UNTRACKED_FILE_BYTES);
-            for file_name_bytes in untracked.as_bytes().split(|b| *b == 0) {
-                if file_name_bytes.is_empty() {
-                    continue;
-                }
-                let Ok(file_name) = std::str::from_utf8(file_name_bytes) else {
-                    continue;
-                };
-                let file_path = repo_path.join(file_name);
-                // Async + bounded so a large untracked file doesn't block
-                // the executor or balloon memory.
-                let Ok(file) = tokio::fs::File::open(&file_path).await else {
-                    continue;
-                };
-                let mut bytes = Vec::with_capacity(read_cap);
-                use tokio::io::AsyncReadExt as _;
-                if file
-                    .take(read_cap as u64)
-                    .read_to_end(&mut bytes)
-                    .await
-                    .is_err()
-                {
-                    continue;
-                }
-                let check_len = bytes.len().min(BINARY_CHECK_BYTES);
-                if warp_util::file_type::is_buffer_binary(&bytes[..check_len]) {
-                    continue;
-                }
-                let Ok(content) = std::str::from_utf8(&bytes) else {
-                    continue;
-                };
-                let content = truncate_on_char_boundary(content, MAX_UNTRACKED_FILE_BYTES);
-                let line_count = content.lines().count();
-                diff.push_str(&format!(
-                    "diff --git a/{file_name} b/{file_name}\nnew file mode 100644\n\
+    {
+        // `-z` separates paths with NUL bytes and disables C-style
+        // quoting, so paths containing spaces or non-ASCII characters
+        // round-trip intact.
+        // Cap the read to cover both the binary-check window and the
+        // synthesised-hunk budget.
+        let read_cap = BINARY_CHECK_BYTES.max(MAX_UNTRACKED_FILE_BYTES);
+        for file_name_bytes in untracked.as_bytes().split(|b| *b == 0) {
+            if file_name_bytes.is_empty() {
+                continue;
+            }
+            let Ok(file_name) = std::str::from_utf8(file_name_bytes) else {
+                continue;
+            };
+            let file_path = repo_path.join(file_name);
+            // Async + bounded so a large untracked file doesn't block
+            // the executor or balloon memory.
+            let Ok(file) = tokio::fs::File::open(&file_path).await else {
+                continue;
+            };
+            let mut bytes = Vec::with_capacity(read_cap);
+            use tokio::io::AsyncReadExt as _;
+            if file
+                .take(read_cap as u64)
+                .read_to_end(&mut bytes)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            let check_len = bytes.len().min(BINARY_CHECK_BYTES);
+            if warp_util::file_type::is_buffer_binary(&bytes[..check_len]) {
+                continue;
+            }
+            let Ok(content) = std::str::from_utf8(&bytes) else {
+                continue;
+            };
+            let content = truncate_on_char_boundary(content, MAX_UNTRACKED_FILE_BYTES);
+            let line_count = content.lines().count();
+            diff.push_str(&format!(
+                "diff --git a/{file_name} b/{file_name}\nnew file mode 100644\n\
                      --- /dev/null\n+++ b/{file_name}\n@@ -0,0 +1,{line_count} @@\n"
-                ));
-                for line in content.lines() {
-                    diff.push('+');
-                    diff.push_str(line);
-                    diff.push('\n');
-                }
+            ));
+            for line in content.lines() {
+                diff.push('+');
+                diff.push_str(line);
+                diff.push('\n');
             }
         }
     }
@@ -811,8 +809,8 @@ pub async fn get_repository_info(
 /// findable from macOS GUI launches (launchd's minimal `PATH` excludes it).
 #[cfg(feature = "local_fs")]
 async fn run_gh_command(repo_path: &Path, args: &[&str], path_env: Option<&str>) -> Result<String> {
-    use command::r#async::Command;
     use command::Stdio;
+    use command::r#async::Command;
 
     log::debug!(
         "[GIT OPERATION] git.rs run_gh_command gh {}",

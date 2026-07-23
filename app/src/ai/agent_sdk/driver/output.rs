@@ -8,6 +8,7 @@ pub mod text {
     use ai::agent::action_result::{FetchConversationResult, ReadSkillResult, UseComputerResult};
     use itertools::Itertools;
 
+    use crate::AIAgentActionResultType;
     use crate::ai::agent::{
         AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentTodo,
         ArtifactCreatedData, CallMCPToolResult, FileGlobResult, FileGlobV2Result, GrepResult,
@@ -16,7 +17,6 @@ pub mod text {
         UploadArtifactResult, WebFetchStatus, WebSearchStatus,
         WriteToLongRunningShellCommandResult,
     };
-    use crate::AIAgentActionResultType;
 
     /// Format an agent input as a human-readable string. For action results, it's assumed that
     /// the action is shown immediately before this result.
@@ -296,8 +296,6 @@ pub mod text {
                     }
                     FetchConversationResult::Cancelled => writeln!(w, "{CANCELLED_MESSAGE}"),
                 },
-                // StartAgent is a client-side orchestration action, not used in SDK
-                AIAgentActionResultType::StartAgent(_) => Ok(()),
                 // SendMessageToAgent is a client-side orchestration action, not used in SDK
                 AIAgentActionResultType::SendMessageToAgent(_) => Ok(()),
                 AIAgentActionResultType::AskUserQuestion(_) => Ok(()),
@@ -421,9 +419,6 @@ pub mod text {
                     }
                     AIAgentActionType::FetchConversation { conversation_id } => {
                         writeln!(w, "Fetching conversation {conversation_id}")?;
-                    }
-                    AIAgentActionType::StartAgent { name, .. } => {
-                        writeln!(w, "Starting agent: {name}")?;
                     }
                     AIAgentActionType::SendMessageToAgent {
                         addresses, subject, ..
@@ -576,6 +571,7 @@ pub mod json {
 
     use serde::Serialize;
 
+    use crate::AIAgentActionResultType;
     use crate::ai::agent::comment::ReviewComment;
     use crate::ai::agent::{
         AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
@@ -586,7 +582,6 @@ pub mod json {
         WriteToLongRunningShellCommandResult,
     };
     use crate::code::buffer_location::LocalOrRemotePath;
-    use crate::AIAgentActionResultType;
 
     /// JSON representation of messages in an agent conversation. This is intentionally not 1:1 with our internal `AIAgent*` types - it's
     /// a stable interface for callers.
@@ -1140,7 +1135,6 @@ pub mod json {
                     | AIAgentActionType::ReadShellCommandOutput { .. }
                     | AIAgentActionType::ReadSkill(_)
                     | AIAgentActionType::FetchConversation { .. }
-                    | AIAgentActionType::StartAgent { .. }
                     | AIAgentActionType::SendMessageToAgent { .. }
                     | AIAgentActionType::TransferShellCommandControlToUser { .. } => None,
                     AIAgentActionType::AskUserQuestion { .. } => None,

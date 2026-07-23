@@ -1,6 +1,6 @@
 use warpui_core::keymap::Keystroke;
-use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::platform::OperatingSystem;
+use warpui_core::platform::keyboard::KeyCode;
 
 use super::{ModeProvider, TermMode};
 

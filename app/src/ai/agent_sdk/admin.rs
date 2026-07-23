@@ -6,9 +6,9 @@ use warp_cli::agent::OutputFormat;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::user::PrincipalType;
-use crate::auth::AuthStateProvider;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Kick off a device authorization login flow and handle auth events.

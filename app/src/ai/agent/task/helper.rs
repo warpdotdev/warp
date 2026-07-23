@@ -130,7 +130,6 @@ impl ToolExt for api::message::tool_call::Tool {
             Tool::SuggestPrompt(_) => "suggest_prompt",
             Tool::OpenCodeReview(_) => "open_code_review",
             Tool::InitProject(_) => "init_project",
-            // StartAgent and StartAgentV2 were removed from the proto in PR #344.
             Tool::Server(_) => "server",
             Tool::Subagent(_) => "subagent",
             Tool::AskUserQuestion(_) => "ask_user_question",

@@ -11,8 +11,7 @@ use std::time::{Duration, SystemTime};
 use ai::agent::action_result::{
     AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
     RecordingStarted, RecordingStopped, RequestComputerUseResult, SendMessageToAgentResult,
-    StartAgentResult, StartAgentVersion, StartRecordingResult, StopRecordingResult,
-    UseComputerResult,
+    StartRecordingResult, StopRecordingResult, UseComputerResult,
 };
 use ai::skills::{ParsedSkill, SkillPathOrigin};
 use chrono::{DateTime, Local, TimeZone};
@@ -22,11 +21,11 @@ use warp_multi_agent_api as api;
 use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
 
 use crate::ai::agent::api::convert_from::{
-    convert_user_query_mode, ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    MaybeAIAgentOutputMessage,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
+    convert_user_query_mode,
 };
 use crate::ai::agent::conversation::{
-    update_todo_list_from_todo_op, AIConversation, AIConversationId, ServerAIConversationMetadata,
+    AIConversation, AIConversationId, ServerAIConversationMetadata, update_todo_list_from_todo_op,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::todos::AIAgentTodoList;
@@ -243,8 +242,8 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             };
 
             // Convert binary data to base64
-            use base64::engine::general_purpose;
             use base64::Engine;
+            use base64::engine::general_purpose;
             let data = general_purpose::STANDARD.encode(&image.data);
 
             result.push(AIAgentContext::Image(ImageContext {
@@ -465,8 +464,8 @@ impl ConvertToExchanges for &api::Task {
                     false
                 }
                 api::message::Message::InvokeSkill(invoke_skill) => {
-                    if let Some(api_skill) = invoke_skill.skill.clone() {
-                        if let Ok(parsed_skill) = ParsedSkill::try_from_api_with_origin(
+                    if let Some(api_skill) = invoke_skill.skill.clone()
+                        && let Ok(parsed_skill) = ParsedSkill::try_from_api_with_origin(
                             api_skill,
                             &SkillPathOrigin::RestoredDisplayOnly,
                         ) {
@@ -487,7 +486,6 @@ impl ConvertToExchanges for &api::Task {
                             };
                             current_inputs.push(input);
                         };
-                    };
 
                     true
                 }
@@ -524,8 +522,8 @@ impl ConvertToExchanges for &api::Task {
                 | api::message::Message::OrchestrationConfigSnapshot(_) => false,
             };
 
-            if !added_message_as_exchange_input {
-                if let Ok(MaybeAIAgentOutputMessage::Message(output_msg)) = (*api_message)
+            if !added_message_as_exchange_input
+                && let Ok(MaybeAIAgentOutputMessage::Message(output_msg)) = (*api_message)
                     .clone()
                     .to_client_output_message(ConversionParams {
                         current_todo_list: todo_lists.last(),
@@ -534,9 +532,8 @@ impl ConvertToExchanges for &api::Task {
                         task_id: &TaskId::new(api_message.task_id.clone()),
                         skill_path_origin: &SkillPathOrigin::Unavailable,
                     })
-                {
-                    current_outputs.push(output_msg);
-                }
+            {
+                current_outputs.push(output_msg);
             }
         }
 
@@ -1502,7 +1499,6 @@ pub(crate) fn convert_tool_call_result_to_input(
             create_cancelled_result_for_tool_call(task_id, &tool_call_id, tool_call_map, context)
         }
         Some(ToolCallResultType::Subagent(_)) => None,
-        // StartAgent and StartAgentV2 were removed from the proto in PR #344.
         Some(ToolCallResultType::AskUserQuestion(result)) => {
             let ask_result = match &result.result {
                 Some(warp_multi_agent_api::ask_user_question_result::Result::Success(success)) => {
@@ -1578,6 +1574,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                             environment_id: remote.environment_id.clone(),
                             worker_host: remote.worker_host.clone(),
                             computer_use_enabled: remote.computer_use_enabled,
+                            runner_id: remote.runner_id.clone(),
                         },
                         Some(api::run_agents_result::launched::ResolvedExecutionMode::Local(_))
                         | None => RunAgentsLaunchedExecutionMode::Local,
@@ -1841,7 +1838,6 @@ fn create_cancelled_result_for_tool_call(
             return None;
         }
         ToolType::Subagent(_) => return None,
-        // StartAgent and StartAgentV2 were removed from the proto in PR #344.
         ToolType::AskUserQuestion(_) => {
             AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
         }

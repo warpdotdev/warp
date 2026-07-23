@@ -1187,17 +1187,6 @@ impl TryFrom<FetchConversationResult> for api::request::input::tool_call_result:
     }
 }
 
-impl TryFrom<StartAgentResult> for api::request::input::tool_call_result::Result {
-    type Error = ConvertToAPITypeError;
-
-    fn try_from(_result: StartAgentResult) -> Result<Self, Self::Error> {
-        // StartAgent and StartAgentV2 have been removed from the proto (PR #344).
-        // The server no longer emits these tool calls, so the client should never
-        // need to send these results back. Silently ignore them.
-        Err(ConvertToAPITypeError::Ignore)
-    }
-}
-
 impl From<SendMessageToAgentResult> for api::request::input::tool_call_result::Result {
     fn from(result: SendMessageToAgentResult) -> Self {
         api::request::input::tool_call_result::Result::SendMessageToAgent(
@@ -1308,12 +1297,13 @@ impl From<RunAgentsLaunchedExecutionMode>
                 environment_id,
                 worker_host,
                 computer_use_enabled,
+                runner_id,
             } => api::run_agents_result::launched::ResolvedExecutionMode::Remote(
                 api::run_agents::Remote {
                     environment_id,
                     worker_host,
                     computer_use_enabled,
-                    runner_id: Default::default(),
+                    runner_id,
                 },
             ),
         }

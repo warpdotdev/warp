@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{Role, Scrollback, ScrollbackBlock, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::keymap::ContextPredicate;
-use warpui::{id, AppContext};
+use warpui::{AppContext, id};
 
 use super::model::block::SerializedBlock;
 use super::model::terminal_model::BlockIndex;

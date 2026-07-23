@@ -11,17 +11,18 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
 use warp::tui_export::{
-    should_close_slash_command_menu_for_exact_match, slash_command_query,
-    AcceptSlashCommandOrSavedPrompt, ParsedSlashCommandInput, SlashCommandDataSource as _,
-    SlashCommandMixer, TuiSlashCommandDataSource, UpdatedActiveCommands,
+    AcceptSlashCommandOrSavedPrompt, ConversationSelectionHandle, ParsedSlashCommandInput,
+    SlashCommandDataSource as _, SlashCommandMixer, TuiSlashCommandDataSource,
+    UpdatedActiveCommands, should_close_slash_command_menu_for_exact_match, slash_command_query,
+    slash_commands,
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InputDrivenInlineMenuLifecycle};
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
-    result_row_capacity, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
-    TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
@@ -87,6 +88,7 @@ pub(crate) struct TuiSlashCommandModel {
     lifecycle: InputDrivenInlineMenuLifecycle,
     highlighted_prefix_len: Option<usize>,
     argument_hint_text: Option<&'static str>,
+    conversation_selection: ConversationSelectionHandle,
 }
 
 impl TuiSlashCommandModel {
@@ -95,6 +97,7 @@ impl TuiSlashCommandModel {
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
         mixer: ModelHandle<SlashCommandMixer>,
+        conversation_selection: ConversationSelectionHandle,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&input_editor, |me, _, event, ctx| {
@@ -123,6 +126,7 @@ impl TuiSlashCommandModel {
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
             highlighted_prefix_len: None,
             argument_hint_text: None,
+            conversation_selection,
         };
         model.update_from_input(false, ctx);
         model
@@ -133,6 +137,7 @@ impl TuiSlashCommandModel {
         input_editor: ModelHandle<CodeEditorModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         mixer: ModelHandle<SlashCommandMixer>,
+        conversation_selection: ConversationSelectionHandle,
         rows: Vec<TuiSlashCommandRow>,
         selected_index: usize,
     ) -> Self {
@@ -152,6 +157,7 @@ impl TuiSlashCommandModel {
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
             highlighted_prefix_len: None,
             argument_hint_text: None,
+            conversation_selection,
         }
     }
 
@@ -259,6 +265,16 @@ impl TuiSlashCommandModel {
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
                     description: row.description.clone(),
+                    state_suffix: (row.title == slash_commands::AUTO_APPROVE.name).then(|| {
+                        format!(
+                            "(currently {})",
+                            if self.auto_approve_enabled(ctx) {
+                                "on"
+                            } else {
+                                "off"
+                            }
+                        )
+                    }),
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })
@@ -268,6 +284,13 @@ impl TuiSlashCommandModel {
             max_visible_rows: MAX_VISIBLE_ROWS,
             status,
         })
+    }
+
+    fn auto_approve_enabled(&self, ctx: &AppContext) -> bool {
+        self.conversation_selection
+            .as_ref(ctx)
+            .pending_query_autoexecute_override(ctx)
+            .is_autoexecute_any_action()
     }
 
     fn update_from_input(&mut self, force_query: bool, ctx: &mut ModelContext<Self>) {

@@ -57,6 +57,23 @@ async fn layout_model(app: &mut App, model: &ModelHandle<CodeEditorModel>) {
 }
 
 #[test]
+fn replace_first_n_characters_handles_incremental_unicode_prefix() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(&mut app, "suffix", ContentVersion::new());
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.replace_first_n_characters(CharOffset::from(0), "é", ctx);
+            editor.replace_first_n_characters(CharOffset::from(1), "élan", ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.content().as_ref(ctx).text().as_str(), "élansuffix");
+        });
+    });
+}
+
+#[test]
 fn test_no_trailing_newline() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
@@ -870,10 +887,10 @@ async fn compute_diff_and_expand(app: &mut App, editor: &ModelHandle<CodeEditorM
     app.update(|ctx| {
         let mut diff_tx = Some(diff_tx);
         ctx.subscribe_to_model(editor, move |_, event, _| {
-            if let CodeEditorModelEvent::DiffUpdated = event {
-                if let Some(tx) = diff_tx.take() {
-                    let _ = tx.send(());
-                }
+            if let CodeEditorModelEvent::DiffUpdated = event
+                && let Some(tx) = diff_tx.take()
+            {
+                let _ = tx.send(());
             }
         });
 

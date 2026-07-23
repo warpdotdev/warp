@@ -10,8 +10,8 @@ use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
 use warpui::assets::asset_cache::Asset;
 use warpui::image_cache::{
-    resize_dimensions, CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, FitType,
-    ImageType,
+    CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, FitType, ImageType,
+    resize_dimensions,
 };
 use warpui::util::{parse_i32, parse_u32};
 
@@ -306,7 +306,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                     image_id: message
                         .control_data
                         .image_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     image: KittyImage::try_from(message)?,
                 };
 
@@ -327,11 +327,11 @@ impl TryFrom<KittyMessage> for KittyAction {
                     image_id: message
                         .control_data
                         .image_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     placement_id: message
                         .control_data
                         .placement_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     placement_data: KittyPlacementData {
                         z_index: message.control_data.z_index,
                         cols: message.control_data.cols,
@@ -364,7 +364,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                     placement_id: message
                         .control_data
                         .placement_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     placement_data: KittyPlacementData {
                         z_index: message.control_data.z_index,
                         cols: message.control_data.cols,
@@ -378,7 +378,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                     image_id: message
                         .control_data
                         .image_id
-                        .unwrap_or(rand::thread_rng().gen()),
+                        .unwrap_or(rand::thread_rng().r#gen()),
                     image: KittyImage::try_from(message)?,
                 };
 
@@ -747,7 +747,7 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
         Err(err) => {
             return Err(InvalidKittyPayload::FileError(FileError::FileReadError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -760,10 +760,11 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
 
 #[cfg(feature = "local_fs")]
 fn safe_delete_temp_file(path: &str) {
-    if is_path_in_temp_dir(path) && path.contains("tty-graphics-protocol") {
-        if let Err(err) = fs::remove_file(path) {
-            log::warn!("Failed to delete kitty temporary file (path = {path}): {err:#}");
-        }
+    if is_path_in_temp_dir(path)
+        && path.contains("tty-graphics-protocol")
+        && let Err(err) = fs::remove_file(path)
+    {
+        log::warn!("Failed to delete kitty temporary file (path = {path}): {err:#}");
     }
 }
 
@@ -777,10 +778,10 @@ fn is_path_in_temp_dir(path: &str) -> bool {
         }
     }
 
-    if let Ok(temp_dir) = env::var("TMPDIR") {
-        if path.starts_with(&temp_dir) {
-            return true;
-        }
+    if let Ok(temp_dir) = env::var("TMPDIR")
+        && path.starts_with(&temp_dir)
+    {
+        return true;
     }
 
     false
@@ -807,7 +808,7 @@ fn read_shared_memory(
         Err(err) => {
             return Err(InvalidKittyPayload::ShmError(ShmError::ObjectOpenError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -837,7 +838,7 @@ fn read_from_shared_memory_fd(
 ) -> Result<Vec<u8>, InvalidKittyPayload> {
     use std::num::NonZero;
 
-    use nix::sys::mman::{mmap, MapFlags, ProtFlags};
+    use nix::sys::mman::{MapFlags, ProtFlags, mmap};
     use nix::sys::stat::fstat;
 
     let file_size = match fstat(fd) {
@@ -845,7 +846,7 @@ fn read_from_shared_memory_fd(
         Err(err) => {
             return Err(InvalidKittyPayload::ShmError(ShmError::FileStatError(
                 err.to_string(),
-            )))
+            )));
         }
     };
 
@@ -927,7 +928,7 @@ pub fn set_kitty_png_size(mut image: KittyImage) -> Result<KittyImage, KittyPngE
         None => {
             return Err(KittyPngError::InvalidBytes(
                 "Could not retrieve image size from ImageType for Kitty PNG.".to_string(),
-            ))
+            ));
         }
     };
 

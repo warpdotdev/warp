@@ -5,7 +5,7 @@ use llm_generate::LLMGenerateRequest;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
-use warp_multi_agent_api::{message, Message};
+use warp_multi_agent_api::{Message, message};
 
 use crate::ai::agent::conversation::AIConversation;
 
@@ -263,7 +263,7 @@ pub fn filter_tool_call_results_from_messages<'a>(
     messages
         .map(|msg| {
             let mut filtered_msg = msg.clone();
-            if let Some(message::Message::ToolCallResult(ref tool_result)) = &msg.message {
+            if let Some(message::Message::ToolCallResult(tool_result)) = &msg.message {
                 filtered_msg.message = Some(message::Message::ToolCallResult(
                     filter_tool_call_result(tool_result),
                 ));

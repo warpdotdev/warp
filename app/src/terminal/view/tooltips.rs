@@ -9,11 +9,11 @@ use warpui::{AppContext, Element, EventContext};
 
 use super::{GridHighlightedLink, TerminalAction, TerminalView};
 use crate::appearance::Appearance;
+use crate::terminal::TerminalModel;
 use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::terminal::model::{ObfuscateSecrets, Secret};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::SecretTooltip;
-use crate::terminal::TerminalModel;
 use crate::util::tooltips::{TooltipLink, TooltipRedaction};
 
 cfg_if::cfg_if! {
@@ -210,20 +210,20 @@ impl TerminalView {
             let mut detail = Some(format!("[{modifier} Click]"));
             #[cfg(feature = "local_fs")]
             {
-                if let GridHighlightedLink::File(file_link) = link {
-                    if let Some(path) = file_link.get_inner().absolute_path() {
-                        open_in_warp = open_in_warp_tooltip(
-                            path.clone(),
-                            file_link.get_inner().line_and_column_num,
-                            &mut detail,
-                            self.mouse_states.open_in_warp_tooltip.clone(),
-                            app,
-                        );
-                        show_in_file_explorer = Some(show_in_file_explorer_tooltip(
-                            path,
-                            self.mouse_states.show_in_file_explorer_tooltip.clone(),
-                        ));
-                    }
+                if let GridHighlightedLink::File(file_link) = link
+                    && let Some(path) = file_link.get_inner().absolute_path()
+                {
+                    open_in_warp = open_in_warp_tooltip(
+                        path.clone(),
+                        file_link.get_inner().line_and_column_num,
+                        &mut detail,
+                        self.mouse_states.open_in_warp_tooltip.clone(),
+                        app,
+                    );
+                    show_in_file_explorer = Some(show_in_file_explorer_tooltip(
+                        path,
+                        self.mouse_states.show_in_file_explorer_tooltip.clone(),
+                    ));
                 }
             }
 

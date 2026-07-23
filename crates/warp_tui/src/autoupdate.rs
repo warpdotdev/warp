@@ -12,12 +12,12 @@
 //!
 //! and this module keeps that layout fresh: it polls on the same cadence as
 //! the GUI autoupdater (each poll is a single lightweight `/client_version`
-//! request), downloads newer builds from the server's `/download/tui`
+//! request), downloads newer builds from the server's `/download/agent-cli`
 //! endpoint, stages them into `versions/<version>`, and atomically retargets
 //! the `current` symlink. The running session is never touched — the new
-//! version is picked up on the next launch. In particular, the updater never
-//! deletes the version directory the current process is executing from
-//! (removing a running binary breaks child-process spawning).
+//! version is picked up on the next launch. Managed processes hold shared
+//! per-version leases for their lifetime, and cleanup only removes inactive
+//! versions whose lease can be locked exclusively.
 //!
 //! Background updates only run for managed installs (i.e. when the running
 //! executable resolves into a `versions/` directory), so `cargo run` builds
@@ -26,16 +26,18 @@
 //! `WARP_TUI_DISABLE_AUTOUPDATE` environment variable; re-running the
 //! install script remains available as a manual escape hatch.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use channel_versions::{ChannelVersions, ParsedVersion};
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::TryStreamExt as _;
 use warp::settings::TuiAutoupdateSettings;
 use warp_core::channel::{Channel, ChannelState};
-use warp_core::send_telemetry_from_ctx;
+use warp_core::{safe_warn, send_telemetry_from_ctx};
 use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -51,10 +53,16 @@ const VERSIONS_DIR_NAME: &str = "versions";
 
 /// Name of the symlink under the install root pointing at the active version.
 const CURRENT_LINK_NAME: &str = "current";
+/// Directory under the install root holding stable per-version lease files.
+const VERSION_LEASES_DIR_NAME: &str = "version-leases";
 
-/// Lock file under the install root serializing installs across concurrent
-/// TUI processes.
+/// Atomic directory lock under the install root serializing finalization,
+/// current-pointer changes, and garbage collection across Rust and shell
+/// installers.
 const LOCK_FILE_NAME: &str = ".update.lock";
+
+/// Debug metadata written inside [`LOCK_FILE_NAME`].
+const LOCK_OWNER_FILE_NAME: &str = "owner";
 
 /// How often to check for updates. Mirrors the GUI autoupdater's poll
 /// interval (`AutoupdateState::AUTOUPDATE_POLL`); each check is a single
@@ -71,6 +79,10 @@ const FETCH_VERSIONS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Timeout for downloading the TUI tarball itself.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Disambiguates generated staging paths and install-lock owner tokens when
+/// their process ID and timestamp components happen to match.
+static NEXT_UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
+const MAX_STAGING_DIR_ATTEMPTS: usize = 100;
 
 /// The managed, versioned install layout the running binary belongs to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,8 +104,12 @@ impl InstallLayout {
     /// Returns `None` when the binary isn't inside a `versions/<version>/`
     /// directory (e.g. `cargo run` builds or legacy flat installs).
     fn detect() -> Option<Self> {
-        let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-        Self::from_canonical_exe_path(&exe)
+        let exe = std::env::current_exe().ok()?;
+        // Fall back to the kernel-reported path if canonicalization loses a
+        // startup race with GC. Its `versions/<version>` shape still proves
+        // this is managed, so lease validation must fail closed.
+        let canonical_exe = exe.canonicalize().unwrap_or(exe);
+        Self::from_canonical_exe_path(&canonical_exe)
     }
 
     /// Builds the layout from an already-canonicalized executable path of the
@@ -113,6 +129,71 @@ impl InstallLayout {
             running_version_dir,
             binary_name,
         })
+    }
+}
+
+fn version_lease_path(root: &Path, version: &OsStr) -> PathBuf {
+    let mut lease_name = version.to_os_string();
+    lease_name.push(".lock");
+    root.join(VERSION_LEASES_DIR_NAME).join(lease_name)
+}
+
+fn open_version_lease(root: &Path, version: &OsStr) -> Result<fs::File> {
+    let lease_dir = root.join(VERSION_LEASES_DIR_NAME);
+    fs::create_dir_all(&lease_dir)
+        .with_context(|| format!("failed to create TUI version lease directory {lease_dir:?}"))?;
+    let lease_path = version_lease_path(root, version);
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lease_path)
+        .with_context(|| format!("failed to open TUI version lease {lease_path:?}"))
+}
+
+/// A process-lifetime shared lease protecting one managed version directory
+/// from garbage collection. Dropping the file releases the OS lock.
+pub(crate) struct VersionLease {
+    _file: fs::File,
+}
+
+impl VersionLease {
+    /// Acquires a lease for the version containing the running executable.
+    /// Unmanaged Cargo builds and legacy flat installs do not participate.
+    pub(crate) fn acquire_for_current_process() -> Result<Option<Self>> {
+        InstallLayout::detect()
+            .map(|layout| {
+                Self::acquire(&layout)
+                    .context(
+                        "failed to protect this managed Warp Agent CLI version; retry the \
+                         command, or reinstall Warp Agent CLI if the problem persists",
+                    )
+                    .map(Some)
+            })
+            .unwrap_or(Ok(None))
+    }
+
+    /// Acquires and validates the running version's shared lease.
+    fn acquire(layout: &InstallLayout) -> Result<Self> {
+        let version = layout
+            .running_version_dir
+            .file_name()
+            .context("managed TUI version directory has no version name")?;
+        let lease_path = version_lease_path(&layout.root, version);
+        let file = open_version_lease(&layout.root, version)?;
+        fs4::fs_std::FileExt::lock_shared(&file)
+            .with_context(|| format!("failed to acquire TUI version lease {lease_path:?}"))?;
+
+        if !is_complete_version_dir(layout, &layout.running_version_dir) {
+            bail!(
+                "the managed Warp Agent CLI version at {:?} was retired while this process was \
+                 starting; retry the command, or reinstall Warp Agent CLI if the problem persists",
+                layout.running_version_dir
+            );
+        }
+
+        Ok(Self { _file: file })
     }
 }
 
@@ -298,16 +379,11 @@ impl TuiAutoupdater {
                 Ok(CheckDecision::Settled(outcome)) => {
                     me.finish_check(Ok(outcome), fallback_status, layout, ctx);
                 }
-                Ok(CheckDecision::NeedsInstall {
-                    latest_version,
-                    already_staged,
-                }) => {
+                Ok(CheckDecision::NeedsInstall { latest_version }) => {
                     me.set_status(TuiAutoupdateStatus::Updating, ctx);
                     let install_layout = layout.clone();
                     ctx.spawn(
-                        async move {
-                            install_update(install_layout, latest_version, already_staged).await
-                        },
+                        async move { install_update(install_layout, latest_version).await },
                         move |me, result, ctx| {
                             me.finish_check(result, fallback_status, layout, ctx);
                         },
@@ -389,12 +465,7 @@ enum CheckDecision {
     /// Nothing to install; the pass is complete with this outcome.
     Settled(UpdateOutcome),
     /// A newer version needs the install phase ([`install_update`]).
-    NeedsInstall {
-        latest_version: String,
-        /// A previous check already staged this version's directory; only
-        /// the `current` symlink still needs retargeting.
-        already_staged: bool,
-    },
+    NeedsInstall { latest_version: String },
 }
 
 /// Performs the check phase of an update pass: a single lightweight
@@ -431,47 +502,103 @@ async fn check_for_update(layout: InstallLayout) -> Result<CheckDecision> {
         bail!("refusing to overwrite the running version directory {version_dir:?}");
     }
 
-    // If a previous check already staged this version and pointed `current`
-    // at it, there is nothing left to do until the user restarts. Like the
-    // staging validation, don't treat a symlinked binary as staged.
-    let already_staged = fs::symlink_metadata(version_dir.join(&layout.binary_name))
-        .is_ok_and(|metadata| metadata.file_type().is_file());
-    if already_staged && current_points_at(&layout, &latest_version) {
-        return Ok(CheckDecision::Settled(UpdateOutcome::PendingRestart {
-            version: latest_version,
-        }));
+    // Errors from this check abort only the current background update pass.
+    // `finish_check` restores the previous status and schedules the next poll.
+    match version_dir_state(&layout, &version_dir)? {
+        VersionDirState::Complete if current_points_at(&layout, &latest_version) => {
+            return Ok(CheckDecision::Settled(UpdateOutcome::PendingRestart {
+                version: latest_version,
+            }));
+        }
+        VersionDirState::Invalid => {
+            bail!(
+                "refusing to replace incomplete or invalid installed TUI version at \
+                 {version_dir:?}; remove that directory or reinstall Warp Agent CLI, then retry"
+            );
+        }
+        VersionDirState::Complete | VersionDirState::Missing => {}
     }
 
-    Ok(CheckDecision::NeedsInstall {
-        latest_version,
-        already_staged,
-    })
+    Ok(CheckDecision::NeedsInstall { latest_version })
 }
 
-/// Performs the install phase of an update pass: downloads and stages
-/// `latest_version` (unless already staged) and retargets `current` at it.
-async fn install_update(
-    layout: InstallLayout,
-    latest_version: String,
-    already_staged: bool,
-) -> Result<UpdateOutcome> {
-    // Serialize installs across concurrent TUI processes.
-    let Some(_lock) = InstallLock::acquire(&layout.root)? else {
-        return Ok(UpdateOutcome::Locked);
+/// Performs the install phase of an update pass. Download and extraction
+/// happen without the global install lock; only immutable finalization,
+/// activation, and garbage collection are serialized.
+async fn install_update(layout: InstallLayout, latest_version: String) -> Result<UpdateOutcome> {
+    let version_dir = layout.versions_dir.join(&latest_version);
+    let staged = match version_dir_state(&layout, &version_dir)? {
+        VersionDirState::Complete => None,
+        VersionDirState::Missing => {
+            let client = http_client::Client::new();
+            Some(download_update(&layout, &client, &latest_version).await?)
+        }
+        VersionDirState::Invalid => {
+            bail!(
+                "refusing to replace incomplete or invalid installed TUI version at \
+                 {version_dir:?}; remove that directory or reinstall Warp Agent CLI, then retry"
+            );
+        }
     };
+    blocking::unblock(move || {
+        let Some(_lock) = InstallLock::acquire(&layout.root)? else {
+            return Ok(UpdateOutcome::Locked);
+        };
+        // Another installer may have completed this exact immutable version
+        // while this process downloaded, so recheck under the install lock.
+        match version_dir_state(&layout, &version_dir)? {
+            VersionDirState::Complete => {}
+            VersionDirState::Missing => {
+                let staged = staged.context(
+                    "the completed TUI version disappeared before activation; retry the update",
+                )?;
+                finalize_staged_version(&layout, &latest_version, staged, &version_dir)?;
+            }
+            VersionDirState::Invalid => {
+                bail!(
+                    "refusing to replace incomplete or invalid installed TUI version at \
+                     {version_dir:?}; remove that directory or reinstall Warp Agent CLI, then retry"
+                );
+            }
+        }
 
-    if !already_staged {
-        let client = http_client::Client::new();
-        let version_dir = layout.versions_dir.join(&latest_version);
-        download_and_stage(&layout, &client, &latest_version, &version_dir).await?;
-    }
+        point_current_at(&layout, &latest_version)?;
+        prune_old_versions(&layout, &latest_version);
 
-    point_current_at(&layout, &latest_version)?;
-    prune_old_versions(&layout, &latest_version).await;
-
-    Ok(UpdateOutcome::Installed {
-        version: latest_version,
+        Ok(UpdateOutcome::Installed {
+            version: latest_version,
+        })
     })
+    .await
+}
+
+/// State of an immutable final version path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VersionDirState {
+    Missing,
+    Complete,
+    Invalid,
+}
+
+/// A complete version is a real directory containing the expected regular
+/// binary and a real `resources/` directory. Symlinks never satisfy these
+/// checks.
+fn is_complete_version_dir(layout: &InstallLayout, version_dir: &Path) -> bool {
+    fs::symlink_metadata(version_dir).is_ok_and(|metadata| metadata.file_type().is_dir())
+        && fs::symlink_metadata(version_dir.join(&layout.binary_name))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+        && fs::symlink_metadata(version_dir.join("resources"))
+            .is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
+fn version_dir_state(layout: &InstallLayout, version_dir: &Path) -> Result<VersionDirState> {
+    match fs::symlink_metadata(version_dir) {
+        Ok(_) if is_complete_version_dir(layout, version_dir) => Ok(VersionDirState::Complete),
+        Ok(_) => Ok(VersionDirState::Invalid),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(VersionDirState::Missing),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to inspect TUI version directory {version_dir:?}")),
+    }
 }
 
 /// Whether the `current` symlink points at `versions/<version>`.
@@ -548,13 +675,14 @@ fn latest_version_for_channel(versions: &ChannelVersions) -> Result<String> {
     Ok(channel_version.version_info().version)
 }
 
-/// The server's `channel` query parameter for the current channel. Only
-/// channels accepted by [`latest_version_for_channel`] reach this.
-fn download_channel() -> &'static str {
-    match ChannelState::channel() {
-        Channel::Preview => "preview",
-        Channel::Stable => "stable",
-        Channel::Dev | Channel::Local | Channel::Oss | Channel::Integration => "dev",
+/// The Warp Agent CLI artifact endpoint for a release channel.
+fn download_endpoint(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Preview => "/download/agent-cli-preview/artifact",
+        Channel::Stable => "/download/agent-cli/artifact",
+        Channel::Dev | Channel::Local | Channel::Oss | Channel::Integration => {
+            "/download/agent-cli-dev/artifact"
+        }
     }
 }
 
@@ -573,17 +701,80 @@ fn download_os() -> Option<&'static str> {
     }
 }
 
-/// Downloads and stages `version` into `version_dir`: stream the tarball into
-/// a staging directory next to `versions/`, extract and validate it, then
-/// atomically rename it into place. The staging directory lives on the same
-/// filesystem so the final move is a cheap rename, and it is cleaned up on
-/// any failure.
-async fn download_and_stage(
+/// A validated update payload staged next to the final version directories.
+/// Its staging tree is removed on every exit path.
+struct StagedUpdate {
+    staging_dir: PathBuf,
+    payload_dir: PathBuf,
+}
+
+impl StagedUpdate {
+    /// Atomically publishes this payload at a previously missing immutable
+    /// version path.
+    fn finalize(self, version_dir: &Path) -> Result<()> {
+        fs::rename(&self.payload_dir, version_dir)
+            .with_context(|| format!("failed to move the staged TUI update into {version_dir:?}"))
+    }
+}
+
+fn finalize_staged_version(
+    layout: &InstallLayout,
+    version: &str,
+    staged: StagedUpdate,
+    version_dir: &Path,
+) -> Result<()> {
+    staged.finalize(version_dir)?;
+    open_version_lease(&layout.root, OsStr::new(version))
+        .context("failed to mark the finalized TUI version as lease-aware")?;
+    Ok(())
+}
+
+impl Drop for StagedUpdate {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.staging_dir);
+    }
+}
+
+async fn create_unique_staging_dir(versions_dir: &Path, version: &str) -> Result<PathBuf> {
+    create_unique_staging_dir_with(|| {
+        let staging_id = NEXT_UNIQUE_ID.fetch_add(1, Ordering::Relaxed);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        versions_dir.join(format!(
+            ".staging-{version}-{}-{timestamp}-{staging_id}",
+            std::process::id()
+        ))
+    })
+    .await
+}
+
+async fn create_unique_staging_dir_with(
+    mut next_candidate: impl FnMut() -> PathBuf,
+) -> Result<PathBuf> {
+    for _ in 0..MAX_STAGING_DIR_ATTEMPTS {
+        let staging_dir = next_candidate();
+        match async_fs::create_dir(&staging_dir).await {
+            Ok(()) => return Ok(staging_dir),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to create staging dir {staging_dir:?}"));
+            }
+        }
+    }
+    bail!("failed to allocate a unique TUI update staging directory")
+}
+
+/// Downloads, extracts, and validates `version` without holding the install
+/// lock. The returned payload remains in a unique hidden staging directory on
+/// the same filesystem so locked finalization is a cheap atomic rename.
+async fn download_update(
     layout: &InstallLayout,
     client: &http_client::Client,
     version: &str,
-    version_dir: &Path,
-) -> Result<()> {
+) -> Result<StagedUpdate> {
     let os = download_os().context("no TUI release artifacts exist for this platform")?;
     let arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
@@ -591,23 +782,16 @@ async fn download_and_stage(
         "x86_64"
     };
     let url = format!(
-        "{}/download/tui?os={os}&arch={arch}&channel={}&version={version}",
+        "{}{}?os={os}&arch={arch}&version={version}",
         ChannelState::server_root_url().trim_end_matches('/'),
-        download_channel(),
+        download_endpoint(ChannelState::channel()),
     );
 
     async_fs::create_dir_all(&layout.versions_dir)
         .await
         .with_context(|| format!("failed to create {:?}", layout.versions_dir))?;
-    let staging_dir = layout
-        .versions_dir
-        .join(format!(".staging-{version}-{}", std::process::id()));
+    let staging_dir = create_unique_staging_dir(&layout.versions_dir, version).await?;
     let _cleanup = RemoveDirOnDrop(staging_dir.clone());
-    // Clear any leftovers from a previous crashed attempt by this same pid.
-    let _ = async_fs::remove_dir_all(&staging_dir).await;
-    async_fs::create_dir_all(&staging_dir)
-        .await
-        .with_context(|| format!("failed to create staging dir {staging_dir:?}"))?;
 
     // Stream the tarball straight to disk instead of buffering it in memory
     // (the artifact is tens of MBs), mirroring the GUI's DMG download.
@@ -695,15 +879,11 @@ async fn download_and_stage(
             .await;
     }
 
-    // Move the validated payload into place. `version_dir` can only already
-    // exist as a partial install (the validity check above failed for it), so
-    // replacing it is safe — and it's never the running version's directory.
-    let _ = async_fs::remove_dir_all(version_dir).await;
-    async_fs::rename(&payload_dir, version_dir)
-        .await
-        .with_context(|| format!("failed to move the staged TUI update into {version_dir:?}"))?;
-
-    Ok(())
+    std::mem::forget(_cleanup);
+    Ok(StagedUpdate {
+        staging_dir,
+        payload_dir,
+    })
 }
 
 /// Atomically points the `current` symlink at `versions/<version>` by staging
@@ -725,79 +905,242 @@ fn point_current_at(_layout: &InstallLayout, _version: &str) -> Result<()> {
     bail!("TUI auto-update is only supported on unix platforms")
 }
 
-/// Removes stale version directories, keeping the newly installed version,
-/// the version the running binary is executing from, and whatever `current`
-/// points at. Deleting a running version's directory would break its child
-/// process spawning, so this errs on the side of keeping things.
-async fn prune_old_versions(layout: &InstallLayout, new_version: &str) {
-    let current_target = fs::read_link(&layout.current_link)
-        .ok()
-        .and_then(|target| target.file_name().map(|name| name.to_owned()));
+/// Removes inactive, lease-aware versions while the caller holds the global
+/// install lock. Unmarked versions predate this protocol and are retained.
+fn prune_old_versions(layout: &InstallLayout, new_version: &str) {
     let running_version = layout
         .running_version_dir
         .file_name()
         .map(ToOwned::to_owned);
-
-    let Ok(mut entries) = async_fs::read_dir(&layout.versions_dir).await else {
-        return;
+    let entries = match fs::read_dir(&layout.versions_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            safe_warn!(
+                safe: ("TUI autoupdate: failed to inspect installed versions: {error}"),
+                full: (
+                    "TUI autoupdate: failed to inspect installed versions at {:?}: {error}",
+                    layout.versions_dir
+                )
+            );
+            return;
+        }
     };
-    while let Some(Ok(entry)) = entries.next().await {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                log::warn!("TUI autoupdate: failed to inspect installed version: {error}");
+                continue;
+            }
+        };
         let name = entry.file_name();
-        // Skip staging dirs / lock leftovers, the new install, the running
-        // version, and the current target.
         if name.to_string_lossy().starts_with('.')
             || name == *new_version
             || Some(&name) == running_version.as_ref()
-            || Some(&name) == current_target.as_ref()
         {
             continue;
         }
-        if entry
-            .file_type()
-            .await
-            .is_ok_and(|file_type| file_type.is_dir())
-        {
-            log::info!("TUI autoupdate: pruning old version {name:?}");
-            if let Err(error) = async_fs::remove_dir_all(entry.path()).await {
-                log::warn!("TUI autoupdate: failed to prune {name:?}: {error}");
+        let is_dir = match entry.file_type() {
+            Ok(file_type) => file_type.is_dir(),
+            Err(error) => {
+                log::warn!("TUI autoupdate: retaining {name:?}; inspection failed: {error}");
+                continue;
             }
+        };
+        if !is_dir || !is_complete_version_dir(layout, &entry.path()) {
+            log::info!(
+                "TUI autoupdate: retaining {name:?}; it is not a completed version directory"
+            );
+            continue;
+        }
+
+        let mut lease_name = name.clone();
+        lease_name.push(".lock");
+        let lease_path = layout.root.join(VERSION_LEASES_DIR_NAME).join(lease_name);
+        let lease_is_file = match fs::symlink_metadata(&lease_path) {
+            Ok(metadata) => metadata.file_type().is_file(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                log::info!("TUI autoupdate: retaining unmarked version {name:?}");
+                continue;
+            }
+            Err(error) => {
+                safe_warn!(
+                    safe: (
+                        "TUI autoupdate: retaining {name:?}; failed to inspect its lease: {error}"
+                    ),
+                    full: (
+                        "TUI autoupdate: retaining {name:?}; failed to inspect lease \
+                         {lease_path:?}: {error}"
+                    )
+                );
+                continue;
+            }
+        };
+        if !lease_is_file {
+            safe_warn!(
+                safe: (
+                    "TUI autoupdate: retaining {name:?}; its lease path is not a regular file"
+                ),
+                full: (
+                    "TUI autoupdate: retaining {name:?}; lease path is not a regular file: \
+                     {lease_path:?}"
+                )
+            );
+            continue;
+        }
+        let lease = match fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lease_path)
+        {
+            Ok(lease) => lease,
+            Err(error) => {
+                safe_warn!(
+                    safe: (
+                        "TUI autoupdate: retaining {name:?}; failed to open its lease: {error}"
+                    ),
+                    full: (
+                        "TUI autoupdate: retaining {name:?}; failed to open lease \
+                         {lease_path:?}: {error}"
+                    )
+                );
+                continue;
+            }
+        };
+        match fs4::fs_std::FileExt::try_lock_exclusive(&lease) {
+            Ok(true) => {}
+            Ok(false) => {
+                log::info!("TUI autoupdate: retaining live version {name:?}");
+                continue;
+            }
+            Err(error) => {
+                safe_warn!(
+                    safe: (
+                        "TUI autoupdate: retaining {name:?}; failed to lock its lease: {error}"
+                    ),
+                    full: (
+                        "TUI autoupdate: retaining {name:?}; failed to lock lease \
+                         {lease_path:?}: {error}"
+                    )
+                );
+                continue;
+            }
+        }
+
+        // `current` may have changed while the lease was being acquired.
+        // Re-read it immediately before deletion.
+        match fs::read_link(&layout.current_link) {
+            Ok(target) if target.file_name() == Some(name.as_os_str()) => {
+                log::info!("TUI autoupdate: retaining current version {name:?}");
+                continue;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                safe_warn!(
+                    safe: (
+                        "TUI autoupdate: retaining {name:?}; failed to inspect current symlink: \
+                         {error}"
+                    ),
+                    full: (
+                        "TUI autoupdate: retaining {name:?}; failed to inspect current symlink \
+                         {:?}: {error}",
+                        layout.current_link
+                    )
+                );
+                continue;
+            }
+        }
+        log::info!("TUI autoupdate: pruning inactive version {name:?}");
+        if let Err(error) = fs::remove_dir_all(entry.path()) {
+            log::warn!("TUI autoupdate: failed to prune {name:?}: {error}");
         }
     }
 }
 
-/// An exclusive advisory lock over the install, backed by an `O_EXCL`-style
-/// lock file under the install root. Removed on drop; locks older than
-/// [`STALE_LOCK_AGE`] are assumed abandoned and broken.
+/// An exclusive install lock backed by an atomically created directory. The
+/// owner token prevents a stale guard from removing a successor's lock.
+/// Fresh legacy lock files are treated as contention and stale files are
+/// migrated using the same one-retry policy as lock directories.
 struct InstallLock {
     path: PathBuf,
+    owner: String,
 }
 
 impl InstallLock {
     /// Attempts to take the lock. Returns `Ok(None)` when another live
     /// process holds it.
     fn acquire(root: &Path) -> Result<Option<Self>> {
+        Self::acquire_with_stale_age(root, STALE_LOCK_AGE)
+    }
+
+    fn acquire_with_stale_age(root: &Path, stale_age: Duration) -> Result<Option<Self>> {
         let path = root.join(LOCK_FILE_NAME);
+        let owner = format!(
+            "{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+            NEXT_UNIQUE_ID.fetch_add(1, Ordering::Relaxed)
+        );
         for attempt in 0..2 {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(_) => return Ok(Some(Self { path })),
+            match fs::create_dir(&path) {
+                Ok(()) => {
+                    let owner_path = path.join(LOCK_OWNER_FILE_NAME);
+                    if let Err(error) = fs::write(&owner_path, &owner) {
+                        let _ = fs::remove_dir_all(&path);
+                        return Err(error)
+                            .with_context(|| format!("failed to write lock owner {owner_path:?}"));
+                    }
+                    return Ok(Some(Self {
+                        path,
+                        owner: owner.clone(),
+                    }));
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let is_stale = fs::metadata(&path)
-                        .and_then(|metadata| metadata.modified())
+                    let metadata = match fs::symlink_metadata(&path) {
+                        Ok(metadata) => metadata,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => {
+                            return Err(error).with_context(|| {
+                                format!("failed to inspect install lock {path:?}")
+                            });
+                        }
+                    };
+                    let is_stale = metadata
+                        .modified()
                         .ok()
                         .and_then(|modified| modified.elapsed().ok())
-                        .is_some_and(|age| age > STALE_LOCK_AGE);
+                        .is_some_and(|age| age > stale_age);
                     if !is_stale || attempt > 0 {
                         return Ok(None);
                     }
-                    log::warn!("TUI autoupdate: breaking stale install lock at {path:?}");
-                    let _ = fs::remove_file(&path);
+                    safe_warn!(
+                        safe: ("TUI autoupdate: breaking stale install lock"),
+                        full: ("TUI autoupdate: breaking stale install lock at {path:?}")
+                    );
+                    let remove_result = if metadata.file_type().is_dir() {
+                        fs::remove_dir_all(&path)
+                    } else {
+                        fs::remove_file(&path)
+                    };
+                    if let Err(error) = remove_result
+                        && error.kind() != std::io::ErrorKind::NotFound
+                    {
+                        safe_warn!(
+                            safe: ("TUI autoupdate: failed to break stale install lock: {error}"),
+                            full: (
+                                "TUI autoupdate: failed to break stale install lock at \
+                                 {path:?}: {error}"
+                            )
+                        );
+                        return Ok(None);
+                    }
                 }
                 Err(error) => {
-                    return Err(error).context(format!("failed to create lock file {path:?}"))
+                    return Err(error)
+                        .with_context(|| format!("failed to create lock directory {path:?}"));
                 }
             }
         }
@@ -807,7 +1150,18 @@ impl InstallLock {
 
 impl Drop for InstallLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let owner_path = self.path.join(LOCK_OWNER_FILE_NAME);
+        if fs::read_to_string(&owner_path).is_ok_and(|owner| owner == self.owner)
+            && let Err(error) = fs::remove_dir_all(&self.path)
+        {
+            safe_warn!(
+                safe: ("TUI autoupdate: failed to release install lock: {error}"),
+                full: (
+                    "TUI autoupdate: failed to release install lock at {:?}: {error}",
+                    self.path
+                )
+            );
+        }
     }
 }
 

@@ -6,9 +6,9 @@ use anyhow::anyhow;
 use ui_components::lightbox::{LightboxImage, LightboxImageSource};
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
+use warpui::SingletonEntity;
 #[cfg(feature = "local_fs")]
 use warpui::platform::SaveFilePickerConfiguration;
-use warpui::SingletonEntity;
 
 #[cfg(feature = "local_fs")]
 use crate::ai::artifact_download::default_download_filename;
@@ -16,8 +16,8 @@ use crate::ai::artifact_download::sanitized_basename;
 #[cfg(feature = "local_fs")]
 use crate::ai::artifact_download::{default_download_directory, download_artifact_bytes};
 use crate::notebooks::NotebookId;
-use crate::server::server_api::ai::ArtifactDownloadResponse;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::ArtifactDownloadResponse;
 use crate::view_components::DismissibleToast;
 #[cfg(feature = "local_fs")]
 use crate::view_components::ToastLink;
@@ -44,6 +44,15 @@ pub enum Artifact {
         repo: Option<String>,
         #[serde(skip_serializing)] // We derive this field from the url on deserialize
         number: Option<u32>,
+    },
+    #[serde(rename = "EXTERNAL_REFERENCE")]
+    ExternalReference {
+        reference_type: String,
+        url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        metadata: Option<serde_json::Value>,
     },
     #[serde(rename = "SCREENSHOT")]
     Screenshot {
@@ -73,6 +82,13 @@ enum ArtifactHelper {
     },
     #[serde(rename = "PULL_REQUEST")]
     PullRequest { url: String, branch: String },
+    #[serde(rename = "EXTERNAL_REFERENCE")]
+    ExternalReference {
+        reference_type: String,
+        url: String,
+        title: Option<String>,
+        metadata: Option<serde_json::Value>,
+    },
     #[serde(rename = "SCREENSHOT")]
     Screenshot {
         artifact_uid: String,
@@ -115,6 +131,17 @@ impl<'de> serde::Deserialize<'de> for Artifact {
                     number,
                 }
             }
+            ArtifactHelper::ExternalReference {
+                reference_type,
+                url,
+                title,
+                metadata,
+            } => Artifact::ExternalReference {
+                reference_type,
+                url,
+                title,
+                metadata,
+            },
             ArtifactHelper::Screenshot {
                 artifact_uid,
                 mime_type,

@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::{SendError, SyncSender};
 use std::sync::Arc;
+use std::sync::mpsc::{SendError, SyncSender};
 use std::thread::JoinHandle;
 
 use anyhow::Context as _;
@@ -27,11 +27,11 @@ use super::terminal_attributes::TerminalAttributesPoller;
 use super::{mio_channel, recorder};
 use crate::ai::aws_credentials::AwsCredentialRefresher as _;
 use crate::ai::blocklist::SerializedBlockListItem;
-use crate::auth::auth_state::AuthState;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_state::AuthState;
 use crate::banner::BannerState;
-use crate::context_chips::prompt::Prompt;
 use crate::context_chips::ContextChipKind;
+use crate::context_chips::prompt::Prompt;
 use crate::features::FeatureFlag;
 use crate::persistence::ModelEvent;
 use crate::send_telemetry_on_executor;
@@ -62,8 +62,8 @@ use crate::terminal::writeable_pty::terminal_manager_util::{
 };
 use crate::terminal::writeable_pty::{self, Message, PtyIntentEvent, TerminalSurface};
 use crate::terminal::{
-    terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo,
-    TerminalManager as TerminalManagerTrait, TerminalModel, PTY_READS_BROADCAST_CHANNEL_SIZE,
+    PTY_READS_BROADCAST_CHANNEL_SIZE, ShellLaunchData, ShellLaunchState, SizeInfo,
+    TerminalManager as TerminalManagerTrait, TerminalModel, terminal_manager,
 };
 
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
@@ -504,15 +504,18 @@ impl<S> TerminalManager<S> {
             log::info!("Failed to send Shutdown {e:?}");
         }
 
-        if let Some(join_handle) = self.event_loop_handle.take() {
-            if let Err(e) = join_handle.join() {
-                report_error!(
-                    "Failed to join event loop handle",
-                    extra: { "error" => ?e }
-                );
+        match self.event_loop_handle.take() {
+            Some(join_handle) => {
+                if let Err(e) = join_handle.join() {
+                    report_error!(
+                        "Failed to join event loop handle",
+                        extra: { "error" => ?e }
+                    );
+                }
             }
-        } else {
-            log::warn!("No event loop handle to join when dropping terminal manager.");
+            _ => {
+                log::warn!("No event loop handle to join when dropping terminal manager.");
+            }
         }
 
         self.inactive_pty_reads_rx.close();

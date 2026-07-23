@@ -9,6 +9,8 @@ mod imp;
 mod mock;
 mod noop;
 mod overlay;
+#[cfg(any(macos, linux))]
+mod recording_metadata;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 
@@ -23,7 +25,9 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
-pub use overlay::{ActionLogEntry, overlay_labels_for};
+pub use overlay::{
+    ActionLogEntry, PointerEvent, PointerEventKind, is_meaningful_action_group, overlay_labels_for,
+};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
@@ -104,6 +108,28 @@ pub fn background_supported() -> bool {
         noop::background_supported()
     } else {
         imp::background_supported()
+    }
+}
+
+/// Ends the background computer-use session owned by `owner` (the client conversation id),
+/// restoring the user's original keyboard focus.
+///
+/// On macOS a background session activates the target window and installs focus-suppression
+/// taps; this tears down only the windows owned by `owner`, deactivates them, and re-activates the
+/// app that was frontmost before the session, so the user's keystrokes return to where they were.
+/// Scoping by owner keeps concurrent background sessions (e.g. another conversation driving a
+/// different window) intact. Idempotent and a no-op when `owner` has no active session, and on
+/// platforms without background per-window control.
+///
+/// Call this whenever a computer-use session ends — normal completion, cancellation, or teardown.
+pub fn end_background_session(owner: &str) {
+    #[cfg(macos)]
+    {
+        imp::end_background_session(owner);
+    }
+    #[cfg(not(macos))]
+    {
+        let _ = owner;
     }
 }
 
@@ -224,6 +250,12 @@ pub trait Actor: Send + Sync + 'static {
     /// Returns the platform that this actor is running on, if known.
     fn platform(&self) -> Option<Platform>;
 
+    /// Records the owner of the background computer-use session this actor drives (the client
+    /// conversation id), so that when the session ends [`end_background_session`] tears down only
+    /// this owner's background-activation state and leaves concurrent sessions untouched. Set it
+    /// before performing actions. Default no-op; only the macOS actor tracks per-session ownership.
+    fn set_background_session_owner(&mut self, _owner: Option<String>) {}
+
     async fn perform_actions(
         &mut self,
         actions: &[TargetedAction],
@@ -249,24 +281,38 @@ pub fn create_recorder() -> Box<dyn Recorder> {
     }
 }
 
-/// Burns action labels into a recorded video, returning the path to the
-/// annotated file. The original file is left untouched; the caller owns cleanup
-/// of both. Real compositing (ffmpeg + libass) only runs on the Linux capture
-/// path; every other target returns `input` unchanged so callers can treat
-/// annotation as best-effort and upload the original on any failure.
-pub async fn burn_in_action_log(
+/// Applies platform-specific post-processing and returns the path to upload.
+/// Linux trims inactive gaps and burns action overlays; other platforms return
+/// `input` unchanged.
+pub async fn post_process_recording(
     input: &Path,
     entries: &[ActionLogEntry],
     dimensions: (u32, u32),
+    source_duration: Duration,
+    frame_rate: u32,
 ) -> Result<PathBuf, RecordingError> {
     #[cfg(all(linux, not(noop)))]
     {
-        imp::burn_in_action_log(input, entries, dimensions).await
+        imp::post_process_recording(input, entries, dimensions, source_duration, frame_rate).await
     }
     #[cfg(not(all(linux, not(noop))))]
     {
-        let _ = (entries, dimensions);
+        let _ = (entries, dimensions, source_duration, frame_rate);
         Ok(input.to_path_buf())
+    }
+}
+/// Reads the duration encoded in a finalized recording's media timeline.
+pub async fn finalized_video_duration(input: &Path) -> Result<Duration, RecordingError> {
+    #[cfg(any(macos, linux))]
+    {
+        recording_metadata::video_duration(input).await
+    }
+    #[cfg(not(any(macos, linux)))]
+    {
+        let _ = input;
+        Err(RecordingError::Finalize {
+            reason: "video duration probing is unsupported on this platform".to_string(),
+        })
     }
 }
 
@@ -587,6 +633,22 @@ pub struct Options {
     /// exactly like the legacy full-screen path: any window target is ignored, only the main
     /// display is captured, and no window list or captured-window metadata is returned.
     pub background_enabled: bool,
+    /// When set, a recording is active and the actor records each resolved pointer event here
+    /// (capture-space coordinate, kind, and offset from capture start) for post-stop burn-in.
+    /// `None` on non-recording, CLI, and test paths; actors without burn-in support ignore it.
+    pub pointer_sink: Option<PointerSink>,
+}
+
+/// Collects resolved pointer events during a recording so the finalize pass can burn in
+/// click/drag annotations. Only the Linux x11 actor populates it.
+pub struct PointerSink {
+    /// Capture start instant; event offsets are measured from here.
+    pub started_at: instant::Instant,
+    /// The surface being recorded, so the actor can resolve each event into the recording's
+    /// capture-space pixels.
+    pub recording_target: Target,
+    /// Events collected in dispatch order; drained by the caller after the batch completes.
+    pub events: Arc<Mutex<Vec<PointerEvent>>>,
 }
 
 /// The buttons of a mouse.

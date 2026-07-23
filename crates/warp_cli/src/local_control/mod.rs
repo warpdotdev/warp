@@ -611,9 +611,6 @@ pub struct TabCreateArgs {
     #[arg(long = "type", value_enum)]
     pub tab_type: Option<CliTabType>,
 
-    #[arg(long = "shell")]
-    pub shell: Option<String>,
-
     #[command(flatten)]
     pub target: TargetArgs,
 }

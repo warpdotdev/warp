@@ -4,13 +4,19 @@ use super::parse_ansi_c_quoted_string;
 fn test_unescape_ps1() {
     // This a "real-life" example of a PS1 sent from Git Bash with `printf %q`.
     let escaped_ps1 = "$'\\001\\E]0;MINGW64:/c/Users/abhis\\a\\002\\r\\n\\001\\E[32m\\002abhis@abhi-linux \\001\\E[35m\\002MINGW64 \\001\\E[33m\\002~\\001\\E[36m\\002\\001\\E[0m\\002\\r\\n$ '";
-    assert_eq!(parse_ansi_c_quoted_string(escaped_ps1.to_string()), "\x1b]0;MINGW64:/c/Users/abhis\x07\r\n\x1b[32mabhis@abhi-linux \x1b[35mMINGW64 \x1b[33m~\x1b[36m\x1b[0m\r\n$ ");
+    assert_eq!(
+        parse_ansi_c_quoted_string(escaped_ps1.to_string()),
+        "\x1b]0;MINGW64:/c/Users/abhis\x07\r\n\x1b[32mabhis@abhi-linux \x1b[35mMINGW64 \x1b[33m~\x1b[36m\x1b[0m\r\n$ "
+    );
 }
 
 #[test]
 fn test_unescape_ps1_cjk() {
     let escaped_ps1 = r#"$'\001\E]0;MINGW64:/c/Users/abhis/dev/你\a\002\r\n\001\E[32m\002abhis@abhi-linux \001\E[35m\002MINGW64 \001\E[33m\002~/dev/你\001\E[36m\002\001\E[0m\002\r\n$ '"#;
-    assert_eq!(parse_ansi_c_quoted_string(escaped_ps1.to_string()), "\x1b]0;MINGW64:/c/Users/abhis/dev/你\x07\r\n\x1b[32mabhis@abhi-linux \x1b[35mMINGW64 \x1b[33m~/dev/你\x1b[36m\x1b[0m\r\n$ ");
+    assert_eq!(
+        parse_ansi_c_quoted_string(escaped_ps1.to_string()),
+        "\x1b]0;MINGW64:/c/Users/abhis/dev/你\x07\r\n\x1b[32mabhis@abhi-linux \x1b[35mMINGW64 \x1b[33m~/dev/你\x1b[36m\x1b[0m\r\n$ "
+    );
 }
 
 #[test]
