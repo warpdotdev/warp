@@ -60,7 +60,8 @@ use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentMod
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
-use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::execution_profiles::ExecutionProfileId;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::LLMId;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai_assistant::AskAIType;
@@ -724,7 +725,7 @@ pub enum Event {
         path: PathBuf,
     },
     OpenAgentProfileEditor {
-        profile_id: ClientProfileId,
+        profile_id: ExecutionProfileId,
     },
     RepoChanged,
     AttachPathAsContext {
@@ -1715,10 +1716,14 @@ impl PaneGroup {
                     let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
 
                     if let Some(profile_id) =
-                        profiles_model.get_profile_id_by_sync_id(active_profile_sync_id)
+                        profiles_model.get_profile_id_by_sync_id(active_profile_sync_id, ctx)
                     {
                         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                            profiles_model.set_active_profile(terminal_view_id, profile_id, ctx);
+                            profiles_model.set_active_profile(
+                                terminal_view_id,
+                                profile_id.clone(),
+                                ctx,
+                            );
                         });
                         log::info!(
                             "Restored active profile {profile_id:?} for terminal {terminal_view_id:?}"

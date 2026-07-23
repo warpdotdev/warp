@@ -117,6 +117,9 @@ use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::{
 };
 use crate::ai::blocklist::inline_action::code_diff_view;
 use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
+use crate::ai::blocklist::inline_action::gemini_enterprise_credentials_error::{
+    GeminiEnterpriseCredentialsErrorEvent, GeminiEnterpriseCredentialsErrorView,
+};
 use crate::ai::blocklist::inline_action::requested_command::{
     self, RequestedActionViewType, RequestedCommand, RequestedCommandView,
     RequestedCommandViewEvent,
@@ -451,7 +454,6 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handles per citation.
     /// A given citation should only appear once per block.
     footer_citation_chip_handles: HashMap<AIAgentCitation, MouseStateHandle>,
-    orchestration_navigation_card_handles: HashMap<AIAgentActionId, MouseStateHandle>,
     /// Persistent mouse-state handles per received-message transcript row,
     /// used by the clickable sender avatar.
     pub(super) transcript_avatar_handles: HashMap<MessageId, MouseStateHandle>,
@@ -882,7 +884,6 @@ fn default_collapsible_state_for_orchestration_action(
     display_mode: OrchestrationMessageDisplayMode,
 ) -> Option<CollapsibleElementState> {
     match action {
-        AIAgentActionType::StartAgent { .. } => Some(CollapsibleElementState::default()),
         AIAgentActionType::SendMessageToAgent { .. } => {
             Some(default_orchestration_collapsible_state(
                 display_mode.should_expand_agent_message_body(),
@@ -1070,6 +1071,9 @@ pub struct AIBlock {
 
     /// View for AWS Bedrock credentials error, created lazily when the error occurs.
     aws_bedrock_credentials_error_view: Option<ViewHandle<AwsBedrockCredentialsErrorView>>,
+    /// View for Gemini Enterprise credentials errors, created lazily when the error occurs.
+    gemini_enterprise_credentials_error_view:
+        Option<ViewHandle<GeminiEnterpriseCredentialsErrorView>>,
 
     imported_comments: HashMap<AIAgentActionId, ImportedCommentGroup>,
     has_imported_comments: bool,
@@ -1526,6 +1530,7 @@ impl AIBlock {
             agent_view_controller,
             ambient_agent_view_model,
             aws_bedrock_credentials_error_view: None,
+            gemini_enterprise_credentials_error_view: None,
             imported_comments: Default::default(),
             has_imported_comments: false,
             run_agents_card_views: Default::default(),
@@ -1556,6 +1561,7 @@ impl AIBlock {
             }
             AIBlockOutputStatus::Failed { error, .. } => {
                 me.maybe_create_aws_bedrock_credentials_error_view(&error, ctx);
+                me.maybe_create_gemini_enterprise_credentials_error_view(&error, ctx);
                 me.finish(FinishReason::Error, ctx);
             }
             AIBlockOutputStatus::Cancelled { .. } => {
@@ -1941,6 +1947,7 @@ impl AIBlock {
                     ctx
                 );
                 self.maybe_create_aws_bedrock_credentials_error_view(&error, ctx);
+                self.maybe_create_gemini_enterprise_credentials_error_view(&error, ctx);
                 // There are no actions to be taken in this block, it is finished.
                 self.finish(FinishReason::Error, ctx);
             }
@@ -2034,12 +2041,6 @@ impl AIBlock {
                         cancel_button,
                     },
                 );
-            }
-            if matches!(&action.action, AIAgentActionType::StartAgent { .. }) {
-                self.state_handles
-                    .orchestration_navigation_card_handles
-                    .entry(action.id.clone())
-                    .or_default();
             }
 
             if matches!(
@@ -3796,11 +3797,12 @@ impl AIBlock {
             }
             AskUserQuestionViewEvent::SpeedbumpPermissionChanged(permission) => {
                 let permission = *permission;
-                let profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+                let profile_id = AIExecutionProfilesModel::as_ref(ctx)
                     .active_profile(Some(self.terminal_view_id), ctx)
-                    .id();
+                    .id()
+                    .clone();
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.set_ask_user_question(profile_id, permission, ctx);
+                    model.set_ask_user_question(&profile_id, permission, ctx);
                 });
                 send_telemetry_from_ctx!(
                     TelemetryEvent::ChangedAgentModeAskUserQuestionPermission {
@@ -4118,6 +4120,45 @@ impl AIBlock {
         ctx.notify();
     }
 
+    fn maybe_create_gemini_enterprise_credentials_error_view(
+        &mut self,
+        error: &RenderableAIError,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !matches!(
+            error,
+            RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
+        ) {
+            return;
+        }
+        if let Some(view) = &self.gemini_enterprise_credentials_error_view {
+            view.update(ctx, |view, ctx| view.reset(ctx));
+            return;
+        }
+
+        let view = ctx.add_typed_action_view(GeminiEnterpriseCredentialsErrorView::new);
+        ctx.subscribe_to_view(&view, |_me, _view, event, ctx| match event {
+            GeminiEnterpriseCredentialsErrorEvent::RefreshCredentials => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    use ai::api_keys::ApiKeyManager;
+
+                    ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                        crate::ai::geap_credentials::force_refresh_geap_credentials(manager, ctx);
+                    });
+                }
+            }
+            GeminiEnterpriseCredentialsErrorEvent::OpenSettings => {
+                ctx.dispatch_typed_action(&WorkspaceAction::ShowSettingsPageWithSearch {
+                    search_query: "gemini enterprise".to_string(),
+                    section: Some(SettingsSection::WarpAgent),
+                });
+            }
+        });
+
+        self.gemini_enterprise_credentials_error_view = Some(view);
+        ctx.notify();
+    }
     pub fn accept_pending_unit_test_suggestion(
         &mut self,
         interaction_source: InteractionSource,
@@ -4570,11 +4611,19 @@ impl AIBlock {
                                     permission,
                                     AgentModeCodingPermissionsType::AllowReadingSpecificFiles
                                 ) {
-                                    report_if_error!(
-                                        permissions.add_filepath_to_code_read_allowlist(
-                                            root_repo_path,
-                                            ctx
-                                        )
+                                    let profile_id = AIExecutionProfilesModel::as_ref(ctx)
+                                        .active_profile(Some(me.terminal_view_id), ctx)
+                                        .id()
+                                        .clone();
+                                    AIExecutionProfilesModel::handle(ctx).update(
+                                        ctx,
+                                        |profiles, ctx| {
+                                            profiles.add_to_directory_allowlist(
+                                                &profile_id,
+                                                &root_repo_path,
+                                                ctx,
+                                            );
+                                        },
                                     );
                                 }
                             });

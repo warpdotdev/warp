@@ -48,8 +48,8 @@ use super::settings_page::{
     SettingsPageViewHandle, SettingsWidget, TOGGLE_BUTTON_RIGHT_PADDING, ToggleState,
     build_sub_header, build_toggle_element, render_body_item_label,
     render_body_item_label_with_icon, render_custom_size_header, render_dropdown_item,
-    render_dropdown_item_label, render_full_pane_width_ai_button, render_input_list,
-    render_separator, render_settings_info_banner,
+    render_dropdown_item_label, render_filterable_dropdown_item, render_full_pane_width_ai_button,
+    render_input_list, render_separator, render_settings_info_banner,
 };
 use super::{
     SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction, SettingsSection,
@@ -63,11 +63,11 @@ use crate::ai::blocklist::agent_view::agent_input_footer::editor::{
 };
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::execution_profiles::profiles::{
-    AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
+    AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, WriteToPtyPermission,
-    long_context_pricing_warning_title,
+    AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, ExecutionProfileId,
+    WriteToPtyPermission, long_context_pricing_warning_title,
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::geap_credentials::force_refresh_geap_credentials;
@@ -157,7 +157,7 @@ use crate::server::telemetry::{
     AgentModeAutoDetectionSettingOrigin, AutonomySettingToggleSource,
     ToggleCodeSuggestionsSettingSource,
 };
-use crate::settings::{AISettings, VoiceInputToggleKey};
+use crate::settings::{AISettings, VOICE_INPUT_LANGUAGES, VoiceInputLanguage, VoiceInputToggleKey};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings;
@@ -692,6 +692,7 @@ pub struct AISettingsPageView {
     page: PageType<Self>,
     active_subpage: Option<AISubpage>,
     voice_input_toggle_key_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    voice_input_language_dropdown: ViewHandle<FilterableDropdown<AISettingsPageAction>>,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
     autodetection_denylist_editor: ViewHandle<EditorView>,
     autonomy_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
@@ -855,6 +856,38 @@ impl AISettingsPageView {
                 ctx,
             );
             dropdown.set_selected_by_index(selected_index, ctx);
+
+            dropdown
+        });
+
+        let voice_input_language_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            if !AISettings::as_ref(ctx).is_voice_input_enabled(ctx) {
+                dropdown.set_disabled(ctx);
+            }
+
+            dropdown.add_items(
+                VOICE_INPUT_LANGUAGES
+                    .iter()
+                    .map(|&(code, name)| {
+                        DropdownItem::new(
+                            name,
+                            AISettingsPageAction::SetVoiceInputLanguage(code.to_string()),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            let current_code = AISettings::as_ref(ctx)
+                .voice_input_language_code()
+                .unwrap_or("")
+                .to_string();
+            dropdown.set_selected_by_action(
+                AISettingsPageAction::SetVoiceInputLanguage(current_code),
+                ctx,
+            );
 
             dropdown
         });
@@ -1310,6 +1343,19 @@ impl AISettingsPageView {
                             dropdown.set_selected_by_name(current_value, ctx)
                         });
                 }
+                AISettingsChangedEvent::VoiceInputLanguage { .. } => {
+                    let current_code = AISettings::as_ref(ctx)
+                        .voice_input_language_code()
+                        .unwrap_or("")
+                        .to_string();
+                    me.voice_input_language_dropdown
+                        .update(ctx, |dropdown, ctx| {
+                            dropdown.set_selected_by_action(
+                                AISettingsPageAction::SetVoiceInputLanguage(current_code),
+                                ctx,
+                            )
+                        });
+                }
                 AISettingsChangedEvent::AgentModeCommandExecutionAllowlist { .. } => {
                     me.command_execution_allowlist_mouse_state_handles = AISettings::as_ref(ctx)
                         .agent_mode_command_execution_allowlist
@@ -1640,7 +1686,7 @@ impl AISettingsPageView {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
 
-                    model.add_to_directory_allowlist(*profile_id, &PathBuf::from(expanded), ctx);
+                    model.add_to_directory_allowlist(profile_id, &PathBuf::from(expanded), ctx);
                 });
                 ctx.notify();
             }
@@ -1681,7 +1727,7 @@ impl AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.add_to_command_denylist(*profile_id, &predicate, ctx);
+                    model.add_to_command_denylist(profile_id, &predicate, ctx);
                 });
                 ctx.notify();
             }
@@ -1720,7 +1766,7 @@ impl AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.add_to_command_allowlist(*profile_id, &predicate, ctx);
+                    model.add_to_command_allowlist(profile_id, &predicate, ctx);
                 });
                 ctx.notify();
             }
@@ -1962,6 +2008,7 @@ impl AISettingsPageView {
             page: Self::build_page(None, ctx),
             active_subpage: None,
             voice_input_toggle_key_dropdown,
+            voice_input_language_dropdown,
             autodetection_denylist_editor,
             local_only_icon_tooltip_states: Default::default(),
             command_execution_allowlist_editor,
@@ -2035,6 +2082,14 @@ impl AISettingsPageView {
                     dropdown.set_disabled(ctx);
                 }
             });
+        self.voice_input_language_dropdown
+            .update(ctx, |dropdown, ctx| {
+                if is_voice_enabled {
+                    dropdown.set_enabled(ctx);
+                } else {
+                    dropdown.set_disabled(ctx);
+                }
+            });
         ctx.notify();
     }
 
@@ -2065,9 +2120,9 @@ impl AISettingsPageView {
                 // Mirror `AISettingsPageAction::SetBaseModel`: set the active
                 // profile's base model and clear any stale context-window limit.
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    let profile_id = *profiles_model.active_profile(None, ctx).id();
-                    profiles_model.set_base_model(profile_id, Some(id.clone()), ctx);
-                    profiles_model.set_context_window_limit(profile_id, None, ctx);
+                    let profile_id = profiles_model.active_profile(None, ctx).id().clone();
+                    profiles_model.set_base_model(&profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_context_window_limit(&profile_id, None, ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
                 self.hide_set_default_model_modal(ctx);
@@ -2937,9 +2992,10 @@ impl AISettingsPageView {
                             AIExecutionProfilesModel::handle(ctx).update(
                                 ctx,
                                 |profiles_model, ctx| {
-                                    let profile_id = *profiles_model.active_profile(None, ctx).id();
+                                    let profile_id =
+                                        profiles_model.active_profile(None, ctx).id().clone();
                                     profiles_model.set_context_window_limit(
-                                        profile_id,
+                                        &profile_id,
                                         Some(clamped),
                                         ctx,
                                     );
@@ -3463,13 +3519,18 @@ impl AISettingsPageView {
 
         profile_ids
             .iter()
-            .map(|&profile_id| {
-                let profile_view =
-                    ctx.add_typed_action_view(|ctx| ExecutionProfileView::new(profile_id, ctx));
+            .map(|profile_id| {
+                let profile_id = profile_id.clone();
+                let profile_view = ctx.add_typed_action_view(|ctx| {
+                    ExecutionProfileView::new(profile_id.clone(), ctx)
+                });
+                let profile_id_for_event = profile_id.clone();
 
                 ctx.subscribe_to_view(&profile_view, move |_me, _, event, ctx| match event {
                     ExecutionProfileViewEvent::EditProfile => {
-                        ctx.emit(AISettingsPageEvent::OpenExecutionProfileEditor(profile_id));
+                        ctx.emit(AISettingsPageEvent::OpenExecutionProfileEditor(
+                            profile_id_for_event.clone(),
+                        ));
                     }
                 });
 
@@ -3585,7 +3646,7 @@ pub enum AISettingsPageEvent {
     OpenCustomRouterEditor(Option<crate::ai::custom_model_routers::CustomModelRouter>),
     #[cfg(feature = "local_fs")]
     OpenCustomRouterFile(PathBuf),
-    OpenExecutionProfileEditor(ClientProfileId),
+    OpenExecutionProfileEditor(ExecutionProfileId),
     SignupAnonymousUser,
     ShowModal,
     HideModal,
@@ -3599,6 +3660,7 @@ impl Entity for AISettingsPageView {
 pub enum AISettingsPageAction {
     OpenUrl(String),
     SetVoiceInputToggleKey(VoiceInputToggleKey),
+    SetVoiceInputLanguage(String),
     ToggleGlobalAI,
     ToggleActiveAI,
     ToggleIntelligentAutosuggestions,
@@ -3628,7 +3690,7 @@ pub enum AISettingsPageAction {
     RemoveFromCommandExecutionDenylist(AgentModeCommandExecutionPredicate),
     OpenAIFactCollection,
     OpenMCPServerCollection,
-    OpenExecutionProfileEditor(ClientProfileId),
+    OpenExecutionProfileEditor(ExecutionProfileId),
     SetBaseModel(LLMId),
     SetCodingModel(LLMId),
     /// Called while the user is actively dragging the context window slider.
@@ -3720,6 +3782,13 @@ impl TypedActionView for AISettingsPageView {
                             .explicitly_interacted_with_voice
                             .set_value(true, ctx)
                     );
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetVoiceInputLanguage(language) => {
+                let language = language.clone();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.voice_input_language.set_value(language, ctx));
                 });
                 ctx.notify();
             }
@@ -4163,14 +4232,14 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::OpenMCPServerCollection => {
                 ctx.emit(AISettingsPageEvent::OpenMCPServerCollection)
             }
-            AISettingsPageAction::OpenExecutionProfileEditor(profile_id) => {
-                ctx.emit(AISettingsPageEvent::OpenExecutionProfileEditor(*profile_id))
-            }
+            AISettingsPageAction::OpenExecutionProfileEditor(profile_id) => ctx.emit(
+                AISettingsPageEvent::OpenExecutionProfileEditor(profile_id.clone()),
+            ),
             AISettingsPageAction::SetBaseModel(id) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    let profile_id = *profiles_model.active_profile(None, ctx).id();
-                    profiles_model.set_base_model(profile_id, Some(id.clone()), ctx);
-                    profiles_model.set_context_window_limit(profile_id, None, ctx);
+                    let profile_id = profiles_model.active_profile(None, ctx).id().clone();
+                    profiles_model.set_base_model(&profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_context_window_limit(&profile_id, None, ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
                 ctx.notify();
@@ -4205,8 +4274,8 @@ impl TypedActionView for AISettingsPageView {
                 };
                 let clamped = (*value).clamp(cw.min, cw.max);
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    let profile_id = *profiles_model.active_profile(None, ctx).id();
-                    profiles_model.set_context_window_limit(profile_id, Some(clamped), ctx);
+                    let profile_id = profiles_model.active_profile(None, ctx).id().clone();
+                    profiles_model.set_context_window_limit(&profile_id, Some(clamped), ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
                 ctx.notify();
@@ -4253,35 +4322,35 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::SetApplyCodeDiffs(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_apply_code_diffs(*profile.id(), permission, ctx);
+                    model.set_apply_code_diffs(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
             AISettingsPageAction::SetReadFiles(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_read_files(*profile.id(), permission, ctx);
+                    model.set_read_files(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
             AISettingsPageAction::SetExecuteCommands(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_execute_commands(*profile.id(), permission, ctx);
+                    model.set_execute_commands(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
             AISettingsPageAction::SetWriteToPty(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_write_to_pty(*profile.id(), permission, ctx);
+                    model.set_write_to_pty(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
             AISettingsPageAction::SetMCPPermissions(permission) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
-                    model.set_mcp_permissions(*profile.id(), permission, ctx);
+                    model.set_mcp_permissions(profile.id(), permission, ctx);
                 });
                 ctx.notify();
             }
@@ -4319,7 +4388,7 @@ impl TypedActionView for AISettingsPageView {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
                     model.remove_from_directory_allowlist(
-                        *profile_id,
+                        profile_id,
                         &PathBuf::from(path_buf),
                         ctx,
                     );
@@ -4331,7 +4400,7 @@ impl TypedActionView for AISettingsPageView {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
 
-                    model.remove_from_command_denylist(*profile_id, cmd, ctx);
+                    model.remove_from_command_denylist(profile_id, cmd, ctx);
                 });
                 ctx.notify();
             }
@@ -4340,7 +4409,7 @@ impl TypedActionView for AISettingsPageView {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
 
-                    model.remove_from_command_allowlist(*profile_id, command, ctx);
+                    model.remove_from_command_allowlist(profile_id, command, ctx);
                 });
                 ctx.notify();
             }
@@ -4361,7 +4430,7 @@ impl TypedActionView for AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.add_to_mcp_allowlist(*profile_id, id, ctx);
+                    model.add_to_mcp_allowlist(profile_id, id, ctx);
                 });
                 ctx.notify();
             }
@@ -4369,7 +4438,7 @@ impl TypedActionView for AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.remove_from_mcp_allowlist(*profile_id, id, ctx);
+                    model.remove_from_mcp_allowlist(profile_id, id, ctx);
                 });
                 ctx.notify();
             }
@@ -4377,7 +4446,7 @@ impl TypedActionView for AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.add_to_mcp_denylist(*profile_id, id, ctx);
+                    model.add_to_mcp_denylist(profile_id, id, ctx);
                 });
                 ctx.notify();
             }
@@ -4385,7 +4454,7 @@ impl TypedActionView for AISettingsPageView {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
                     let profile = model.default_profile(ctx);
                     let profile_id = profile.id();
-                    model.remove_from_mcp_denylist(*profile_id, id, ctx);
+                    model.remove_from_mcp_denylist(profile_id, id, ctx);
                 });
                 ctx.notify();
             }
@@ -4394,7 +4463,6 @@ impl TypedActionView for AISettingsPageView {
                     .update(ctx, |model, ctx| model.create_profile(ctx));
 
                 if let Some(profile_id) = new_profile_id {
-                    self.profile_views = Self::create_profile_views(ctx);
                     ctx.emit(AISettingsPageEvent::OpenExecutionProfileEditor(profile_id));
                 }
                 ctx.notify();
@@ -7192,6 +7260,20 @@ impl VoiceWidget {
                 None,
                 &view.voice_input_toggle_key_dropdown,
             ));
+            column.add_child(render_filterable_dropdown_item(
+                appearance,
+                "Speech Language",
+                Some("Language used when transcribing voice input."),
+                None,
+                LocalOnlyIconState::for_setting(
+                    VoiceInputLanguage::storage_key(),
+                    VoiceInputLanguage::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                None,
+                &view.voice_input_language_dropdown,
+            ));
         }
 
         column.finish()
@@ -7202,7 +7284,7 @@ impl SettingsWidget for VoiceWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "voice agent oz ai a.i. speech input natural language talk english"
+        "voice agent oz ai a.i. speech input natural language talk english spanish french german estonian finnish"
     }
 
     fn should_render(&self, app: &AppContext) -> bool {

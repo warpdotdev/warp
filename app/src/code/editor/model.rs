@@ -3314,6 +3314,43 @@ impl CodeEditorModel {
         self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
     }
 
+    /// Builds the selection used by operator+`%` motions (`d%`, `c%`, `y%`).
+    ///
+    /// `vim_jump_to_matching_bracket(true, ctx)` creates a half-open selection from the cursor to
+    /// the matching bracket offset. Because operator ranges are half-open, that would leave the
+    /// matching bracket char itself outside the deleted/changed/yanked range. Operator motions on
+    /// `%` must include that final char (mirroring Vim), so this extends the selection end by one
+    /// after the jump — the same adjustment the block editor makes in its
+    /// `vim_select_for_matching_bracket`.
+    pub fn vim_select_for_matching_bracket(&mut self, ctx: &mut ModelContext<Self>) {
+        self.vim_jump_to_matching_bracket(true, ctx);
+
+        let max_offset = self.content().as_ref(ctx).max_charoffset();
+        let current_selections = self.selection_model.as_ref(ctx).selection_offsets();
+
+        let new_selections = current_selections.mapped(|selection| {
+            // A cursor-only selection means no matching bracket was found; leave it untouched.
+            if selection.head == selection.tail {
+                return selection;
+            }
+            // The selection end is the larger of head/tail. Extend it by one so the matching
+            // bracket char is included in the operator's (half-open) range.
+            if selection.head > selection.tail {
+                SelectionOffsets {
+                    head: cmp::min(selection.head + 1, max_offset),
+                    tail: selection.tail,
+                }
+            } else {
+                SelectionOffsets {
+                    head: selection.head,
+                    tail: cmp::min(selection.tail + 1, max_offset),
+                }
+            }
+        });
+
+        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
+    }
+
     /// This method does Vim's `[` command. It moves to the enclosing bracket around the cursor. It
     /// is similar to the `%` command, but it does not require the cursor to start on a bracket.
     pub fn vim_jump_to_unmatched_bracket(

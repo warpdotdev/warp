@@ -22,12 +22,12 @@ use warpui_core::{
     ViewContext, ViewHandle,
 };
 
-use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
-use super::orchestration_block::TuiOrchestrationBlock;
+use super::agent_block::{TuiAIBlock, TuiAIBlockEvent, TuiBlockingChild};
 use super::terminal_block::{block_content_rows, should_render_terminal_block};
 use super::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
 };
+use super::tui_builder::TuiUiBuilder;
 use super::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
 
 /// Rows of blank space above every transcript block. Terminal blocks get it
@@ -61,6 +61,10 @@ pub(super) enum TuiTranscriptViewEvent {
     /// An agent block's blocking child changed state; the session surface
     /// re-derives the active blocker (input replacement).
     BlockingStateChanged,
+    PermissionReplacementGuidanceSubmitted {
+        conversation_id: AIConversationId,
+        text: String,
+    },
 }
 
 /// Selection actions originating from the transcript's element tree.
@@ -416,6 +420,17 @@ impl TuiTranscriptView {
                 ctx.emit(TuiTranscriptViewEvent::BlockingStateChanged);
                 ctx.notify();
             }
+            TuiAIBlockEvent::ReplacementGuidanceSubmitted {
+                conversation_id,
+                text,
+            } => {
+                ctx.emit(
+                    TuiTranscriptViewEvent::PermissionReplacementGuidanceSubmitted {
+                        conversation_id: *conversation_id,
+                        text: text.clone(),
+                    },
+                );
+            }
         });
         self.agent_blocks.borrow_mut().insert(view_id, view);
         let item = RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false);
@@ -451,6 +466,13 @@ impl TuiTranscriptView {
     /// Clears agent rich content before replacing the sole conversation.
     pub(super) fn clear_for_replacement(&mut self, ctx: &mut ViewContext<Self>) {
         self.clear_agent_blocks(ctx);
+        self.viewport.scroll_to_end();
+    }
+
+    /// Clears agent and terminal blocks before starting a new conversation.
+    pub(super) fn clear_for_new_conversation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_agent_blocks(ctx);
+        self.model.lock().clear_blocks();
         self.viewport.scroll_to_end();
     }
 
@@ -585,10 +607,7 @@ impl TuiTranscriptView {
     /// The front-of-queue blocking interaction across this transcript's
     /// agent blocks, if any. A pure query over the shared action queue; the
     /// session surface derives input visibility and focus from it.
-    pub(super) fn active_blocking_child(
-        &self,
-        ctx: &AppContext,
-    ) -> Option<ViewHandle<TuiOrchestrationBlock>> {
+    pub(super) fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
         self.agent_blocks
             .borrow()
             .values()
@@ -647,8 +666,12 @@ impl TuiView for TuiTranscriptView {
             self.agent_blocks.clone(),
             self.cli_subagent_blocks.clone(),
         );
-        let viewport = TuiViewportedList::new(self.viewport.clone(), source)
-            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+        let viewport = TuiViewportedList::new(
+            self.viewport.clone(),
+            source,
+            TuiUiBuilder::from_app(app).selection_style(),
+        )
+        .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
         let semantic_selection = SemanticSelection::as_ref(app);
         let selectable = TuiSelectable::new(self.selection.clone(), viewport)
             .with_word_boundaries_policy(semantic_selection.word_boundary_policy())

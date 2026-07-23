@@ -695,7 +695,7 @@ impl AskUserQuestionView {
             AskUserQuestionEffect::RefreshCurrent => {
                 self.rebuild_current_question(AskUserQuestionRebuildMode::PreserveSelection, ctx);
             }
-            AskUserQuestionEffect::FocusOtherInput => {
+            AskUserQuestionEffect::FocusCustomAnswerInput => {
                 self.rebuild_current_question(AskUserQuestionRebuildMode::PreserveSelection, ctx);
                 if let Some(text_input) = &self.text_input {
                     ctx.focus(text_input);
@@ -1246,7 +1246,9 @@ impl TypedActionView for AskUserQuestionView {
             }
             AskUserQuestionViewAction::OtherSelected => {
                 self.abort_auto_advance();
-                let effect = self.session.apply(AskUserQuestionAction::OpenOtherInput);
+                let effect = self
+                    .session
+                    .apply(AskUserQuestionAction::EnterCustomAnswerEditing);
                 self.handle_session_effect(effect, ctx);
             }
             AskUserQuestionViewAction::NavigateNext => {

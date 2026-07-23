@@ -8058,3 +8058,145 @@ fn cmd_k_in_agent_view_cancels_in_progress_conversation_and_starts_new_one() {
         });
     })
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn copy_forwards_etx_to_pty_on_linux_alt_screen_without_warp_selection() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            // Enter the alt screen (a fullscreen TUI is in control) and add no
+            // Warp-visible selection of any kind.
+            {
+                let mut model = view.model.lock();
+                model.set_mode(ansi::Mode::SwapScreen {
+                    save_cursor_and_clear_screen: true,
+                });
+                assert!(model.is_alt_screen_active());
+            }
+            assert_eq!("", &read_from_clipboard(ctx));
+
+            // No CLI-subagent / error-screen / grid / input-editor / block
+            // selection exists, so `copy()` reaches the new fallback. The clipboard
+            // is written synchronously, but `WriteBytesToPty` events are dispatched
+            // after the update closure returns, so the PTY-write assertion is made
+            // outside the closure (mirroring `ctrl_c_after_stop_takeover_cancels_conversation`).
+            view.handle_action(&TerminalAction::Copy, ctx);
+
+            assert_eq!(
+                read_from_clipboard(ctx),
+                "",
+                "Copy must not write anything to the clipboard when Warp has no selection"
+            );
+        });
+
+        assert_eq!(
+            *pty_writes.borrow(),
+            vec![vec![C0::ETX]],
+            "Copy on Linux alt screen with no Warp selection must forward exactly one ETX byte to the PTY"
+        );
+    })
+}
+
+#[test]
+fn copy_does_not_forward_when_alt_screen_has_warp_selection() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            {
+                // Enter the alt screen and add text the user will select in Warp.
+                let mut model = view.model.lock();
+                model.set_mode(ansi::Mode::SwapScreen {
+                    save_cursor_and_clear_screen: true,
+                });
+                assert!(model.is_alt_screen_active());
+
+                model.alt_screen_mut().input('h');
+            }
+
+            // Make a Warp-owned alt-screen selection (the path that copies today).
+            view.begin_alt_selection(Point::new(0, 0), Side::Left, SelectionType::Simple, ctx);
+            view.update_alt_selection(Point::new(0, 2), Side::Left, &Lines::zero(), ctx);
+            view.end_alt_selection(ctx);
+            // `end_alt_selection` copies via copy-on-select, so the clipboard now
+            // holds the selected text. Reset the PTY-write recorder so the only
+            // writes observed below come from the explicit Copy dispatch.
+            pty_writes.borrow_mut().clear();
+            assert_eq!("h", &read_from_clipboard(ctx));
+
+            view.handle_action(&TerminalAction::Copy, ctx);
+
+            assert_eq!(
+                read_from_clipboard(ctx),
+                "h",
+                "Copy must still copy the Warp alt-screen selection to the clipboard"
+            );
+        });
+
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "Copy must not forward ETX to the PTY when a Warp alt-screen selection was copied"
+        );
+    })
+}
+
+#[test]
+fn copy_does_not_forward_on_normal_screen() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            // Normal screen: no alt screen, no selection of any kind.
+            assert!(!view.model.lock().is_alt_screen_active());
+            assert_eq!("", &read_from_clipboard(ctx));
+
+            view.handle_action(&TerminalAction::Copy, ctx);
+
+            assert_eq!(
+                read_from_clipboard(ctx),
+                "",
+                "Copy must not write anything to the clipboard on the normal screen with no selection"
+            );
+        });
+
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "Copy must not write anything to the PTY on the normal screen with no selection"
+        );
+    })
+}

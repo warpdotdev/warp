@@ -122,7 +122,6 @@ impl DocumentActionPresentation {
                 | AIAgentActionType::StopRecording { .. }
                 | AIAgentActionType::ReadSkill(_)
                 | AIAgentActionType::FetchConversation { .. }
-                | AIAgentActionType::StartAgent { .. }
                 | AIAgentActionType::SendMessageToAgent { .. }
                 | AIAgentActionType::TransferShellCommandControlToUser { .. }
                 | AIAgentActionType::AskUserQuestion { .. }

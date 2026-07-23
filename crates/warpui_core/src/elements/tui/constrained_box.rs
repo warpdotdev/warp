@@ -1,10 +1,10 @@
-//! [`TuiConstrainedBox`]: caps a single child's size on either axis.
+//! [`TuiConstrainedBox`]: constrains a single child's size on either axis.
 //!
 //! # Construction
-//! Wrap a child with [`TuiConstrainedBox::new`] and cap either axis with
-//! [`with_max_rows`](TuiConstrainedBox::with_max_rows) (height) and
-//! [`with_max_cols`](TuiConstrainedBox::with_max_cols) (width). Either cap may
-//! be left unset, in which case that axis passes through unchanged.
+//! Wrap a child with [`TuiConstrainedBox::new`] and constrain either axis with
+//! the `with_min_*` / `with_max_*` setters. Either bound may be left unset, in
+//! which case that bound passes through from the parent. Setting `min == max`
+//! on an axis pins the child to exactly that size.
 //!
 //! # Layout policy
 //! The box is otherwise transparent: it measures and paints its child within the
@@ -21,6 +21,7 @@ use crate::AppContext;
 
 pub struct TuiConstrainedBox {
     child: Box<dyn TuiElement>,
+    min_cols: Option<u16>,
     max_rows: Option<u16>,
     max_cols: Option<u16>,
 }
@@ -29,9 +30,18 @@ impl TuiConstrainedBox {
     pub fn new(child: Box<dyn TuiElement>) -> Self {
         Self {
             child,
+            min_cols: None,
             max_rows: None,
             max_cols: None,
         }
+    }
+
+    /// Floors the child's width to `cols` cells. When combined with
+    /// [`with_max_cols`](Self::with_max_cols) set to the same value the child
+    /// is pinned to exactly that width.
+    pub fn with_min_cols(mut self, cols: u16) -> Self {
+        self.min_cols = Some(cols);
+        self
     }
 
     /// Caps the child's height to `rows` cells.
@@ -55,10 +65,14 @@ impl TuiConstrainedBox {
         let max_height = self.max_rows.map_or(constraint.max.height, |rows| {
             constraint.max.height.min(rows)
         });
-        let min = TuiSize::new(
-            constraint.min.width.min(max_width),
-            constraint.min.height.min(max_height),
-        );
+        // Apply min_cols: floor the child's width to `min_cols`, taking the
+        // larger of `min_cols` and the parent's existing min, then clamp to
+        // max_width so the constraint invariant (min ≤ max) is always upheld.
+        let min_width = match self.min_cols {
+            None => constraint.min.width.min(max_width),
+            Some(cols) => cols.max(constraint.min.width).min(max_width),
+        };
+        let min = TuiSize::new(min_width, constraint.min.height.min(max_height));
         TuiConstraint::new(min, TuiSize::new(max_width, max_height))
     }
 }

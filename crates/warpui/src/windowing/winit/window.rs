@@ -1454,14 +1454,8 @@ fn create_window(
 
     #[cfg(target_os = "linux")]
     if let Ok(window) = created_window.as_ref() {
-        use wgpu::rwh::RawDisplayHandle;
-        let is_x11 = matches!(
-            window_target.display_handle().map(|dh| dh.as_raw()),
-            Ok(RawDisplayHandle::Xlib(_)) | Ok(RawDisplayHandle::Xcb(_))
-        );
-        if is_x11 {
-            window.set_ime_allowed(true);
-        }
+        window.set_ime_allowed(true);
+        log::debug!("IME allowed on newly created Linux window");
     }
 
     #[cfg(windows)]

@@ -14,6 +14,7 @@ use session_sharing_protocol::common::{
     AICommandMetadata, OrderedTerminalEventType, ParticipantId,
 };
 use session_sharing_protocol::sharer::SessionSourceType;
+use string_offset::CharOffset;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
@@ -32,7 +33,7 @@ use super::block::{
     BlocklistEnvVarMetadata, SerializedBlock,
 };
 use super::blockgrid::BlockGrid;
-use super::blocks::ActiveBlockCompletion;
+use super::blocks::{ActiveBlockCompletion, BlockFilter};
 use super::grid::grid_handler::{
     ContainsPoint, FragmentBoundary, GridHandler, Link, PossiblePath, TermMode,
 };
@@ -1655,6 +1656,11 @@ impl TerminalModel {
         &mut self.block_list
     }
 
+    /// Clears all completed blocks and resets the active block's screen.
+    pub fn clear_blocks(&mut self) {
+        self.block_list.clear_screen(ansi::ClearMode::ResetAndClear);
+    }
+
     pub fn remove_image_id_to_metadata_entry(&mut self, image_id: u32) {
         self.image_id_to_metadata.remove(&image_id);
     }
@@ -2287,6 +2293,30 @@ impl TerminalModel {
         if !self.alt_screen_active {
             self.block_list.early_output_mut().push_user_input(input);
         }
+    }
+
+    /// Takes accumulated typeahead that should be inserted into a front-end input editor.
+    pub fn take_typeahead_for_input(&mut self) -> Option<(String, CharOffset)> {
+        let completed_block_index = self.block_list.prev_matching_block_from_index(
+            BlockFilter {
+                include_hidden: true,
+                include_background: false,
+            },
+            self.block_list.active_block_index(),
+        );
+        let was_entered_during_agent_requested_command =
+            completed_block_index.is_some_and(|index| {
+                self.block_list
+                    .block_at(index)
+                    .is_some_and(|block| block.agent_interaction_metadata().is_some())
+            });
+        if was_entered_during_agent_requested_command {
+            return None;
+        }
+
+        let (typeahead, previously_inserted) =
+            self.block_list.early_output_mut().advance_typeahead()?;
+        Some((typeahead.to_owned(), previously_inserted))
     }
 
     fn emit_handler_event(&mut self, event: HandlerEvent) {

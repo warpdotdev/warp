@@ -32,7 +32,7 @@ fn view_state_shows_other_input_only_for_the_current_question() {
         }
     );
 
-    session.apply(AskUserQuestionAction::OpenOtherInput);
+    session.apply(AskUserQuestionAction::EnterCustomAnswerEditing);
     assert_eq!(
         ask_user_question_view_state(session.current()),
         AskUserQuestionViewState {

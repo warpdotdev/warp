@@ -1831,6 +1831,11 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                     }
                 }
             },
+            HarnessSupportCommand::ReportExternalReference(_) => {
+                CliTelemetryEvent::HarnessSupportReportArtifact {
+                    artifact_type: "external_reference",
+                }
+            }
             HarnessSupportCommand::NotifyUser(_) => CliTelemetryEvent::HarnessSupportNotifyUser,
             HarnessSupportCommand::FinishTask(finish_args) => {
                 CliTelemetryEvent::HarnessSupportFinishTask {

@@ -506,6 +506,26 @@ pub struct BillingMetadata {
     pub ai_overages: Option<AiOverages>,
 }
 
+/// The effective account outcome used to route users after account-first signup.
+///
+/// Paid status and free AI availability are resolved from fresh server-authored
+/// data during post-auth onboarding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FtueAccountClass {
+    Paid,
+    FreeIcp,
+    FreeStandard,
+}
+
+impl FtueAccountClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FtueAccountClass::Paid => "paid",
+            FtueAccountClass::FreeIcp => "free_icp",
+            FtueAccountClass::FreeStandard => "free_standard",
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct BonusGrantsPurchased {
     pub total_credits_purchased: i32,

@@ -230,7 +230,7 @@ pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
 use warp_errors::{report_error, report_if_error};
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warp_logging::LogDestination;
+use warp_logging::{LogDestination, LogFrontend};
 use warp_managed_secrets::ManagedSecretManager;
 use warp_server_client::iap::{IapManager, IapManagerEvent, IapState, ManagedIapMint};
 use warp_server_client::network_logging::NetworkLogModel;
@@ -314,7 +314,7 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::{AudibleBell, CustomSecretRegexUpdater, History};
 #[cfg(feature = "tui")]
-pub use crate::tui::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
+pub use crate::tui::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase, log_out_tui};
 use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
 use crate::util::bindings::is_binding_cross_platform;
@@ -639,6 +639,16 @@ impl LaunchMode {
         }
     }
 
+    fn log_frontend(&self) -> LogFrontend {
+        match self {
+            LaunchMode::Tui { .. } => LogFrontend::Tui,
+            LaunchMode::App { .. } | LaunchMode::Test { .. } => LogFrontend::Gui,
+            LaunchMode::CommandLine { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. } => LogFrontend::Cli,
+        }
+    }
+
     fn as_str_for_tracing(&self) -> &'static str {
         match self {
             LaunchMode::App { .. } => "app",
@@ -824,7 +834,7 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             let launch_mode = LaunchMode::RemoteServerProxy;
             let mut tracing_initialization = tracing::init()?;
             warp_logging::init(warp_logging::LogConfig {
-                is_cli: true,
+                frontend: launch_mode.log_frontend(),
                 log_destination: launch_mode.log_destination(),
                 ..Default::default()
             })?;
@@ -962,7 +972,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
-    let is_cli = log_destination.is_some();
 
     cfg_if::cfg_if! {
         if #[cfg(enable_crash_recovery)] {
@@ -970,14 +979,14 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
                 warp_logging::init_for_crash_recovery_process()?;
             } else {
                 warp_logging::init(warp_logging::LogConfig {
-                    is_cli,
+                    frontend: launch_mode.log_frontend(),
                     log_destination,
                     ..Default::default()
                 })?;
             }
         } else {
             warp_logging::init(warp_logging::LogConfig {
-                is_cli,
+                frontend: launch_mode.log_frontend(),
                 log_destination,
                 ..Default::default()
             })?;
@@ -1291,6 +1300,37 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
 pub struct UpdateQuakeModeEventArg {
     active_window_id: Option<WindowId>,
+}
+
+fn refresh_user_after_iap_access(ctx: &mut AppContext) {
+    let iap_manager = IapManager::handle(ctx);
+    if !iap_manager.as_ref(ctx).is_enabled() || iap_manager.as_ref(ctx).has_valid_token() {
+        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+            auth_manager.refresh_user(ctx);
+        });
+        return;
+    }
+
+    let mut refresh_started = false;
+    ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| match event {
+        IapManagerEvent::StateChanged => {
+            if refresh_started || !iap_manager.as_ref(ctx).has_valid_token() {
+                return;
+            }
+            refresh_started = true;
+            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+                auth_manager.refresh_user(ctx);
+            });
+        }
+        IapManagerEvent::AccessUnavailable => {
+            report_error!("Staging IAP access unavailable before startup user refresh");
+        }
+        IapManagerEvent::RefreshFailed {
+            message: _,
+            is_first_failure_of_streak: _,
+        } => {}
+    });
+    iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
@@ -1751,15 +1791,6 @@ pub(crate) fn initialize_app(
     let user_is_logged_in = auth_state.is_logged_in();
 
     if user_is_logged_in {
-        // Skip refresh_user for CLI mode — the CLI handles auth refresh in
-        // ensure_auth_state so it can detect invalid credentials before running
-        // a command.
-        if !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
-            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                auth_manager.refresh_user(ctx);
-            });
-        }
-
         // Set the first frame callback to record the app's startup time.
         // This is only sent for logged-in users so that new users don't skew performance metrics.
         let is_screen_reader_enabled = ctx.is_screen_reader_enabled();
@@ -2262,6 +2293,13 @@ pub(crate) fn initialize_app(
             _ => {}
         };
     });
+
+    // CLI commands establish IAP access and refresh auth in their dispatch path so they can
+    // surface failures synchronously. Interactive clients wait for IAP here before refreshing
+    // their persisted user, since the refresh itself calls the IAP-gated warp-server.
+    if user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
+        refresh_user_after_iap_access(ctx);
+    }
 
     // Add a singleton model that holds the current prompt configuration.
     ctx.add_singleton_model(Prompt::new);

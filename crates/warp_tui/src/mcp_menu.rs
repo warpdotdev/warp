@@ -185,6 +185,7 @@ impl TuiMcpMenuModel {
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
                     description: row.description.clone(),
+                    state_suffix: None,
                     is_selectable: row.action.is_some(),
                     style: TuiInlineMenuRowStyle::Default,
                 })

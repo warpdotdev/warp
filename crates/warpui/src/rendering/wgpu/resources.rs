@@ -273,6 +273,7 @@ async fn select_adapter(
                 power_preference,
                 force_fallback_adapter: false,
                 compatible_surface: Some(surface),
+                apply_limit_buckets: true,
             };
 
             let adapter = instance.request_adapter(&request_adapter_options).await.ok()?;

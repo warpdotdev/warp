@@ -4,6 +4,7 @@ use warp_core::features::FeatureFlag;
 use warpui::{AppContext, EntityId, SingletonEntity};
 
 use super::History;
+use crate::ai::blocklist::history_model::AIQueryHistory;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig};
 use crate::input_suggestions::HistoryInputSuggestion;
 use crate::settings::AISettings;
@@ -69,6 +70,38 @@ fn sort_and_dedupe_suggestions<'a>(
         .map(|(_, suggestion)| suggestion)
         .collect()
 }
+/// Returns de-duplicated prompt history ordered for up-arrow presentation.
+///
+/// Prompts from other terminal surfaces precede prompts from the requested
+/// surface, and repeated text keeps its newest occurrence.
+pub fn prompt_history_for_terminal_view(
+    terminal_view_id: EntityId,
+    app: &AppContext,
+) -> Vec<AIQueryHistory> {
+    let ignored_prompts = if app.has_singleton_model::<IgnoredSuggestionsModel>() {
+        IgnoredSuggestionsModel::handle(app)
+            .as_ref(app)
+            .get_ignored_suggestions_for_type(SuggestionType::AIQuery)
+    } else {
+        HashSet::new()
+    };
+    let suggestions = BlocklistAIHistoryModel::handle(app)
+        .as_ref(app)
+        .all_ai_queries(Some(terminal_view_id))
+        .filter(|entry| !ignored_prompts.contains(&entry.query_text))
+        .filter(|entry| !entry.query_text.trim().is_empty())
+        .map(|entry| HistoryInputSuggestion::AIQuery { entry })
+        .collect();
+    let sorted = sort_and_dedupe_suggestions(suggestions, None, &HashSet::new());
+
+    sorted
+        .into_iter()
+        .filter_map(|suggestion| match suggestion {
+            HistoryInputSuggestion::AIQuery { entry } => Some(entry),
+            HistoryInputSuggestion::Command { .. } => None,
+        })
+        .collect()
+}
 
 impl History {
     pub(crate) fn up_arrow_suggestions_for_terminal_view<'a>(
@@ -109,12 +142,8 @@ impl History {
             );
         }
 
-        let ai_queries = BlocklistAIHistoryModel::handle(app)
-            .as_ref(app)
-            .all_ai_queries(Some(terminal_view_id))
-            .filter(|query| {
-                !ignored_suggestions.is_ignored(&query.query_text, SuggestionType::AIQuery)
-            })
+        let ai_queries = prompt_history_for_terminal_view(terminal_view_id, app)
+            .into_iter()
             .map(|entry| HistoryInputSuggestion::AIQuery { entry });
 
         let suggestions: Vec<HistoryInputSuggestion<'a>> =
@@ -128,3 +157,7 @@ impl History {
         sort_and_dedupe_suggestions(suggestions, session_id, &all_live_session_ids)
     }
 }
+
+#[cfg(test)]
+#[path = "up_arrow_tests.rs"]
+mod tests;

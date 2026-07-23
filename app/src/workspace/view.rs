@@ -212,8 +212,9 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
+use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
-use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::view::AIFactPage;
 use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
 use crate::ai::llms::LLMPreferences;
@@ -6422,6 +6423,12 @@ impl Workspace {
                     ctx,
                 );
             }
+            LeftPanelEvent::SignInRequested => {
+                self.open_require_login_modal(AuthViewVariant::RequireLoginCloseable, ctx);
+                self.require_login_modal.update(ctx, |modal, ctx| {
+                    modal.start_sign_in(ctx);
+                });
+            }
         }
     }
 
@@ -8816,12 +8823,12 @@ impl Workspace {
     pub fn open_execution_profile_editor_pane(
         &mut self,
         direction: Option<Direction>,
-        profile_id: ClientProfileId,
+        profile_id: ExecutionProfileId,
         ctx: &mut ViewContext<Self>,
     ) {
         let manager = ExecutionProfileEditorManager::handle(ctx);
 
-        if let Some(locator) = manager.as_ref(ctx).find_pane(ctx.window_id(), profile_id) {
+        if let Some(locator) = manager.as_ref(ctx).find_pane(ctx.window_id(), &profile_id) {
             self.focus_pane(locator, ctx);
             return;
         }
@@ -11388,6 +11395,13 @@ impl Workspace {
                 self.open_auth_override_warning_modal(interrupted_auth_payload.clone(), ctx);
             }
             AuthManagerEvent::AuthComplete => {
+                // This workspace can survive an anonymous user signing up from
+                // inside the app. Refresh the cached auth state and recompute
+                // effective toolbelt availability so onboarding preferences
+                // (for example, Warp Drive and conversation history) take
+                // effect without requiring an off/on toggle.
+                self.auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+                self.update_left_panel_available_views(ctx);
                 // Only show the telemetry banner if the user is an existing user. The new user flow
                 // for this is handled in the onboarding flow.
                 if self.auth_state.is_onboarded().unwrap_or_default() {
@@ -11395,6 +11409,7 @@ impl Workspace {
                     // to make sure we don't show the banner if the user is an enterprise user.
                     self.check_and_trigger_telemetry_banner_for_existing_users(ctx);
                 }
+                ctx.notify();
             }
             _ => {
                 ctx.notify();
@@ -13880,9 +13895,10 @@ impl Workspace {
         new_terminal_view_id: EntityId,
         ctx: &mut AppContext,
     ) {
-        let source_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+        let source_profile_id = AIExecutionProfilesModel::as_ref(ctx)
             .active_profile(Some(source_terminal_view_id), ctx)
-            .id();
+            .id()
+            .clone();
         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
             profiles.set_active_profile(new_terminal_view_id, source_profile_id, ctx);
         });
@@ -14981,7 +14997,7 @@ impl Workspace {
                 self.open_custom_router_editor_pane(None, router.clone(), ctx);
             }
             SettingsViewEvent::OpenExecutionProfileEditor(profile_id) => {
-                self.open_execution_profile_editor_pane(None, *profile_id, ctx);
+                self.open_execution_profile_editor_pane(None, profile_id.clone(), ctx);
             }
             SettingsViewEvent::OpenLspLogs { log_path } => {
                 self.open_lsp_logs(log_path, ctx);
@@ -17055,7 +17071,7 @@ impl Workspace {
                 self.close_tabs_with_file_path(path, ctx);
             }
             pane_group::Event::OpenAgentProfileEditor { profile_id } => {
-                self.open_execution_profile_editor_pane(None, *profile_id, ctx);
+                self.open_execution_profile_editor_pane(None, profile_id.clone(), ctx);
             }
             pane_group::Event::OpenEnvironmentManagementPane => {
                 self.open_environment_management_pane(
@@ -19165,7 +19181,7 @@ impl Workspace {
                 // Set codex as the model for the default profile and make the default profile active.
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
                     let default_profile_id = profiles.default_profile_id();
-                    profiles.set_base_model(default_profile_id, Some(codex_model_id), ctx);
+                    profiles.set_base_model(&default_profile_id, Some(codex_model_id), ctx);
                     profiles.set_active_profile(terminal_view.id(), default_profile_id, ctx);
                 });
 
@@ -23683,7 +23699,6 @@ impl Workspace {
             views.push(ToolPanelView::ProjectExplorer);
         }
         if FeatureFlag::AgentViewConversationListView.is_enabled()
-            && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
             && *AISettings::as_ref(ctx).show_conversation_history
         {
             views.push(ToolPanelView::ConversationListView);
@@ -23696,7 +23711,7 @@ impl Workspace {
                 entry_focus: GlobalSearchEntryFocus::Results,
             });
         }
-        if WarpDriveSettings::is_warp_drive_enabled(ctx) {
+        if *WarpDriveSettings::as_ref(ctx).enable_warp_drive {
             views.push(ToolPanelView::WarpDrive);
         }
         views
@@ -26309,9 +26324,7 @@ impl View for Workspace {
             context.set.insert(flags::ENABLE_WARP_DRIVE);
         }
 
-        if AISettings::as_ref(app).is_any_ai_enabled(app)
-            && *AISettings::as_ref(app).show_conversation_history
-        {
+        if AISettings::as_ref(app).is_conversation_history_enabled(app) {
             context.set.insert(flags::SHOW_CONVERSATION_HISTORY);
         }
 

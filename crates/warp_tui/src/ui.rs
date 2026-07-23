@@ -110,7 +110,7 @@ fn vertically_centered(content: TuiFlex) -> Box<dyn TuiElement> {
 }
 
 /// Centers `content` horizontally and vertically within the viewport.
-fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
+pub(crate) fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
     let centered_row = TuiFlex::row()
         .flex_child(TuiFlex::row().finish())
         .child(content)
@@ -164,7 +164,11 @@ pub(crate) fn login_placeholder(
             );
         }
     }
-    vertically_centered(content)
+    centered_in_viewport(
+        content
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .finish(),
+    )
 }
 
 /// Placeholder shown between login completion and terminal session creation.

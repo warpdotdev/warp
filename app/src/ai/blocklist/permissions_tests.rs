@@ -48,8 +48,8 @@ fn initialize_permissions_test(app: &mut App) -> PermissionsTestState {
 fn initialize_permissions_test_sandboxed(app: &mut App) -> PermissionsTestState {
     let state = initialize_permissions_test_with_mode(app, ExecutionMode::Sdk, true);
     state.profile_model.update(app, |model, ctx| {
-        let profile_id = *model.default_profile(ctx).id();
-        model.apply_cli_profile_defaults_for_test(profile_id, true, ctx);
+        let profile_id = model.default_profile(ctx).id().clone();
+        model.apply_cli_profile_defaults_for_test(&profile_id, true, ctx);
     });
     state
 }
@@ -135,7 +135,7 @@ fn test_can_read_files_workspace_settings_override_profile() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.set_read_files(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAllow,
                 ctx,
             );
@@ -202,12 +202,12 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
         // Set up profile with allowlist and AlwaysAsk
         profile_model.update(&mut app, |model, ctx| {
             model.set_read_files(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAsk,
                 ctx,
             );
             model.add_to_directory_allowlist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &PathBuf::from("/profile/allowed"),
                 ctx,
             );
@@ -337,7 +337,7 @@ fn test_can_write_files() {
         // Test AgentDecides setting
         profile_model.update(&mut app, |model, ctx| {
             model.set_apply_code_diffs(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AgentDecides,
                 ctx,
             );
@@ -358,7 +358,7 @@ fn test_can_write_files() {
         // Test AlwaysAllow setting
         profile_model.update(&mut app, |model, ctx| {
             model.set_apply_code_diffs(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAllow,
                 ctx,
             );
@@ -378,7 +378,7 @@ fn test_can_write_files() {
         // Test AlwaysAsk setting
         profile_model.update(&mut app, |model, ctx| {
             model.set_apply_code_diffs(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAsk,
                 ctx,
             );
@@ -410,7 +410,7 @@ fn test_can_write_files_workspace_settings_override_profile() {
         // Set profile to AlwaysAllow
         profile_model.update(&mut app, |model, ctx| {
             model.set_apply_code_diffs(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAllow,
                 ctx,
             );
@@ -465,7 +465,7 @@ fn test_can_write_files_mcp_config_always_denied() {
         // Even with AlwaysAllow, writing to an MCP config must be denied.
         profile_model.update(&mut app, |model, ctx| {
             model.set_apply_code_diffs(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAllow,
                 ctx,
             );
@@ -516,7 +516,7 @@ fn test_can_autoexecute_command_workspace_settings_override_profile() {
         // Set profile to AlwaysAllow
         profile_model.update(&mut app, |model, ctx| {
             model.set_execute_commands(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAllow,
                 ctx,
             );
@@ -590,7 +590,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
         // Set up profile with denylist
         profile_model.update(&mut app, |model, ctx| {
             model.add_to_command_denylist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
                 ctx,
             );
@@ -682,10 +682,13 @@ fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
         } = initialize_permissions_test(&mut app);
 
         profile_model.update(&mut app, |model, ctx| {
-            let profile_id = *model.active_profile(Some(terminal_view_id), ctx).id();
-            model.set_execute_commands(profile_id, &ActionPermission::AlwaysAllow, ctx);
+            let profile_id = model
+                .active_profile(Some(terminal_view_id), ctx)
+                .id()
+                .clone();
+            model.set_execute_commands(&profile_id, &ActionPermission::AlwaysAllow, ctx);
             model.add_to_command_denylist(
-                profile_id,
+                &profile_id,
                 &AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
                 ctx,
             );
@@ -753,12 +756,12 @@ fn test_can_autoexecute_command_allowlist_precedence() {
         // Set up profile with AlwaysAsk and allowlist
         profile_model.update(&mut app, |model, ctx| {
             model.set_execute_commands(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAsk,
                 ctx,
             );
             model.add_to_command_allowlist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &AgentModeCommandExecutionPredicate::new_regex("git .*").unwrap(),
                 ctx,
             );
@@ -873,7 +876,7 @@ fn test_can_autoexecute_command_denylist_beats_run_to_completion() {
         // Add a denylist rule that matches the test command.
         profile_model.update(&mut app, |model, ctx| {
             model.add_to_command_denylist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
                 ctx,
             );
@@ -959,7 +962,7 @@ fn test_can_write_to_pty() {
         // Set profile to AlwaysAllow
         profile_model.update(&mut app, |model, ctx| {
             model.set_write_to_pty(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &WriteToPtyPermission::AlwaysAllow,
                 ctx,
             );
@@ -1005,7 +1008,7 @@ fn test_can_use_mcp_server_always_allow_no_denylist() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.set_mcp_permissions(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAllow,
                 ctx,
             );
@@ -1041,12 +1044,12 @@ fn test_can_use_mcp_server_always_allow_with_denylist() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.set_mcp_permissions(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAllow,
                 ctx,
             );
             model.add_to_mcp_denylist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &server_uuid,
                 ctx,
             );
@@ -1087,12 +1090,12 @@ fn test_can_use_mcp_server_always_ask_with_allowlist() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.set_mcp_permissions(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAsk,
                 ctx,
             );
             model.add_to_mcp_allowlist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &server_uuid,
                 ctx,
             );
@@ -1134,17 +1137,17 @@ fn test_can_use_mcp_server_always_ask_denylist_overrides_allowlist() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.set_mcp_permissions(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AlwaysAsk,
                 ctx,
             );
             model.add_to_mcp_allowlist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &server_uuid,
                 ctx,
             );
             model.add_to_mcp_denylist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &server_uuid,
                 ctx,
             );
@@ -1178,12 +1181,12 @@ fn test_can_use_mcp_server_agent_decides() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.set_mcp_permissions(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AgentDecides,
                 ctx,
             );
             model.add_to_mcp_allowlist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &server_uuid,
                 ctx,
             );
@@ -1223,17 +1226,17 @@ fn test_can_use_mcp_server_agent_decides_denylist_overrides_allowlist() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.set_mcp_permissions(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &ActionPermission::AgentDecides,
                 ctx,
             );
             model.add_to_mcp_allowlist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &server_uuid,
                 ctx,
             );
             model.add_to_mcp_denylist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &server_uuid,
                 ctx,
             );
@@ -1400,7 +1403,7 @@ fn test_merged_denylist_deduplication() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.add_to_command_denylist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &rm_predicate,
                 ctx,
             );
@@ -1479,7 +1482,7 @@ fn test_empty_org_denylist_allows_user_entries() {
 
         profile_model.update(&mut app, |model, ctx| {
             model.add_to_command_denylist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
                 ctx,
             );
@@ -1527,7 +1530,7 @@ fn test_denylist_matches_multiline_commands() {
         // Add denylist rule for rm
         profile_model.update(&mut app, |model, ctx| {
             model.add_to_command_denylist(
-                *model.active_profile(Some(terminal_view_id), ctx).id(),
+                model.active_profile(Some(terminal_view_id), ctx).id(),
                 &AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
                 ctx,
             );

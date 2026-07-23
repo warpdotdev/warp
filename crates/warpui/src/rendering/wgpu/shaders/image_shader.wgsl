@@ -29,7 +29,7 @@ struct ImageVertexShaderOutput {
     @location(1) rect_corner: vec2<f32>,
     @location(2) texture_coordinate: vec2<f32>,
     @location(4) color: vec4<f32>,
-    @location(5) is_icon: u32,
+    @location(5) @interpolate(flat) is_icon: u32,
     @location(6) corner_radius: vec4<f32>,
 }
 

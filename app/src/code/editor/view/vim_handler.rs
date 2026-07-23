@@ -259,8 +259,11 @@ impl VimHandler for CodeEditorView {
                                     model.vim_extend_selection_linewise(include_newline, ctx);
                                 }
                             }
-                            _ => {
-                                // TODO: Implement other motions (find char, brackets, etc.)
+                            VimMotion::JumpToMatchingBracket => {
+                                model.vim_select_for_matching_bracket(ctx);
+                            }
+                            VimMotion::JumpToUnmatchedBracket(bracket) => {
+                                model.vim_jump_to_unmatched_bracket(bracket, true, ctx);
                             }
                         }
                     }

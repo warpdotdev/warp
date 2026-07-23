@@ -12,6 +12,61 @@ use crate::settings::ai::DefaultSessionMode;
 use crate::settings::{AISettings, CodeSettings};
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::FtueAccountClass;
+
+pub fn apply_account_first_onboarding_settings(
+    selected_settings: &SelectedSettings,
+    account_class: Option<FtueAccountClass>,
+    app: &mut AppContext,
+) {
+    // Every authenticated account-first user gets the Warp Agent surface,
+    // including standard-free accounts with no included Warp credits. Skipping
+    // account creation is the only outcome that leaves Agent disabled.
+    let is_ai_enabled = match account_class {
+        None => false,
+        Some(
+            FtueAccountClass::Paid | FtueAccountClass::FreeIcp | FtueAccountClass::FreeStandard,
+        ) => true,
+    };
+
+    match selected_settings {
+        SelectedSettings::AgentDrivenDevelopment {
+            agent_settings,
+            ui_customization,
+            ..
+        } => {
+            apply_agent_settings(agent_settings, app);
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, true, app);
+            }
+        }
+        SelectedSettings::Terminal {
+            ui_customization,
+            cli_agent_toolbar_enabled,
+            show_agent_notifications,
+        } => {
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, false, app);
+            }
+            AISettings::handle(app).update(app, |settings, ctx| {
+                report_if_error!(
+                    settings
+                        .should_render_cli_agent_footer
+                        .set_value(*cli_agent_toolbar_enabled, ctx)
+                );
+                report_if_error!(
+                    settings
+                        .show_agent_notifications
+                        .set_value(*show_agent_notifications, ctx)
+                );
+            });
+        }
+    }
+
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(settings.is_any_ai_enabled.set_value(is_ai_enabled, ctx));
+    });
+}
 
 /// Applies onboarding settings based on the user's selected mode.
 ///
@@ -83,7 +138,9 @@ fn apply_ui_customization_settings(
     app: &mut AppContext,
 ) {
     // Customize UI slide should only exist with this flag enabled.
-    if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+    if !FeatureFlag::AccountFirstOnboarding.is_enabled()
+        && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+    {
         return;
     }
     TabSettings::handle(app).update(app, |settings, ctx| {
@@ -165,28 +222,21 @@ fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut App
 
     AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
         let default_profile_info = profiles.default_profile(ctx);
-        let default_profile_id = *default_profile_info.id();
+        let default_profile_id = default_profile_info.id().clone();
 
-        // Preserve the existing cloud default profile for users who are
-        // already logged in (or who log in at the end of onboarding). A
-        // `Some` sync_id means the profile is backed by a cloud object that
-        // was either loaded at startup or reconciled during the post-login
-        // initial load, and its values represent what the user has stored
-        // previously. Overwriting those with the onboarding-selected
-        // base_model / autonomy would silently discard their prior
-        // customizations. Fresh `Unsynced` default profiles (brand-new
-        // users, or users without any cloud default yet) still receive the
-        // onboarding values.
-        if default_profile_info.sync_id().is_some() {
+        // Preserve profiles loaded for an existing account, regardless of
+        // whether the active source is legacy cloud objects or the settings
+        // collection. Fresh local profiles still receive onboarding values.
+        if profiles.should_preserve_onboarding_profile(ctx) {
             log::info!(
-                "Preserving existing cloud default execution profile; skipping \
+                "Preserving existing account execution profile; skipping \
                  onboarding-driven overrides for profile {default_profile_id:?}"
             );
             return;
         }
 
         profiles.set_base_model(
-            default_profile_id,
+            &default_profile_id,
             Some(agent_settings.selected_model_id.clone()),
             ctx,
         );
@@ -200,18 +250,18 @@ fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut App
 
         // Only set permissions that are not enforced by the workspace
         if !workspace_autonomy_settings.has_override_for_code_diffs() {
-            profiles.set_apply_code_diffs(default_profile_id, &permissions.apply_code_diffs, ctx);
+            profiles.set_apply_code_diffs(&default_profile_id, &permissions.apply_code_diffs, ctx);
         }
         if !workspace_autonomy_settings.has_override_for_read_files() {
-            profiles.set_read_files(default_profile_id, &permissions.read_files, ctx);
+            profiles.set_read_files(&default_profile_id, &permissions.read_files, ctx);
         }
         if !workspace_autonomy_settings.has_override_for_execute_commands() {
-            profiles.set_execute_commands(default_profile_id, &permissions.execute_commands, ctx);
+            profiles.set_execute_commands(&default_profile_id, &permissions.execute_commands, ctx);
         }
         // Note: MCP permissions don't have a workspace-level override, so always set them
-        profiles.set_mcp_permissions(default_profile_id, &permissions.mcp_permissions, ctx);
+        profiles.set_mcp_permissions(&default_profile_id, &permissions.mcp_permissions, ctx);
         if !workspace_autonomy_settings.has_override_for_write_to_pty() {
-            profiles.set_write_to_pty(default_profile_id, &permissions.write_to_pty, ctx);
+            profiles.set_write_to_pty(&default_profile_id, &permissions.write_to_pty, ctx);
         }
     });
 }

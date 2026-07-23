@@ -18,6 +18,8 @@ use warpui::r#async::FutureExt;
 use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
 use super::AgentDriverError;
+#[cfg(feature = "local_fs")]
+use super::cache_setup;
 use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
@@ -156,6 +158,18 @@ async fn prepare_environment_impl(
         }
     }
 
+    #[cfg(feature = "local_fs")]
+    if let Some(cache_root) = cache_setup::enabled_cache_root() {
+        let result = setup_events
+            .record_result(
+                SetupStep::CacheSetup,
+                cache_setup::setup_caches(cache_root, source_repos, working_dir, spawner),
+            )
+            .await;
+        if let Err(error) = result {
+            log::warn!("Build cache setup degraded; continuing environment preparation: {error}");
+        }
+    }
     let has_setup_commands = !setup_commands.is_empty();
     if has_setup_commands {
         setup_events

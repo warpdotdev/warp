@@ -9,6 +9,7 @@
 mod config_state;
 mod edit_state;
 mod providers;
+mod remote_child;
 mod snapshots;
 mod validation;
 
@@ -24,6 +25,13 @@ pub use providers::{
 pub(crate) use providers::{
     can_execute_with_auth_secret, persist_auth_secret_selection,
     populate_default_auth_secret_for_execution,
+};
+pub(crate) use remote_child::should_disable_snapshot;
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use remote_child::{
+    CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
+    PrepareRemoteChildLaunchError, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,
+    classify_cloud_agent_startup_error, oz_run_url, prepare_remote_child_launch,
 };
 pub(crate) use snapshots::AUTH_SECRET_INHERIT_LABEL;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]

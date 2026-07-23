@@ -1879,6 +1879,9 @@ impl AgentInputFooter {
                 let voice_transcriber = VoiceTranscriber::as_ref(ctx);
                 if let Some(transcriber) = voice_transcriber.transcriber() {
                     let transcriber = transcriber.clone();
+                    let language = AISettings::as_ref(ctx)
+                        .voice_input_language_code()
+                        .map(str::to_owned);
                     self.cli_voice_input_state = CLIVoiceInputState::Transcribing;
 
                     voice_input::VoiceInput::handle(ctx).update(ctx, |voice, _| {
@@ -1886,7 +1889,7 @@ impl AgentInputFooter {
                     });
 
                     self.cli_transcription_handle = Some(ctx.spawn(
-                        async move { transcriber.transcribe(wav_base64).await },
+                        async move { transcriber.transcribe(wav_base64, language).await },
                         Self::apply_cli_transcribed_voice_input,
                     ));
                 } else {

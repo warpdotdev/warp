@@ -94,6 +94,7 @@ pub(super) fn subscribe_to_shared_dependencies<T>(
             event,
             AISettingsChangedEvent::IsAnyAIEnabled { .. }
                 | AISettingsChangedEvent::ShouldForceDisableCloudHandoff { .. }
+                | AISettingsChangedEvent::AIAutoDetectionEnabled { .. }
         ) {
             recompute_active_commands(me, ctx);
         }
@@ -616,7 +617,7 @@ fn prefix_match_bonus(query: &str, name: &str) -> f64 {
 #[derive(Debug, Clone)]
 pub struct InlineItem {
     pub action: AcceptSlashCommandOrSavedPrompt,
-    pub icon_path: &'static str,
+    pub icon_path: Option<&'static str>,
     pub name: String,
     pub description: Option<String>,
     pub font_family: FamilyId,
@@ -635,7 +636,7 @@ impl InlineItem {
         let appearance = Appearance::as_ref(app);
         Self {
             action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: *command_id },
-            icon_path: command.icon_path,
+            icon_path: command.supported_surfaces.gui_icon_path(),
             name: command.name.to_owned(),
             description: Some(command.description.to_owned()),
             font_family: appearance.monospace_font_family(),
@@ -655,7 +656,7 @@ impl InlineItem {
             action: AcceptSlashCommandOrSavedPrompt::SavedPrompt {
                 id: saved_prompt.id,
             },
-            icon_path: "bundled/svg/prompt.svg",
+            icon_path: Some("bundled/svg/prompt.svg"),
             name: saved_prompt.model().data.name().to_owned(),
             description: None,
             font_family: appearance.ui_font_family(),
@@ -688,7 +689,7 @@ impl InlineItem {
                 reference: skill.reference.clone(),
                 name: skill.name.clone(),
             },
-            icon_path: icon.into(),
+            icon_path: Some(icon.into()),
             name: format!("/{}", &skill.name),
             description: Some(skill.description.clone()),
             font_family: appearance.monospace_font_family(),
