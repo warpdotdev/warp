@@ -110,7 +110,8 @@ pub enum TuiInputViewEvent {
     Submitted(String),
     /// The terminal delivered one complete bracketed-paste payload.
     Pasted(String),
-    /// Backspace was pressed with an empty normal input.
+    /// Backspace was pressed at the start of an empty agent input. Empty shell
+    /// input consumes Backspace to exit shell mode instead.
     BackspaceAtEmptyInput,
     /// The user selected a slash command menu item.
     AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
@@ -149,7 +150,7 @@ pub enum TuiInputAction {
     /// Apply an editing command shared with generic TUI editors.
     EditorCommand(TuiEditorCommand),
     /// Place the cursor at `offset` without starting a drag selection
-    /// (the `!` gutter click).
+    /// (the prompt gutter click).
     SetCursor { offset: CharOffset },
 }
 
@@ -442,52 +443,6 @@ impl TuiInputView {
         self.follow_cursor(ctx);
         ctx.notify();
     }
-
-    /// Composes the shell-mode input row: the accent-styled `!` affordance in a
-    /// two-column gutter (glyph plus one column of right padding), then the
-    /// editor filling the remaining width. The gutter is outside the editable
-    /// area; clicking it places the cursor at the start of the buffer.
-    fn shell_element(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let prefix_style = TuiUiBuilder::from_app(ctx).shell_mode_accent_style();
-        let prefix = TuiHoverable::new(
-            self.prefix_mouse_state.clone(),
-            TuiContainer::new(TuiText::new("!").with_style(prefix_style).finish())
-                .with_padding_right(1)
-                .finish(),
-        )
-        .on_click(|event_ctx, _| {
-            event_ctx.dispatch_typed_action(TuiInputAction::SetCursor {
-                offset: CharOffset::from(1),
-            });
-        });
-        TuiFlex::row()
-            .child(prefix.finish())
-            .flex_child(self.render_input(ctx))
-            .finish()
-    }
-
-    /// Composes the normal-mode input row: the plain cyan `>` affordance in a
-    /// two-column gutter (glyph plus one column of right padding), then the
-    /// editor filling the remaining width. The gutter is outside the editable
-    /// area; clicking it places the cursor at the start of the buffer.
-    fn normal_element(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let prefix_style = TuiUiBuilder::from_app(ctx).accent_text_style();
-        let prefix = TuiHoverable::new(
-            self.prefix_mouse_state.clone(),
-            TuiContainer::new(TuiText::new(">").with_style(prefix_style).finish())
-                .with_padding_right(1)
-                .finish(),
-        )
-        .on_click(|event_ctx, _| {
-            event_ctx.dispatch_typed_action(TuiInputAction::SetCursor {
-                offset: CharOffset::from(1),
-            });
-        });
-        TuiFlex::row()
-            .child(prefix.finish())
-            .flex_child(self.render_input(ctx))
-            .finish()
-    }
 }
 
 impl TuiView for TuiInputView {
@@ -496,11 +451,27 @@ impl TuiView for TuiInputView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        if self.is_shell_mode(ctx) {
-            self.shell_element(ctx)
+        let builder = TuiUiBuilder::from_app(ctx);
+        let (prefix, prefix_style) = if self.is_shell_mode(ctx) {
+            ("!", builder.shell_mode_accent_style())
         } else {
-            self.normal_element(ctx)
-        }
+            (">", builder.accent_text_style())
+        };
+        let prefix = TuiHoverable::new(
+            self.prefix_mouse_state.clone(),
+            TuiContainer::new(TuiText::new(prefix).with_style(prefix_style).finish())
+                .with_padding_right(1)
+                .finish(),
+        )
+        .on_click(|event_ctx, _| {
+            event_ctx.dispatch_typed_action(TuiInputAction::SetCursor {
+                offset: CharOffset::from(1),
+            });
+        });
+        TuiFlex::row()
+            .child(prefix.finish())
+            .flex_child(self.render_input(ctx))
+            .finish()
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {

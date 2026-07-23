@@ -251,7 +251,6 @@ fn agent_mode_placeholder_hint_renders_only_while_empty() {
         });
     });
 }
-
 #[test]
 fn orchestration_hint_is_ghosted_only_while_tabs_are_available_and_input_is_empty() {
     App::test((), |mut app| async move {
@@ -312,17 +311,34 @@ fn shell_mode_placeholder_hint_teaches_exit() {
 }
 
 #[test]
-fn normal_mode_wraps_at_gutter_narrowed_width() {
+fn agent_mode_render_has_prompt_gutter() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
-            type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
-            let (_, area) = laid_out_element(&view, ctx);
-            assert_eq!(area.height, 1);
-            let (_, area) = laid_out_view_row(&view, ctx);
+            let (buffer, cursor, height) = render_view(&view, ctx);
+            assert!(buffer.to_lines()[0].starts_with("> "));
+            assert_eq!(cursor, Some((2, 0)));
+            assert_eq!(height, 1);
+
+            let prefix_style = TuiUiBuilder::from_app(ctx).accent_text_style();
+            let prefix = &buffer[(0, 0)];
             assert_eq!(
-                area.height, 2,
-                "normal mode should wrap two columns earlier"
+                prefix.fg,
+                prefix_style.fg.expect("accent style has a foreground")
+            );
+            assert_eq!(prefix.bg, warpui_core::elements::tui::Color::Reset);
+            assert_eq!(prefix.modifier, prefix_style.add_modifier);
+            assert!(
+                !prefix
+                    .modifier
+                    .contains(warpui_core::elements::tui::Modifier::BOLD)
+            );
+
+            type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
+            assert_eq!(
+                render_view(&view, ctx).2,
+                2,
+                "agent input should wrap at the gutter-narrowed width"
             );
         });
     });
@@ -353,7 +369,10 @@ fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> Tui
     buffer
 }
 
-fn render_view_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> TuiBuffer {
+fn render_view(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+) -> (TuiBuffer, Option<(u16, u16)>, u16) {
     let mut element = view.as_ref(ctx).render(ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut layout_ctx = TuiLayoutContext {
@@ -375,42 +394,11 @@ fn render_view_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> TuiB
             &mut paint_ctx,
         );
     }
-    buffer
-}
-
-fn render_view_snapshot(
-    view: &ViewHandle<TuiInputView>,
-    ctx: &AppContext,
-    width: u16,
-    height: u16,
-) -> (Vec<String>, Option<(u16, u16)>) {
-    let mut element = view.as_ref(ctx).render(ctx);
-    let mut rendered_views = EntityIdMap::default();
-    let mut layout_ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    let size = element.layout(
-        TuiConstraint::loose(TuiSize::new(width, height)),
-        &mut layout_ctx,
-        ctx,
-    );
-    let area = TuiRect::new(0, 0, size.width, size.height);
-    let mut buffer = TuiBuffer::empty(area);
-    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-    {
-        let mut surface = TuiPaintSurface::new(&mut buffer);
-        element.render(
-            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
-            &mut surface,
-            &mut paint_ctx,
-        );
-    }
     let cursor = paint_ctx
         .terminal_cursor()
         .and_then(|point| Some((u16::try_from(point.x).ok()?, u16::try_from(point.y).ok()?)));
-    (buffer.to_lines(), cursor)
+    (buffer, cursor, size.height)
 }
-
 fn render_element_lines(
     mut element: Box<dyn TuiElement>,
     ctx: &AppContext,
@@ -588,7 +576,7 @@ fn typeahead_overwrites_incremental_prefix_and_moves_cursor_to_end() {
             });
 
             assert_eq!(text(&view, ctx), "echo hi");
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((9, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((7, 0)));
         });
     });
 }
@@ -1115,12 +1103,12 @@ fn type_str(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, s: &str) {
     dispatch(view, ctx, &actions);
 }
 
-/// Render the view, lay it out at width `W`, and return `(cursor, height)`.
+/// Render the editor, lay it out at width `W`, and return `(cursor, height)`.
 fn cursor_and_height(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
 ) -> (Option<(u16, u16)>, u16) {
-    let mut element = view.as_ref(ctx).render(ctx);
+    let mut element = view.as_ref(ctx).render_element(ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -1210,7 +1198,7 @@ fn move_left_on_empty_buffer_opens_conversation_menu() {
                     .iter()
                     .any(|line| line.trim() == "No conversations found")
             );
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
         });
     });
 }
@@ -1221,7 +1209,7 @@ fn move_left_on_non_empty_buffer_only_moves_cursor() {
         app.update(|ctx| {
             let (view, menu_model, _) = build_view_with_conversation_menu(ctx);
             type_str(&view, ctx, "ab");
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((4, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
 
             dispatch(
                 &view,
@@ -1230,7 +1218,7 @@ fn move_left_on_non_empty_buffer_only_moves_cursor() {
             );
 
             assert!(!menu_model.as_ref(ctx).is_open);
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((3, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((1, 0)));
             assert!(render_input_buffer(&view, ctx).to_lines()[0].starts_with("ab"));
         });
     });
@@ -1275,90 +1263,12 @@ fn cursor_at_origin_when_empty() {
         app.update(|ctx| {
             let view = build_view(ctx);
             let (cursor, height) = cursor_and_height(&view, ctx);
-            assert_eq!(cursor, Some((2, 0)));
+            assert_eq!(cursor, Some((0, 0)));
             assert_eq!(height, 1);
         });
     });
 }
 
-#[test]
-fn normal_mode_render_has_cyan_prompt_gutter() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            let view = build_view(ctx);
-            let buffer = render_view_buffer(&view, ctx);
-            assert!(buffer.to_lines()[0].starts_with("> "));
-
-            let prefix_style = TuiUiBuilder::from_app(ctx).accent_text_style();
-            let prefix = &buffer[(0, 0)];
-            assert_eq!(
-                prefix.fg,
-                prefix_style.fg.expect("accent style has a foreground")
-            );
-            assert_eq!(prefix.bg, warpui_core::elements::tui::Color::Reset);
-            assert_eq!(prefix.modifier, prefix_style.add_modifier);
-            assert!(
-                !prefix
-                    .modifier
-                    .contains(warpui_core::elements::tui::Modifier::BOLD)
-            );
-            assert_eq!(buffer[(1, 0)].bg, warpui_core::elements::tui::Color::Reset);
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
-        });
-    });
-}
-
-#[test]
-fn render_to_lines_visual_proof_for_prompt_states() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            let view = build_view(ctx);
-
-            let (empty_lines, empty_cursor) = render_view_snapshot(&view, ctx, 18, 4);
-            assert!(empty_lines[0].starts_with("> "));
-            assert_eq!(empty_cursor, Some((2, 0)));
-            println!("empty normal (cursor={empty_cursor:?})");
-            for line in &empty_lines {
-                println!("{line:?}");
-            }
-
-            type_str(&view, ctx, "some text");
-            let (single_line, single_cursor) = render_view_snapshot(&view, ctx, 18, 4);
-            assert!(single_line[0].starts_with("> some text"));
-            assert_eq!(single_cursor, Some((11, 0)));
-            println!("populated single-line (cursor={single_cursor:?})");
-            for line in &single_line {
-                println!("{line:?}");
-            }
-
-            view.update(ctx, |view, ctx| {
-                view.set_text("first row\nsecond row wraps here", ctx);
-            });
-            let (multiline, multiline_cursor) = render_view_snapshot(&view, ctx, 18, 6);
-            assert!(multiline[0].starts_with("> first row"));
-            assert!(
-                multiline.iter().skip(1).all(|line| !line.starts_with('>')),
-                "continuation rows must not repeat the prompt: {multiline:?}"
-            );
-            assert!(multiline.len() >= 3);
-            println!("multiline/wrapped (cursor={multiline_cursor:?})");
-            for line in &multiline {
-                println!("{line:?}");
-            }
-
-            view.update(ctx, |view, ctx| view.clear(ctx));
-            type_str(&view, ctx, "!");
-            assert!(view.as_ref(ctx).is_shell_mode(ctx));
-            let (shell_lines, shell_cursor) = render_view_snapshot(&view, ctx, 18, 4);
-            assert!(shell_lines[0].starts_with("! "));
-            assert!(!shell_lines[0].starts_with("> "));
-            println!("shell mode (cursor={shell_cursor:?})");
-            for line in &shell_lines {
-                println!("{line:?}");
-            }
-        });
-    });
-}
 /// Regression: navigating a freshly-built (empty, never-edited) view must not
 /// panic. The char-cell `line_starts` is seeded with `[0]` at construction, so
 /// the soft-wrap helpers reached via `move_to_line_start` etc. index it safely
@@ -1381,7 +1291,7 @@ fn navigation_on_empty_buffer_does_not_panic() {
                 ],
             );
             let (cursor, height) = cursor_and_height(&view, ctx);
-            assert_eq!(cursor, Some((2, 0)));
+            assert_eq!(cursor, Some((0, 0)));
             assert_eq!(height, 1);
         });
     });
@@ -1394,7 +1304,7 @@ fn cursor_tracks_end_of_single_line() {
             let view = build_view(ctx);
             type_str(&view, ctx, "ab");
             let (cursor, height) = cursor_and_height(&view, ctx);
-            assert_eq!(cursor, Some((4, 0)));
+            assert_eq!(cursor, Some((2, 0)));
             assert_eq!(height, 1);
         });
     });
@@ -1417,7 +1327,7 @@ fn cursor_renders_at_start_of_new_line() {
                 )],
             );
             let (cursor, height) = cursor_and_height(&view, ctx);
-            assert_eq!(cursor, Some((2, 1)), "cursor should be at row 1, col 2");
+            assert_eq!(cursor, Some((0, 1)), "cursor should be at row 1, col 0");
             assert!(height >= 2, "two visual rows expected, got height {height}");
         });
     });
@@ -1443,7 +1353,7 @@ fn interior_empty_line_does_not_collapse() {
             type_str(&view, ctx, "b");
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(height, 3, "three visual rows expected");
-            assert_eq!(cursor, Some((3, 2)), "cursor should be on the 3rd row");
+            assert_eq!(cursor, Some((1, 2)), "cursor should be on the 3rd row");
         });
     });
 }
@@ -1475,7 +1385,7 @@ fn move_up_through_empty_line_positions_cursor() {
             assert_eq!(height, 3);
             assert_eq!(
                 cursor,
-                Some((2, 1)),
+                Some((0, 1)),
                 "cursor should be on the empty 2nd row"
             );
         });
@@ -1605,7 +1515,7 @@ fn clear_empties_buffer_and_resets_scroll() {
             assert!(view.as_ref(ctx).is_empty(ctx));
             assert_eq!(text(&view, ctx), "");
             assert_eq!(scroll_offset(&view, ctx), 0);
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
         });
     });
 }
@@ -1678,7 +1588,7 @@ fn move_to_line_start_and_end_multiline() {
                     TuiEditorCommand::MoveToLineStart,
                 )],
             );
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 1)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 1)));
             dispatch(
                 &view,
                 ctx,
@@ -1686,7 +1596,7 @@ fn move_to_line_start_and_end_multiline() {
                     TuiEditorCommand::MoveToLineEnd,
                 )],
             );
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((5, 1)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((3, 1)));
         });
     });
 }
@@ -1702,7 +1612,7 @@ fn cursor_accounts_for_wide_chars() {
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(
                 cursor,
-                Some((6, 0)),
+                Some((4, 0)),
                 "two double-width chars → cursor col 4"
             );
             assert_eq!(height, 1);
@@ -1720,7 +1630,7 @@ fn cursor_accounts_for_zero_width_chars() {
             let view = build_view(ctx);
             type_str(&view, ctx, "a\u{0301}b");
             let (cursor, _height) = cursor_and_height(&view, ctx);
-            assert_eq!(cursor, Some((4, 0)), "a + combining + b → 4 display cols");
+            assert_eq!(cursor, Some((2, 0)), "a + combining + b → 2 display cols");
         });
     });
 }
@@ -1733,21 +1643,21 @@ fn cursor_accounts_for_multi_char_graphemes() {
             type_str(&view, ctx, "\u{2328}\u{fe0f}");
             assert_eq!(
                 cursor_and_height(&view, ctx).0,
-                Some((4, 0)),
+                Some((2, 0)),
                 "VS16 emoji occupies two columns"
             );
 
             type_str(&view, ctx, "👨‍👩‍👧‍👦");
             assert_eq!(
                 cursor_and_height(&view, ctx).0,
-                Some((6, 0)),
+                Some((4, 0)),
                 "ZWJ family adds two columns"
             );
 
             type_str(&view, ctx, "🇺🇸");
             assert_eq!(
                 cursor_and_height(&view, ctx).0,
-                Some((8, 0)),
+                Some((6, 0)),
                 "regional-indicator flag adds two columns"
             );
         });
@@ -1762,7 +1672,7 @@ fn multi_char_grapheme_wraps_as_one_unit() {
             type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
             type_str(&view, ctx, "\u{2328}\u{fe0f}");
 
-            assert_eq!(cursor_and_height(&view, ctx), (Some((5, 1)), 2));
+            assert_eq!(cursor_and_height(&view, ctx), (Some((2, 1)), 2));
         });
     });
 }
@@ -1783,7 +1693,7 @@ fn input_grows_when_line_exactly_fills_width() {
             assert_eq!(scroll_offset(&view, ctx), 0, "first row must stay visible");
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(height, 2, "wrapped cursor row must be shown");
-            assert_eq!(cursor, Some((4, 1)), "cursor wraps to start of next row");
+            assert_eq!(cursor, Some((0, 1)), "cursor wraps to start of next row");
         });
     });
 }
@@ -1799,7 +1709,7 @@ fn input_grows_when_first_line_softwraps() {
             assert_eq!(scroll_offset(&view, ctx), 0, "first row must stay visible");
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(height, 2, "two visual rows expected");
-            assert_eq!(cursor, Some((9, 1)), "cursor on second row after wrap");
+            assert_eq!(cursor, Some((5, 1)), "cursor on second row after wrap");
         });
     });
 }
@@ -1942,7 +1852,7 @@ fn printable_input_is_accepted_only_while_focused() {
         assert!(app.read(|ctx| dispatch_element_event(&view, ctx, &printable_key('a'))));
         assert_eq!(
             app.read(|ctx| cursor_and_height(&view, ctx).0),
-            Some((2, 0))
+            Some((0, 0))
         );
 
         let focus_target = view.update(&mut app, |_, ctx| ctx.add_tui_view(|_| FocusTarget));
@@ -1985,7 +1895,7 @@ fn single_click_places_cursor() {
             type_str(&view, ctx, "hello world");
             assert!(mouse(&view, ctx, &left_down(3, 0, 1, false)));
             assert!(mouse(&view, ctx, &left_up(3, 0)));
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((5, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((3, 0)));
             assert_eq!(selected_text(&view, ctx), None);
         });
     });
@@ -2002,7 +1912,7 @@ fn clicks_map_around_wide_grapheme() {
             mouse(&view, ctx, &left_up(2, 0));
             assert_eq!(
                 cursor_and_height(&view, ctx).0,
-                Some((3, 0)),
+                Some((1, 0)),
                 "clicking inside the wide grapheme places the cursor before it"
             );
 
@@ -2010,7 +1920,7 @@ fn clicks_map_around_wide_grapheme() {
             mouse(&view, ctx, &left_up(3, 0));
             assert_eq!(
                 cursor_and_height(&view, ctx).0,
-                Some((5, 0)),
+                Some((3, 0)),
                 "clicking after the wide grapheme places the cursor after it"
             );
         });
@@ -2028,14 +1938,14 @@ fn click_on_phantom_wrap_row_keeps_cursor_at_end() {
             type_str(&view, ctx, &"a".repeat(W as usize));
             // The exactly-full line renders two rows: the text row and the
             // phantom cursor row below it.
-            assert_eq!(cursor_and_height(&view, ctx), (Some((4, 1)), 2));
+            assert_eq!(cursor_and_height(&view, ctx), (Some((0, 1)), 2));
 
             // Click the phantom row at its left edge.
             assert!(mouse(&view, ctx, &left_down(0, 1, 1, false)));
             assert!(mouse(&view, ctx, &left_up(0, 1)));
 
             // The cursor stays at the buffer end (and the row stays rendered).
-            assert_eq!(cursor_and_height(&view, ctx), (Some((4, 1)), 2));
+            assert_eq!(cursor_and_height(&view, ctx), (Some((0, 1)), 2));
             assert_eq!(selected_text(&view, ctx), None);
         });
     });
@@ -2219,8 +2129,8 @@ fn wheel_outside_area_is_ignored() {
 // Mode *transitions* live on the shared `BlocklistAIInputModel` (exercised by
 // the app crate's `input_model` tests; the view tests drive it through
 // [`BlocklistAIInputModel::mock`]); these tests cover the view's `!` trigger,
-// the submit/clear split, and the shell-mode gutter geometry of the composed
-// `!`-affordance row (built directly via `TuiInputView::shell_element`).
+// the submit/clear split, and the shell-mode gutter geometry of the shared
+// input row.
 
 /// A `!` typed at the start of the buffer enters shell mode without inserting;
 /// subsequent text lands in the buffer.
@@ -2275,27 +2185,7 @@ fn autodetected_unlocked_shell_uses_shell_mode_ui() {
             });
 
             assert!(view.as_ref(ctx).is_shell_mode(ctx));
-            let mut element = view.as_ref(ctx).render(ctx);
-            let mut rendered_views = EntityIdMap::default();
-            let mut layout_ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let size = element.layout(
-                TuiConstraint::loose(TuiSize::new(W, 20)),
-                &mut layout_ctx,
-                ctx,
-            );
-            let area = TuiRect::new(0, 0, size.width, size.height);
-            let mut buffer = TuiBuffer::empty(area);
-            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-            {
-                let mut surface = TuiPaintSurface::new(&mut buffer);
-                element.render(
-                    TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
-                    &mut surface,
-                    &mut paint_ctx,
-                );
-            }
+            let (buffer, _, _) = render_view(&view, ctx);
             assert!(buffer.to_lines()[0].starts_with("! "));
         });
     });
@@ -2330,7 +2220,7 @@ fn submit_keeps_buffer_until_cleared() {
             assert_eq!(text(&view, ctx), "ab", "submit must not clear the buffer");
             view.update(ctx, |v, vctx| v.clear(vctx));
             assert_eq!(text(&view, ctx), "");
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
         });
     });
 }
@@ -2389,25 +2279,13 @@ fn keymap_context_flags_shell_mode() {
     });
 }
 
-/// Lays out the shell-mode composition (the `!` gutter row wrapping the
-/// editor) at width `W`, returning the boxed row element and its area.
-fn laid_out_view_row(
+/// Lays out the shared input row at width `W`, returning the boxed element and
+/// its area.
+fn laid_out_input_row(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
 ) -> (Box<dyn TuiElement>, TuiRect) {
     let mut element = view.as_ref(ctx).render(ctx);
-    let mut rendered_views = EntityIdMap::default();
-    let mut lctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
-    (element, TuiRect::new(0, 0, size.width, size.height))
-}
-fn laid_out_shell_row(
-    view: &ViewHandle<TuiInputView>,
-    ctx: &AppContext,
-) -> (Box<dyn TuiElement>, TuiRect) {
-    let mut element = view.as_ref(ctx).shell_element(ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -2441,8 +2319,8 @@ fn shell_mode_offsets_cursor_by_gutter() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
-            type_str(&view, ctx, "ab");
-            let (mut element, area) = laid_out_shell_row(&view, ctx);
+            type_str(&view, ctx, "!ab");
+            let (mut element, area) = laid_out_input_row(&view, ctx);
             let mut rendered_views = EntityIdMap::default();
             let mut buffer = TuiBuffer::empty(area);
             let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
@@ -2470,7 +2348,7 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
-            type_str(&view, ctx, "hello world");
+            type_str(&view, ctx, "!hello world");
             let action = {
                 let (mut element, area) = laid_out_shell_content_slot(&view, ctx);
                 let scene = paint_event_scene(&mut element, area);
@@ -2490,7 +2368,7 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             // A press on the gutter arms the `!` affordance's click, and the
             // release inside it fires the handler (which moves the cursor to
             // the buffer start); both halves are consumed.
-            let (mut row, area) = laid_out_shell_row(&view, ctx);
+            let (mut row, area) = laid_out_input_row(&view, ctx);
             let scene = paint_event_scene(row.as_mut(), area);
             let mut rendered_views = EntityIdMap::default();
             let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
@@ -2507,36 +2385,6 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
     });
 }
 
-#[test]
-fn normal_prompt_gutter_click_places_cursor_without_selecting() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            let view = build_view(ctx);
-            type_str(&view, ctx, "hello");
-
-            let (mut row, area) = laid_out_view_row(&view, ctx);
-            let scene = paint_event_scene(row.as_mut(), area);
-            let mut rendered_views = EntityIdMap::default();
-            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
-            event_ctx.set_origin_view(Some(view.id()));
-            assert!(row.dispatch_event(&left_down(0, 0, 1, false), &mut event_ctx, ctx));
-            assert!(row.dispatch_event(&left_up(0, 0), &mut event_ctx, ctx));
-            // The runtime drains the click's queued typed action after event
-            // dispatch; apply the same action here to assert its semantics.
-            dispatch(
-                &view,
-                ctx,
-                &[TuiInputAction::SetCursor {
-                    offset: CharOffset::from(1),
-                }],
-            );
-
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
-            assert_eq!(selected_text(&view, ctx), None);
-            assert!(!is_drag_selecting(&view, ctx));
-        });
-    });
-}
 /// The gutter click places the cursor without starting a drag selection
 /// (`SetCursor`), so a later drag cannot extend a stale selection anchored at
 /// the buffer start.
@@ -2554,7 +2402,7 @@ fn gutter_click_places_cursor_without_selecting() {
                     offset: CharOffset::from(1),
                 }],
             );
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
             assert!(!is_drag_selecting(&view, ctx));
             assert_eq!(selected_text(&view, ctx), None);
 
@@ -2573,11 +2421,12 @@ fn shell_mode_wraps_at_gutter_narrowed_width() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
+            type_str(&view, ctx, "!");
             // W - 1 chars: fits one row at width W, wraps at width W - 2.
             type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
             let (_, area) = laid_out_element(&view, ctx);
             assert_eq!(area.height, 1);
-            let (_, area) = laid_out_shell_row(&view, ctx);
+            let (_, area) = laid_out_input_row(&view, ctx);
             assert_eq!(area.height, 2, "shell mode should wrap two columns earlier");
         });
     });
