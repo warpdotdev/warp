@@ -1035,8 +1035,13 @@ pub enum Event {
         attachments: Vec<AgentAttachment>,
     },
     /// A disconnected Cloud Mode pane is requesting to submit a cloud follow-up.
+    ///
+    /// `attachments` carries any pending image/file attachments that must be uploaded to
+    /// GCS via `prepare_attachments_for_upload` before the follow-up text is dispatched. The
+    /// next remote execution picks the uploaded files up via `fetch_and_download_attachments`.
     SubmitCloudFollowup {
         prompt: String,
+        attachments: Vec<PendingAttachment>,
     },
     /// A viewer in a shared session is requesting to cancel the active agent conversation.
     CancelSharedSessionConversation {
@@ -4104,7 +4109,16 @@ impl Input {
             AIQueryRouting::NewCloudVm { .. } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled() {
                     let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-                    ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    // Stage pending attachments onto the follow-up so the view can upload them
+                    // to GCS before dispatching the text. Taking them clears the attachment
+                    // chips now; the upload path restores them on failure so the user can retry.
+                    let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.take_pending_attachments(ctx)
+                    });
+                    ctx.emit(Event::SubmitCloudFollowup {
+                        prompt,
+                        attachments,
+                    });
                 } else {
                     // Cloud-to-cloud follow-up is unavailable; block rather than run locally.
                     self.show_ephemeral_error_toast(
@@ -14065,17 +14079,17 @@ impl Input {
                 });
 
         if is_ready_for_cloud_followup {
-            // Cloud follow-up does not support attachments; a queued row's attachments are dropped
-            // when the row is removed after dispatch.
-            let drops_attachments = !QueuedQueryModel::as_ref(ctx)
+            // Carry the fired row's attachments onto the follow-up so the view can upload them
+            // to GCS before dispatching the text. The row is peeked (not yet removed) here, so its
+            // attachments are still readable; `drain_queued_prompts` removes the row after this
+            // returns. On upload failure the view restores them to the context model for retry.
+            let attachments = QueuedQueryModel::as_ref(ctx)
                 .attachments_for(conversation_id, query_id)
-                .is_empty();
-            if drops_attachments {
-                log::warn!(
-                    "Dropping attachments on a queued cloud follow-up prompt; cloud follow-up does not support attachments"
-                );
-            }
-            ctx.emit(Event::SubmitCloudFollowup { prompt });
+                .to_vec();
+            ctx.emit(Event::SubmitCloudFollowup {
+                prompt,
+                attachments,
+            });
             return;
         }
 
@@ -14822,6 +14836,284 @@ impl Input {
                     prompt,
                     attachments: all_attachments,
                 });
+            },
+        );
+    }
+
+    /// Submit a cloud follow-up, uploading any staged `attachments` to GCS first.
+    ///
+    /// With no attachments (or the image-context flag off) the follow-up text is submitted
+    /// immediately — the existing text-only path. With attachments, the input is frozen for the
+    /// duration of the upload (`prepare_attachments_for_upload` + PUT to the presigned GCS URLs)
+    /// and the follow-up is dispatched only after the files are uploaded, so the next remote
+    /// execution's `fetch_and_download_attachments` picks them up. On upload failure the
+    /// attachments are restored to the context model and the input is unfrozen so the user can
+    /// retry. `submit_cloud_followup` itself is unchanged — the upload is a client-side pre-step.
+    pub(crate) fn submit_cloud_followup_with_attachments(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        prompt: String,
+        attachments: Vec<PendingAttachment>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let has_uploads =
+            !attachments.is_empty() && FeatureFlag::CloudModeImageContext.is_enabled();
+
+        if !has_uploads {
+            // No attachments to upload — dispatch the text-only follow-up immediately.
+            ambient_agent_view_model.update(ctx, |model, ctx| {
+                model.submit_cloud_followup(prompt, ctx);
+            });
+            self.reset_after_cloud_followup_submission(ctx);
+            self.set_input_mode_agent(true, ctx);
+            return;
+        }
+
+        // Freeze the input so the user can't re-submit while the upload is in flight. The
+        // ephemeral `{prompt} ◌` overlay preserves the real buffer underneath, which
+        // `unfreeze_cloud_followup_input` restores on failure.
+        self.freeze_input_in_loading_state_with_text(&prompt, ctx);
+
+        self.upload_files_then_submit_cloud_followup(
+            task_id,
+            ambient_agent_view_model,
+            prompt,
+            &attachments,
+            ctx,
+        );
+    }
+
+    /// Restores the editor to an editable state after a follow-up upload was abandoned, undoing
+    /// the ephemeral loading overlay set by `freeze_input_in_loading_state_with_text`. Unlike
+    /// `unfreeze_agent_input`, this works for the cloud-follow-up owner pane, which is not a
+    /// shared-session viewer/sharer.
+    fn unfreeze_cloud_followup_input(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.exit_ephemeral_loading_state(ctx);
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            let appearance = Appearance::as_ref(ctx);
+            editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
+        });
+    }
+
+    /// Builds the GCS upload payload for follow-up attachments: decodes pending images and reads
+    /// pending files from disk, dropping any that exceed the 10MB size limit. Returns
+    /// `(files, skipped)` where `files` are `(filename, mime_type, bytes)` ready to upload and
+    /// `skipped` are the filenames left behind for being oversized.
+    ///
+    /// Pure and allocation-only so it can be unit-tested without a view context.
+    fn build_followup_attachment_upload_payload(
+        attachments: &[PendingAttachment],
+    ) -> (Vec<(String, String, Vec<u8>)>, Vec<String>) {
+        let mut files: Vec<(String, String, Vec<u8>)> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+        for attachment in attachments {
+            match attachment {
+                PendingAttachment::Image(image) => {
+                    match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                        Ok(bytes) => {
+                            if bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
+                                skipped.push(image.file_name.clone());
+                            } else {
+                                files.push((
+                                    image.file_name.clone(),
+                                    image.mime_type.clone(),
+                                    bytes,
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            report_error!(
+                                anyhow::Error::new(e)
+                                    .context("Failed to decode image attachment for follow-up"),
+                                extra: { "file_name" => %image.file_name }
+                            );
+                        }
+                    }
+                }
+                PendingAttachment::File(file) => match std::fs::read(&file.file_path) {
+                    Ok(bytes) => {
+                        if bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
+                            skipped.push(file.file_name.clone());
+                        } else {
+                            files.push((file.file_name.clone(), file.mime_type.clone(), bytes));
+                        }
+                    }
+                    Err(e) => {
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("Failed to read file attachment for follow-up"),
+                            extra: { "path" => %file.file_path.display() }
+                        );
+                    }
+                },
+            }
+        }
+        (files, skipped)
+    }
+
+    /// Uploads `attachments` to GCS for `task_id`, then dispatches the follow-up text. Mirrors
+    /// [`Self::upload_files_then_send_prompt`] but submits a cloud follow-up (which has no
+    /// attachment-aware API) instead of emitting `SendAgentPrompt`: once
+    /// `prepare_attachments_for_upload` registers the attachment metadata on the task, the next
+    /// execution picks the files up automatically.
+    #[allow(clippy::too_many_arguments)]
+    fn upload_files_then_submit_cloud_followup(
+        &mut self,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        prompt: String,
+        attachments: &[PendingAttachment],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let server_api = ServerApiProvider::as_ref(ctx).get();
+
+        let (files_to_upload, skipped) =
+            Self::build_followup_attachment_upload_payload(attachments);
+
+        // Surface oversized files so the user knows they were left behind.
+        if !skipped.is_empty() {
+            let window_id = ctx.window_id();
+            let message = if skipped.len() == 1 {
+                format!("{} was not attached — exceeds 10MB limit.", skipped[0])
+            } else {
+                format!(
+                    "{} files were not attached — exceed 10MB limit.",
+                    skipped.len()
+                )
+            };
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
+            });
+        }
+
+        let attachments_for_retry = attachments.to_vec();
+
+        if files_to_upload.is_empty() {
+            // Nothing uploadable — restore the attachments so the user can drop the oversized
+            // ones and retry, and bail without dispatching the follow-up.
+            self.ai_context_model.update(ctx, |context_model, ctx| {
+                context_model.append_pending_attachments(attachments_for_retry, ctx);
+            });
+            self.unfreeze_cloud_followup_input(ctx);
+            return;
+        }
+
+        let file_infos: Vec<AttachmentFileInfo> = files_to_upload
+            .iter()
+            .map(|(name, mime, _)| AttachmentFileInfo {
+                filename: name.clone(),
+                mime_type: mime.clone(),
+            })
+            .collect();
+
+        let total = files_to_upload.len();
+        ctx.spawn(
+            async move {
+                let response = match ai_client
+                    .prepare_attachments_for_upload(&task_id, &file_infos)
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        report_error!(
+                            e.context("Failed to prepare attachment uploads for follow-up"),
+                            extra: { "task_id" => %task_id }
+                        );
+                        return None;
+                    }
+                };
+
+                let mut uploaded = 0;
+                for ((_, mime_type, file_bytes), upload_info) in
+                    files_to_upload.iter().zip(response.attachments.iter())
+                {
+                    let result = server_api
+                        .http_client()
+                        .put(&upload_info.upload_url)
+                        .header("Content-Type", mime_type.as_str())
+                        .body(file_bytes.clone())
+                        .send()
+                        .await;
+
+                    match result {
+                        Ok(resp) if resp.status().is_success() => uploaded += 1,
+                        Ok(resp) => {
+                            report_error!(
+                                "Failed to upload follow-up attachment: unexpected HTTP status",
+                                extra: { "status" => %resp.status() }
+                            );
+                        }
+                        Err(e) => {
+                            report_error!(
+                                anyhow::Error::new(e)
+                                    .context("Failed to upload follow-up attachment")
+                            );
+                        }
+                    }
+                }
+
+                if uploaded < total {
+                    log::warn!(
+                        "Only {uploaded}/{total} follow-up attachments uploaded successfully"
+                    );
+                }
+
+                Some(uploaded)
+            },
+            move |input, maybe_uploaded, ctx| {
+                let uploaded = match maybe_uploaded {
+                    None => {
+                        // Prepare failed (e.g. attachment limit exceeded). Restore the
+                        // attachments so the user can retry, unfreeze the input, and toast.
+                        input.ai_context_model.update(ctx, |context_model, ctx| {
+                            context_model.append_pending_attachments(attachments_for_retry, ctx);
+                        });
+                        input.unfreeze_cloud_followup_input(ctx);
+                        let window_id = ctx.window_id();
+                        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::error(
+                                    "Couldn't upload the attached file. Try again.".to_string(),
+                                ),
+                                window_id,
+                                ctx,
+                            );
+                        });
+                        return;
+                    }
+                    Some(uploaded) => uploaded,
+                };
+
+                // Upload completed (possibly partial — the successful files are in GCS with
+                // metadata registered on the task). Dispatch the follow-up text and clear the
+                // staged attachments.
+                if uploaded < total {
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::default(
+                                "Some files couldn't be uploaded; the follow-up was sent with the rest."
+                                    .to_string(),
+                            ),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                }
+                input.ai_context_model.update(ctx, |context_model, ctx| {
+                    context_model.clear_pending_attachments(ctx);
+                });
+                input.editor.update(ctx, |editor, ctx| {
+                    editor.exit_ephemeral_loading_state(ctx);
+                });
+                ambient_agent_view_model.update(ctx, |model, ctx| {
+                    model.submit_cloud_followup(prompt, ctx);
+                });
+                input.reset_after_cloud_followup_submission(ctx);
+                input.set_input_mode_agent(true, ctx);
             },
         );
     }

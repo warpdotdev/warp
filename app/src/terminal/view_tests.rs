@@ -1988,7 +1988,7 @@ fn pending_cloud_followup_without_ambient_model_restores_prompt() {
         terminal.update(&mut app, |view, ctx| {
             view.pending_cloud_followup_task_id = Some(task_id);
 
-            assert!(view.try_submit_pending_cloud_followup("follow up".to_string(), ctx));
+            assert!(view.try_submit_pending_cloud_followup("follow up".to_string(), vec![], ctx));
         });
 
         terminal.read(&app, |view, ctx| {

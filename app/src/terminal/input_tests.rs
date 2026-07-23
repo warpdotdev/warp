@@ -9284,3 +9284,68 @@ fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
         });
     });
 }
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn build_followup_attachment_upload_payload_reads_files_and_decodes_images() {
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
+    let temp_dir = std::env::temp_dir();
+    let file_path = temp_dir.join("warp_followup_attach_test_script.py");
+    std::fs::write(&file_path, "print('hi')").expect("write file");
+
+    let file_attachment = PendingAttachment::File(PendingFile {
+        file_name: "script.py".to_owned(),
+        file_path: file_path.clone(),
+        mime_type: "text/x-python".to_owned(),
+    });
+    let image_bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    let image_attachment = PendingAttachment::Image(ImageContext {
+        data: BASE64.encode(&image_bytes),
+        mime_type: "image/png".to_owned(),
+        file_name: "pic.png".to_owned(),
+        is_figma: false,
+    });
+
+    let (files, skipped) =
+        Input::build_followup_attachment_upload_payload(&[file_attachment, image_attachment]);
+
+    assert!(skipped.is_empty(), "no attachments should be skipped");
+    assert_eq!(files.len(), 2);
+    let by_name: std::collections::HashMap<&str, &(String, String, Vec<u8>)> =
+        files.iter().map(|t| (t.0.as_str(), t)).collect();
+    let file_entry = by_name["script.py"];
+    assert_eq!(file_entry.1, "text/x-python");
+    assert_eq!(file_entry.2, b"print('hi')");
+    let image_entry = by_name["pic.png"];
+    assert_eq!(image_entry.1, "image/png");
+    assert_eq!(image_entry.2, &image_bytes);
+
+    let _ = std::fs::remove_file(file_path);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn build_followup_attachment_upload_payload_skips_oversized_files() {
+    let temp_dir = std::env::temp_dir();
+    let file_path = temp_dir.join("warp_followup_attach_test_big.bin");
+    // Write a file just over the 10MB attachment limit.
+    let oversize = MAX_ATTACHMENT_SIZE_BYTES + 1;
+    std::fs::write(&file_path, vec![0u8; oversize]).expect("write file");
+
+    let attachment = PendingAttachment::File(PendingFile {
+        file_name: "big.bin".to_owned(),
+        file_path: file_path.clone(),
+        mime_type: "application/octet-stream".to_owned(),
+    });
+
+    let (files, skipped) = Input::build_followup_attachment_upload_payload(&[attachment]);
+
+    assert!(
+        files.is_empty(),
+        "oversized file should not be included in the upload payload"
+    );
+    assert_eq!(skipped, vec!["big.bin".to_owned()]);
+
+    let _ = std::fs::remove_file(file_path);
+}

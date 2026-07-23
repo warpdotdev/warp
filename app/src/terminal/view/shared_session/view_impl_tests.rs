@@ -1993,9 +1993,13 @@ fn test_try_submit_pending_cloud_followup_allows_repeat_submission_for_owned_tas
             });
 
             view.enable_cloud_followup_input(task_id, ctx);
-            assert!(view.try_submit_pending_cloud_followup("follow up".to_string(), ctx));
+            assert!(view.try_submit_pending_cloud_followup("follow up".to_string(), vec![], ctx));
             assert_eq!(view.pending_cloud_followup_task_id, Some(task_id));
-            assert!(view.try_submit_pending_cloud_followup("second follow up".to_string(), ctx));
+            assert!(view.try_submit_pending_cloud_followup(
+                "second follow up".to_string(),
+                vec![],
+                ctx
+            ));
             assert_eq!(view.pending_cloud_followup_task_id, Some(task_id));
             assert_eq!(
                 ambient_agent_view_model
@@ -2038,7 +2042,7 @@ fn test_try_submit_pending_cloud_followup_rejects_task_source_that_blocks_follow
             });
 
             view.enable_cloud_followup_input(task_id, ctx);
-            assert!(!view.try_submit_pending_cloud_followup("follow up".to_string(), ctx));
+            assert!(!view.try_submit_pending_cloud_followup("follow up".to_string(), vec![], ctx));
             assert_eq!(view.pending_cloud_followup_task_id, None);
             assert_eq!(
                 ambient_agent_view_model

@@ -553,7 +553,7 @@ fn terminal_cloud_status_transition_drains_once_through_cloud_followup_input_eve
         let followup_events_for_subscription = followup_events.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&input, move |_, event: &InputEvent, _| {
-                if let InputEvent::SubmitCloudFollowup { prompt } = event {
+                if let InputEvent::SubmitCloudFollowup { prompt, .. } = event {
                     followup_events_for_subscription
                         .borrow_mut()
                         .push(prompt.clone());

@@ -21248,6 +21248,7 @@ impl TerminalView {
     fn try_submit_pending_cloud_followup(
         &mut self,
         prompt: String,
+        attachments: Vec<PendingAttachment>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if !FeatureFlag::HandoffCloudCloud.is_enabled() {
@@ -21291,19 +21292,25 @@ impl TerminalView {
             return true;
         }
 
-        ambient_agent_view_model.update(ctx, |model, ctx| {
-            model.submit_cloud_followup(prompt, ctx);
+        // Upload any staged attachments to GCS before dispatching the text follow-up. When
+        // there are none, `submit_cloud_followup_with_attachments` submits immediately (the
+        // original text-only path). The upload freezes the input and restores the attachments
+        // on failure so the user can retry.
+        let followup_task_id = task_id;
+        self.input.update(ctx, |input, ctx| {
+            input.submit_cloud_followup_with_attachments(
+                ambient_agent_view_model.clone(),
+                followup_task_id,
+                prompt,
+                attachments,
+                ctx,
+            );
         });
 
-        self.input.update(ctx, |input, ctx| {
-            input.reset_after_cloud_followup_submission(ctx);
-            input.set_input_mode_agent(true, ctx);
-        });
         self.update_pane_configuration(ctx);
         ctx.notify();
         true
     }
-
     fn handle_input_event(&mut self, event: &InputEvent, ctx: &mut ViewContext<Self>) {
         match event {
             InputEvent::Enter => self.clear_prompt_suggestions(ctx),
@@ -21363,9 +21370,16 @@ impl TerminalView {
                     attachments: attachments.clone(),
                 });
             }
-            InputEvent::SubmitCloudFollowup { prompt } => {
+            InputEvent::SubmitCloudFollowup {
+                prompt,
+                attachments,
+            } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled()
-                    && self.try_submit_pending_cloud_followup(prompt.clone(), ctx)
+                    && self.try_submit_pending_cloud_followup(
+                        prompt.clone(),
+                        attachments.clone(),
+                        ctx,
+                    )
                 {
                     return;
                 }
