@@ -415,10 +415,10 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
                 "alt-enter".to_string(),
             ])
         );
-        let copy = HashSet::from(["ctrl-shift-C".to_string(), "cmd-c".to_string()]);
+        let copy = HashSet::from(["ctrl-shift-C".to_string(), "alt-w".to_string()]);
         assert_eq!(triggers_for("tui:input:copy"), copy);
         assert_eq!(triggers_for("tui:editor:copy"), copy);
-        let cut = HashSet::from(["ctrl-x".to_string(), "cmd-x".to_string()]);
+        let cut = HashSet::from(["ctrl-x".to_string()]);
         assert_eq!(triggers_for("tui:input:cut"), cut);
         assert_eq!(triggers_for("tui:editor:cut"), cut);
         assert!(app.read(|ctx| ctx.get_binding_by_name("tui:editor:move_up").is_none()));

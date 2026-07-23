@@ -278,14 +278,14 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         input_name: Some("tui:input:copy"),
         editor_name: Some("tui:editor:copy"),
         description: "Copy selected text",
-        keys: &["ctrl-shift-C", "cmd-c"],
+        keys: &["ctrl-shift-C", "alt-w"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::Cut,
         input_name: Some("tui:input:cut"),
         editor_name: Some("tui:editor:cut"),
         description: "Cut selected text",
-        keys: &["ctrl-x", "cmd-x"],
+        keys: &["ctrl-x"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::KillToLineEnd,
