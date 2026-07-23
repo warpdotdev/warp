@@ -3,7 +3,8 @@ use clap::{Args, Subcommand};
 /// Model-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum ModelCommand {
-    /// List available models.
+    /// List available models for the Warp Agent harness. For third party harnesses,
+    /// consult third party harness docs for available models.
     List,
 }
 

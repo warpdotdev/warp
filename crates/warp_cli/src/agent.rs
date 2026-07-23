@@ -604,11 +604,6 @@ pub struct RunCloudArgs {
     /// "oz" (the default) runs on Warp's built-in agent infrastructure. Other
     /// values delegate the run to an external agent CLI; see the possible
     /// values below.
-    ///
-    /// To select a specific model for a third-party harness, combine with
-    /// `--model`. For example: `--harness claude --model opus` or
-    /// `--harness claude --model claude-opus-4-8`. See `--model --help` for
-    /// the full list of accepted values per harness.
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz)]
     pub harness: Harness,
 
