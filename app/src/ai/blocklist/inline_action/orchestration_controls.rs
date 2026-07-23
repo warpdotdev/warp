@@ -45,6 +45,7 @@ pub use crate::ai::orchestration::{
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
+use crate::server::experiments::{ServerExperiment, ServerExperiments};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::FilterableDropdown;
@@ -66,6 +67,26 @@ const ORCHESTRATION_SEGMENT_VERTICAL_PADDING: f32 = 4.;
 /// Label for the auth secret column.
 pub const AUTH_SECRET_COLUMN_LABEL: &str = "API key";
 const AUTH_SECRET_CREATE_NEW_LABEL: &str = "New API key…";
+
+/// Returns whether the client should expose the remote runner controls.
+///
+/// Both the feature flag and the server-side experiment test arm are required.
+/// Keeping this predicate here ensures the picker creation and rendering paths
+/// use the same gate.
+pub fn runner_controls_enabled(ctx: &AppContext) -> bool {
+    runner_controls_enabled_for_state(
+        FeatureFlag::CloudAgentRunners.is_enabled(),
+        ServerExperiments::as_ref(ctx)
+            .is_experiment_enabled(&ServerExperiment::MacosRunnersExperiment),
+    )
+}
+
+fn runner_controls_enabled_for_state(
+    cloud_agent_runners_enabled: bool,
+    macos_runners_experiment_enabled: bool,
+) -> bool {
+    cloud_agent_runners_enabled && macos_runners_experiment_enabled
+}
 
 // ── Action trait ────────────────────────────────────────────────────
 
@@ -96,7 +117,8 @@ pub struct OrchestrationPickerHandles<A: OrchestrationControlAction> {
     pub model_picker: Option<ViewHandle<FilterableDropdown<A>>>,
     pub harness_picker: Option<ViewHandle<Dropdown<A>>>,
     pub environment_picker: Option<ViewHandle<FilterableDropdown<A>>>,
-    /// Runner picker for the Cloud variant (gated on `CloudAgentRunners`).
+    /// Runner picker for the Cloud variant (gated on `CloudAgentRunners` and
+    /// the macOS runner experiment test arm).
     /// `None` until built; runners are fetched via `FactoryClient::get_runners`.
     pub runner_picker: Option<ViewHandle<FilterableDropdown<A>>>,
     pub host_picker: Option<ViewHandle<HostPicker>>,
@@ -1121,8 +1143,9 @@ pub fn render_picker_row<A: OrchestrationControlAction>(
     state: &OrchestrationConfigState,
     handles: &OrchestrationPickerHandles<A>,
     appearance: &Appearance,
+    show_runner_controls: bool,
 ) -> Box<dyn Element> {
-    render_picker_row_with_layout(state, handles, appearance, false)
+    render_picker_row_with_layout(state, handles, appearance, false, show_runner_controls)
 }
 
 /// Renders pickers vertically at full width when `vertical` is true,
@@ -1132,6 +1155,7 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
     handles: &OrchestrationPickerHandles<A>,
     appearance: &Appearance,
     vertical: bool,
+    show_runner_controls: bool,
 ) -> Box<dyn Element> {
     let is_remote = state.execution_mode.is_remote();
     let show_auth_picker = should_show_auth_secret_picker(state);
@@ -1184,7 +1208,7 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
                     .as_ref()
                     .map(|p| ChildView::new(p).finish()),
             );
-            if FeatureFlag::CloudAgentRunners.is_enabled() {
+            if show_runner_controls {
                 add(
                     &mut column,
                     "Runner",
@@ -1241,7 +1265,7 @@ pub fn render_picker_row_with_layout<A: OrchestrationControlAction>(
                     .as_ref()
                     .map(|p| ChildView::new(p).finish()),
             );
-            if FeatureFlag::CloudAgentRunners.is_enabled() {
+            if show_runner_controls {
                 add_picker(
                     &mut row,
                     "Runner",
@@ -1314,3 +1338,7 @@ pub fn render_validation_error(
     .with_margin_bottom(8.)
     .finish()
 }
+
+#[cfg(test)]
+#[path = "orchestration_controls_tests.rs"]
+mod tests;
