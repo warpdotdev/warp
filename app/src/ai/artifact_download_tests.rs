@@ -16,7 +16,6 @@ fn sample_file_download_response(filename: &str, filepath: &str) -> ArtifactDown
         },
         data: FileArtifactResponseData {
             download_url: "https://storage.example.com/report.txt".to_string(),
-            view_url: None,
             expires_at: Utc.with_ymd_and_hms(2024, 1, 15, 11, 30, 0).unwrap(),
             content_type: "text/plain".to_string(),
             filepath: filepath.to_string(),

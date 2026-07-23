@@ -509,13 +509,6 @@ impl ArtifactDownloadResponse {
         }
     }
 
-    pub fn view_url(&self) -> Option<&str> {
-        match self {
-            ArtifactDownloadResponse::Screenshot { .. } => None,
-            ArtifactDownloadResponse::File { data, .. } => data.view_url.as_deref(),
-        }
-    }
-
     pub fn expires_at(&self) -> DateTime<Utc> {
         match self {
             ArtifactDownloadResponse::Screenshot { data, .. } => data.expires_at,
@@ -578,7 +571,6 @@ pub struct ScreenshotArtifactResponseData {
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct FileArtifactResponseData {
     pub download_url: String,
-    pub view_url: Option<String>,
     pub expires_at: DateTime<Utc>,
     pub content_type: String,
     pub filepath: String,

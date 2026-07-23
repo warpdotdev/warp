@@ -149,7 +149,6 @@ fn test_deserialize_file_artifact_download_response() {
         "created_at": "2024-01-15T10:30:00Z",
         "data": {
             "download_url": "https://storage.example.com/report.txt",
-            "view_url": "https://oz.warp.dev/runs/run-123?artifact=artifact-123",
             "expires_at": "2024-01-15T11:30:00Z",
             "content_type": "text/plain",
             "filepath": "outputs/report.txt",
@@ -167,10 +166,6 @@ fn test_deserialize_file_artifact_download_response() {
     assert_eq!(common.artifact_uid, "artifact-123");
     assert_eq!(common.created_at.to_rfc3339(), "2024-01-15T10:30:00+00:00");
     assert_eq!(data.download_url, "https://storage.example.com/report.txt");
-    assert_eq!(
-        data.view_url.as_deref(),
-        Some("https://oz.warp.dev/runs/run-123?artifact=artifact-123")
-    );
     assert_eq!(data.expires_at.to_rfc3339(), "2024-01-15T11:30:00+00:00");
     assert_eq!(data.content_type, "text/plain");
     assert_eq!(data.filepath, "outputs/report.txt");
