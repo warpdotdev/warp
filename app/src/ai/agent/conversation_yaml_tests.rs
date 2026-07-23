@@ -136,6 +136,7 @@ fn mixed_message_types_produce_sequentially_indexed_files() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn run_agents_result_serializes_agent_ids() {
     let task_id = "root";
     let tasks = vec![create_api_task(
@@ -159,6 +160,9 @@ fn run_agents_result_serializes_agent_ids() {
                         agents: vec![
                             api::run_agents_result::AgentOutcome {
                                 name: "child".to_string(),
+                                model_id: String::new(),
+                                harness: None,
+                                execution_mode: None,
                                 result: Some(
                                     api::run_agents_result::agent_outcome::Result::Launched(
                                         api::run_agents_result::LaunchedAgent {
@@ -169,6 +173,9 @@ fn run_agents_result_serializes_agent_ids() {
                             },
                             api::run_agents_result::AgentOutcome {
                                 name: "other".to_string(),
+                                model_id: String::new(),
+                                harness: None,
+                                execution_mode: None,
                                 result: Some(
                                     api::run_agents_result::agent_outcome::Result::Failed(
                                         api::run_agents_result::FailedAgent {

@@ -353,6 +353,7 @@ fn agent_cfg() -> RunAgentsAgentRunConfig {
         prompt: "do X".to_string(),
         title: "Child".to_string(),
         agent_identity_uid: String::new(),
+        model_id: String::new(),
     }
 }
 
