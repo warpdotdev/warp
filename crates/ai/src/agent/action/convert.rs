@@ -534,6 +534,11 @@ impl From<api::message::tool_call::StopRecording> for AIAgentActionType {
     fn from(value: api::message::tool_call::StopRecording) -> Self {
         AIAgentActionType::StopRecording {
             recording_id: value.recording_id,
+            should_persist: value.should_persist_value.is_none_or(
+                |api::message::tool_call::stop_recording::ShouldPersistValue::ShouldPersist(
+                    should_persist,
+                )| should_persist,
+            ),
         }
     }
 }

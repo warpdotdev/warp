@@ -411,7 +411,7 @@ pub mod text {
                     AIAgentActionType::StartRecording { .. } => {
                         writeln!(w, "Starting recording")?;
                     }
-                    AIAgentActionType::StopRecording { recording_id } => {
+                    AIAgentActionType::StopRecording { recording_id, .. } => {
                         writeln!(w, "Stopping recording {recording_id}")?;
                     }
                     AIAgentActionType::ReadSkill(request) => {

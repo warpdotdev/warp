@@ -55,7 +55,11 @@ impl StopRecordingExecutor {
                 action,
                 conversation_id,
             } = input;
-            let AIAgentActionType::StopRecording { recording_id } = &action.action else {
+            let AIAgentActionType::StopRecording {
+                recording_id,
+                should_persist,
+            } = &action.action
+            else {
                 return ActionExecution::<()>::InvalidAction.into();
             };
             // Explicit stop remains retry-safe while the conversation is
@@ -78,18 +82,20 @@ impl StopRecordingExecutor {
             // Atomically claim an active recording, join an upload another
             // terminal path already started, or read the retained result. The
             // controller owns the actual stop/upload task in every case.
-            let finalization =
-                match finalize_recording_by_id(recording_id, FinalizeReason::StoppedByAgent, ctx) {
-                    Ok(finalization) => finalization,
-                    Err(error) => {
-                        return ActionExecution::<()>::Sync(
-                            AIAgentActionResultType::StopRecording(StopRecordingResult::Error(
-                                error.to_string(),
-                            )),
-                        )
-                        .into();
-                    }
-                };
+            let finalization = match finalize_recording_by_id(
+                recording_id,
+                FinalizeReason::StoppedByAgent,
+                *should_persist,
+                ctx,
+            ) {
+                Ok(finalization) => finalization,
+                Err(error) => {
+                    return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
+                        StopRecordingResult::Error(error.to_string()),
+                    ))
+                    .into();
+                }
+            };
             let recording_id = recording_id.clone();
 
             // Consume `Finalized` only from the completion callback, after the

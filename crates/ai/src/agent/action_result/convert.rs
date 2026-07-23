@@ -1493,6 +1493,15 @@ impl TryFrom<StopRecordingResult> for api::request::input::tool_call_result::Res
                     },
                 ),
             ),
+            StopRecordingResult::Discarded => Ok(
+                api::request::input::tool_call_result::Result::StopRecording(
+                    api::StopRecordingResult {
+                        result: Some(api::stop_recording_result::Result::Discarded(
+                            api::stop_recording_result::Discarded {},
+                        )),
+                    },
+                ),
+            ),
             StopRecordingResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
         }
     }
