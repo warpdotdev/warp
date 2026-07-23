@@ -378,6 +378,39 @@ fn render_view_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> TuiB
     buffer
 }
 
+fn render_view_snapshot(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+    width: u16,
+    height: u16,
+) -> (Vec<String>, Option<(u16, u16)>) {
+    let mut element = view.as_ref(ctx).render(ctx);
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(width, height)),
+        &mut layout_ctx,
+        ctx,
+    );
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(
+            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+            &mut surface,
+            &mut paint_ctx,
+        );
+    }
+    let cursor = paint_ctx
+        .terminal_cursor()
+        .and_then(|point| Some((u16::try_from(point.x).ok()?, u16::try_from(point.y).ok()?)));
+    (buffer.to_lines(), cursor)
+}
+
 fn render_element_lines(
     mut element: Box<dyn TuiElement>,
     ctx: &AppContext,
@@ -1271,6 +1304,58 @@ fn normal_mode_render_has_cyan_prompt_gutter() {
             );
             assert_eq!(buffer[(1, 0)].bg, warpui_core::elements::tui::Color::Reset);
             assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
+        });
+    });
+}
+
+#[test]
+fn render_to_lines_visual_proof_for_prompt_states() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+
+            let (empty_lines, empty_cursor) = render_view_snapshot(&view, ctx, 18, 4);
+            assert!(empty_lines[0].starts_with("> "));
+            assert_eq!(empty_cursor, Some((2, 0)));
+            println!("empty normal (cursor={empty_cursor:?})");
+            for line in &empty_lines {
+                println!("{line:?}");
+            }
+
+            type_str(&view, ctx, "some text");
+            let (single_line, single_cursor) = render_view_snapshot(&view, ctx, 18, 4);
+            assert!(single_line[0].starts_with("> some text"));
+            assert_eq!(single_cursor, Some((11, 0)));
+            println!("populated single-line (cursor={single_cursor:?})");
+            for line in &single_line {
+                println!("{line:?}");
+            }
+
+            view.update(ctx, |view, ctx| {
+                view.set_text("first row\nsecond row wraps here", ctx);
+            });
+            let (multiline, multiline_cursor) = render_view_snapshot(&view, ctx, 18, 6);
+            assert!(multiline[0].starts_with("> first row"));
+            assert!(
+                multiline.iter().skip(1).all(|line| !line.starts_with('>')),
+                "continuation rows must not repeat the prompt: {multiline:?}"
+            );
+            assert!(multiline.len() >= 3);
+            println!("multiline/wrapped (cursor={multiline_cursor:?})");
+            for line in &multiline {
+                println!("{line:?}");
+            }
+
+            view.update(ctx, |view, ctx| view.clear(ctx));
+            type_str(&view, ctx, "!");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            let (shell_lines, shell_cursor) = render_view_snapshot(&view, ctx, 18, 4);
+            assert!(shell_lines[0].starts_with("! "));
+            assert!(!shell_lines[0].starts_with("> "));
+            println!("shell mode (cursor={shell_cursor:?})");
+            for line in &shell_lines {
+                println!("{line:?}");
+            }
         });
     });
 }
