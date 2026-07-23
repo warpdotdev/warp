@@ -56,7 +56,7 @@ where
         };
 
         if let Some(errors) = response.errors.as_ref() {
-            warp_core::safe_error!(
+            warp_core::safe_warn!(
                 safe: ("graphql response for {:?} had errors", operation_name),
                 full: ("graphql response for {:?} had errors {:?}", operation_name, errors)
             );
