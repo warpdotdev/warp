@@ -454,7 +454,6 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handles per citation.
     /// A given citation should only appear once per block.
     footer_citation_chip_handles: HashMap<AIAgentCitation, MouseStateHandle>,
-    orchestration_navigation_card_handles: HashMap<AIAgentActionId, MouseStateHandle>,
     /// Persistent mouse-state handles per received-message transcript row,
     /// used by the clickable sender avatar.
     pub(super) transcript_avatar_handles: HashMap<MessageId, MouseStateHandle>,
@@ -885,7 +884,6 @@ fn default_collapsible_state_for_orchestration_action(
     display_mode: OrchestrationMessageDisplayMode,
 ) -> Option<CollapsibleElementState> {
     match action {
-        AIAgentActionType::StartAgent { .. } => Some(CollapsibleElementState::default()),
         AIAgentActionType::SendMessageToAgent { .. } => {
             Some(default_orchestration_collapsible_state(
                 display_mode.should_expand_agent_message_body(),
@@ -2043,12 +2041,6 @@ impl AIBlock {
                         cancel_button,
                     },
                 );
-            }
-            if matches!(&action.action, AIAgentActionType::StartAgent { .. }) {
-                self.state_handles
-                    .orchestration_navigation_card_handles
-                    .entry(action.id.clone())
-                    .or_default();
             }
 
             if matches!(
