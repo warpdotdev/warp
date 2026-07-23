@@ -17,7 +17,6 @@ use warp_completer::parsers::ParsedExpression;
 use warp_completer::parsers::hir::{Command, Expression, FlagType};
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
-use warp_util::path::ShellFamily;
 #[cfg(feature = "local_fs")]
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -372,15 +371,6 @@ impl NextCommandModel {
                     let mut history_based_autosuggestion_state =
                         HistoryBasedAutosuggestionState::default();
                     let start_ts_ms = Utc::now().timestamp_millis();
-                    // The AI prompt serializes history as JSON, which doubles every
-                    // backslash; the model can echo that JSON-escaped form back as the
-                    // "plain command." Resolve the active shell family once so the
-                    // server response can be unescaped at this single ingestion point
-                    // (see `normalize_ai_input_suggestion_response`).
-                    let shell_family = completion_context
-                        .as_ref()
-                        .map(|context| context.session.shell_family())
-                        .unwrap_or(ShellFamily::Posix);
 
                     let mut next_command_context =
                         if let Some(cached_next_command_context) = cached_next_command_context {
@@ -477,10 +467,7 @@ impl NextCommandModel {
                     let Some(prefix) = prefix else {
                         let response = server_api
                             .generate_ai_input_suggestions(&request)
-                            .await
-                            .map(|response| {
-                                normalize_ai_input_suggestion_response(response, shell_family)
-                            });
+                            .await;
                         return (
                             response,
                             request,
@@ -564,10 +551,7 @@ impl NextCommandModel {
                     // Only if we have no commands from history and no completions, use the LLM to generate a partial suggestion.
                     let response = server_api
                         .generate_ai_input_suggestions(&request)
-                        .await
-                        .map(|response| {
-                            normalize_ai_input_suggestion_response(response, shell_family)
-                        });
+                        .await;
                     (
                         response,
                         request,
@@ -653,37 +637,6 @@ impl NextCommandModel {
             }
         };
     }
-}
-
-/// JSON-decodes the server-backed AI next-command response at the single
-/// ingestion point where it enters client state.
-///
-/// The AI prompt serializes command history as JSON (`serde_json::to_string`),
-/// and the model can echo that JSON-escaped form back as the "plain command."
-/// Parsing the response as a JSON string reverses all of that encoding, including
-/// backslashes, quotes, and control characters. Malformed responses fall back to
-/// their original text. History and completer fallbacks are already correct and
-/// are never routed through here (they return with `is_from_ai = false`).
-/// POSIX-family sessions are a no-op: their commands use backslashes as shell
-/// escapes that must not be collapsed, so only PowerShell responses are decoded.
-pub(crate) fn normalize_ai_input_suggestion_response(
-    mut response: GenerateAIInputSuggestionsResponseV2,
-    shell_family: ShellFamily,
-) -> GenerateAIInputSuggestionsResponseV2 {
-    if shell_family != ShellFamily::PowerShell {
-        return response;
-    }
-    response.most_likely_action = decode_json_string(response.most_likely_action);
-    response.commands = response
-        .commands
-        .into_iter()
-        .map(decode_json_string)
-        .collect();
-    response
-}
-fn decode_json_string(text: String) -> String {
-    serde_json::from_str::<String>(&format!("\"{}\"", text.replace('"', "\\\"")))
-        .unwrap_or_else(|_| text.to_string())
 }
 
 impl SingletonEntity for NextCommandModel {}
