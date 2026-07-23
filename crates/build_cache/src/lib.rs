@@ -21,6 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -349,6 +350,78 @@ fn has_command(command: &str) -> bool {
         std::env::split_paths(&path).any(|directory| directory.join(command).is_executable())
     })
 }
+/// Create a cache directory, escalating to `sudo` when an ancestor is not writable.
+///
+/// Cache roots may be located on a mounted volume whose parent directories are owned by root.
+/// In that case, create each missing ancestor from the root toward the target and transfer its
+/// ownership to the current effective user before continuing.
+async fn create_cache_dir_all<F, Fut>(
+    path: &Path,
+    run_command: &mut F,
+) -> Result<(), CacheSetupError>
+where
+    F: FnMut(Command) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
+{
+    if path.is_dir() {
+        return Ok(());
+    }
+
+    match std::fs::create_dir_all(path) {
+        Ok(()) => return Ok(()),
+        Err(error) if error.kind() != ErrorKind::PermissionDenied => {
+            return Err(CacheSetupError::RootCreationFailed);
+        }
+        Err(_) => {}
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = run_command;
+        return Err(CacheSetupError::RootCreationFailed);
+    }
+
+    #[cfg(unix)]
+    {
+        if !has_command("sudo") {
+            return Err(CacheSetupError::RootCreationFailed);
+        }
+
+        let owner = current_owner();
+        for ancestor in missing_ancestors(path) {
+            let mut mkdir = Command::new_with_process_group("sudo");
+            mkdir.args(["mkdir"]).arg(&ancestor);
+            run_command(mkdir)
+                .await
+                .map_err(|_| CacheSetupError::RootCreationFailed)?;
+
+            let mut chown = Command::new_with_process_group("sudo");
+            chown.args(["chown", &owner]).arg(&ancestor);
+            run_command(chown)
+                .await
+                .map_err(|_| CacheSetupError::RootCreationFailed)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn current_owner() -> String {
+    // These libc calls only read the process credentials and have no unsafe preconditions.
+    let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    format!("{uid}:{gid}")
+}
+
+#[cfg(unix)]
+fn missing_ancestors(path: &Path) -> Vec<PathBuf> {
+    let mut missing = path
+        .ancestors()
+        .take_while(|ancestor| !ancestor.exists())
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    missing.reverse();
+    missing
+}
 
 /// Default implementation of the `run_command` hook for [`setup_cache`].
 pub async fn default_run_command(command: Command) -> Result<Vec<u8>, CacheSetupError> {
@@ -424,7 +497,10 @@ where
         };
 
         // We create the scoped cache directory here, as `spacectl` fails if it doesn't exist.
-        if std::fs::create_dir_all(&configuration_root).is_err() {
+        if create_cache_dir_all(&configuration_root, &mut run_command)
+            .await
+            .is_err()
+        {
             report.invocations.push(failed_invocation(
                 scope,
                 Vec::new(),
@@ -478,7 +554,10 @@ where
     for configuration in &plan.configurations {
         let configuration_root = plan.cache_root.join(&configuration.relative_cache_dir);
         // All repo-scoped cache roots should already exist. However, we still need to create the global root.
-        let invocation = if std::fs::create_dir_all(&configuration_root).is_err() {
+        let invocation = if create_cache_dir_all(&configuration_root, &mut run_command)
+            .await
+            .is_err()
+        {
             failed_invocation(
                 configuration.scope.clone(),
                 configuration.modes.clone(),

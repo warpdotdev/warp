@@ -2450,6 +2450,7 @@ dependencies = [
  "hex",
  "instant",
  "is_executable",
+ "libc",
  "log",
  "serde",
  "serde_json",
