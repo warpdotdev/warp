@@ -3347,6 +3347,20 @@ impl TuiTerminalSessionView {
         });
     }
 
+    /// The selected conversation's accumulated usage totals, or `None` (entry
+    /// hidden) until any usage has been reported.
+    fn selected_conversation_usage_totals(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ConversationUsageTotals> {
+        let totals = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation(ctx)?
+            .usage_totals();
+        totals.has_usage.then_some(totals)
+    }
+
     /// The session's working directory. The cwd only arrives once shell
     /// metadata flows (warpified sessions); until then fall back to the
     /// process cwd the TUI's shell was spawned with.
