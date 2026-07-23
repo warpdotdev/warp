@@ -106,7 +106,7 @@ impl LoginPurpose {
             ),
             LoginPurpose::AccountFirst => (
                 "Create an account",
-                "Access AI, run cloud agents, collaborate with teammates, and sync settings across devices",
+                "Access AI, run cloud agents, collaborate with teammates, and sync settings across devices.",
             ),
         }
     }

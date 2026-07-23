@@ -6,7 +6,7 @@ fn account_first_copy_matches_product_spec() {
         LoginPurpose::AccountFirst.copy(),
         (
             "Create an account",
-            "Access AI, run cloud agents, collaborate with teammates, and sync settings across devices",
+            "Access AI, run cloud agents, collaborate with teammates, and sync settings across devices.",
         )
     );
     assert_eq!(
