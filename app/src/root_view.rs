@@ -596,6 +596,20 @@ fn requires_post_onboarding_login(
             || ((ai_enabled || warp_drive_enabled)
                 && FeatureFlag::OpenWarpNewSettingsModes.is_enabled()))
 }
+/// Replaces the settings and tutorial snapshots consumed when post-auth
+/// onboarding eventually completes.
+///
+/// Account-first users can navigate Back from the offer to Theme/Customize and
+/// change their choices. Re-snapshotting both values keeps the eventual settings
+/// application and guided tutorial aligned with the latest visible selections.
+fn refresh_pending_onboarding_choices(
+    selected_settings: &SelectedSettings,
+    pending_settings: &mut Option<SelectedSettings>,
+    pending_tutorial: &mut Option<OnboardingTutorial>,
+) {
+    *pending_settings = Some(selected_settings.clone());
+    *pending_tutorial = Some(OnboardingTutorial::from(selected_settings.clone()));
+}
 
 fn send_feedback(_: &(), ctx: &mut AppContext) {
     match active_workspace(ctx) {
@@ -2469,6 +2483,11 @@ impl RootView {
                 {
                     let onboarding_view = onboarding_view.clone();
                     let account_class = *account_class;
+                    refresh_pending_onboarding_choices(
+                        selected_settings,
+                        &mut self.pending_post_auth_onboarding_settings,
+                        &mut self.pending_tutorial,
+                    );
                     let variant = offer_variant_for_account_class(account_class)
                         .expect("free account classes have an offer");
                     onboarding_view.update(ctx, |view, ctx| {
@@ -2505,8 +2524,11 @@ impl RootView {
                     requires_post_onboarding_login(is_logged_in, ai_enabled, warp_drive_enabled);
 
                 if requires_login {
-                    let tutorial = OnboardingTutorial::from(selected_settings.clone());
-                    self.pending_tutorial = Some(tutorial);
+                    refresh_pending_onboarding_choices(
+                        selected_settings,
+                        &mut self.pending_post_auth_onboarding_settings,
+                        &mut self.pending_tutorial,
+                    );
 
                     let appearance = Appearance::as_ref(ctx);
                     let theme_name = appearance
@@ -2558,7 +2580,6 @@ impl RootView {
                         me.handle_login_slide_event(event, ctx);
                     });
 
-                    self.pending_post_auth_onboarding_settings = Some(selected_settings.clone());
                     self.auth_onboarding_state = AuthOnboardingState::LoginSlide {
                         login_slide_view,
                         onboarding_view,

@@ -1,11 +1,12 @@
-use onboarding::OfferVariant;
+use onboarding::{OfferVariant, SelectedSettings, UICustomizationSettings};
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{App, SingletonEntity};
 
 use super::{
     AccountFirstCompletion, HAS_COMPLETED_ONBOARDING_KEY, RootView, has_completed_local_onboarding,
-    offer_variant_for_account_class, requires_post_onboarding_login,
+    offer_variant_for_account_class, refresh_pending_onboarding_choices,
+    requires_post_onboarding_login,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -132,6 +133,42 @@ fn account_first_completion_metadata_matches_terminal_outcomes() {
         assert_eq!(completion.account_class(), account_class);
         assert_eq!(completion.starts_agent_tutorial(), starts_agent_tutorial);
     }
+}
+
+#[test]
+fn refreshing_pending_onboarding_choices_replaces_stale_settings() {
+    let settings = |use_vertical_tabs| SelectedSettings::Terminal {
+        ui_customization: Some(UICustomizationSettings {
+            use_vertical_tabs,
+            show_conversation_history: false,
+            show_project_explorer: true,
+            show_global_search: false,
+            show_warp_drive: false,
+            show_code_review_button: true,
+        }),
+        cli_agent_toolbar_enabled: true,
+        show_agent_notifications: false,
+    };
+
+    let mut pending_settings = Some(settings(false));
+    let mut pending_tutorial = None;
+    let latest_settings = settings(true);
+
+    refresh_pending_onboarding_choices(
+        &latest_settings,
+        &mut pending_settings,
+        &mut pending_tutorial,
+    );
+
+    let Some(SelectedSettings::Terminal {
+        ui_customization: Some(ui),
+        ..
+    }) = pending_settings
+    else {
+        panic!("latest terminal settings should replace the pending snapshot");
+    };
+    assert!(ui.use_vertical_tabs);
+    assert!(pending_tutorial.is_some());
 }
 
 /// Regression test for the bug fixed by introducing
