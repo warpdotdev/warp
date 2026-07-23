@@ -12,10 +12,10 @@ use wgpu::wgc::device::DeviceError;
 use wgpu::wgc::present::SurfaceError;
 
 pub use super::resources::{GetSurfaceTextureError, SurfaceConfigureError};
+use crate::Scene;
 use crate::r#async::block_on;
 use crate::rendering::wgpu::Resources;
 use crate::rendering::{GlyphConfig, GlyphRasterBoundsFn, RasterizeGlyphFn};
-use crate::Scene;
 
 const ENCODER_DESCRIPTOR: wgpu::CommandEncoderDescriptor = wgpu::CommandEncoderDescriptor {
     label: Some("Command encoder"),
@@ -107,12 +107,11 @@ impl Renderer {
             queue.submit(Some(encoder.finish()));
         });
 
-        if let Some(callback) = capture_callback {
-            if let Err(err) =
+        if let Some(callback) = capture_callback
+            && let Err(err) =
                 capture_surface_texture(device, queue, resources, &surface_texture, callback)
-            {
-                log::warn!("Frame capture failed: {err}");
-            }
+        {
+            log::warn!("Frame capture failed: {err}");
         }
 
         if let Some(callback) = pre_present_callback {
@@ -126,7 +125,7 @@ impl Renderer {
                 // wgpu will print out an error that we attempted to present a
                 // texture without submitting any work to the GPU.
                 match with_error_scope(device, || {
-                    surface_texture.present();
+                    queue.present(surface_texture);
                 }) {
                     (_, None) => Ok(()),
                     (_, Some(error)) => Err(error),
@@ -141,6 +140,8 @@ impl Renderer {
 pub enum Error {
     #[error("Device was lost")]
     DeviceLost,
+    #[error("Failed to map buffer range: {0}")]
+    BufferMap(#[from] wgpu::MapRangeError),
     #[error("Failed to acquire surface texture: {0:#}")]
     SurfaceError(#[from] GetSurfaceTextureError),
     #[error("Failed to configure surface: {0:#}")]
@@ -254,7 +255,9 @@ fn capture_surface_texture(
 
     map_result?;
 
-    let data = buffer_slice.get_mapped_range();
+    let data = buffer_slice
+        .get_mapped_range()
+        .map_err(|e| format!("Failed to get mapped range: {e}"))?;
     let mut rgba_data = Vec::with_capacity((width * height * bytes_per_pixel) as usize);
     for row in 0..height {
         let start = (row * padded_bytes_per_row) as usize;

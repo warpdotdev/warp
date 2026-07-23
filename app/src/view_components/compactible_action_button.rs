@@ -57,10 +57,10 @@ impl CompactibleActionButton {
                     .with_tooltip(label.clone())
                     .on_click(move |ctx| ctx.dispatch_typed_action(action_for_compact.clone()));
 
-            if let Some(ref kb) = keybinding {
-                if let Some(tooltip_sublabel) = kb.displayed(ctx) {
-                    compact_button = compact_button.with_tooltip_sublabel(tooltip_sublabel);
-                }
+            if let Some(ref kb) = keybinding
+                && let Some(tooltip_sublabel) = kb.displayed(ctx)
+            {
+                compact_button = compact_button.with_tooltip_sublabel(tooltip_sublabel);
             }
 
             compact_button

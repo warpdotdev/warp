@@ -24,7 +24,10 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-use crate::{Action, ActionResult, Options, Target, TargetedAction};
+use crate::{
+    Action, ActionResult, MouseButton, Options, PointerEvent, PointerEventKind, PointerSink,
+    Target, TargetedAction,
+};
 
 /// How often to re-check whether a raise took effect. Raising is redirected to the window
 /// manager (when one is running), which restacks asynchronously.
@@ -171,12 +174,17 @@ impl crate::Actor for Actor {
     async fn perform_actions(
         &mut self,
         actions: &[TargetedAction],
-        options: Options,
+        mut options: Options,
     ) -> Result<ActionResult, String> {
         // When background computer use is disabled, force the legacy full-screen path: ignore
         // any window target, drive the user's core pointer/keyboard, and capture only the root
         // window. This keeps behavior identical to the pre-existing implementation.
         let background = options.background_enabled;
+        // When a recording is live, the sink collects each resolved pointer event
+        // (in capture-space pixels) for the post-stop click/drag burn-in.
+        // `last_capture` lets a release reuse the last resolved point.
+        let pointer_sink = options.pointer_sink.take();
+        let mut last_capture: Option<Vector2I> = None;
 
         // Validate every target and create the agent seat up front, so a failure cannot leave
         // the batch half-applied.
@@ -241,13 +249,32 @@ impl crate::Actor for Actor {
                         screen_mouse.focus_window_under_pointer()?;
                         screen_mouse.button_down(button)?;
                         last_mouse_position = Some(*at);
+                        record_down_move(
+                            pointer_sink.as_ref(),
+                            &mut last_capture,
+                            PointerEventKind::Down,
+                            Some(button.clone()),
+                            target,
+                            *at,
+                            *at,
+                        );
                     }
                     Action::MouseUp { button } => {
                         screen_mouse.button_up(button)?;
+                        record_up(pointer_sink.as_ref(), &last_capture, button.clone());
                     }
                     Action::MouseMove { to } => {
                         screen_mouse.move_to(*to)?;
                         last_mouse_position = Some(*to);
+                        record_down_move(
+                            pointer_sink.as_ref(),
+                            &mut last_capture,
+                            PointerEventKind::Move,
+                            None,
+                            target,
+                            *to,
+                            *to,
+                        );
                     }
                     Action::MouseWheel {
                         at,
@@ -280,6 +307,7 @@ impl crate::Actor for Actor {
                             Timer::after(*duration).await;
                         }
                         Action::MouseDown { button, at } => {
+                            let local = *at;
                             let at =
                                 windows::window_local_to_root(&self.conn, root, window_id, *at)?;
                             ensure_window_clickable_at(&self.conn, root, window_id, at).await?;
@@ -289,15 +317,35 @@ impl crate::Actor for Actor {
                             agent_mouse.move_to(at)?;
                             agent_mouse.button_down(button)?;
                             last_mouse_position = Some(at);
+                            record_down_move(
+                                pointer_sink.as_ref(),
+                                &mut last_capture,
+                                PointerEventKind::Down,
+                                Some(button.clone()),
+                                target,
+                                local,
+                                at,
+                            );
                         }
                         Action::MouseUp { button } => {
                             agent_mouse.button_up(button)?;
+                            record_up(pointer_sink.as_ref(), &last_capture, button.clone());
                         }
                         Action::MouseMove { to } => {
+                            let local = *to;
                             let to =
                                 windows::window_local_to_root(&self.conn, root, window_id, *to)?;
                             agent_mouse.move_to(to)?;
                             last_mouse_position = Some(to);
+                            record_down_move(
+                                pointer_sink.as_ref(),
+                                &mut last_capture,
+                                PointerEventKind::Move,
+                                None,
+                                target,
+                                local,
+                                to,
+                            );
                         }
                         Action::MouseWheel {
                             at,
@@ -380,5 +428,90 @@ impl crate::Actor for Actor {
             },
             captured_window,
         })
+    }
+}
+
+/// Resolves an action's coordinate into the recording's capture-space pixels, or
+/// `None` when the action's surface does not match the recording (so the event
+/// is omitted rather than drawn at the wrong place).
+fn resolve_capture_point(
+    recording_target: Target,
+    action_target: Target,
+    local: Vector2I,
+    root: Vector2I,
+) -> Option<Vector2I> {
+    match recording_target {
+        // Full-screen capture: everything maps to root/screen pixels.
+        Target::Screen => Some(root),
+        // Window capture: only actions on the recorded window resolve, using the
+        // window-local pixels that match the captured window's frame.
+        Target::Window {
+            window_id: recorded,
+            ..
+        } => match action_target {
+            Target::Window { window_id, .. } if window_id == recorded => Some(local),
+            _ => None,
+        },
+    }
+}
+
+/// Records a resolved press/move into the pointer sink, tracking the last point
+/// so a later release (which carries no coordinate) can reuse it. A down or move
+/// whose surface does not match the recording clears the last point so a later
+/// release is not recorded at a stale coordinate.
+fn record_down_move(
+    pointer_sink: Option<&PointerSink>,
+    last: &mut Option<Vector2I>,
+    kind: PointerEventKind,
+    button: Option<MouseButton>,
+    action_target: Target,
+    local: Vector2I,
+    root: Vector2I,
+) {
+    let Some(sink) = pointer_sink else {
+        return;
+    };
+    match resolve_capture_point(sink.recording_target, action_target, local, root) {
+        Some(point) => {
+            *last = Some(point);
+            push_pointer_event(sink, point, kind, button);
+        }
+        None => {
+            // Any unmatched down or move (a surface that isn't the recorded
+            // one) invalidates the last point, so a following release is not
+            // recorded at a stale in-frame coordinate.
+            *last = None;
+        }
+    }
+}
+
+/// Records a release at the last resolved point (a release carries no coordinate
+/// of its own). Omitted when there is no last point, for example when the press
+/// was on a non-recorded surface.
+fn record_up(pointer_sink: Option<&PointerSink>, last: &Option<Vector2I>, button: MouseButton) {
+    let Some(sink) = pointer_sink else {
+        return;
+    };
+    if let Some(point) = *last {
+        push_pointer_event(sink, point, PointerEventKind::Up, Some(button));
+    }
+}
+
+fn push_pointer_event(
+    sink: &PointerSink,
+    point: Vector2I,
+    kind: PointerEventKind,
+    button: Option<MouseButton>,
+) {
+    let offset = Instant::now()
+        .checked_duration_since(sink.started_at)
+        .unwrap_or_default();
+    if let Ok(mut events) = sink.events.lock() {
+        events.push(PointerEvent {
+            offset,
+            kind,
+            button,
+            point,
+        });
     }
 }

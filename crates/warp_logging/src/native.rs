@@ -13,11 +13,12 @@ use warp_errors::report_error;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::{LogConfig, LogDestination};
+use crate::{LogConfig, LogDestination, LogFrontend};
 
 const MAX_FILES_IN_GUI_ROTATION: usize = 5;
 const MAX_FILES_IN_CLI_ROTATION: usize = 10;
 const CLI_LOG_SUBDIRECTORY: &str = "oz";
+const TUI_LOG_SUBDIRECTORY: &str = "warp-cli";
 const TEMP_LOG_FILE_SUFFIX: &str = "old.temp";
 
 /// Runtime logging state, computed from `LogConfig` during initialization.
@@ -29,9 +30,48 @@ struct LogState {
     /// The directory that logs should be written to. This is set even if `use_logfile` is false,
     /// as we sometimes generate other log files.
     log_directory: PathBuf,
+    /// The resolved base filename for the active frontend and channel.
+    logfile_name: String,
 
     /// The maximum number of backup log files to keep during rotation.
     max_rotation: usize,
+}
+
+impl LogFrontend {
+    fn log_directory(self, base_directory: PathBuf) -> PathBuf {
+        match self {
+            LogFrontend::Gui => base_directory,
+            LogFrontend::Tui => base_directory.join(TUI_LOG_SUBDIRECTORY),
+            LogFrontend::Cli => base_directory.join(CLI_LOG_SUBDIRECTORY),
+        }
+    }
+
+    fn max_rotation(self) -> usize {
+        match self {
+            LogFrontend::Gui => MAX_FILES_IN_GUI_ROTATION,
+            LogFrontend::Tui | LogFrontend::Cli => MAX_FILES_IN_CLI_ROTATION,
+        }
+    }
+}
+
+impl LogState {
+    fn new(
+        use_logfile: bool,
+        base_log_directory: PathBuf,
+        logfile_name: String,
+        frontend: LogFrontend,
+    ) -> Self {
+        Self {
+            use_logfile,
+            log_directory: frontend.log_directory(base_log_directory),
+            logfile_name,
+            max_rotation: frontend.max_rotation(),
+        }
+    }
+
+    fn log_file_path(&self) -> PathBuf {
+        main_process_log_file_path(&self.log_directory, &self.logfile_name)
+    }
 }
 
 static LOG_STATE: OnceLock<LogState> = OnceLock::new();
@@ -101,8 +141,10 @@ pub fn on_crash_recovery_process_killed() {
     if !config.use_logfile {
         return;
     }
-
-    let _ = fs::remove_file(crash_recovery_process_log_file_path(&config.log_directory));
+    let _ = fs::remove_file(crash_recovery_process_log_file_path(
+        &config.log_directory,
+        &config.logfile_name,
+    ));
 }
 
 /// Handles the crash recovery process "recovering" from a parent crash by:
@@ -117,14 +159,13 @@ pub fn on_parent_process_crash() {
     if !config.use_logfile {
         return;
     }
-
-    let main_log_path = main_process_log_file_path(&config.log_directory);
-    let temp_path = temp_log_file_path(&config.log_directory);
+    let main_log_path = main_process_log_file_path(&config.log_directory, &config.logfile_name);
+    let temp_path = temp_log_file_path(&config.log_directory, &config.logfile_name);
 
     let _ = fs::rename(&main_log_path, temp_path);
 
     let _ = fs::rename(
-        crash_recovery_process_log_file_path(&config.log_directory),
+        crash_recovery_process_log_file_path(&config.log_directory, &config.logfile_name),
         main_log_path,
     );
 }
@@ -140,7 +181,7 @@ pub async fn rotate_log_files() {
 
     let max_rotation = config.max_rotation;
 
-    if let Err(err) = rotate_files(&ChannelState::logfile_name(), max_rotation).await {
+    if let Err(err) = rotate_files(&config.logfile_name, max_rotation).await {
         report_error!(err.context("Failed to rotate log files"));
     }
 
@@ -158,7 +199,6 @@ pub async fn rotate_files(channel_file_name: &str, max_rotation: usize) -> Resul
             return Err(anyhow::anyhow!("Could not get log directory {err:?}"));
         }
     };
-
     // Delete the oldest log file (and any nested .in_session.M chunks that
     // belonged to that oldest startup-rotation slot).
     let largest_log_file_suffix = max_rotation.saturating_sub(1);
@@ -191,7 +231,7 @@ pub async fn rotate_files(channel_file_name: &str, max_rotation: usize) -> Resul
     migrate_previous_session_in_session_chunks(&log_directory, channel_file_name);
 
     // Rename `warp.log.old.temp` (the temporary file) to `warp.log.old.0`.
-    let temp_file_path = temp_log_file_path(&log_directory);
+    let temp_file_path = temp_log_file_path(&log_directory, channel_file_name);
 
     let _ = fs::rename(
         temp_file_path,
@@ -280,21 +320,20 @@ fn migrate_previous_session_in_session_chunks(log_directory: &Path, channel_file
 /// Initializes the logger for the crash recovery process.
 pub fn init_for_crash_recovery_process() -> Result<()> {
     init_internal(
-        true,  /* is_from_crash_recovery_process */
-        false, /* is_cli */
-        None,  /* log_destination */
-        None,  /* max_file_size_bytes — crash recovery uses its own short-lived log */
+        true, /* is_from_crash_recovery_process */
+        LogFrontend::Gui,
+        None, /* log_destination */
+        None, /* max_file_size_bytes — crash recovery uses its own short-lived log */
     )
 }
 
 /// Initializes the global logger for the application.
 /// If `config.log_destination` is `Some`, always use the specified destination regardless of
-/// environment. If `config.is_cli` is true, logs are written to a separate "oz" subdirectory with
-/// a higher rotation limit so that CLI invocations don't evict GUI application logs.
+/// environment. The frontend selects the log subdirectory and rotation policy.
 pub fn init(config: LogConfig) -> Result<()> {
     init_internal(
         false, /* is_from_crash_recovery_process */
-        config.is_cli,
+        config.frontend,
         config.log_destination,
         config.max_file_size_bytes,
     )
@@ -304,15 +343,18 @@ pub fn init(config: LogConfig) -> Result<()> {
 /// We use a separate log file for the crash recovery process. If the crash
 /// recovery process handles a crash, we'll move the crash recovery process log file to its usual
 /// location at `log_directory/warp.log`.
-fn crash_recovery_process_log_file_path(log_directory: impl AsRef<Path>) -> PathBuf {
+fn crash_recovery_process_log_file_path(
+    log_directory: impl AsRef<Path>,
+    logfile_name: &str,
+) -> PathBuf {
     log_directory
         .as_ref()
-        .join(format!("{}.recovery", ChannelState::logfile_name()))
+        .join(format!("{logfile_name}.recovery"))
 }
 
 /// Returns the path to the main process's log file.
-fn main_process_log_file_path(log_directory: impl AsRef<Path>) -> PathBuf {
-    log_directory.as_ref().join(&*ChannelState::logfile_name())
+fn main_process_log_file_path(log_directory: impl AsRef<Path>, logfile_name: &str) -> PathBuf {
+    log_directory.as_ref().join(logfile_name)
 }
 
 /// Returns the path to the current execution's main log file.
@@ -320,8 +362,10 @@ fn main_process_log_file_path(log_directory: impl AsRef<Path>) -> PathBuf {
 /// Note: logging must be initialized before calling this function, otherwise this will
 /// return an error.
 pub fn log_file_path() -> Result<PathBuf> {
-    let dir = log_directory()?;
-    Ok(main_process_log_file_path(&dir))
+    let state = LOG_STATE
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Logging not initialized"))?;
+    Ok(state.log_file_path())
 }
 
 /// Collects paths to the current warp instance's log file and any older
@@ -336,14 +380,8 @@ pub fn log_file_path() -> Result<PathBuf> {
 /// - For each previous-startup slot `K = 0..max_rotation`, in order:
 ///   `<name>.log.old.K` (that session's final-state log) immediately
 ///   followed by its `<name>.log.old.K.in_session.N` chunks, sorted by N.
-fn current_and_rotated_log_paths() -> Result<Vec<PathBuf>> {
-    let log_directory = log_directory()?;
-    let logfile_name = ChannelState::logfile_name();
-    collect_log_paths_in(&log_directory, &logfile_name)
-}
-
-/// Directory-scanning core of [`current_and_rotated_log_paths`], parameterized
-/// for testability. See the parent docs for ordering semantics.
+///
+/// Scans the resolved log directory for files belonging to `logfile_name`.
 fn collect_log_paths_in(log_directory: &Path, logfile_name: &str) -> Result<Vec<PathBuf>> {
     let current_log_path = log_directory.join(logfile_name);
     let in_session_prefix = format!("{logfile_name}.in_session.");
@@ -433,44 +471,54 @@ fn collect_log_paths_in(log_directory: &Path, logfile_name: &str) -> Result<Vec<
 /// Creates a timestamped zip archive containing the current log file
 /// and any older logs for the active instance.
 pub fn create_log_bundle_zip() -> Result<PathBuf> {
-    let log_files = current_and_rotated_log_paths()?;
-    let log_directory = log_directory()?;
-    let logfile_name = ChannelState::logfile_name();
-    let logfile_stem = logfile_name.strip_suffix(".log").unwrap_or(&logfile_name);
-
-    let zip_path = log_directory.join(format!(
-        "{logfile_stem}-{}.zip",
-        Local::now().format("%Y%m%d-%H%M%S")
-    ));
-    if zip_path.exists() {
-        let error_message = format!(
-            "New log zip path conflicts with an existing zip: {}",
-            zip_path.display()
-        );
-        return Err(anyhow::anyhow!("{error_message}"));
-    }
-
-    let zip_file = File::create(&zip_path)?;
-    let mut zip_writer = ZipWriter::new(zip_file);
-    let zip_options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
-    for log_file in log_files {
-        let entry_name = log_file
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid log file name: {}", log_file.display()))?;
-        zip_writer.start_file(entry_name, zip_options)?;
-
-        let mut source = File::open(&log_file)?;
-        copy(&mut source, &mut zip_writer)?;
-    }
-
-    zip_writer.finish()?;
-    Ok(zip_path)
+    let state = LOG_STATE
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Logging not initialized"))?;
+    state.create_log_bundle_zip()
 }
 
-fn temp_log_file_path(log_directory: impl AsRef<Path>) -> PathBuf {
-    let channel_logfile_name = ChannelState::logfile_name();
+impl LogState {
+    fn create_log_bundle_zip(&self) -> Result<PathBuf> {
+        let log_files = collect_log_paths_in(&self.log_directory, &self.logfile_name)?;
+        let logfile_stem = self
+            .logfile_name
+            .strip_suffix(".log")
+            .unwrap_or(&self.logfile_name);
+
+        let zip_path = self.log_directory.join(format!(
+            "{logfile_stem}-{}.zip",
+            Local::now().format("%Y%m%d-%H%M%S")
+        ));
+        if zip_path.exists() {
+            let error_message = format!(
+                "New log zip path conflicts with an existing zip: {}",
+                zip_path.display()
+            );
+            return Err(anyhow::anyhow!("{error_message}"));
+        }
+
+        let zip_file = File::create(&zip_path)?;
+        let mut zip_writer = ZipWriter::new(zip_file);
+        let zip_options =
+            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        for log_file in log_files {
+            let entry_name = log_file
+                .file_name()
+                .and_then(|file_name| file_name.to_str())
+                .ok_or_else(|| anyhow::anyhow!("Invalid log file name: {}", log_file.display()))?;
+            zip_writer.start_file(entry_name, zip_options)?;
+
+            let mut source = File::open(&log_file)?;
+            copy(&mut source, &mut zip_writer)?;
+        }
+
+        zip_writer.finish()?;
+        Ok(zip_path)
+    }
+}
+
+fn temp_log_file_path(log_directory: impl AsRef<Path>, channel_logfile_name: &str) -> PathBuf {
     log_directory
         .as_ref()
         .join(format!("{channel_logfile_name}.{TEMP_LOG_FILE_SUFFIX}"))
@@ -509,7 +557,7 @@ fn sentry_log_filter(md: &log::Metadata) -> sentry_log::LogFilter {
 
 fn init_internal(
     is_from_crash_recovery_process: bool,
-    is_cli: bool,
+    frontend: LogFrontend,
     log_destination: Option<LogDestination>,
     max_file_size_bytes: Option<u64>,
 ) -> Result<()> {
@@ -517,6 +565,7 @@ fn init_internal(
     /// renames the previous execution's log to a temporary name.
     fn setup_log_files_for_current_execution(
         log_directory: &Path,
+        logfile_name: &str,
         is_from_crash_recovery_process: bool,
     ) -> Result<File> {
         fs::create_dir_all(log_directory)?;
@@ -525,13 +574,16 @@ fn init_internal(
             // Use a temporary file for logs within the crash recovery process. We intentionally do
             // not rename the old main log file to `warp.log.temp` like we do below because this
             // would result in us moving the log file of the parent process.
-            crash_recovery_process_log_file_path(log_directory)
+            crash_recovery_process_log_file_path(log_directory, logfile_name)
         } else {
-            let main_log_path = main_process_log_file_path(log_directory);
+            let main_log_path = main_process_log_file_path(log_directory, logfile_name);
 
             // Rename the old main log file to `warp.log.temp`.
             // We rotate the log files later in the background to make fewer blocking calls.
-            let _ = fs::rename(main_log_path.clone(), temp_log_file_path(log_directory));
+            let _ = fs::rename(
+                main_log_path.clone(),
+                temp_log_file_path(log_directory, logfile_name),
+            );
             main_log_path
         };
 
@@ -576,19 +628,18 @@ fn init_internal(
         None => !stdout_is_a_tty && !in_ci && !integration_test,
     };
 
-    let max_rotation = if is_cli {
-        MAX_FILES_IN_CLI_ROTATION
-    } else {
-        MAX_FILES_IN_GUI_ROTATION
-    };
-
-    let mut log_directory = init_log_directory()?;
-    if is_cli {
-        log_directory = log_directory.join(CLI_LOG_SUBDIRECTORY);
-    }
+    let state = LogState::new(
+        use_logfile,
+        init_log_directory()?,
+        ChannelState::logfile_name().into_owned(),
+        frontend,
+    );
     if use_logfile {
-        let file =
-            setup_log_files_for_current_execution(&log_directory, is_from_crash_recovery_process)?;
+        let file = setup_log_files_for_current_execution(
+            &state.log_directory,
+            &state.logfile_name,
+            is_from_crash_recovery_process,
+        )?;
         // Crash-recovery logs are short-lived (the file is renamed into place
         // by the parent on crash, and otherwise deleted on clean exit), so
         // skip in-session rotation for them — `max_file_size_bytes` only
@@ -598,10 +649,10 @@ fn init_internal(
         } else {
             crate::rotation::wrap_for_rotation(
                 file,
-                &log_directory,
-                &ChannelState::logfile_name(),
+                &state.log_directory,
+                &state.logfile_name,
                 max_file_size_bytes,
-                max_rotation,
+                state.max_rotation,
             )?
         };
         base_logger.target(env_logger::Target::Pipe(target));
@@ -634,13 +685,7 @@ fn init_internal(
         log_panics::init();
     }
 
-    LOG_STATE
-        .set(LogState {
-            use_logfile,
-            log_directory,
-            max_rotation,
-        })
-        .expect("Logging already initialized");
+    LOG_STATE.set(state).expect("Logging already initialized");
     // We can .expect here because .init would have already panicked if we initialized logging twice.
 
     Ok(())

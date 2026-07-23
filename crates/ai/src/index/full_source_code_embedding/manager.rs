@@ -988,34 +988,33 @@ impl CodebaseIndexManager {
                             .as_ref()
                             .is_some_and(|storage| storage.has_snapshot(&p))
                     })
+                && let Some(snapshot_storage) = snapshot_storage.as_ref()
             {
-                if let Some(snapshot_storage) = snapshot_storage.as_ref() {
-                    let read_snapshot_start_time = Instant::now();
-                    match read_snapshot(
-                        store_client.clone(),
-                        snapshot_storage.path(),
-                        repository.clone(),
-                        max_files_repo_limit,
-                        embedding_generation_batch_size,
-                        ctx,
-                    ) {
-                        Ok(snapshot_index) => {
-                            send_telemetry_from_ctx!(
-                                AITelemetryEvent::MerkleTreeSnapshotRebuildSuccess {
-                                    duration: read_snapshot_start_time.elapsed()
-                                },
-                                ctx
-                            );
-                            return snapshot_index;
-                        }
-                        Err(err) => {
-                            send_telemetry_from_ctx!(
-                                AITelemetryEvent::MerkleTreeSnapshotRebuildFailed {
-                                    error: err.to_string()
-                                },
-                                ctx
-                            );
-                        }
+                let read_snapshot_start_time = Instant::now();
+                match read_snapshot(
+                    store_client.clone(),
+                    snapshot_storage.path(),
+                    repository.clone(),
+                    max_files_repo_limit,
+                    embedding_generation_batch_size,
+                    ctx,
+                ) {
+                    Ok(snapshot_index) => {
+                        send_telemetry_from_ctx!(
+                            AITelemetryEvent::MerkleTreeSnapshotRebuildSuccess {
+                                duration: read_snapshot_start_time.elapsed()
+                            },
+                            ctx
+                        );
+                        return snapshot_index;
+                    }
+                    Err(err) => {
+                        send_telemetry_from_ctx!(
+                            AITelemetryEvent::MerkleTreeSnapshotRebuildFailed {
+                                error: err.to_string()
+                            },
+                            ctx
+                        );
                     }
                 }
             }

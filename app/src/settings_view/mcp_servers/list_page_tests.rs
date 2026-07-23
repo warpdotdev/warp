@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use super::config_diagnostic_display;
-use crate::ai::mcp::file_mcp_watcher::{FileMCPConfigDiagnostic, FileMCPConfigDiagnosticKind};
 use crate::ai::mcp::MCPProvider;
+use crate::ai::mcp::file_mcp_watcher::{FileMCPConfigDiagnostic, FileMCPConfigDiagnosticKind};
 
 fn diagnostic(kind: FileMCPConfigDiagnosticKind, message: &str) -> FileMCPConfigDiagnostic {
     FileMCPConfigDiagnostic {

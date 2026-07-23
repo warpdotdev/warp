@@ -27,6 +27,13 @@ pub fn background_supported() -> bool {
     true
 }
 
+/// Ends the background computer-use session owned by `owner`, restoring the user's original
+/// keyboard focus. Idempotent and a no-op when `owner` has no active session. See
+/// [`activation::end_sessions_for_owner`].
+pub fn end_background_session(owner: &str) {
+    activation::end_sessions_for_owner(owner);
+}
+
 /// Enumerates the on-screen windows as crate-level [`crate::WindowInfo`] records.
 pub fn enumerate_windows() -> Vec<crate::WindowInfo> {
     window::enumerate_windows()
@@ -129,6 +136,12 @@ impl Actor {
 impl super::Actor for Actor {
     fn platform(&self) -> Option<super::Platform> {
         Some(super::Platform::Mac)
+    }
+
+    fn set_background_session_owner(&mut self, owner: Option<String>) {
+        // Tag this session's window activations with the owner so teardown can scope to it.
+        self.keyboard.set_session_owner(owner.clone());
+        self.mouse.set_session_owner(owner);
     }
 
     async fn perform_actions(

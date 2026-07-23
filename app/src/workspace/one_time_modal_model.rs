@@ -8,7 +8,7 @@ use warp_util::sync::Condition;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
 use super::hoa_onboarding;
-use super::view::feature_intro_modal::{FeatureIntroId, FEATURE_INTROS};
+use super::view::feature_intro_modal::{FEATURE_INTROS, FeatureIntroId};
 use super::view::free_ai_removal_modal::{
     FreeAiRemovalModalTelemetryEvent, FreeAiRemovalModalVariant,
 };
@@ -251,10 +251,11 @@ impl OneTimeModalModel {
             // workspace only renders / populates the view when
             // `target_window_id` matches, and `on_active_window_changed` may not
             // have run yet when the startup modal queue fires.
-            if intro.is_some() && self.target_window_id.is_none() {
-                if let Some(window_id) = ctx.windows().active_window() {
-                    self.target_window_id = Some(window_id);
-                }
+            if intro.is_some()
+                && self.target_window_id.is_none()
+                && let Some(window_id) = ctx.windows().active_window()
+            {
+                self.target_window_id = Some(window_id);
             }
             ctx.emit(OneTimeModalEvent::VisibilityChanged {
                 is_open: intro.is_some(),
@@ -326,7 +327,7 @@ impl OneTimeModalModel {
     /// modal is closed, or when it next closes if currently open. The future
     /// reads live modal state at poll time, so it can be created ahead of the
     /// modal opening.
-    pub fn wait_until_auto_handoff_sleep_modal_closed(&self) -> impl Future<Output = ()> {
+    pub fn wait_until_auto_handoff_sleep_modal_closed(&self) -> impl Future<Output = ()> + use<> {
         self.auto_handoff_sleep_modal_closed.wait()
     }
 

@@ -91,7 +91,7 @@ pub trait ConversationSelection: AgentConversationListPolicy {
 
     /// Returns the autoexecute override for the pending query.
     fn pending_query_autoexecute_override(&self, app: &AppContext)
-        -> AIConversationAutoexecuteMode;
+    -> AIConversationAutoexecuteMode;
 
     /// Toggles the autoexecute override for the pending query.
     fn toggle_pending_query_autoexecute(

@@ -10,8 +10,8 @@ use settings::Setting;
 use siphasher::sip::SipHasher;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{
     NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
@@ -53,7 +53,7 @@ use crate::ai::agent_management::details_action_buttons::{
 use crate::ai::agent_management::telemetry::{
     AgentManagementTelemetryEvent, ArtifactType, FilterType, OpenedFrom,
 };
-use crate::ai::ambient_agents::{cancel_task_with_toast, AgentSource};
+use crate::ai::ambient_agents::{AgentSource, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::format_credits;
 use crate::ai::conversation_details_panel::{
@@ -90,7 +90,7 @@ use crate::workspace::{
     ForkedConversationDestination, RestoreConversationLayout, ToastStack, WorkspaceAction,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, AgentModeEntrypoint};
+use crate::{AgentModeEntrypoint, send_telemetry_from_ctx};
 
 lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
@@ -1004,42 +1004,48 @@ impl AgentManagementView {
             self.list_state.add_item();
             let card_key = card.item_id.as_key();
 
-            if let Some(mut existing) = old_items.remove(&card_key) {
-                // Update artifacts view if it exists, or create if needed
-                if should_show_artifacts(&card.artifacts) {
-                    if let Some(view) = &existing.artifact_buttons_view {
-                        view.update(ctx, |v, ctx| v.update_artifacts(&card.artifacts, ctx));
+            match old_items.remove(&card_key) {
+                Some(mut existing) => {
+                    // Update artifacts view if it exists, or create if needed
+                    if should_show_artifacts(&card.artifacts) {
+                        if let Some(view) = &existing.artifact_buttons_view {
+                            view.update(ctx, |v, ctx| v.update_artifacts(&card.artifacts, ctx));
+                        } else {
+                            existing.artifact_buttons_view =
+                                Some(self.create_artifact_buttons_view(&card.artifacts, ctx));
+                        }
                     } else {
-                        existing.artifact_buttons_view =
-                            Some(self.create_artifact_buttons_view(&card.artifacts, ctx));
+                        existing.artifact_buttons_view = None;
                     }
-                } else {
-                    existing.artifact_buttons_view = None;
+
+                    existing.action_buttons_view.update(ctx, |row, ctx| {
+                        row.set_config(card.action_buttons_config, ctx)
+                    });
+
+                    new_items.push(existing);
                 }
+                _ => {
+                    let artifact_buttons_view = if should_show_artifacts(&card.artifacts) {
+                        Some(self.create_artifact_buttons_view(&card.artifacts, ctx))
+                    } else {
+                        None
+                    };
+                    let action_buttons_view = self.create_action_buttons_view(
+                        card.item_id,
+                        card.action_buttons_config,
+                        ctx,
+                    );
 
-                existing.action_buttons_view.update(ctx, |row, ctx| {
-                    row.set_config(card.action_buttons_config, ctx)
-                });
-
-                new_items.push(existing);
-            } else {
-                let artifact_buttons_view = if should_show_artifacts(&card.artifacts) {
-                    Some(self.create_artifact_buttons_view(&card.artifacts, ctx))
-                } else {
-                    None
-                };
-                let action_buttons_view =
-                    self.create_action_buttons_view(card.item_id, card.action_buttons_config, ctx);
-
-                new_items.push(CardState {
-                    hover_state: MouseStateHandle::default(),
-                    avatar_hover_state: MouseStateHandle::default(),
-                    session_status_hover_state: MouseStateHandle::default(),
-                    action_buttons_hover_state: MouseStateHandle::default(),
-                    artifact_buttons_view,
-                    action_buttons_view,
-                    item_id: card.item_id,
-                });
+                    new_items.push(CardState {
+                        hover_state: MouseStateHandle::default(),
+                        avatar_hover_state: MouseStateHandle::default(),
+                        session_status_hover_state: MouseStateHandle::default(),
+                        action_buttons_hover_state: MouseStateHandle::default(),
+                        artifact_buttons_view,
+                        action_buttons_view,
+                        item_id: card.item_id,
+                    });
+                }
             }
         }
 
@@ -1525,22 +1531,22 @@ impl AgentManagementView {
                 .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
 
             let mut stack = Stack::new().with_child(container.finish());
-            if state.is_hovered() {
-                if let Some(tooltip_text) = tooltip_text_opt {
-                    let tooltip = ui_builder
-                        .tool_tip(tooltip_text.to_string())
-                        .build()
-                        .finish();
-                    stack.add_positioned_overlay_child(
-                        tooltip,
-                        OffsetPositioning::offset_from_parent(
-                            vec2f(0., -4.),
-                            ParentOffsetBounds::WindowByPosition,
-                            ParentAnchor::TopMiddle,
-                            ChildAnchor::BottomMiddle,
-                        ),
-                    );
-                }
+            if state.is_hovered()
+                && let Some(tooltip_text) = tooltip_text_opt
+            {
+                let tooltip = ui_builder
+                    .tool_tip(tooltip_text.to_string())
+                    .build()
+                    .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -4.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                );
             }
             stack.finish()
         })
@@ -1798,30 +1804,30 @@ impl AgentManagementView {
         }
 
         let availability = HarnessAvailabilityModel::as_ref(app);
-        if availability.should_show_harness_selector() {
-            if let Some(harness) = entry.display.harness {
-                metadata_parts.push(format!(
-                    "Harness: {}",
-                    availability.display_name_for(harness)
-                ));
-            }
+        if availability.should_show_harness_selector()
+            && let Some(harness) = entry.display.harness
+        {
+            metadata_parts.push(format!(
+                "Harness: {}",
+                availability.display_name_for(harness)
+            ));
         }
 
         if let Some(executor) = &entry.display.executor {
             let same_as_creator =
                 executor.uid.is_some() && executor.uid == entry.display.creator.uid;
-            if !same_as_creator {
-                if let Some(name) = executor.name.as_deref().or(executor.uid.as_deref()) {
-                    let label = if executor
-                        .principal_type
-                        .is_some_and(|pt| pt.is_service_account())
-                    {
-                        "Agent"
-                    } else {
-                        "Executor"
-                    };
-                    metadata_parts.push(format!("{label}: {name}"));
-                }
+            if !same_as_creator
+                && let Some(name) = executor.name.as_deref().or(executor.uid.as_deref())
+            {
+                let label = if executor
+                    .principal_type
+                    .is_some_and(|pt| pt.is_service_account())
+                {
+                    "Agent"
+                } else {
+                    "Executor"
+                };
+                metadata_parts.push(format!("{label}: {name}"));
             }
         }
 

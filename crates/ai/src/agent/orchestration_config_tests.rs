@@ -9,6 +9,7 @@ fn make_config(model: &str, harness: &str, remote: bool) -> OrchestrationConfig 
             OrchestrationExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
+                runner_id: String::new(),
             }
         } else {
             OrchestrationExecutionMode::Local
@@ -28,6 +29,7 @@ fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: false,
+                runner_id: String::new(),
             }
         } else {
             RunAgentsExecutionMode::Local
@@ -37,6 +39,7 @@ fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
             prompt: String::new(),
             title: String::new(),
             agent_identity_uid: String::new(),
+            model_id: String::new(),
         }],
         plan_id: String::new(),
         harness_auth_secret_name: None,
@@ -118,6 +121,54 @@ fn remote_empty_env_inherits_and_matches() {
         *environment_id = String::new();
     }
     assert!(matches_active_config(&request, &config));
+}
+
+#[test]
+fn remote_matching_runner_matches() {
+    let mut config = make_config("auto", "oz", true);
+    if let OrchestrationExecutionMode::Remote { runner_id, .. } = &mut config.execution_mode {
+        *runner_id = "runner-1".to_string();
+    }
+    let mut request = make_request("auto", "oz", true);
+    if let RunAgentsExecutionMode::Remote { runner_id, .. } = &mut request.execution_mode {
+        *runner_id = "runner-1".to_string();
+    }
+    assert!(matches_active_config(&request, &config));
+}
+
+#[test]
+fn remote_different_runner_mismatches() {
+    let mut config = make_config("auto", "oz", true);
+    if let OrchestrationExecutionMode::Remote { runner_id, .. } = &mut config.execution_mode {
+        *runner_id = "runner-1".to_string();
+    }
+    let mut request = make_request("auto", "oz", true);
+    if let RunAgentsExecutionMode::Remote { runner_id, .. } = &mut request.execution_mode {
+        *runner_id = "runner-2".to_string();
+    }
+    assert!(!matches_active_config(&request, &config));
+}
+
+#[test]
+fn remote_empty_runner_inherits_and_matches() {
+    let mut config = make_config("auto", "oz", true);
+    if let OrchestrationExecutionMode::Remote { runner_id, .. } = &mut config.execution_mode {
+        *runner_id = "runner-1".to_string();
+    }
+    // Request leaves runner_id empty → inherits from config → matches.
+    let request = make_request("auto", "oz", true);
+    assert!(matches_active_config(&request, &config));
+}
+
+#[test]
+fn proto_round_trip_config_remote_with_runner() {
+    let mut config = make_config("auto", "claude", true);
+    if let OrchestrationExecutionMode::Remote { runner_id, .. } = &mut config.execution_mode {
+        *runner_id = "runner-xyz".to_string();
+    }
+    let proto = config.to_proto();
+    let round_tripped = OrchestrationConfig::from_proto(&proto);
+    assert_eq!(config, round_tripped);
 }
 
 #[test]

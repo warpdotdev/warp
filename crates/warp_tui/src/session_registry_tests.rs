@@ -7,7 +7,7 @@ use warpui::{AddWindowOptions, ReadModel, SingletonEntity as _, UpdateModel};
 use warpui_core::App;
 
 use super::{TuiSessions, TuiSessionsEvent};
-use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_semantic_selection, add_test_terminal_session};
 
 type CapturedEvents = Rc<RefCell<Vec<TuiSessionsEvent>>>;
 
@@ -97,6 +97,20 @@ fn focus_drives_events() {
         assert_eq!(
             std::mem::take(&mut *events.borrow_mut()),
             vec![TuiSessionsEvent::FocusChanged(first_id)],
+        );
+
+        app.update_model(&sessions, |sessions, ctx| sessions.clear(ctx));
+        assert_eq!(app.read_model(&sessions, |sessions, _| sessions.len()), 0);
+        assert_eq!(
+            app.read_model(&sessions, |sessions, _| sessions.focused_session_id()),
+            None
+        );
+        assert_eq!(
+            std::mem::take(&mut *events.borrow_mut()),
+            vec![
+                TuiSessionsEvent::SessionRemoved(first_id),
+                TuiSessionsEvent::SessionRemoved(second_id),
+            ],
         );
     });
 }

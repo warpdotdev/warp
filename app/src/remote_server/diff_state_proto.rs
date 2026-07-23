@@ -11,7 +11,7 @@ use std::sync::Arc;
 use warp_util::standardized_path::StandardizedPath;
 
 use super::proto;
-use crate::code_review::diff_size_limits::{DiffSize, UnrenderableReason, MAX_DIFF_SIZE};
+use crate::code_review::diff_size_limits::{DiffSize, MAX_DIFF_SIZE, UnrenderableReason};
 use crate::code_review::diff_state::{
     CommitChainMode, DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase,
     DiffMode, DiffState, DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData,

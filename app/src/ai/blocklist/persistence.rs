@@ -8,8 +8,11 @@ use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
+use warpui::{AppContext, EntityId, SingletonEntity};
 
-use super::AIQueryHistoryOutputStatus;
+use super::history_model::{
+    AIQueryHistoryOutputStatus, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentActionType, AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput,
@@ -18,7 +21,9 @@ use crate::ai::agent::{
     UserQueryMode,
 };
 use crate::ai::llms::LLMId;
+use crate::persistence::ModelEvent;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
+
 /// Data we persist for each [`AIAgentExchange`] for use in history. Does not contain output data.
 #[derive(Debug, Deserialize, Clone)]
 pub struct PersistedAIInput {
@@ -69,12 +74,19 @@ impl TryFrom<&AIAgentInput> for PersistedAIInputType {
                 context: context.clone(),
                 referenced_attachments: Default::default(),
             }),
-            AIAgentInput::PassiveSuggestionResult { suggestion: PassiveSuggestionResultType::Prompt { prompt }, context, .. } => Ok(Self::Query {
+            AIAgentInput::PassiveSuggestionResult {
+                suggestion: PassiveSuggestionResultType::Prompt { prompt },
+                context,
+                ..
+            } => Ok(Self::Query {
                 text: prompt.clone(),
                 context: context.clone(),
                 referenced_attachments: Default::default(),
             }),
-            AIAgentInput::PassiveSuggestionResult { suggestion: PassiveSuggestionResultType::CodeDiff { .. }, .. } => Err(anyhow!(
+            AIAgentInput::PassiveSuggestionResult {
+                suggestion: PassiveSuggestionResultType::CodeDiff { .. },
+                ..
+            } => Err(anyhow!(
                 "PassiveSuggestionResult::CodeDiff is not persisted as a query."
             )),
             AIAgentInput::ActionResult { .. }
@@ -117,6 +129,80 @@ impl TryFrom<PersistedAIInputType> for AIAgentInput {
             }),
         }
     }
+}
+
+/// Builds the persistence-writer event for a query-bearing exchange update.
+///
+/// GUI panes and TUI sessions both consume the global history model, so the
+/// serialization and filtering rules must stay shared even though each
+/// frontend writes to its own persistence scope.
+///
+/// Returns `None` when the event is irrelevant to this terminal surface or the
+/// exchange should not be persisted.
+pub fn maybe_build_ai_query_upsert_event(
+    event: &BlocklistAIHistoryEvent,
+    terminal_surface_id: EntityId,
+    is_shared_ambient_agent_session: bool,
+    app: &AppContext,
+) -> Option<ModelEvent> {
+    if event
+        .terminal_surface_id()
+        .is_some_and(|id| id != terminal_surface_id)
+    {
+        return None;
+    }
+
+    let (exchange_id, conversation_id, is_hidden) = match event {
+        BlocklistAIHistoryEvent::AppendedExchange {
+            exchange_id,
+            conversation_id,
+            is_hidden,
+            ..
+        }
+        | BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+            exchange_id,
+            conversation_id,
+            is_hidden,
+            ..
+        } => (*exchange_id, *conversation_id, *is_hidden),
+        _ => return None,
+    };
+
+    let history_model = BlocklistAIHistoryModel::as_ref(app);
+    let Some(conversation) = history_model.conversation(&conversation_id) else {
+        log::warn!("Received event with invalid conversation ID: {conversation_id:?}");
+        return None;
+    };
+    let Some(exchange) = conversation.exchange_with_id(exchange_id) else {
+        log::warn!("Received event with invalid exchange ID: {exchange_id:?}");
+        return None;
+    };
+
+    if is_hidden || conversation.is_entirely_passive() || is_shared_ambient_agent_session {
+        return None;
+    }
+
+    let inputs: Vec<_> = exchange
+        .input
+        .iter()
+        .filter_map(|input| PersistedAIInputType::try_from(input).ok())
+        .collect();
+    if inputs.is_empty() {
+        return None;
+    }
+
+    Some(ModelEvent::UpsertAIQuery {
+        query: Arc::new(PersistedAIInput {
+            start_ts: exchange.start_time,
+            inputs,
+            exchange_id: exchange.id,
+            conversation_id,
+            output_status: AIQueryHistoryOutputStatus::from(&exchange.output_status),
+            working_directory: exchange.working_directory.clone(),
+            model_id: exchange.model_id.clone(),
+            coding_model_id: exchange.coding_model_id.clone(),
+        }),
+    })
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -354,7 +440,6 @@ impl From<&AIAgentActionType> for PersistedAIAgentActionType {
             AIAgentActionType::FetchConversation { conversation_id } => Self::FetchConversation {
                 conversation_id: conversation_id.clone(),
             },
-            AIAgentActionType::StartAgent { .. } => Self::NotPersisted,
             AIAgentActionType::SendMessageToAgent { .. } => Self::NotPersisted,
             // Orchestrate is rendered from the in-history tool call message;
             // there is no per-action state we need to persist locally.
@@ -526,3 +611,7 @@ impl From<SerializedBlock> for SerializedBlockListItem {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_tests.rs"]
+mod tests;

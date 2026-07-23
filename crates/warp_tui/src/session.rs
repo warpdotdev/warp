@@ -5,8 +5,8 @@
 //! defers creating the first terminal session until login.
 
 use anyhow::{Context, Result};
-use clap::error::ErrorKind;
 use clap::Parser;
+use clap::error::ErrorKind;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::telemetry::TelemetryEvent as _;
@@ -45,6 +45,9 @@ fn parse_resume_token(token: String) -> Result<ServerConversationToken> {
 
 /// Boots the headless Warp app and mounts the transcript-capable TUI session.
 pub fn run() -> Result<()> {
+    // Protect this managed version before any worker dispatch or resource
+    // access. The guard stays alive until this process exits.
+    let _version_lease = crate::autoupdate::VersionLease::acquire_for_current_process()?;
     // If this process was re-exec'd as a Warp worker (e.g. the terminal
     // server), dispatch that instead of starting another TUI — otherwise the
     // worker re-exec would recursively launch TUIs.
@@ -71,12 +74,12 @@ pub fn run() -> Result<()> {
         args.api_key,
         Box::new(move |ctx| init(resume_token, exit_summary_for_app, ctx)),
     );
-    if result.is_ok() {
-        if let Some(token) = exit_summary.token() {
-            let token = token.as_str();
-            println!("To continue this conversation, run:");
-            println!("warp --resume {token}");
-        }
+    if result.is_ok()
+        && let Some(token) = exit_summary.token()
+    {
+        let token = token.as_str();
+        println!("To continue this conversation, run:");
+        println!("warp --resume {token}");
     }
     result
 }
@@ -124,21 +127,21 @@ fn init(
             });
             let orchestration = TuiOrchestrationModel::register(ctx);
             TuiSessions::wire_orchestration(&sessions, &orchestration, ctx);
+            let sessions_for_login = sessions.clone();
+            let root_for_login = root.clone();
+            let login_model = TuiLoginModel::handle(ctx);
+            ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
+                TuiLoginEvent::LoggedIn => {
+                    create_terminal_session_after_login(&sessions_for_login, &root_for_login, ctx)
+                }
+                TuiLoginEvent::LoggedOut => {
+                    root_for_login.update(ctx, |root, ctx| root.show_auth(ctx));
+                    sessions_for_login.update(ctx, |sessions, ctx| sessions.clear(ctx));
+                }
+            });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
                 create_terminal_session_after_login(&sessions, &root, ctx);
-            } else {
-                // Otherwise wait for login to complete and create it then.
-                let sessions_for_login = sessions.clone();
-                let root_for_login = root.clone();
-                let login_model = TuiLoginModel::handle(ctx);
-                ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
-                    TuiLoginEvent::LoggedIn => create_terminal_session_after_login(
-                        &sessions_for_login,
-                        &root_for_login,
-                        ctx,
-                    ),
-                });
             }
         }
         Err(error) => {

@@ -92,9 +92,6 @@ pub enum AIAgentActionResultType {
     /// The result of fetching a conversation's tasks.
     FetchConversation(FetchConversationResult),
 
-    /// The result of starting a child agent.
-    StartAgent(StartAgentResult),
-
     /// The result of sending a message to another agent.
     SendMessageToAgent(SendMessageToAgentResult),
 
@@ -111,12 +108,16 @@ pub enum AIAgentActionResultType {
     /// resume.
     WaitForEvents(WaitForEventsResult),
 }
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ReadFilesFailedFile {
+    pub path: String,
+    pub message: String,
+}
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum StartAgentVersion {
-    #[default]
-    V1,
-    V2,
+impl Display for ReadFilesFailedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path, self.message)
+    }
 }
 
 impl AIAgentActionResultType {
@@ -174,7 +175,6 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::StartRecording(result) => result.fmt(f),
             AIAgentActionResultType::StopRecording(result) => result.fmt(f),
             AIAgentActionResultType::FetchConversation(result) => result.fmt(f),
-            AIAgentActionResultType::StartAgent(result) => result.fmt(f),
             AIAgentActionResultType::SendMessageToAgent(result) => result.fmt(f),
             AIAgentActionResultType::TransferShellCommandControlToUser(result) => result.fmt(f),
             AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
@@ -417,7 +417,10 @@ impl From<&FileContext> for FileLocations {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ReadFilesResult {
-    Success { files: Vec<FileContext> },
+    Success {
+        files: Vec<FileContext>,
+        failed_files: Vec<ReadFilesFailedFile>,
+    },
     Error(String),
     Cancelled,
 }
@@ -425,8 +428,15 @@ pub enum ReadFilesResult {
 impl Display for ReadFilesResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReadFilesResult::Success { files } => {
-                write!(f, "Read files: {}", files.iter().format(", "))
+            ReadFilesResult::Success {
+                files,
+                failed_files,
+            } => {
+                write!(f, "Read files: {}", files.iter().format(", "))?;
+                if !failed_files.is_empty() {
+                    write!(f, " (failed: {})", failed_files.iter().format(", "))?;
+                }
+                Ok(())
             }
             ReadFilesResult::Error(error) => write!(f, "Read files error: {error}"),
             ReadFilesResult::Cancelled => write!(f, "Read files cancelled"),
@@ -772,7 +782,6 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::StartRecording(_) => "The result of starting a recording",
             AIAgentActionResultType::StopRecording(_) => "The result of stopping a recording",
             AIAgentActionResultType::FetchConversation(_) => "The fetched conversation tasks",
-            AIAgentActionResultType::StartAgent(_) => "The result of starting a child agent",
             AIAgentActionResultType::SendMessageToAgent(_) => "The result of sending a message",
             AIAgentActionResultType::TransferShellCommandControlToUser(_) => {
                 "The result of transferring shell command control to user"
@@ -818,14 +827,15 @@ impl AIAgentActionResultType {
             | Self::OpenCodeReview
             | Self::ReadSkill(ReadSkillResult::Success { .. })
             | Self::FetchConversation(FetchConversationResult::Success { .. })
-            | Self::StartAgent(StartAgentResult::Success { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Success { .. })
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Snapshot { .. }
                 | TransferShellCommandControlToUserResult::CommandFinished { .. },
             ) => true,
             Self::AskUserQuestion(AskUserQuestionResult::Success { .. }) => true,
-            Self::RunAgents(RunAgentsResult::Launched { .. }) => true,
+            Self::RunAgents(RunAgentsResult::Launched { agents, .. }) => agents
+                .iter()
+                .any(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Launched { .. })),
             Self::WaitForEvents(WaitForEventsResult::Completed) => true,
             _ => false,
         }
@@ -852,7 +862,6 @@ impl AIAgentActionResultType {
             | Self::StartRecording(StartRecordingResult::Error(_))
             | Self::StopRecording(StopRecordingResult::Error(_))
             | Self::FetchConversation(FetchConversationResult::Error(_))
-            | Self::StartAgent(StartAgentResult::Error { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Error(_))
             | Self::AskUserQuestion(AskUserQuestionResult::Error(_))
             | Self::TransferShellCommandControlToUser(
@@ -861,6 +870,9 @@ impl AIAgentActionResultType {
             | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. }) => {
                 true
             }
+            Self::RunAgents(RunAgentsResult::Launched { agents, .. }) => agents
+                .iter()
+                .all(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Failed { .. })),
             _ => false,
         }
     }
@@ -901,7 +913,6 @@ impl AIAgentActionResultType {
             )
             | Self::ReadSkill(ReadSkillResult::Cancelled)
             | Self::FetchConversation(FetchConversationResult::Cancelled)
-            | Self::StartAgent(StartAgentResult::Cancelled { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             // SkippedByAutoApprove is intentionally excluded: the agent should continue.
             | Self::AskUserQuestion(AskUserQuestionResult::Cancelled)
@@ -1301,50 +1312,6 @@ impl Display for FetchConversationResult {
     }
 }
 
-// TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 result support once
-// old preview orchestration history no longer needs parse/display/result compatibility.
-// Linear issue: QUALITY-788.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum StartAgentResult {
-    Success {
-        agent_id: String,
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-    Error {
-        error: String,
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-    Cancelled {
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-}
-
-impl StartAgentResult {
-    /// Returns which start-agent tool schema version produced this result.
-    pub fn version(&self) -> StartAgentVersion {
-        match self {
-            StartAgentResult::Success { version, .. }
-            | StartAgentResult::Error { version, .. }
-            | StartAgentResult::Cancelled { version } => *version,
-        }
-    }
-}
-
-impl Display for StartAgentResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StartAgentResult::Success { agent_id, .. } => {
-                write!(f, "Started agent with id {agent_id}")
-            }
-            StartAgentResult::Error { error, .. } => write!(f, "Start agent error: {error}"),
-            StartAgentResult::Cancelled { .. } => write!(f, "Start agent cancelled"),
-        }
-    }
-}
-
 /// The terminal outcome of an orchestrate tool call.
 ///
 /// Mirrors the proto `RunAgentsResult` oneof, with an additional
@@ -1381,6 +1348,9 @@ pub enum RunAgentsLaunchedExecutionMode {
         environment_id: String,
         worker_host: String,
         computer_use_enabled: bool,
+        /// Resolved runner UID the batch committed to; empty when none.
+        #[serde(default)]
+        runner_id: String,
     },
 }
 
@@ -1391,6 +1361,11 @@ pub enum RunAgentsLaunchedExecutionMode {
 pub struct RunAgentsAgentOutcome {
     pub name: String,
     pub kind: RunAgentsAgentOutcomeKind,
+    /// The model that was actually used for this child agent. Set from the
+    /// per-agent `model_id` override when present; otherwise from the
+    /// batch-level resolved model. Empty when the server did not populate it.
+    #[serde(default)]
+    pub resolved_model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

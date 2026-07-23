@@ -4,7 +4,7 @@ use super::path::{sorted_directories_relative_to, sorted_paths_relative_to};
 use crate::completer::context::CompletionContext;
 use crate::completer::matchers::MatchStrategy;
 use crate::completer::suggest::{MatchedSuggestion, Priority, Suggestion, SuggestionType};
-use crate::completer::{engine, get_path_separators, TopLevelCommandCaseSensitivity};
+use crate::completer::{TopLevelCommandCaseSensitivity, engine, get_path_separators};
 use crate::parsers::ParsedToken;
 
 /// Generates top-level completion results based on the fragment of text that is entered into the
@@ -49,17 +49,17 @@ pub async fn complete(
 
     // If `cd`ing into a directory without entering `cd` is enabled, also suggest directories.
     // Note that the directories will be listed _after_ the top level commands.
-    if context.shell_supports_autocd().unwrap_or(false) {
-        if let Some(path_completion_context) = context.path_completion_context() {
-            return command_suggestions
-                .into_iter()
-                .chain(
-                    sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
-                        .await
-                        .into_iter(),
-                )
-                .collect();
-        }
+    if context.shell_supports_autocd().unwrap_or(false)
+        && let Some(path_completion_context) = context.path_completion_context()
+    {
+        return command_suggestions
+            .into_iter()
+            .chain(
+                sorted_directories_relative_to(parsed_token, matcher, path_completion_context)
+                    .await
+                    .into_iter(),
+            )
+            .collect();
     }
 
     command_suggestions.into_iter().collect()

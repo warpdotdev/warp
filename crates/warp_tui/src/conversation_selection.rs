@@ -23,7 +23,7 @@ impl TuiConversationSelection {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) -> Self {
-        let conversation_id = Self::start_new_conversation(terminal_surface_id, true, ctx);
+        let conversation_id = Self::start_new_conversation(terminal_surface_id, false, ctx);
         terminal_model
             .lock()
             .block_list_mut()
@@ -67,7 +67,7 @@ impl TuiConversationSelection {
         self.set_terminal_conversation_context(None);
         self.set_pending_query_state(
             PendingQueryState::New {
-                autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
+                autoexecute_override: AIConversationAutoexecuteMode::RespectUserSettings,
             },
             ctx,
         );
@@ -147,23 +147,37 @@ impl AgentConversationListPolicy for TuiConversationSelection {
         entry: &AgentConversationEntry,
         _: &AppContext,
     ) -> AgentConversationListEntryState {
-        classify_conversation_list_entry(
-            self.selected_id(),
-            entry.identity.local_conversation_id,
-            entry.identity.server_conversation_token.is_some(),
-            entry.display.harness,
-            &entry.display.status,
-        )
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: self.selected_id(),
+            local_conversation_id: entry.identity.local_conversation_id,
+            has_server_token: entry.identity.server_conversation_token.is_some(),
+            is_cloud_agent_run: entry.is_cloud_agent_run(),
+            harness: entry.display.harness,
+            status: &entry.display.status,
+        })
     }
 }
 
-fn classify_conversation_list_entry(
+struct ConversationListEntryContext<'a> {
     selected_id: Option<AIConversationId>,
     local_conversation_id: Option<AIConversationId>,
     has_server_token: bool,
+    is_cloud_agent_run: bool,
     harness: Option<Harness>,
-    status: &AgentRunDisplayStatus,
+    status: &'a AgentRunDisplayStatus,
+}
+
+fn classify_conversation_list_entry(
+    context: ConversationListEntryContext<'_>,
 ) -> AgentConversationListEntryState {
+    let ConversationListEntryContext {
+        selected_id,
+        local_conversation_id,
+        has_server_token,
+        is_cloud_agent_run,
+        harness,
+        status,
+    } = context;
     if selected_id.is_some_and(|selected_id| local_conversation_id == Some(selected_id)) {
         return AgentConversationListEntryState::Selected;
     }
@@ -188,7 +202,9 @@ fn classify_conversation_list_entry(
         | AgentRunDisplayStatus::ConversationError
         | AgentRunDisplayStatus::ConversationCancelled => true,
     };
-    if has_terminal_status && (local_conversation_id.is_some() || has_server_token) {
+    if (!is_cloud_agent_run || has_terminal_status)
+        && (local_conversation_id.is_some() || has_server_token)
+    {
         AgentConversationListEntryState::Available
     } else {
         AgentConversationListEntryState::Unavailable
@@ -232,13 +248,11 @@ impl ConversationSelection for TuiConversationSelection {
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) {
         let previous_conversation_id = self.selected_id();
-        // TODO: Implement actual permissions once settings are in place and there is a UI for permissions requests.
-        // For now, we just always set fast-forward to on.
 
         if let Some(previous_conversation_id) = previous_conversation_id {
             Self::emit_deactivated(previous_conversation_id, true, ctx);
         }
-        let conversation_id = Self::start_new_conversation(self.terminal_surface_id, true, ctx);
+        let conversation_id = Self::start_new_conversation(self.terminal_surface_id, false, ctx);
         self.set_terminal_conversation_context(Some(conversation_id));
         self.set_pending_query_state(PendingQueryState::Existing { conversation_id }, ctx);
         Self::emit_activated(origin, ctx);

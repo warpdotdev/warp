@@ -13,7 +13,7 @@ use crate::terminal::model::cell::Flags;
 use crate::terminal::model::header_grid::PromptEndPoint;
 use crate::terminal::model::session::SessionInfo;
 use crate::terminal::model::test_utils::{
-    create_test_block_with_grids, test_iterm_image, TestBlockBuilder,
+    TestBlockBuilder, create_test_block_with_grids, test_iterm_image,
 };
 use crate::test_util::mock_blockgrid;
 
@@ -415,10 +415,12 @@ pub fn test_command_grid_bold() {
     block.prompt_only_precmd(PromptMetadata::default());
 
     // We should have the BOLD flag enabled for commands, once we've started the command grid.
-    assert!(block
-        .header_grid
-        .command_cursor_flags()
-        .contains(Flags::BOLD));
+    assert!(
+        block
+            .header_grid
+            .command_cursor_flags()
+            .contains(Flags::BOLD)
+    );
 
     for c in "command".chars() {
         block.input(c);
@@ -437,20 +439,24 @@ pub fn test_command_grid_bold_after_reset() {
     block.prompt_only_precmd(PromptMetadata::default());
 
     // We should have the BOLD flag enabled for commands, once we've started the command grid.
-    assert!(block
-        .header_grid
-        .command_cursor_flags()
-        .contains(Flags::BOLD));
+    assert!(
+        block
+            .header_grid
+            .command_cursor_flags()
+            .contains(Flags::BOLD)
+    );
 
     for c in "command".chars() {
         block.input(c);
     }
     // Even after a Reset, we should still re-enable the BOLD flag.
     block.terminal_attribute(Attr::Reset);
-    assert!(block
-        .header_grid
-        .command_cursor_flags()
-        .contains(Flags::BOLD));
+    assert!(
+        block
+            .header_grid
+            .command_cursor_flags()
+            .contains(Flags::BOLD)
+    );
 
     block.finish(0);
 

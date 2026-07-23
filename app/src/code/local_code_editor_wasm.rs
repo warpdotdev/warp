@@ -13,9 +13,9 @@ use warpui::{
     AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
 };
 
+use super::ImmediateSaveError;
 pub use super::diff_viewer::DisplayMode;
 use super::editor::view::CodeEditorView;
-use super::ImmediateSaveError;
 use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
 use crate::code::editor::EditorReviewComment;
 use crate::code_review::comments::CommentId;

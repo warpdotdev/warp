@@ -19,7 +19,7 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView, ViewHandle};
 
 use super::{TuiPlanCodeKey, TuiPlanView, TuiPlanViewAction, TuiPlanViewEvent};
-use crate::test_fixtures::{add_test_action_model, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_action_model};
 use crate::tui_builder::TuiUiBuilder;
 
 #[test]
@@ -45,20 +45,24 @@ fn streamed_create_renders_cached_markdown_and_code_children() {
             assert_eq!(lines[0], "○ Creating pomodoro-app-spec.md ▾");
             assert_eq!(lines[1], "");
             assert_eq!(lines[2], "  Overview");
-            assert!(lines
-                .iter()
-                .any(|line| line.trim() == "Build a fast timer."));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.trim() == "Build a fast timer.")
+            );
             assert!(lines.iter().all(|line| !line.contains("**")));
             let plan_toggle_hint = "Ctrl + Shift + P to collapse plan";
             assert_eq!(
                 lines.last().map(|line| line.trim_end()),
                 Some(plan_toggle_hint)
             );
-            assert!(lines
-                .iter()
-                .skip(2)
-                .filter(|line| !line.is_empty() && line.trim_end() != plan_toggle_hint)
-                .all(|line| line.starts_with("  ")));
+            assert!(
+                lines
+                    .iter()
+                    .skip(2)
+                    .filter(|line| !line.is_empty() && line.trim_end() != plan_toggle_hint)
+                    .all(|line| line.starts_with("  "))
+            );
             let plan_background = TuiUiBuilder::from_app(ctx).plan_background();
             assert_eq!(buffer[(0, 0)].bg, Color::Reset);
             assert_eq!(buffer[(0, 1)].bg, plan_background);
@@ -245,9 +249,11 @@ fn finalized_edit_uses_full_result_content() {
 
         app.read(|ctx| {
             let view = view.as_ref(ctx);
-            assert!(view.presentation.documents[0]
-                .content
-                .contains("| Mode | Focus |"));
+            assert!(
+                view.presentation.documents[0]
+                    .content
+                    .contains("| Mode | Focus |")
+            );
             let (lines, _) = render(view, 50, ctx);
             assert_eq!(lines[0], "✓ Updated plan ▾");
             assert!(lines.iter().any(|line| line.trim() == "Updated"));

@@ -4,17 +4,17 @@ use std::iter::FromIterator;
 use string_offset::ByteOffset;
 use typed_path::TypedPathBuf;
 
-use super::{describe, Description};
+use super::{Description, describe};
 use crate::completer::context::CompletionContext;
 use crate::completer::describe::OptionCaseSensitivity;
 use crate::completer::suggest::{MatchRequirement, SuggestionType};
 use crate::completer::testing::{FakeCompletionContext, MockPathCompletionContext};
 use crate::completer::{EngineDirEntry, TopLevelCommandCaseSensitivity};
 use crate::meta::{Span, SpannedItem};
+use crate::signatures::CommandRegistry;
 use crate::signatures::testing::{
     add_content_signature, create_test_command_registry, git_signature, test_signature,
 };
-use crate::signatures::CommandRegistry;
 
 #[cfg(windows)]
 mod windows_constants {
@@ -53,13 +53,17 @@ pub fn test_describe_top_level_commands_case_sensitive() {
         Some("git".into())
     );
 
-    assert!(describe_at_cursor("GIT", ByteOffset::from(1), &ctx)
-        .map(Description::into_token_name)
-        .is_none());
+    assert!(
+        describe_at_cursor("GIT", ByteOffset::from(1), &ctx)
+            .map(Description::into_token_name)
+            .is_none()
+    );
 
-    assert!(describe_at_cursor("GIt", ByteOffset::from(1), &ctx)
-        .map(Description::into_token_name)
-        .is_none());
+    assert!(
+        describe_at_cursor("GIt", ByteOffset::from(1), &ctx)
+            .map(Description::into_token_name)
+            .is_none()
+    );
 
     // The `TopLevelCommandCaseSensitivity` value does not matter since we check parts other than the top-level command.
     assert_eq!(

@@ -4,8 +4,9 @@ use warpui::{
 };
 
 use crate::ai::blocklist::agent_view::AgentViewController;
+use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::profiles::{
-    AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
+    AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
 use crate::search::data_source::Query;
 use crate::search::mixer::{SearchMixer, SearchMixerEvent};
@@ -20,7 +21,7 @@ use crate::terminal::input::suggestions_mode_model::{
 
 #[derive(Debug, Clone)]
 pub enum InlineProfileSelectorEvent {
-    SelectedProfile { profile_id: ClientProfileId },
+    SelectedProfile { profile_id: ExecutionProfileId },
     ManageProfiles,
     Dismissed,
 }
@@ -64,7 +65,7 @@ impl InlineProfileSelectorView {
             InlineMenuEvent::AcceptedItem { item, .. } => match item {
                 SelectProfileMenuItem::Profile { profile_id } => {
                     ctx.emit(InlineProfileSelectorEvent::SelectedProfile {
-                        profile_id: *profile_id,
+                        profile_id: profile_id.clone(),
                     });
                 }
                 SelectProfileMenuItem::ManageProfiles => {
@@ -163,9 +164,10 @@ impl InlineProfileSelectorView {
 
             // Pre-highlight the active profile when no filter query is entered.
             if me.input_buffer_model.as_ref(ctx).current_value().is_empty() {
-                let active_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+                let active_profile_id = AIExecutionProfilesModel::as_ref(ctx)
                     .active_profile(Some(me.terminal_view_id), ctx)
-                    .id();
+                    .id()
+                    .clone();
                 me.menu_view.update(ctx, |menu, ctx| {
                     menu.select_first_where(
                         |item| {

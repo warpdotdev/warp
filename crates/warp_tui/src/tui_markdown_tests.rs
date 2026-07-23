@@ -2,23 +2,59 @@ use std::cell::Cell;
 
 use futures::channel::oneshot;
 use markdown_parser::{
-    parse_markdown, parse_markdown_with_gfm_tables, FormattedText, FormattedTextFragment,
-    FormattedTextLine,
+    CodeBlockText, FormattedImage, FormattedIndentTextInline, FormattedTable, FormattedTaskList,
+    FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextLine,
+    OrderedFormattedIndentTextInline, parse_markdown, parse_markdown_with_gfm_tables,
 };
 use warp::tui_export::Appearance;
-use warpui::platform::WindowStyle;
 use warpui::AddWindowOptions;
+use warpui::platform::WindowStyle;
 use warpui_core::elements::tui::{
     Modifier, TuiBufferExt, TuiChildView, TuiElement, TuiRect, TuiText,
 };
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, ViewHandle, WindowInvalidation};
 
-use super::{render_formatted_text, TuiMarkdownBlockHooks, TuiMarkdownPalette};
+use super::{TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_text};
 use crate::test_fixtures::TestHostView;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
+#[test]
+fn inserts_blank_rows_between_tightly_packed_headers_and_paragraphs() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let formatted =
+                parse_markdown("# Heading\nFirst paragraph.\n## Next heading\nSecond paragraph.")
+                    .expect("Markdown should parse");
+            let (lines, _) = render(&formatted, 80, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "Heading",
+                    "",
+                    "First paragraph.",
+                    "",
+                    "Next heading",
+                    "",
+                    "Second paragraph.",
+                ]
+            );
+        });
+    });
+}
 
+#[test]
+fn keeps_soft_wrapped_paragraph_lines_contiguous() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let formatted = parse_markdown("one\ntwo\nthree").expect("Markdown should parse");
+            let (lines, _) = render(&formatted, 80, ctx);
+            assert_eq!(lines, vec!["one", "two", "three"]);
+        });
+    });
+}
 #[test]
 fn renders_blocks_inline_styles_and_accessible_links_without_markers() {
     App::test((), |app| async move {
@@ -144,6 +180,7 @@ fn renders_structural_and_specialized_fallbacks() {
                     "│ fn main() {}         │",
                     "│                      │",
                     "└──────────────────────┘",
+                    "",
                     "[Unsupported embedded",
                     "content]",
                 ]
@@ -194,7 +231,7 @@ fn delegates_code_blocks_to_the_supplied_hook() {
                 render_code: Some(&render_code),
             };
             let (lines, _) = render_with_hooks(&formatted, 40, &hooks, ctx);
-            assert_eq!(lines, vec!["before", "code 0: rust"]);
+            assert_eq!(lines, vec!["before", "", "code 0: rust"]);
             assert_eq!(calls.get(), 1);
         });
     });
@@ -228,10 +265,10 @@ fn fenced_markdown_code_block_applies_syntax_colors_to_exact_cells() {
         app.update(|ctx| {
             let mut tx = Some(tx);
             ctx.subscribe_to_view(&code_view, move |_, event, _| {
-                if matches!(event, TuiCodeBlockViewEvent::SyntaxUpdated) {
-                    if let Some(tx) = tx.take() {
-                        let _ = tx.send(());
-                    }
+                if matches!(event, TuiCodeBlockViewEvent::SyntaxUpdated)
+                    && let Some(tx) = tx.take()
+                {
+                    let _ = tx.send(());
                 }
             });
             code_view.update(ctx, |view, ctx| {
@@ -285,6 +322,161 @@ fn fenced_markdown_code_block_applies_syntax_colors_to_exact_cells() {
     });
 }
 
+#[test]
+fn inserts_blank_row_after_code_block_before_heading_and_line() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let code_block = FormattedTextLine::CodeBlock(CodeBlockText {
+                lang: "rust".to_owned(),
+                code: "fn main() {}\n".to_owned(),
+            });
+            let heading_after = FormattedText::new([
+                code_block.clone(),
+                FormattedTextLine::Heading(plain_header("After code")),
+            ]);
+            let (lines, _) = render(&heading_after, 24, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "┌──────────────────────┐",
+                    "│ rust                 │",
+                    "│ fn main() {}         │",
+                    "│                      │",
+                    "└──────────────────────┘",
+                    "",
+                    "After code",
+                ]
+            );
+
+            let line_after = FormattedText::new([code_block, plain_line("After code block.")]);
+            let (lines, _) = render(&line_after, 24, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "┌──────────────────────┐",
+                    "│ rust                 │",
+                    "│ fn main() {}         │",
+                    "│                      │",
+                    "└──────────────────────┘",
+                    "",
+                    "After code block.",
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn inserts_blank_row_after_table_before_heading_and_line() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let table = FormattedTextLine::Table(FormattedTable::from_internal_format(
+                "Name\tDescription\nAlice\tBuilds terminals",
+            ));
+            let heading_after = FormattedText::new([
+                table.clone(),
+                FormattedTextLine::Heading(plain_header("After table")),
+            ]);
+            let (lines, _) = render(&heading_after, 50, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "Name  │ Description",
+                    "──────────────────────────────────────────────────",
+                    "Alice │ Builds terminals",
+                    "",
+                    "After table",
+                ]
+            );
+
+            let line_after = FormattedText::new([table, plain_line("After table.")]);
+            let (lines, _) = render(&line_after, 50, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "Name  │ Description",
+                    "──────────────────────────────────────────────────",
+                    "Alice │ Builds terminals",
+                    "",
+                    "After table.",
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn inserts_blank_row_after_image_before_heading_and_line() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let image = FormattedTextLine::Image(FormattedImage {
+                alt_text: "Diagram".to_owned(),
+                source: "diagram.png".to_owned(),
+                title: None,
+            });
+            let heading_after = FormattedText::new([
+                image.clone(),
+                FormattedTextLine::Heading(plain_header("After image")),
+            ]);
+            let (lines, _) = render(&heading_after, 80, ctx);
+            assert_eq!(
+                lines,
+                vec!["Image: Diagram (diagram.png)", "", "After image"]
+            );
+
+            let line_after = FormattedText::new([image, plain_line("After image.")]);
+            let (lines, _) = render(&line_after, 80, ctx);
+            assert_eq!(
+                lines,
+                vec!["Image: Diagram (diagram.png)", "", "After image."]
+            );
+        });
+    });
+}
+
+#[test]
+fn inserts_blank_row_after_list_block_before_heading_and_line() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let heading_after = FormattedText::new([
+                FormattedTextLine::UnorderedList(plain_unordered("first")),
+                FormattedTextLine::UnorderedList(plain_unordered("second")),
+                FormattedTextLine::Heading(plain_header("After list")),
+            ]);
+            let (lines, _) = render(&heading_after, 80, ctx);
+            assert_eq!(lines, vec!["• first", "• second", "", "After list"]);
+
+            let line_after = FormattedText::new([
+                FormattedTextLine::UnorderedList(plain_unordered("first")),
+                FormattedTextLine::UnorderedList(plain_unordered("second")),
+                plain_line("After list."),
+            ]);
+            let (lines, _) = render(&line_after, 80, ctx);
+            assert_eq!(lines, vec!["• first", "• second", "", "After list."]);
+        });
+    });
+}
+
+#[test]
+fn keeps_consecutive_list_items_contiguous_across_list_kinds() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let formatted = FormattedText::new([
+                FormattedTextLine::UnorderedList(plain_unordered("bullet")),
+                FormattedTextLine::OrderedList(plain_ordered(Some(1), "numbered")),
+                FormattedTextLine::TaskList(plain_task(false, "task")),
+            ]);
+            let (lines, _) = render(&formatted, 80, ctx);
+            assert_eq!(lines, vec!["• bullet", "1. numbered", "[ ] task"]);
+        });
+    });
+}
+
 fn add_code_view(app: &mut App) -> ViewHandle<TuiCodeBlockView> {
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
@@ -330,4 +522,40 @@ fn render_with_hooks(
         lines.pop();
     }
     (lines, frame.buffer)
+}
+
+fn plain_line(text: &str) -> FormattedTextLine {
+    FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(text)])
+}
+
+fn plain_header(text: &str) -> FormattedTextHeader {
+    FormattedTextHeader {
+        heading_size: 1,
+        text: vec![FormattedTextFragment::plain_text(text)],
+    }
+}
+
+fn plain_unordered(text: &str) -> FormattedIndentTextInline {
+    FormattedIndentTextInline {
+        indent_level: 0,
+        text: vec![FormattedTextFragment::plain_text(text)],
+    }
+}
+
+fn plain_ordered(number: Option<usize>, text: &str) -> OrderedFormattedIndentTextInline {
+    OrderedFormattedIndentTextInline {
+        number,
+        indented_text: FormattedIndentTextInline {
+            indent_level: 0,
+            text: vec![FormattedTextFragment::plain_text(text)],
+        },
+    }
+}
+
+fn plain_task(complete: bool, text: &str) -> FormattedTaskList {
+    FormattedTaskList {
+        complete,
+        indent_level: 0,
+        text: vec![FormattedTextFragment::plain_text(text)],
+    }
 }

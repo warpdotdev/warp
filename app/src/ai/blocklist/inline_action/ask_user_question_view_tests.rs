@@ -1,7 +1,7 @@
 use ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
 use ai::agent::{AskUserQuestionAction, AskUserQuestionSession};
 
-use super::{ask_user_question_view_state, AskUserQuestionViewState};
+use super::{AskUserQuestionViewState, ask_user_question_view_state};
 
 fn build_question(question_id: &str, supports_other: bool) -> AskUserQuestionItem {
     AskUserQuestionItem {
@@ -32,7 +32,7 @@ fn view_state_shows_other_input_only_for_the_current_question() {
         }
     );
 
-    session.apply(AskUserQuestionAction::OpenOtherInput);
+    session.apply(AskUserQuestionAction::EnterCustomAnswerEditing);
     assert_eq!(
         ask_user_question_view_state(session.current()),
         AskUserQuestionViewState {

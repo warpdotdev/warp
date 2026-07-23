@@ -10,8 +10,8 @@ use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{BoxFuture, DataSourceRunErrorWrapper};
 use crate::settings::AISettings;
 use crate::terminal;
-use crate::terminal::model::session::SessionId;
 use crate::terminal::HistoryEntry;
+use crate::terminal::model::session::SessionId;
 
 pub(crate) struct HistorySnapshot {
     commands: Arc<[Arc<HistoryEntry>]>,

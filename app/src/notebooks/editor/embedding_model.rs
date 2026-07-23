@@ -20,23 +20,23 @@ use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Element, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
 use super::embedded_item::EmbeddedWorkflow;
-use super::keys::{custom_action_to_display, NotebookKeybindings};
+use super::keys::{NotebookKeybindings, custom_action_to_display};
 use super::model::ChildModelHandle;
 use super::notebook_command::{
     parsed_token_to_color_style_ranges, transform_ansi_color_to_solid_color,
 };
 use super::view::EditorViewAction;
-use super::{rich_text_styles, NotebookWorkflow};
+use super::{NotebookWorkflow, rich_text_styles};
 use crate::appearance::Appearance;
-use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::CloudObject;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::completer::SessionAgnosticContext;
 use crate::notebooks::styles::block_footer_action_button;
 use crate::notebooks::telemetry::{ActionEntrypoint, BlockInfo};
 use crate::server::ids::{HashableId, ToServerId};
 use crate::settings::FontSettings;
 use crate::terminal::input::decorations::{
-    parse_current_commands_and_tokens, ParsedTokensSnapshot,
+    ParsedTokensSnapshot, parse_current_commands_and_tokens,
 };
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::icons::Icon;

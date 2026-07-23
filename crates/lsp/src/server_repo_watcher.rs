@@ -9,9 +9,9 @@ use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::{ModelContext, SingletonEntity, WeakModelHandle};
 
+use crate::LspServerConfig;
 use crate::model::LspServerModel;
 use crate::types::WatchedFileChangeEvent;
-use crate::LspServerConfig;
 
 enum RepoWatchState {
     NotWatching,

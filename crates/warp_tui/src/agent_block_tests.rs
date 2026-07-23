@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,36 +14,338 @@ use warp::tui_export::{
     AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
     AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, AgentOutputImage,
-    AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable, Appearance, LLMId,
-    MessageId, OutputStatusUpdateCallback, ReceivedMessageDisplay, RequestCommandOutputResult,
-    ServerOutputId, Shared, SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus,
-    UserQueryMode,
+    AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable, Appearance,
+    FailedOutputPresentation, LLMId, MessageId, OutputStatusUpdateCallback, ReceivedMessageDisplay,
+    RenderableAIError, RequestCommandOutputResult, ServerOutputId, Shared, SummarizationType,
+    TaskId, TerminalModel, TodoOperation, TodoStatus, UserQueryMode,
+    should_show_failed_output_usage_notice,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext,
+    Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition,
     TuiSize,
 };
-use warpui_core::elements::Fill as CoreFill;
+use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityId, EntityIdMap, TuiView, ViewContext, ViewHandle};
 
 use super::{
     CollapsibleSectionStates, TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection,
-    TuiCodeBlockKey, TuiRichTextSection, TuiToolCallView,
+    TuiCodeBlockKey, TuiRichTextSection, TuiToolCallView, render_failure_section,
 };
 use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
 };
 use crate::agent_message::agent_message_section_id;
-use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_action_model_and_events};
+use crate::tui_builder::TuiUiBuilder;
 use crate::tui_plan_view::TuiPlanViewAction;
 use crate::tui_shell_command_view::TuiShellCommandViewAction;
+
+#[test]
+fn agent_block_renders_generic_failure_after_partial_output() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: vec![query_input("hello")],
+                status: failed_output(
+                    vec![plain_text_message("message-1", "partial response")],
+                    RenderableAIError::other("backend failed", false),
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            let lines = render_block_lines(block.as_ref(ctx), 60, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "> hello",
+                    "partial response",
+                    "⚠ I'm sorry, I couldn't complete that request.",
+                    "backend failed",
+                ]
+            );
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                block.as_ref(ctx).render_element(ctx),
+                TuiRect::new(0, 0, 60, 9),
+                ctx,
+            );
+            let failure_row = frame
+                .buffer
+                .to_lines()
+                .iter()
+                .position(|line| line.contains("couldn't complete"))
+                .expect("failure row");
+            let red: Color = CoreFill::from(ThemeFill::from(
+                Appearance::as_ref(ctx).theme().terminal_colors().normal.red,
+            ))
+            .into();
+            assert_eq!(frame.buffer[(0, failure_row as u16)].fg, red);
+        });
+    });
+}
+
+#[test]
+fn agent_block_renders_invalid_api_key_detail_without_usage_notice() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: failed_output(
+                    Vec::new(),
+                    RenderableAIError::InvalidApiKey {
+                        provider: "OpenAI".to_owned(),
+                        model_name: "GPT".to_owned(),
+                    },
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            let lines = render_block_lines(block.as_ref(ctx), 100, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "⚠ Provided API key is not valid",
+                    "  Failed to authenticate with OpenAI when using GPT. Double-check that your API key is correct.",
+                ]
+            );
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| !line.contains("won't count towards your usage"))
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_block_suppresses_recovery_pending_failure() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: failed_output(
+                    vec![plain_text_message("message-1", "partial response")],
+                    RenderableAIError::Other {
+                        error_message: "temporary failure".to_owned(),
+                        will_attempt_resume: true,
+                        waiting_for_network: false,
+                        is_user_error: false,
+                    },
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            assert_eq!(
+                render_block_lines(block.as_ref(ctx), 60, ctx),
+                vec!["partial response"]
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_block_renders_context_window_failure() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: failed_output(
+                    Vec::new(),
+                    RenderableAIError::ContextWindowExceeded(
+                        "The conversation is too long.".to_owned(),
+                    ),
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            assert_eq!(
+                render_block_lines(block.as_ref(ctx), 60, ctx),
+                vec!["× The conversation is too long."]
+            );
+        });
+    });
+}
+
+#[test]
+fn out_of_credits_failure_uses_shared_copy_warning_style_and_tui_actions() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+
+        app.read(|ctx| {
+            let presentation = FailedOutputPresentation::OutOfCredits {
+                message: "I'm sorry, I couldn't complete that request.\n\nIn order to use Warp's AI features, subscribe to a Warp plan, or bring your own inference."
+                    .to_owned(),
+                can_use_own_api_keys: true,
+            };
+            let compare_plans_hover_state = MouseStateHandle::default();
+            let byok_hover_state = MouseStateHandle::default();
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 100, 4),
+                ctx,
+            );
+            assert_eq!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .collect::<Vec<_>>(),
+                vec![
+                    "⚠ I'm sorry, I couldn't complete that request.",
+                    "  In order to use Warp's AI features, subscribe to a Warp plan, or bring your own inference.",
+                    "",
+                    "  Compare plans  or  Use your own API keys",
+                ]
+            );
+            let builder = TuiUiBuilder::from_app(ctx);
+            let primary_foreground = builder
+                .primary_text_style()
+                .fg
+                .expect("primary foreground");
+            assert_eq!(
+                frame.buffer[(0, 0)].fg,
+                builder.error_text_style().fg.expect("error foreground")
+            );
+            assert_eq!(frame.buffer[(2, 0)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(2, 1)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(2, 3)].fg, primary_foreground);
+            assert_eq!(
+                frame.buffer[(17, 3)].fg,
+                builder.muted_text_style().fg.expect("muted foreground")
+            );
+            assert_eq!(frame.buffer[(21, 3)].fg, primary_foreground);
+            assert!(
+                frame.buffer[(2, 3)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED)
+            );
+            assert!(
+                frame.buffer[(21, 3)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED)
+            );
+
+            dispatch_click_on_text(
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                "Compare plans",
+                100,
+                4,
+                ctx,
+            );
+            dispatch_click_on_text(
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                "Use your own API keys",
+                100,
+                4,
+                ctx,
+            );
+
+            let without_byok = FailedOutputPresentation::OutOfCredits {
+                message: "I'm sorry, I couldn't complete that request.\n\nOut of credits."
+                    .to_owned(),
+                can_use_own_api_keys: false,
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_failure_section(
+                    &without_byok,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 100, 4),
+                ctx,
+            );
+            assert_eq!(frame.buffer.to_lines()[3].trim_end(), "  Compare plans");
+        });
+
+        assert_eq!(
+            &*opened_urls.borrow(),
+            &[
+                "https://www.warp.dev/pricing".to_owned(),
+                "https://docs.warp.dev/agent-platform/inference/bring-your-own-api-key/".to_owned(),
+            ]
+        );
+    });
+}
+
+#[test]
+fn failed_output_usage_notice_matches_gui_conditions() {
+    let error = RenderableAIError::other("failed", false);
+    assert!(should_show_failed_output_usage_notice(
+        &error, true, false, false
+    ));
+    assert!(should_show_failed_output_usage_notice(
+        &RenderableAIError::QuotaLimit {
+            user_display_message: Some("You've reached your credit limit.".to_owned()),
+        },
+        true,
+        false,
+        false,
+    ));
+    assert!(!should_show_failed_output_usage_notice(
+        &error, false, false, false
+    ));
+    assert!(!should_show_failed_output_usage_notice(
+        &error, true, true, false
+    ));
+    assert!(!should_show_failed_output_usage_notice(
+        &error, true, false, true
+    ));
+    assert!(!should_show_failed_output_usage_notice(
+        &RenderableAIError::InvalidApiKey {
+            provider: "OpenAI".to_owned(),
+            model_name: "GPT".to_owned(),
+        },
+        true,
+        false,
+        false,
+    ));
+}
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
@@ -527,7 +829,8 @@ fn shell_command_disclosure_invalidates_agent_block_layout() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
-                TuiAIBlockEvent::BlockingStateChanged => {}
+                TuiAIBlockEvent::BlockingStateChanged
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
             });
         });
 
@@ -620,7 +923,8 @@ fn plan_collapse_invalidates_agent_block_layout() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
-                TuiAIBlockEvent::BlockingStateChanged => {}
+                TuiAIBlockEvent::BlockingStateChanged
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
             });
         });
 
@@ -691,9 +995,11 @@ fn keyboard_toggle_targets_latest_exposed_plan_in_message_order() {
             let Some(TuiToolCallView::Plan(second)) = block.action_views.get(&second_id) else {
                 panic!("second action has a plan child");
             };
-            assert!(render_tui_view_lines(first.as_ref(ctx), 40, 8, ctx)
-                .iter()
-                .any(|line| line.trim() == "first body"));
+            assert!(
+                render_tui_view_lines(first.as_ref(ctx), 40, 8, ctx)
+                    .iter()
+                    .any(|line| line.trim() == "first body")
+            );
             assert_eq!(
                 render_tui_view_lines(second.as_ref(ctx), 40, 8, ctx),
                 vec!["○ Create plan ▸"]
@@ -775,9 +1081,10 @@ fn streamed_ask_user_question_payload_replaces_the_initial_empty_child_view() {
                 panic!("updated ask-question child view");
             };
             assert_ne!(view.id(), initial_view_id);
-            assert!(view
-                .as_ref(ctx)
-                .matches_action(&action_id, &ask_user_question_items("Which one?")));
+            assert!(
+                view.as_ref(ctx)
+                    .matches_action(&action_id, &ask_user_question_items("Which one?"))
+            );
         });
     });
 }
@@ -922,11 +1229,13 @@ fn agent_block_preserves_and_renders_code_sections_in_order() {
                 TuiRect::new(0, 0, 40, 3),
                 app_ctx,
             );
-            assert!(frame
-                .buffer
-                .to_lines()
-                .iter()
-                .any(|line| line.contains("println!")));
+            assert!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .iter()
+                    .any(|line| line.contains("println!"))
+            );
 
             let rendered = render_block_lines(block, 40, app_ctx);
             assert_eq!(rendered.last().map(String::as_str), Some("visible"));
@@ -1037,7 +1346,8 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
-                TuiAIBlockEvent::BlockingStateChanged => {}
+                TuiAIBlockEvent::BlockingStateChanged
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
             });
         });
 
@@ -1125,11 +1435,16 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
                 }]
             );
 
-            let rendered = render_block_lines(block, 40, app_ctx);
-            assert_eq!(rendered[0], "Thinking... ▾");
-            // Body lines are indented four spaces beneath the header.
-            assert_eq!(rendered[1], "    line one");
-            assert_eq!(rendered[2], "    line two");
+            // A blank line separates the header from the body, and body lines
+            // are left-aligned with the header (no indent).
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            let header = rendered
+                .iter()
+                .position(|line| line == "Thinking... ▾")
+                .expect("thinking header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "line one");
+            assert_eq!(rendered[header + 3], "line two");
         });
     });
 }
@@ -1329,10 +1644,13 @@ fn expanded_conversation_summary_shows_its_body() {
             block
                 .collapsible_states
                 .set_collapsed(MessageId::new("summary-1".to_owned()), false);
-            assert_eq!(
-                render_block_lines(block, 40, app_ctx),
-                vec!["Conversation summarized ▾", "    condensed context"]
-            );
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            let header = rendered
+                .iter()
+                .position(|line| line == "Conversation summarized ▾")
+                .expect("conversation summary header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "condensed context");
         });
     });
 }
@@ -1375,10 +1693,20 @@ fn multiple_reasoning_blocks_render_independent_collapse_state() {
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
             // The finished block collapses; the streaming one stays expanded.
-            let rendered = render_block_lines(block, 40, app_ctx);
-            assert_eq!(rendered[0], "Thought for 3 seconds ▸");
-            assert_eq!(rendered[1], "Thinking... ▾");
-            assert_eq!(rendered[2], "    still going");
+            // Blank-line gap, then the left-aligned body.
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            assert!(
+                rendered
+                    .iter()
+                    .any(|line| line == "Thought for 3 seconds ▸"),
+                "{rendered:?}"
+            );
+            let header = rendered
+                .iter()
+                .position(|line| line == "Thinking... ▾")
+                .expect("streaming thinking header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "still going");
             assert!(rendered.iter().all(|line| !line.contains("done body")));
         });
     });
@@ -1497,9 +1825,11 @@ fn task_list_renders_header_and_status_glyph_rows() {
             // Cancelled: muted glyph, struck-through muted title.
             assert_eq!(frame.buffer[(2, 4)].fg, muted);
             assert_eq!(frame.buffer[(4, 4)].fg, muted);
-            assert!(frame.buffer[(4, 4)]
-                .modifier
-                .contains(Modifier::CROSSED_OUT));
+            assert!(
+                frame.buffer[(4, 4)]
+                    .modifier
+                    .contains(Modifier::CROSSED_OUT)
+            );
         });
     });
 }
@@ -1821,6 +2151,18 @@ fn complete_output_messages(messages: Vec<AIAgentOutputMessage>) -> AIBlockOutpu
     }
 }
 
+fn failed_output(
+    messages: Vec<AIAgentOutputMessage>,
+    error: RenderableAIError,
+) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Failed {
+        partial_output: Some(Shared::new(AIAgentOutput {
+            messages,
+            ..Default::default()
+        })),
+        error,
+    }
+}
 /// Builds a text output message from plain-text sections.
 fn text_message(id: &str, sections: Vec<AIAgentTextSection>) -> AIAgentOutputMessage {
     AIAgentOutputMessage {
@@ -2057,6 +2399,92 @@ fn render_block_lines(block: &TuiAIBlock, width: u16, app: &AppContext) -> Vec<S
         .map(|line| line.trim_end().to_owned())
         .filter(|line| !line.is_empty())
         .collect()
+}
+
+/// Renders the block at `width` and returns every row trimmed of trailing
+/// padding, preserving blank rows so tests can assert on inter-section spacing.
+fn render_block_lines_including_blank(
+    block: &TuiAIBlock,
+    width: u16,
+    app: &AppContext,
+) -> Vec<String> {
+    let height = desired_height(block, width, app).max(1) as u16;
+    let mut presenter = TuiPresenter::new();
+    let frame = presenter.present_element(
+        block.render_element(app),
+        TuiRect::new(0, 0, width, height),
+        app,
+    );
+    frame
+        .buffer
+        .to_lines()
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .collect()
+}
+
+fn dispatch_click_on_text(
+    mut element: Box<dyn TuiElement>,
+    label: &str,
+    width: u16,
+    height: u16,
+    app: &AppContext,
+) {
+    let area = TuiRect::new(0, 0, width, height);
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.layout(
+        TuiConstraint::loose(TuiSize::new(width, height)),
+        &mut layout_ctx,
+        app,
+    );
+    let (buffer, scene) = {
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+        (buffer, Rc::new(paint_ctx.scene.clone()))
+    };
+    let lines = buffer.to_lines();
+    let (row, byte_index) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(row, line)| line.find(label).map(|byte_index| (row, byte_index)))
+        .expect("rendered element contains target link");
+    let x = lines[row][..byte_index].chars().count() as u16;
+    let position = TuiPoint::new(x, row as u16);
+    let modifiers = ModifiersState::default();
+    let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+    event_ctx.set_origin_view(Some(EntityId::new()));
+    element.dispatch_event(
+        &TuiEvent::MouseMoved {
+            position,
+            modifiers,
+            is_synthetic: false,
+        },
+        &mut event_ctx,
+        app,
+    );
+    element.dispatch_event(
+        &TuiEvent::LeftMouseDown {
+            position,
+            modifiers,
+            click_count: 1,
+            is_first_mouse: false,
+        },
+        &mut event_ctx,
+        app,
+    );
+    element.dispatch_event(
+        &TuiEvent::LeftMouseUp {
+            position,
+            modifiers,
+        },
+        &mut event_ctx,
+        app,
+    );
 }
 
 fn render_tui_view_lines(

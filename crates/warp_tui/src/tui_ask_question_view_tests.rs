@@ -1,14 +1,16 @@
 use warp::tui_export::{
-    AIAgentActionId, AIConversationId, Appearance, AskUserQuestionAction,
-    AskUserQuestionAnswerItem, AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId, Appearance,
+    AskUserQuestionAction, AskUserQuestionAnswerItem, AskUserQuestionItem, AskUserQuestionOption,
+    AskUserQuestionType, TaskId, queue_tui_permission_action,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, WindowInvalidation};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, TypedActionView as _, ViewHandle};
+use warpui_core::{App, TuiView as _, TypedActionView as _, ViewHandle};
 
-use super::TuiAskQuestionView;
+use super::{TuiAskQuestionView, TuiAskQuestionViewAction};
 use crate::option_selector::TuiOptionSelectorAction;
 use crate::test_fixtures::add_test_action_model;
 
@@ -79,6 +81,62 @@ fn render_active_lines(app: &mut App, view: &ViewHandle<TuiAskQuestionView>) -> 
     })
 }
 
+fn queue_question_action(app: &mut App, view: &ViewHandle<TuiAskQuestionView>) {
+    let (action_model, conversation_id, action) = app.read(|ctx| {
+        let view = view.as_ref(ctx);
+        (
+            view.action_model.clone(),
+            view.conversation_id,
+            AIAgentAction {
+                id: view.action_id.clone(),
+                task_id: TaskId::new("task".to_owned()),
+                action: AIAgentActionType::AskUserQuestion {
+                    questions: view.source_questions.clone(),
+                },
+                requires_result: true,
+            },
+        )
+    });
+    action_model.update(app, |model, ctx| {
+        queue_tui_permission_action(model, action, conversation_id, ctx);
+    });
+}
+
+fn present_active_view(app: &mut App, view: &ViewHandle<TuiAskQuestionView>) {
+    let mut presenter = TuiPresenter::new();
+    app.update(|ctx| {
+        let selector = view.as_ref(ctx).selector.clone();
+        let mut invalidation = WindowInvalidation::default();
+        invalidation.updated.insert(view.id());
+        invalidation.updated.insert(selector.id());
+        invalidation
+            .updated
+            .extend(selector.as_ref(ctx).child_view_ids(ctx));
+        presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+        presenter.present(ctx, view, TuiRect::new(0, 0, 80, 20));
+    });
+}
+
+fn dispatch_focused_key(app: &mut App, view: &ViewHandle<TuiAskQuestionView>, key: &str) -> bool {
+    let (window_id, responder_chain) = app.read(|ctx| {
+        let window_id = view.window_id(ctx);
+        let focused = ctx
+            .focused_view_id(window_id)
+            .expect("question interaction has a focused view");
+        let responder_chain = ctx.view_ancestors(window_id, focused);
+        assert!(responder_chain.contains(&view.id()));
+        assert!(responder_chain.contains(&view.as_ref(ctx).selector.id()));
+        (window_id, responder_chain)
+    });
+    app.dispatch_keystroke(
+        window_id,
+        &responder_chain,
+        &Keystroke::parse(key).expect("valid keystroke"),
+        false,
+    )
+    .expect("keystroke dispatch succeeds")
+}
+
 #[test]
 fn active_card_matches_question_panel_structure() {
     App::test((), |mut app| async move {
@@ -109,7 +167,7 @@ fn active_card_matches_question_panel_structure() {
                 "│ (2)   Nightly                                                                │",
                 "│ (3) Other…                                                                   │",
                 "│                                                                              │",
-                "│ Enter or number to select  Tab or ← → to navigate  Ctrl + C to skip all      │",
+                "│ Enter or number to select Tab or ← → to navigate Ctrl + C to cancel question │",
                 "│                                                                              │",
                 "└──────────────────────────────────────────────────────────────────────────────┘",
             ]
@@ -233,7 +291,7 @@ fn navigation_restores_multi_selection_and_other_text() {
 }
 
 #[test]
-fn opening_other_keeps_selector_and_shared_session_in_sync() {
+fn opening_and_leaving_other_keeps_selector_and_shared_session_in_sync() {
     App::test((), |mut app| async move {
         let (_, view) = add_view(
             &mut app,
@@ -246,13 +304,71 @@ fn opening_other_keeps_selector_and_shared_session_in_sync() {
 
         app.read(|ctx| {
             let view = view.as_ref(ctx);
-            assert!(view
-                .session
-                .current()
-                .and_then(|current| current.draft)
-                .is_some_and(|draft| draft.is_other_input_active));
+            assert!(
+                view.session
+                    .current()
+                    .and_then(|current| current.draft)
+                    .is_some_and(|draft| draft.is_other_input_active)
+            );
             assert_eq!(view.selector.as_ref(ctx).highlighted_question_index(), None);
         });
+
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::MoveUp, ctx);
+        });
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            assert!(
+                view.session
+                    .current()
+                    .and_then(|current| current.draft)
+                    .is_none_or(|draft| !draft.is_other_input_active)
+            );
+            assert_eq!(
+                view.selector.as_ref(ctx).highlighted_question_index(),
+                Some(0)
+            );
+        });
+    });
+}
+
+#[test]
+fn submitting_other_restores_question_navigation_focus() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        let (_, view) = add_view(
+            &mut app,
+            vec![
+                question("q1", "Target?", true, true, &["Alpha"]),
+                question("q2", "Shell?", false, true, &["Gamma"]),
+            ],
+        );
+        queue_question_action(&mut app, &view);
+        present_active_view(&mut app, &view);
+
+        let selector = app.read(|ctx| view.as_ref(ctx).selector.clone());
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectItem(1), ctx);
+            selector.set_active_custom_text_for_test("custom answer", ctx);
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiAskQuestionViewAction::Enter, ctx);
+            view.abort_auto_advance();
+            let effect = view.session.apply(AskUserQuestionAction::Confirm);
+            view.handle_effect(effect, ctx);
+        });
+        present_active_view(&mut app, &view);
+
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            assert_eq!(view.session.current_question_index(), 1);
+            assert!(view.selector.as_ref(ctx).list_is_focused(ctx));
+        });
+        assert!(dispatch_focused_key(&mut app, &view, "left"));
+        assert_eq!(
+            app.read(|ctx| view.as_ref(ctx).session.current_question_index()),
+            0
+        );
     });
 }
 
@@ -274,7 +390,9 @@ fn navigating_away_from_a_cleared_other_editor_removes_the_previous_answer() {
             view.handle_effect(effect, ctx);
             view.show_current_question(ctx);
 
-            let effect = view.session.apply(AskUserQuestionAction::OpenOtherInput);
+            let effect = view
+                .session
+                .apply(AskUserQuestionAction::EnterCustomAnswerEditing);
             view.handle_effect(effect, ctx);
             view.selector.update(ctx, |selector, ctx| {
                 selector.set_active_custom_text_for_test("", ctx);

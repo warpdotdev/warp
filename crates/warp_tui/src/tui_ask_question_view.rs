@@ -11,17 +11,17 @@ use warp::tui_export::{
     OptionSourceStatus,
 };
 use warpui::SingletonEntity;
+use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
-use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
-use crate::keybindings::{is_tui_owned_binding, TUI_BINDING_GROUP};
+use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
 use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
 use crate::tui_builder::TuiUiBuilder;
 
@@ -151,6 +151,14 @@ impl TuiAskQuestionView {
             .is_some_and(|status| status.is_blocked())
     }
 
+    pub(super) fn is_awaiting_answers(&self, app: &AppContext) -> bool {
+        self.session.is_editing() && self.is_waiting_on_answers(app)
+    }
+
+    pub(super) fn focus(&self, ctx: &mut ViewContext<Self>) {
+        ctx.focus(&self.selector);
+    }
+
     pub(super) fn matches_action(
         &self,
         action_id: &AIAgentActionId,
@@ -228,6 +236,7 @@ impl TuiAskQuestionView {
                     header: None,
                     snapshot,
                     searchable: false,
+                    row_shortcuts: Default::default(),
                 },
                 ctx,
             );
@@ -280,8 +289,17 @@ impl TuiAskQuestionView {
             }
             TuiOptionSelectorEvent::CustomTextOpened => {
                 self.abort_auto_advance();
-                let _ = self.session.apply(AskUserQuestionAction::OpenOtherInput);
+                let _ = self
+                    .session
+                    .apply(AskUserQuestionAction::EnterCustomAnswerEditing);
                 self.invalidate_layout(ctx);
+            }
+            TuiOptionSelectorEvent::CustomTextClosed => {
+                self.abort_auto_advance();
+                let effect = self
+                    .session
+                    .apply(AskUserQuestionAction::ExitCustomAnswerEditing);
+                self.handle_effect(effect, ctx);
             }
             TuiOptionSelectorEvent::LayoutInvalidated => self.invalidate_layout(ctx),
             TuiOptionSelectorEvent::RetryRequested | TuiOptionSelectorEvent::Dismissed => {}
@@ -336,7 +354,7 @@ impl TuiAskQuestionView {
         match effect {
             AskUserQuestionEffect::Noop => {}
             AskUserQuestionEffect::RefreshCurrent => self.refresh_selection(ctx),
-            AskUserQuestionEffect::FocusOtherInput => {
+            AskUserQuestionEffect::FocusCustomAnswerInput => {
                 self.selector
                     .update(ctx, |selector, ctx| selector.confirm_selected(ctx));
             }
@@ -416,11 +434,11 @@ impl TuiAskQuestionView {
             .child(
                 TuiText::from_spans([
                     ("Enter or number ".to_owned(), builder.primary_text_style()),
-                    ("to select  ".to_owned(), builder.muted_text_style()),
+                    ("to select ".to_owned(), builder.muted_text_style()),
                     ("Tab or ← → ".to_owned(), builder.primary_text_style()),
-                    ("to navigate  ".to_owned(), builder.muted_text_style()),
+                    ("to navigate ".to_owned(), builder.muted_text_style()),
                     ("Ctrl + C ".to_owned(), builder.primary_text_style()),
-                    ("to skip all".to_owned(), builder.muted_text_style()),
+                    ("to cancel question".to_owned(), builder.muted_text_style()),
                 ])
                 .truncate()
                 .finish(),

@@ -78,9 +78,11 @@ fn surface_writes_outside_the_mapping_fail_closed() {
     {
         let mut surface = TuiPaintSurface::mapped(&mut b, TuiScreenPosition::new(-5, -2));
         assert!(surface.cell_mut(TuiScreenPosition::new(-6, -2)).is_none());
-        assert!(surface
-            .cell_mut(TuiScreenPosition::new(i32::MAX, -2))
-            .is_none());
+        assert!(
+            surface
+                .cell_mut(TuiScreenPosition::new(i32::MAX, -2))
+                .is_none()
+        );
     }
 
     assert_eq!(b.to_lines(), vec!["  "]);
