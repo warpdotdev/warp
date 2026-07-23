@@ -138,15 +138,17 @@ pub(super) fn merge_repos_deduped(
     additional_repos: Vec<SourceRepo>,
 ) -> Vec<SourceRepo> {
     let mut seen = HashSet::new();
-    let mut merged = Vec::with_capacity(environment_repos.len() + additional_repos.len());
-
-    for repo in environment_repos.into_iter().chain(additional_repos) {
-        let forge = repo.code_forge.unwrap_or_default();
-        let key = (forge, repo.owner.to_lowercase(), repo.repo.to_lowercase());
-        if seen.insert(key) {
-            merged.push(repo);
-        }
-    }
+    let merged = environment_repos
+        .into_iter()
+        .chain(additional_repos)
+        .filter(|repo| {
+            seen.insert((
+                repo.code_forge.unwrap_or_default(),
+                repo.owner.to_lowercase(),
+                repo.repo.to_lowercase(),
+            ))
+        })
+        .collect::<Vec<_>>();
 
     let mut names = HashMap::<&str, (&str, CodeForge)>::new();
     for repo in &merged {
