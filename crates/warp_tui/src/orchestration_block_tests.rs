@@ -46,14 +46,30 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
 }
 
 #[test]
-fn only_the_model_page_is_searchable() {
+fn environment_selector_is_searchable() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", remote("env-1", "warp")));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Environment, ctx);
+        });
+        let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        assert!(
+            selector
+                .read(&app, |selector, _| selector.search_field_for_test())
+                .is_some()
+        );
+    });
+}
+
+#[test]
+fn environment_and_model_pages_are_searchable() {
+    assert!(ConfigPage::Environment.is_searchable());
     assert!(ConfigPage::Model.is_searchable());
     for page in [
         ConfigPage::Location,
         ConfigPage::Harness,
         ConfigPage::ApiKey,
         ConfigPage::Host,
-        ConfigPage::Environment,
     ] {
         assert!(!page.is_searchable(), "{page:?}");
     }

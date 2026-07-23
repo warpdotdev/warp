@@ -64,6 +64,7 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
             SlashCommandKind::ExportToClipboard,
         ),
         (&*commands::EXPORT_TO_FILE, SlashCommandKind::ExportToFile),
+        (&*commands::MOVE_TO_CLOUD, SlashCommandKind::MoveToCloud),
         (&commands::AUTO_APPROVE, SlashCommandKind::AutoApprove),
         (&commands::MCP, SlashCommandKind::Mcp),
         (&commands::EXIT, SlashCommandKind::Exit),

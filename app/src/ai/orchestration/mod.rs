@@ -36,6 +36,8 @@ pub use remote_child::{
 pub(crate) use snapshots::AUTH_SECRET_INHERIT_LABEL;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use snapshots::location_snapshot;
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use snapshots::oz_cloud_model_snapshot;
 pub use snapshots::{
     OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus, api_key_snapshot,
     build_runner_snapshot, environment_snapshot, harness_snapshot, host_snapshot, model_snapshot,
