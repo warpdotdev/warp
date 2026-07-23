@@ -2519,7 +2519,7 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .selected_conversation(ctx)?
             .usage_totals();
-        (totals != ConversationUsageTotals::default()).then_some(totals)
+        totals.has_usage.then_some(totals)
     }
 
     /// The session's working directory. The cwd only arrives once shell

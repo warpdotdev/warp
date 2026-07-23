@@ -27,6 +27,7 @@ fn test_server_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: Some(3.2),
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -106,6 +107,8 @@ fn test_convert_conversation_data_to_ai_conversation_sets_restored_run_id() {
         conversation.run_id(),
         Some(ambient_agent_task_id.to_string())
     );
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert!(conversation.usage_totals().has_usage);
 }
 
 #[test]

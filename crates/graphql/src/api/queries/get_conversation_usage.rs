@@ -26,6 +26,7 @@ query GetConversationUsage(
             contextWindowUsage
             creditsSpent
             platformCreditsSpent
+            totalProviderCostInCents
             summarized
             tokenUsage { modelId totalTokens }
             warpTokenUsage { modelId totalTokens tokenUsageByCategory { category tokens } }
@@ -117,6 +118,7 @@ pub struct ConversationUsageMetadata {
     pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
+    pub total_provider_cost_in_cents: Option<f64>,
     pub summarized: bool,
     pub token_usage: Vec<ModelTokenUsage>,
     pub warp_token_usage: Vec<TokenUsage>,
@@ -194,6 +196,7 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             context_window_usage: gql.context_window_usage as f32,
             credits_spent: gql.credits_spent as f32,
             platform_credits_spent: gql.platform_credits_spent as f32,
+            total_provider_cost_in_cents: gql.total_provider_cost_in_cents.map(|cost| cost as f32),
             credits_spent_for_last_block: None,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
