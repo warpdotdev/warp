@@ -44,6 +44,9 @@ pub(crate) struct ActiveRecording {
     /// The capture frame rate, used by the post-stop smart cut to enforce the
     /// one-source-frame minimum for instantaneous action groups.
     pub(crate) frame_rate: u32,
+    /// The surface being recorded, used to resolve pointer-event coordinates
+    /// into capture space for the post-stop burn-in.
+    pub(crate) target: computer_use::Target,
     /// Action groups committed to the video, in completion order.
     pub(crate) actions: Vec<computer_use::ActionLogEntry>,
     /// Short agent-authored title shown in badges (from StartRecording.summary).
@@ -134,6 +137,7 @@ impl RecordingController {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_start(
         &mut self,
         recording_id: String,
@@ -142,6 +146,7 @@ impl RecordingController {
         frame_rate: u32,
         summary: Option<String>,
         description: Option<String>,
+        target: computer_use::Target,
     ) {
         if matches!(
             self.state,
@@ -155,6 +160,7 @@ impl RecordingController {
                 handle,
                 started_at: Instant::now(),
                 frame_rate,
+                target,
                 actions: Vec::new(),
                 summary,
                 description,
@@ -180,7 +186,7 @@ impl RecordingController {
         &mut self,
         conversation_id: AIConversationId,
         labels: Vec<String>,
-    ) -> Option<Instant> {
+    ) -> Option<(Instant, computer_use::Target)> {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
         {
@@ -202,7 +208,7 @@ impl RecordingController {
                 start_offset,
                 labels,
             });
-            return Some(recording.started_at);
+            return Some((recording.started_at, recording.target));
         }
         None
     }
@@ -221,6 +227,7 @@ impl RecordingController {
         &mut self,
         conversation_id: AIConversationId,
         finish_offset: Duration,
+        pointer_events: Vec<computer_use::PointerEvent>,
     ) {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
@@ -231,7 +238,7 @@ impl RecordingController {
                 offset: pending.start_offset,
                 finish_offset,
                 labels: pending.labels,
-                pointer_events: Vec::new(),
+                pointer_events,
             });
         }
     }
