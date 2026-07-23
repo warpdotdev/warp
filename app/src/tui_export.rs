@@ -40,6 +40,7 @@ pub use crate::ai::agent_conversations_model::{
     query_conversation_entries,
 };
 pub use crate::ai::ambient_agents::AmbientAgentTaskId;
+pub use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffSurface};
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
@@ -61,6 +62,13 @@ pub use crate::ai::blocklist::diff_storage::{
     UpdatedFileState,
 };
 pub use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff, changed_lines_from_op};
+#[cfg(feature = "local_fs")]
+pub use crate::ai::blocklist::handoff::{
+    HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated, HandoffLaunchAttachments,
+    HandoffPrepareError, HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
+    HandoffTargetMaterialization, MaterializeHandoffTarget, PendingCloudLaunch, PendingHandoff,
+    SnapshotUploadTarget, commit_handoff, prepare_handoff,
+};
 pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
@@ -84,8 +92,8 @@ pub use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
     BlocklistAIController, BlocklistAIInputModel, InputConfig, InputModePolicy,
     InputModePolicyHandle, InputType, InputTypeAutoDetectionSource, NewConversationDecision,
-    PendingAttachmentSummary, PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor,
-    RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
+    PendingAttachment, PendingAttachmentSummary, PolicyConfigUpdate, RequestFileEditsExecutor,
+    RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
     ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
     StartAgentRequest, StartAgentRequestId, block_context_from_terminal_model,
     inherit_child_agent_settings, maybe_build_ai_query_upsert_event,

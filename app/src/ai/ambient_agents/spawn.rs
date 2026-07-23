@@ -116,9 +116,33 @@ pub fn spawn_task(
             },
         };
 
+        let mut stream = Box::pin(monitor_spawned_task(
+            task_id,
+            run_id,
+            at_capacity,
+            ai_client,
+            timeout,
+        ));
+        while let Some(event) = stream.next().await {
+            yield event;
+        }
+    }
+}
+
+/// Monitors an ambient task that has already been created.
+///
+/// This preserves the event contract of [`spawn_task`] while allowing callers
+/// that own task creation to avoid issuing a second spawn request.
+pub fn monitor_spawned_task(
+    task_id: AmbientAgentTaskId,
+    run_id: String,
+    at_capacity: bool,
+    ai_client: Arc<dyn AIClient>,
+    timeout: Option<Duration>,
+) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
+    async_stream::stream! {
         yield Ok(AmbientAgentEvent::TaskSpawned { task_id, run_id });
 
-        // Emit AtCapacity event if the server indicates capacity limit reached.
         if at_capacity {
             yield Ok(AmbientAgentEvent::AtCapacity);
         }
