@@ -161,10 +161,6 @@ mod validate_field_sizes {
 
     const NAME: &str = "my-secret";
 
-    fn oversized_for_name(name: &str) -> String {
-        "x".repeat(MAX_SECRET_FIELD_BYTES - name.len() + 1)
-    }
-
     fn oversized_for_key(env_key: &str) -> String {
         "x".repeat(MAX_SECRET_FIELD_BYTES - env_key.len() + 1)
     }
@@ -187,7 +183,7 @@ mod validate_field_sizes {
 
     #[test]
     fn raw_value_over_limit_is_rejected() {
-        let secret = ManagedSecretValue::raw_value(oversized_for_name(NAME));
+        let secret = ManagedSecretValue::raw_value(oversized_for_key(NAME));
         let err = secret.validate_field_sizes(NAME).unwrap_err();
         assert!(err.to_string().contains(&format!("'{NAME}'")));
     }
@@ -291,7 +287,18 @@ mod validate_field_sizes {
         );
         assert!(secret.validate_field_sizes(NAME).is_ok());
     }
+
+    #[test]
+    fn raw_value_name_at_limit_is_rejected() {
+        // A name this long causes `name.len() + 1 == MAX_SECRET_FIELD_BYTES`, which
+        // would underflow the usize subtraction without the upfront guard.
+        let name = "x".repeat(MAX_SECRET_FIELD_BYTES - 1);
+        let secret = ManagedSecretValue::raw_value("value");
+        assert!(secret.validate_field_sizes(&name).is_err());
+    }
 }
+
+/// Test to ensure that the [`ManagedSecretValue::AnthropicBedrockApiKey`] debug representation does not leak secrets.
 #[test]
 fn test_debug_representation_no_secrets_anthropic_bedrock_api_key() {
     let secret = ManagedSecretValue::AnthropicBedrockApiKey {

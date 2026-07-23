@@ -94,6 +94,15 @@ impl ManagedSecretValue {
     /// Returns an error if any env var produced by this secret would exceed [`MAX_SECRET_FIELD_BYTES`] bytes.
     pub fn validate_field_sizes(&self, name: &str) -> anyhow::Result<()> {
         let check = |env_key: &str, value: &str| -> anyhow::Result<()> {
+            // Guard against a pathologically long key name causing usize underflow below.
+            if env_key.len() + 1 >= MAX_SECRET_FIELD_BYTES {
+                anyhow::bail!(
+                    "Secret name is too long ({} bytes) to be used as an environment variable \
+                     name; the maximum is {} bytes.",
+                    env_key.len(),
+                    MAX_SECRET_FIELD_BYTES - 2,
+                );
+            }
             let max_value_len = MAX_SECRET_FIELD_BYTES - env_key.len() - 1 /* '=' */;
             if value.len() > max_value_len {
                 anyhow::bail!(
