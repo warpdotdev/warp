@@ -659,16 +659,13 @@ impl NextCommandModel {
 /// ingestion point where it enters client state.
 ///
 /// The AI prompt serializes command history as JSON (`serde_json::to_string`),
-/// which doubles every backslash; the model can echo that JSON-escaped form back
-/// as the "plain command." Rather than apply a backslash-counting heuristic, this
-/// simply reverses the JSON string encoding (`\\` -> `\`) - the deterministic
-/// inverse of `serde_json::to_string`, which preserves intentional double
-/// backslashes (e.g. a regex literal the user typed: two backslashes are encoded
-/// to four and decoded back to two) and needs no path-token heuristic. History
-/// and completer fallbacks are already correct and are never routed through here
-/// (they return with `is_from_ai = false`). POSIX-family sessions are a no-op:
-/// their commands use backslashes as shell escapes that must not be collapsed, so
-/// only PowerShell responses are decoded.
+/// and the model can echo that JSON-escaped form back as the "plain command."
+/// Parsing the response as a JSON string reverses all of that encoding, including
+/// backslashes, quotes, and control characters. Malformed responses fall back to
+/// their original text. History and completer fallbacks are already correct and
+/// are never routed through here (they return with `is_from_ai = false`).
+/// POSIX-family sessions are a no-op: their commands use backslashes as shell
+/// escapes that must not be collapsed, so only PowerShell responses are decoded.
 pub(crate) fn normalize_ai_input_suggestion_response(
     mut response: GenerateAIInputSuggestionsResponseV2,
     shell_family: ShellFamily,
@@ -676,17 +673,17 @@ pub(crate) fn normalize_ai_input_suggestion_response(
     if shell_family != ShellFamily::PowerShell {
         return response;
     }
-    // Reverse the JSON string backslash doubling. `serde_json::to_string` doubles
-    // every backslash, so the model's echoed form has `\\` for each original `\`;
-    // halving each pair restores the intended text, including intentional double
-    // backslashes (four -> two). Only backslashes are affected by this encoding.
-    response.most_likely_action = response.most_likely_action.replace("\\\\", "\\");
+    response.most_likely_action = decode_json_string(response.most_likely_action);
     response.commands = response
         .commands
         .into_iter()
-        .map(|command| command.replace("\\\\", "\\"))
+        .map(decode_json_string)
         .collect();
     response
+}
+fn decode_json_string(text: String) -> String {
+    serde_json::from_str::<String>(&format!("\"{}\"", text.replace('"', "\\\"")))
+        .unwrap_or_else(|_| text.to_string())
 }
 
 impl SingletonEntity for NextCommandModel {}

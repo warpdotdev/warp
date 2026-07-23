@@ -269,6 +269,21 @@ fn test_normalize_ai_input_suggestion_response_decodes_json_doubled_backslashes(
         response.commands,
         vec![format!("cd C:{}Users{}alice{}repo", run(1), run(1), run(1))]
     );
+    // JSON string decoding also restores quotes and control characters, not just
+    // backslashes. This protects commands whose arguments contain JSON escapes.
+    let escaped_response = normalize_ai_input_suggestion_response(
+        GenerateAIInputSuggestionsResponseV2 {
+            commands: vec![r#"Write-Output "hello\nworld\t!""#.to_owned()],
+            ai_queries: vec![],
+            most_likely_action: r#"echo "hello""#.to_owned(),
+        },
+        ShellFamily::PowerShell,
+    );
+    assert_eq!(escaped_response.most_likely_action, r#"echo "hello""#);
+    assert_eq!(
+        escaped_response.commands,
+        vec!["Write-Output \"hello\nworld\t!\"".to_owned()]
+    );
 
     // AI echo of a UNC path: the two leading UNC backslashes were doubled to four
     // and each separator to two. Halving restores the two-backslash UNC prefix and
