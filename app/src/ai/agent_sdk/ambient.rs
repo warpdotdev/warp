@@ -463,10 +463,11 @@ impl AmbientAgentRunner {
             );
 
             // We must wait until after workspace metadata is refreshed to check available LLMs.
-            // For third-party harnesses, the model ID is harness-specific and validated
-            // server-side, so skip Oz model validation here.
+            // For third-party harnesses, the model is in harness.model_id and is validated
+            // server-side. Clear the top-level model_id slot to prevent any Oz model ID
+            // that leaked in from a config file from being sent alongside the harness model.
             let model_id = if merged_config.harness.is_some() {
-                merged_config.model_id.clone()
+                None
             } else {
                 match merged_config
                     .model_id
