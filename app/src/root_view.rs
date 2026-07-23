@@ -140,6 +140,28 @@ fn offer_variant_for_account_class(account_class: FtueAccountClass) -> Option<Of
     }
 }
 
+/// Whether post-auth routing should hold off on showing the free-user offer
+/// because the web signup flow is presenting team discovery for the user's
+/// email (`joinable_teams` is the same server data the web page keys off).
+/// Deferring keeps the "finish in your browser" login-slide interstitial up so
+/// we never pitch an individual upgrade the user may be about to invalidate by
+/// joining a team in the browser. Only defers once: `already_deferred` is true
+/// when a previous resolution deferred, so the re-resolution triggered when the
+/// user returns to the app falls through to the offer.
+fn should_defer_offer_for_web_team_discovery(
+    account_class: FtueAccountClass,
+    has_team: bool,
+    num_joinable_teams: usize,
+    already_deferred: bool,
+) -> bool {
+    matches!(
+        account_class,
+        FtueAccountClass::FreeIcp | FtueAccountClass::FreeStandard
+    ) && !has_team
+        && num_joinable_teams > 0
+        && !already_deferred
+}
+
 #[derive(Debug, Clone)]
 enum WindowState {
     /// Quake mode window is open and visible on the screen.
@@ -1650,6 +1672,10 @@ struct AccountFirstLoginContext {
 enum AccountFirstCompletion {
     AccountSkipped,
     PaidTeam,
+    /// The user joined a team (free or paid) from the web signup flow's team
+    /// discovery step, so onboarding completes without ever showing the
+    /// individual upgrade offer.
+    TeamJoined,
     FreeIcpSetupLater,
     FreeStandardSetupLater,
     UpgradeCompleted,
@@ -1660,6 +1686,7 @@ impl AccountFirstCompletion {
         match self {
             AccountFirstCompletion::AccountSkipped => "account_skipped",
             AccountFirstCompletion::PaidTeam => "paid_team",
+            AccountFirstCompletion::TeamJoined => "team_joined",
             AccountFirstCompletion::FreeIcpSetupLater => "free_icp_setup_later",
             AccountFirstCompletion::FreeStandardSetupLater => "free_standard_setup_later",
             AccountFirstCompletion::UpgradeCompleted => "upgrade_completed",
@@ -1669,9 +1696,12 @@ impl AccountFirstCompletion {
     fn account_class(self) -> Option<FtueAccountClass> {
         match self {
             AccountFirstCompletion::AccountSkipped => None,
-            AccountFirstCompletion::PaidTeam | AccountFirstCompletion::UpgradeCompleted => {
-                Some(FtueAccountClass::Paid)
-            }
+            // The joined team's plan may be free or paid; the class only gates
+            // account-backed settings, which are identical for every `Some`
+            // class (see `apply_account_first_onboarding_settings`).
+            AccountFirstCompletion::PaidTeam
+            | AccountFirstCompletion::TeamJoined
+            | AccountFirstCompletion::UpgradeCompleted => Some(FtueAccountClass::Paid),
             AccountFirstCompletion::FreeIcpSetupLater => Some(FtueAccountClass::FreeIcp),
             AccountFirstCompletion::FreeStandardSetupLater => Some(FtueAccountClass::FreeStandard),
         }
@@ -1681,6 +1711,7 @@ impl AccountFirstCompletion {
         matches!(
             self,
             AccountFirstCompletion::PaidTeam
+                | AccountFirstCompletion::TeamJoined
                 | AccountFirstCompletion::FreeIcpSetupLater
                 | AccountFirstCompletion::FreeStandardSetupLater
                 | AccountFirstCompletion::UpgradeCompleted
@@ -1762,6 +1793,11 @@ pub struct RootView {
     pending_account_first_tutorial_after_settings: bool,
     pending_account_first_sso_login: Option<AccountFirstLoginContext>,
     account_first_refresh_in_flight: bool,
+    /// True while post-auth routing is deferred because the web signup flow is
+    /// showing team discovery. While set, the login-slide interstitial stays up
+    /// instead of the offer; resolved by the user joining a team (TeamsChanged)
+    /// or returning to the app (AppBecameActive re-refresh).
+    awaiting_web_team_discovery: bool,
     paste_auth_token_modal: Option<ViewHandle<PasteAuthTokenModalView>>,
 }
 
@@ -1873,6 +1909,7 @@ impl RootView {
             pending_account_first_tutorial_after_settings: false,
             pending_account_first_sso_login: None,
             account_first_refresh_in_flight: false,
+            awaiting_web_team_discovery: false,
             paste_auth_token_modal: None,
         };
 
@@ -2011,6 +2048,7 @@ impl RootView {
         self.pending_account_first_tutorial_after_settings = false;
         self.pending_account_first_sso_login = None;
         self.account_first_refresh_in_flight = false;
+        self.awaiting_web_team_discovery = false;
         self.auth_onboarding_state.log_out(ctx);
         ctx.focus_self();
         ctx.notify();
@@ -2269,21 +2307,55 @@ impl RootView {
         let account_class =
             Self::account_first_class(Self::account_first_is_paid(ctx), fresh_request_limit);
         let has_team = UserWorkspaces::as_ref(ctx).has_teams();
-        send_telemetry_from_ctx!(
-            OnboardingEvent::OnboardingAuthCompleted {
-                account_class: account_class.as_str().to_string(),
-                has_team,
-                is_paid: account_class == FtueAccountClass::Paid,
-                team_discovery_outcome: "unknown".to_string(),
-            },
-            ctx
+        let defer_for_team_discovery = should_defer_offer_for_web_team_discovery(
+            account_class,
+            has_team,
+            UserWorkspaces::as_ref(ctx).num_joinable_teams(),
+            self.awaiting_web_team_discovery,
         );
+        // A deferred resolution re-enters this method when the user returns to
+        // the app; only report auth completion for the first resolution.
+        if !self.awaiting_web_team_discovery {
+            send_telemetry_from_ctx!(
+                OnboardingEvent::OnboardingAuthCompleted {
+                    account_class: account_class.as_str().to_string(),
+                    has_team,
+                    is_paid: account_class == FtueAccountClass::Paid,
+                    team_discovery_outcome: if defer_for_team_discovery {
+                        "eligible"
+                    } else {
+                        "none"
+                    }
+                    .to_string(),
+                },
+                ctx
+            );
+        }
+
+        if defer_for_team_discovery {
+            // The web signup flow is showing this user team discovery. Stay on
+            // the login slide's "finish in your browser" interstitial instead
+            // of pitching an upgrade they may be about to invalidate by joining
+            // a team. Resolved by `handle_account_first_workspaces_event` (team
+            // joined) or the next `AppBecameActive` re-refresh (came back
+            // without joining).
+            self.awaiting_web_team_discovery = true;
+            return;
+        }
+        self.awaiting_web_team_discovery = false;
 
         match account_class {
             FtueAccountClass::Paid => {
                 self.complete_account_first(AccountFirstCompletion::PaidTeam, ctx);
             }
             FtueAccountClass::FreeIcp | FtueAccountClass::FreeStandard => {
+                // A team appearing during signup means the user joined it from
+                // the web flow (e.g. team discovery). Never show a team member
+                // the individual upgrade offer, even if the team is free.
+                if has_team {
+                    self.complete_account_first(AccountFirstCompletion::TeamJoined, ctx);
+                    return;
+                }
                 let variant = offer_variant_for_account_class(account_class)
                     .expect("free account classes have an offer");
                 context.onboarding_view.update(ctx, |view, ctx| {
@@ -2308,6 +2380,17 @@ impl RootView {
         ctx: &mut ViewContext<Self>,
     ) {
         if !matches!(event, UserWorkspacesEvent::TeamsChanged) {
+            return;
+        }
+        // While the offer is deferred for web team discovery, a team appearing
+        // means the user joined it in the browser: complete onboarding without
+        // ever showing the offer (free or paid team alike).
+        if self.awaiting_web_team_discovery
+            && self.account_first_login_context(ctx).is_some()
+            && UserWorkspaces::as_ref(ctx).has_teams()
+        {
+            self.awaiting_web_team_discovery = false;
+            self.complete_account_first(AccountFirstCompletion::TeamJoined, ctx);
             return;
         }
         let (account_class, upgrade_started) = match &self.auth_onboarding_state {
@@ -2366,6 +2449,7 @@ impl RootView {
 
         let account_class = completion.account_class();
         self.pending_account_first_sso_login = None;
+        self.awaiting_web_team_discovery = false;
         let cloud_ready = CloudPreferencesSyncer::as_ref(ctx).has_completed_initial_load();
         let settings_applied = if account_class.is_none() || cloud_ready {
             self.pending_account_first_settings_class = None;
@@ -2422,6 +2506,7 @@ impl RootView {
                 self.pending_post_auth_onboarding_settings = None;
                 self.pending_account_first_settings_class = None;
                 self.pending_account_first_tutorial_after_settings = false;
+                self.awaiting_web_team_discovery = false;
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
                 self.focus(ctx);
                 ctx.notify();
@@ -2812,6 +2897,18 @@ impl RootView {
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_available_models(ctx);
                 });
+                // The user coming back while the offer is deferred for web team
+                // discovery is the signal that they're done in the browser:
+                // re-run the full post-auth refresh so fresh data decides
+                // between completing onboarding (team joined) and showing the
+                // offer (no team). The refresh helper also fetches workspace
+                // metadata, so the plain refresh below is skipped.
+                if self.awaiting_web_team_discovery
+                    && let Some(context) = self.account_first_login_context(ctx)
+                {
+                    self.begin_account_first_post_auth_refresh(context, ctx);
+                    return;
+                }
                 TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
                     drop(manager.refresh_workspace_metadata(ctx));
                 });

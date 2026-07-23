@@ -6,7 +6,7 @@ use warpui::{App, SingletonEntity};
 use super::{
     AccountFirstCompletion, HAS_COMPLETED_ONBOARDING_KEY, RootView, has_completed_local_onboarding,
     offer_variant_for_account_class, refresh_pending_onboarding_choices,
-    requires_post_onboarding_login,
+    requires_post_onboarding_login, should_defer_offer_for_web_team_discovery,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -93,6 +93,40 @@ fn account_first_classes_route_to_paid_or_the_expected_offer() {
     );
 }
 
+/// The post-auth offer is deferred only for teamless free users whose email
+/// has discoverable teams (the web signup flow is showing team discovery), and
+/// only for the first resolution — the re-resolution after the user returns to
+/// the app must fall through to the offer instead of waiting forever.
+#[test]
+fn offer_is_deferred_only_for_teamless_free_users_with_joinable_teams() {
+    for free_class in [FtueAccountClass::FreeIcp, FtueAccountClass::FreeStandard] {
+        // Web team discovery in progress: defer.
+        assert!(should_defer_offer_for_web_team_discovery(
+            free_class, false, 1, false
+        ));
+        // No joinable teams: the web flow isn't showing team discovery.
+        assert!(!should_defer_offer_for_web_team_discovery(
+            free_class, false, 0, false
+        ));
+        // Already on a team (joined during signup): complete instead of defer.
+        assert!(!should_defer_offer_for_web_team_discovery(
+            free_class, true, 1, false
+        ));
+        // Second resolution after deferring once: don't defer again.
+        assert!(!should_defer_offer_for_web_team_discovery(
+            free_class, false, 1, true
+        ));
+    }
+
+    // Paid users never see the offer, so there is nothing to defer.
+    assert!(!should_defer_offer_for_web_team_discovery(
+        FtueAccountClass::Paid,
+        false,
+        1,
+        false
+    ));
+}
+
 #[test]
 fn account_first_completion_metadata_matches_terminal_outcomes() {
     let cases = [
@@ -105,6 +139,12 @@ fn account_first_completion_metadata_matches_terminal_outcomes() {
         (
             AccountFirstCompletion::PaidTeam,
             "paid_team",
+            Some(FtueAccountClass::Paid),
+            true,
+        ),
+        (
+            AccountFirstCompletion::TeamJoined,
+            "team_joined",
             Some(FtueAccountClass::Paid),
             true,
         ),
