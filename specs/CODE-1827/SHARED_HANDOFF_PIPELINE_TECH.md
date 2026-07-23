@@ -43,11 +43,11 @@ It exclusively owns this order:
 
 Preparation captures attachment payloads before cancellation but clears them from `BlocklistAIContextModel` only after an active source has been cancelled and its server token has been accepted. Guard failures and missing-token failures leave the shared context attachments untouched; an active missing-token source is still cancelled before the error is returned.
 
-### `commit_handoff`
+### `execute_handoff`
 
-`commit_handoff` is a normal function that consumes `PendingHandoff`, takes `&AppContext`, and synchronously revalidates current handoff enablement, valid environments, and model cloud compatibility. It returns an owned async future that does not borrow `AppContext`; invalid state resolves that future to the original pending state without external work, while valid state starts committed execution.
+`execute_handoff` is a normal function that consumes `PendingHandoff`, takes `&AppContext`, and synchronously revalidates current handoff enablement, valid environments, and model cloud compatibility. It returns an owned async future that does not borrow `AppContext`; invalid state resolves that future to the original pending state without external work, while valid state starts handoff execution.
 
-Committed execution exclusively owns:
+Handoff execution exclusively owns:
 
 1. Server conversation fork or fresh-launch selection.
 2. Optional `materialize_handoff_target`.
@@ -79,7 +79,7 @@ Do not reproduce the orchestration tree in cloud.
 ### GUI migration
 
 - Preserve GUI `&`, chip, slash command, environment modal, pane targeting, and rendering.
-- Replace workspace/model-owned policy and sequencing with `prepare_handoff` and `commit_handoff`.
+- Replace workspace/model-owned policy and sequencing with `prepare_handoff` and `execute_handoff`.
 - Move prompt substitution and snapshot outcome semantics out of `AmbientAgentViewModel`.
 - Supply `materialize_handoff_target` from `Workspace`.
 - Split post-spawn polling into a helper that monitors an already-created task; keep `spawn_task` as a wrapper for unaffected callers.
@@ -107,7 +107,7 @@ Add app-layer tests with fake clients/dependencies:
 - Snapshot success, empty workspace, and silent failure degradation.
 - Complete empty-prompt substitution matrix.
 - Request fields, privacy flag, orchestration marker, and exactly one spawn call.
-- Duplicate commit and stale completion protection.
+- Duplicate execution and stale completion protection.
 
 Retain or migrate existing GUI tests in `ambient_agent/model_tests.rs`, `handoff/touched_repos_tests.rs`, and `workspace/auto_handoff_tests.rs`. Add parity assertions for GUI request construction and prompt behavior.
 
@@ -122,7 +122,7 @@ Run:
 
 - Keep GUI migration isolated from the TUI product surface so parity can be reviewed independently.
 - Preserve GUI compose/pane state outside the shared domain layer.
-- Consume pending state on commit and gate late callbacks to prevent duplicate runs.
+- Consume pending state on execution and gate late callbacks to prevent duplicate runs.
 - Treat snapshot failure as a settled no-token result.
 - Avoid logging prompts, paths, image contents, or environment secrets.
 

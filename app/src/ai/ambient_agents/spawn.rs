@@ -143,6 +143,7 @@ pub fn monitor_spawned_task(
     async_stream::stream! {
         yield Ok(AmbientAgentEvent::TaskSpawned { task_id, run_id });
 
+        // Emit AtCapacity event if the server indicates capacity limit reached.
         if at_capacity {
             yield Ok(AmbientAgentEvent::AtCapacity);
         }

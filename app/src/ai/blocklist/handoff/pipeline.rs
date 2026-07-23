@@ -1,3 +1,23 @@
+//! Shared preparation and execution pipeline for local-to-cloud handoff.
+//!
+//! Frontends call [`prepare_handoff`] while they still have synchronous access
+//! to the source terminal and conversation models. Preparation enforces source
+//! guardrails, captures the data needed for a cloud launch or failure
+//! restoration, cancels an active local response, and returns an owned
+//! [`PendingHandoff`].
+//!
+//! The frontend may retain that pending value while the user edits its model or
+//! environment selection. Passing it to [`execute_handoff`] ends that editing
+//! phase. Execution revalidates mutable global state, then returns an owned
+//! future that performs the server conversation fork, invokes the frontend's
+//! destination-materialization callback, uploads the workspace snapshot, and
+//! spawns exactly one cloud run. No app or view context is held across awaits.
+//!
+//! [`HandoffCommitOutcome`] separates pre-execution rejection from failures
+//! after external work begins and from successful run creation. Snapshot upload
+//! errors are recorded in the outcome but deliberately degrade to a spawn
+//! without workspace state.
+
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
@@ -9,7 +29,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
 
 use super::snapshot::{HandoffUploadResult, SnapshotUploadTarget, upload_handoff_snapshot};
-use super::touched_repos::{descendant_safe_paths, extract_paths_from_conversation};
+use super::touched_repos::extract_paths_from_conversation;
 use super::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::{CancellationReason, extract_user_query_mode};
@@ -40,6 +60,13 @@ const HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT: &str =
 const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
 
+/// Frontend-resolved source state consumed by [`prepare_handoff`].
+///
+/// This input keeps UI discovery outside the shared pipeline: the caller
+/// supplies the relevant terminal/model handles, current working directory,
+/// snapshot execution target, launch payload, and policy facts. Preparation
+/// consumes these values synchronously and returns a frontend-neutral
+/// [`PendingHandoff`].
 pub struct HandoffPrepareInput {
     pub terminal_surface_id: EntityId,
     pub expected_conversation_id: Option<AIConversationId>,
@@ -58,20 +85,39 @@ pub struct HandoffPrepareInput {
     pub require_in_progress_source: bool,
 }
 
+/// A reason handoff preparation or execution revalidation could not proceed.
+///
+/// Preparation errors occur before a `PendingHandoff` is returned. Selection
+/// and enablement errors can also be returned by [`execute_handoff`] if mutable
+/// global state changed while a frontend retained the pending value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HandoffPrepareError {
+    /// The explicitly requested source is no longer the selected conversation.
     SourceConversationChanged,
+    /// There is neither a non-empty source conversation nor a prompt to launch.
     EmptySourceAndPrompt,
+    /// A caller that requires a running source observed a non-running source.
     SourceNotInProgress,
+    /// The source terminal is running a command that cannot be transferred.
     LongRunningCommand,
+    /// An orchestration descendant is still running or waiting for input.
     ActiveOrBlockedChild,
+    /// An existing conversation has not received the token required to fork it.
     MissingServerConversationToken,
+    /// Local-to-cloud handoff became disabled before execution.
     HandoffDisabled,
+    /// The caller requires an environment, but none is selected.
     MissingRequiredEnvironment,
+    /// The selected environment is no longer present in the current catalog.
     InvalidEnvironment,
+    /// The selected model cannot run as a cloud Oz model.
     InvalidModel,
 }
 
+/// Immutable values a frontend needs while presenting a prepared handoff.
+///
+/// This deliberately omits execution internals such as the source token,
+/// snapshot target, attachments, and restoration state.
 #[derive(Clone)]
 pub struct HandoffPresentationSnapshot {
     pub source_conversation_id: Option<AIConversationId>,
@@ -80,6 +126,11 @@ pub struct HandoffPresentationSnapshot {
     pub forked_existing_conversation: bool,
 }
 
+/// Source-input state that can be restored after handoff fails.
+///
+/// The value is owned by [`PendingHandoff`] until an outcome transfers it to
+/// the frontend. It can be taken only once so two failure paths cannot restore
+/// duplicate prompt or attachment state.
 #[derive(Clone)]
 pub struct HandoffRestoration {
     pub prompt: String,
@@ -87,12 +138,21 @@ pub struct HandoffRestoration {
     pub environment_id: Option<SyncId>,
 }
 
+/// Data supplied after the server conversation-fork decision is complete.
+///
+/// The frontend uses this to create its destination pane or card and, for an
+/// existing conversation, associate its local fork with the new server token.
 pub struct HandoffTargetMaterialization {
     pub source_conversation: Option<AIConversation>,
     pub forked_conversation_id: Option<String>,
     pub title: Option<String>,
 }
 
+/// One-shot frontend callback that materializes the destination handoff UI.
+///
+/// Execution invokes it after the optional server conversation fork and before
+/// snapshot upload or cloud-run creation. Returning an error stops execution
+/// before the agent is spawned.
 pub type MaterializeHandoffTarget = Box<
     dyn FnOnce(
             HandoffTargetMaterialization,
@@ -100,6 +160,12 @@ pub type MaterializeHandoffTarget = Box<
         + Send,
 >;
 
+/// Fully prepared, editable handoff state between preparation and execution.
+///
+/// [`prepare_handoff`] owns construction so source policy and captured data
+/// cannot diverge between frontends. While a frontend retains this value, it
+/// may update the selected environment or model. [`execute_handoff`] then
+/// consumes it, revalidates those selections, and runs the async stages.
 pub struct PendingHandoff {
     source_conversation: Option<AIConversation>,
     source_conversation_active: bool,
@@ -122,8 +188,8 @@ pub struct PendingHandoff {
     orchestration_handoff: Option<bool>,
 }
 
-#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 impl PendingHandoff {
+    /// Returns the values needed to render or materialize this pending handoff.
     pub fn presentation_snapshot(&self) -> HandoffPresentationSnapshot {
         HandoffPresentationSnapshot {
             source_conversation_id: self.source_conversation.as_ref().map(AIConversation::id),
@@ -133,6 +199,11 @@ impl PendingHandoff {
         }
     }
 
+    /// Applies an environment selection to the final agent configuration.
+    ///
+    /// Once a frontend records an explicit user selection, later implicit
+    /// defaults cannot replace it.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub fn set_environment_id(&mut self, environment_id: Option<SyncId>, is_explicit: bool) {
         if !is_explicit && self.environment_selection_is_explicit {
             return;
@@ -142,6 +213,11 @@ impl PendingHandoff {
         self.config.environment_id = environment_id.map(|id| id.to_string());
     }
 
+    /// Applies a model selection and records whether it is cloud-runnable.
+    ///
+    /// Once a frontend records an explicit user selection, later implicit
+    /// defaults cannot replace it.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub fn set_model_id(&mut self, model_id: String, is_explicit: bool, ctx: &AppContext) {
         if !is_explicit && self.model_selection_is_explicit {
             return;
@@ -152,10 +228,12 @@ impl PendingHandoff {
         self.model_selection_is_explicit |= is_explicit;
         self.config.model_id = Some(model_id);
     }
-    pub fn refresh_valid_environment_ids(&mut self, valid_environment_ids: HashSet<SyncId>) {
+
+    fn set_valid_environment_ids(&mut self, valid_environment_ids: HashSet<SyncId>) {
         self.valid_environment_ids = valid_environment_ids;
     }
 
+    /// Validates the editable selections without starting external work.
     pub fn validate(&self) -> Result<(), HandoffPrepareError> {
         if self.environment_required && self.selected_environment_id.is_none() {
             return Err(HandoffPrepareError::MissingRequiredEnvironment);
@@ -172,11 +250,25 @@ impl PendingHandoff {
         Ok(())
     }
 
+    /// Removes and returns source-input restoration state, at most once.
     pub fn take_restoration(&mut self) -> Option<HandoffRestoration> {
         self.restoration.take()
     }
 }
 
+/// Prepares a handoff before a frontend presents or executes it.
+///
+/// This is the synchronous first half of the lifecycle. It resolves and
+/// validates the source conversation, rejects active orchestration children or
+/// incompatible terminal state, captures snapshot paths and restoration data,
+/// cancels an active source response, verifies that an existing conversation
+/// can be forked, transfers pending attachments out of the source input, and
+/// resolves initial cloud configuration.
+///
+/// On success, the caller owns a [`PendingHandoff`] and may edit its selection
+/// fields before calling [`execute_handoff`]. On error, no pending value exists;
+/// guard failures occur before source cancellation, while a missing server
+/// token is detected after cancellation but before attachments are cleared.
 pub fn prepare_handoff(
     input: HandoffPrepareInput,
     ctx: &mut AppContext,
@@ -233,15 +325,18 @@ pub fn prepare_handoff(
             .filter_map(|id| history.as_ref(ctx).conversation(&id))
             .any(|child| child.status().is_in_progress() || child.status().is_blocked())
     });
-    validate_prepare_guard(
-        source_conversation.is_some(),
-        prompt.is_empty(),
-        require_in_progress_source,
-        source_in_progress,
-        source_conversation_active,
-        has_long_running_command,
-        has_active_or_blocked_child,
-    )?;
+    if source_conversation.is_none() && prompt.is_empty() {
+        return Err(HandoffPrepareError::EmptySourceAndPrompt);
+    }
+    if require_in_progress_source && !source_in_progress {
+        return Err(HandoffPrepareError::SourceNotInProgress);
+    }
+    if source_conversation_active && has_long_running_command {
+        return Err(HandoffPrepareError::LongRunningCommand);
+    }
+    if has_active_or_blocked_child {
+        return Err(HandoffPrepareError::ActiveOrBlockedChild);
+    }
 
     let title = source_conversation
         .as_ref()
@@ -259,10 +354,13 @@ pub fn prepare_handoff(
         .as_ref()
         .map(|conversation| {
             let mut paths = extract_paths_from_conversation(conversation);
-            paths.extend(descendant_safe_paths(
-                history.as_ref(ctx),
-                conversation.id(),
-            ));
+            paths.extend(
+                descendant_conversation_ids_in_spawn_order(history.as_ref(ctx), conversation.id())
+                    .into_iter()
+                    .filter_map(|id| history.as_ref(ctx).conversation(&id))
+                    .filter(|conversation| conversation.status().is_done())
+                    .flat_map(extract_paths_from_conversation),
+            );
             paths
         })
         .unwrap_or_default();
@@ -314,7 +412,10 @@ pub fn prepare_handoff(
             .and_then(|id| ServerId::try_from(id.as_str()).ok())
             .map(SyncId::ServerId)
     });
-    let valid_environment_ids = current_valid_environment_ids(ctx);
+    let valid_environment_ids = CloudAmbientAgentEnvironment::get_all(ctx)
+        .into_iter()
+        .map(|environment| environment.id)
+        .collect();
     let model_id = LLMPreferences::as_ref(ctx)
         .get_active_base_model(ctx, Some(terminal_surface_id))
         .id
@@ -370,37 +471,11 @@ pub fn prepare_handoff(
         orchestration_handoff,
     })
 }
-fn current_valid_environment_ids(ctx: &AppContext) -> HashSet<SyncId> {
-    CloudAmbientAgentEnvironment::get_all(ctx)
-        .into_iter()
-        .map(|environment| environment.id)
-        .collect()
-}
 
-fn validate_prepare_guard(
-    has_source: bool,
-    prompt_is_empty: bool,
-    require_in_progress_source: bool,
-    source_in_progress: bool,
-    source_active: bool,
-    has_long_running_command: bool,
-    has_active_or_blocked_child: bool,
-) -> Result<(), HandoffPrepareError> {
-    if !has_source && prompt_is_empty {
-        return Err(HandoffPrepareError::EmptySourceAndPrompt);
-    }
-    if require_in_progress_source && !source_in_progress {
-        return Err(HandoffPrepareError::SourceNotInProgress);
-    }
-    if source_active && has_long_running_command {
-        return Err(HandoffPrepareError::LongRunningCommand);
-    }
-    if has_active_or_blocked_child {
-        return Err(HandoffPrepareError::ActiveOrBlockedChild);
-    }
-    Ok(())
-}
-
+/// Successful cloud-run creation returned by [`execute_handoff`].
+///
+/// The frontend uses the task/run identity to begin monitoring the already
+/// spawned run and the snapshot fields for telemetry and degraded-upload UI.
 pub struct HandoffCreated {
     pub task_id: AmbientAgentTaskId,
     pub run_id: String,
@@ -412,6 +487,11 @@ pub struct HandoffCreated {
     pub snapshot_failed: bool,
 }
 
+/// Failure after handoff execution has begun external work.
+///
+/// Depending on the failed stage, this may include a completed spawn request
+/// for existing retry UI and source-input restoration state for a frontend
+/// that has not yet materialized its destination.
 pub struct HandoffCommitFailure {
     pub issue: CloudAgentStartupIssue,
     pub request: Option<SpawnAgentRequest>,
@@ -420,20 +500,26 @@ pub struct HandoffCommitFailure {
     pub snapshot_failed: bool,
 }
 
+/// Result of consuming a [`PendingHandoff`] through [`execute_handoff`].
 pub enum HandoffCommitOutcome {
+    /// Mutable configuration became invalid before any async external work.
     Rejected {
         pending: Box<PendingHandoff>,
         error: HandoffPrepareError,
     },
+    /// Fork, materialization, or spawn failed after execution began.
     Failed(HandoffCommitFailure),
+    /// The cloud run was created and is ready for frontend monitoring.
     Created(HandoffCreated),
 }
 
+/// State after selecting or creating the server-side conversation fork.
 struct ForkedHandoff {
     pending: PendingHandoff,
     forked_conversation_id: Option<String>,
 }
 
+/// State after snapshot upload has settled and spawn inputs are complete.
 struct SnapshotSettledHandoff {
     spawn_ready: SpawnReadyHandoff,
     forked_conversation_id: Option<String>,
@@ -443,13 +529,22 @@ struct SnapshotSettledHandoff {
     snapshot_failed: bool,
 }
 
-pub fn commit_handoff(
+/// Consumes a prepared handoff and begins its execution lifecycle.
+///
+/// Mutable feature, environment, model, and snapshot settings are re-read
+/// synchronously before the returned future can perform external work.
+pub fn execute_handoff(
     mut pending: PendingHandoff,
     ai_client: Arc<dyn AIClient>,
     materialize_handoff_target: Option<MaterializeHandoffTarget>,
     ctx: &AppContext,
 ) -> Pin<Box<dyn Future<Output = HandoffCommitOutcome> + Send>> {
-    pending.refresh_valid_environment_ids(current_valid_environment_ids(ctx));
+    pending.set_valid_environment_ids(
+        CloudAmbientAgentEnvironment::get_all(ctx)
+            .into_iter()
+            .map(|environment| environment.id)
+            .collect(),
+    );
     pending.model_is_cloud_runnable = LLMPreferences::as_ref(ctx)
         .is_cloud_runnable_oz_model_id(&LLMId::from(pending.selected_model_id.as_str()));
     pending.snapshot_disabled = should_disable_snapshot(ctx);
@@ -467,19 +562,19 @@ pub fn commit_handoff(
         });
     }
 
-    Box::pin(execute_committed_handoff(
+    Box::pin(execute_validated_handoff(
         pending,
         ai_client,
         materialize_handoff_target,
     ))
 }
 
-async fn execute_committed_handoff(
+async fn execute_validated_handoff(
     pending: PendingHandoff,
     ai_client: Arc<dyn AIClient>,
     materialize_handoff_target: Option<MaterializeHandoffTarget>,
 ) -> HandoffCommitOutcome {
-    let mut forked = match fork_handoff(pending, &ai_client).await {
+    let mut forked = match fork_source_conversation(pending, &ai_client).await {
         Ok(forked) => forked,
         Err(failure) => return HandoffCommitOutcome::Failed(failure),
     };
@@ -503,7 +598,7 @@ async fn execute_committed_handoff(
         }
     }
 
-    let mut settled = settle_snapshot(forked).await;
+    let mut settled = prepare_snapshot_for_spawn(forked).await;
     let request = build_spawn_request(
         settled.spawn_ready,
         settled.forked_conversation_id,
@@ -533,7 +628,11 @@ async fn execute_committed_handoff(
     })
 }
 
-async fn fork_handoff(
+/// Forks an existing server conversation or records that this is a fresh launch.
+///
+/// A fork failure returns restoration state before frontend materialization or
+/// agent spawn has occurred.
+async fn fork_source_conversation(
     mut pending: PendingHandoff,
     ai_client: &Arc<dyn AIClient>,
 ) -> Result<ForkedHandoff, HandoffCommitFailure> {
@@ -561,7 +660,11 @@ async fn fork_handoff(
     })
 }
 
-async fn settle_snapshot(forked: ForkedHandoff) -> SnapshotSettledHandoff {
+/// Uploads workspace state and converts the fork stage into spawn-ready data.
+///
+/// Snapshot upload failure is non-fatal: the returned stage records the
+/// failure and omits the token so execution can still create the cloud run.
+async fn prepare_snapshot_for_spawn(forked: ForkedHandoff) -> SnapshotSettledHandoff {
     let PendingHandoff {
         source_conversation: _,
         source_conversation_active,
@@ -613,6 +716,7 @@ async fn settle_snapshot(forked: ForkedHandoff) -> SnapshotSettledHandoff {
     }
 }
 
+/// Request inputs that no longer depend on source, fork, or snapshot work.
 struct SpawnReadyHandoff {
     prompt: String,
     source_conversation_active: bool,

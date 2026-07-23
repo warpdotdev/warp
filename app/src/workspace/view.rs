@@ -192,7 +192,7 @@ use crate::ai::blocklist::handoff;
 use crate::ai::blocklist::handoff::{
     HandoffCommitOutcome, HandoffLaunchAttachments, HandoffPrepareError, HandoffPrepareInput,
     HandoffPresentationSnapshot, HandoffRestoration, HandoffTargetMaterialization,
-    MaterializeHandoffTarget, PendingCloudLaunch, commit_handoff, prepare_handoff,
+    MaterializeHandoffTarget, PendingCloudLaunch, execute_handoff, prepare_handoff,
 };
 use crate::ai::blocklist::history_model::{CloudConversationData, load_conversation_from_server};
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
@@ -15487,9 +15487,10 @@ impl Workspace {
                 Some(launch)
             }
             Some(launch) => Some(launch),
-            None if intent.shows_user_feedback() => {
-                Some(PendingCloudLaunch::new(String::new(), source_attachments))
-            }
+            None if intent.shows_user_feedback() => Some(PendingCloudLaunch {
+                prompt: String::new(),
+                attachments: source_attachments,
+            }),
             None => None,
         };
         let history = BlocklistAIHistoryModel::handle(ctx);
@@ -15564,8 +15565,8 @@ impl Workspace {
             })
         });
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let commit = commit_handoff(pending, ai_client, Some(materialize), ctx);
-        ctx.spawn(commit, move |workspace, outcome, ctx| match outcome {
+        let execution = execute_handoff(pending, ai_client, Some(materialize), ctx);
+        ctx.spawn(execution, move |workspace, outcome, ctx| match outcome {
             HandoffCommitOutcome::Rejected { mut pending, error } => {
                 let restoration = pending.take_restoration();
                 workspace.restore_handoff_after_commit_failure(
@@ -15716,8 +15717,9 @@ impl Workspace {
         if !intent.shows_user_feedback() {
             return;
         }
-        let launch = launch.map(|launch| {
-            PendingCloudLaunch::new(launch.prompt, HandoffLaunchAttachments::default())
+        let launch = launch.map(|launch| PendingCloudLaunch {
+            prompt: launch.prompt,
+            attachments: HandoffLaunchAttachments::default(),
         });
         Self::restore_source_handoff_draft(source_view, launch, environment_id, ctx);
         let message = match error {
@@ -15768,10 +15770,13 @@ impl Workspace {
             return;
         }
         if let Some(restoration) = restoration {
-            let launch = PendingCloudLaunch::new(
-                restoration.prompt,
-                HandoffLaunchAttachments::new(Vec::new(), restoration.attachments),
-            );
+            let launch = PendingCloudLaunch {
+                prompt: restoration.prompt,
+                attachments: HandoffLaunchAttachments {
+                    request_attachments: Vec::new(),
+                    display_attachments: restoration.attachments,
+                },
+            };
             Self::restore_source_handoff_draft(
                 source_view,
                 Some(launch),

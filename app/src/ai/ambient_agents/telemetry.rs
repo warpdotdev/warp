@@ -19,6 +19,7 @@ pub enum CloudModeEntryPoint {
     /// User re-entered Cloud Mode by clicking on an ambient agent entry block.
     EntryBlock,
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffSurface {

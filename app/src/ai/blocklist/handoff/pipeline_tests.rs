@@ -9,7 +9,11 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::*;
-use crate::ai::agent::UserQueryMode;
+use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
+    Shared, UserQueryMode,
+};
 use crate::ai::blocklist::{
     PendingAttachment, PendingFile, RequestInput, ResponseStream, ResponseStreamId,
 };
@@ -25,6 +29,35 @@ fn task_id() -> AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000"
         .parse()
         .expect("valid task id")
+}
+fn exchange_with_working_directory(
+    working_directory: &str,
+    output_status: AIAgentOutputStatus,
+) -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![AIAgentInput::UserQuery {
+            query: "test".to_owned(),
+            context: Default::default(),
+            static_query_type: None,
+            referenced_attachments: Default::default(),
+            user_query_mode: UserQueryMode::Normal,
+            running_command: None,
+            intended_agent: None,
+        }],
+        output_status,
+        added_message_ids: HashSet::new(),
+        start_time: Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: Some(working_directory.to_owned()),
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-coding-model"),
+        cli_agent_model_id: LLMId::from("test-cli-model"),
+        computer_use_model_id: LLMId::from("test-computer-use-model"),
+        response_initiator: None,
+    }
 }
 
 #[test]
@@ -43,9 +76,9 @@ fn required_environment_revalidates_after_catalog_refresh() {
         pending.validate(),
         Err(HandoffPrepareError::InvalidEnvironment)
     );
-    pending.refresh_valid_environment_ids(HashSet::from([environment_id]));
+    pending.set_valid_environment_ids(HashSet::from([environment_id]));
     assert!(pending.validate().is_ok());
-    pending.refresh_valid_environment_ids(HashSet::new());
+    pending.set_valid_environment_ids(HashSet::new());
     assert_eq!(
         pending.validate(),
         Err(HandoffPrepareError::InvalidEnvironment)
@@ -82,7 +115,7 @@ fn model_selection_refreshes_cloud_compatibility_in_both_directions() {
 }
 
 #[test]
-fn commit_revalidates_current_model_before_returning_future() {
+fn execute_revalidates_current_model_before_returning_future() {
     let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
     let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(true);
     App::test((), |mut app| async move {
@@ -94,7 +127,7 @@ fn commit_revalidates_current_model_before_returning_future() {
         pending.selected_model_id = "custom-router:local:byok".to_owned();
         pending.model_is_cloud_runnable = true;
 
-        let future = app.update(|ctx| commit_handoff(pending, client, None, ctx));
+        let future = app.update(|ctx| execute_handoff(pending, client, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("current invalid model must reject before external work");
         };
@@ -103,7 +136,7 @@ fn commit_revalidates_current_model_before_returning_future() {
 }
 
 #[test]
-fn commit_revalidates_current_environment_catalog_before_returning_future() {
+fn execute_revalidates_current_environment_catalog_before_returning_future() {
     let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
     let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(true);
     App::test((), |mut app| async move {
@@ -117,7 +150,7 @@ fn commit_revalidates_current_environment_catalog_before_returning_future() {
         pending.valid_environment_ids.insert(environment_id);
         pending.config.environment_id = Some(environment_id.to_string());
 
-        let future = app.update(|ctx| commit_handoff(pending, client, None, ctx));
+        let future = app.update(|ctx| execute_handoff(pending, client, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("deleted environment must reject before external work");
         };
@@ -126,7 +159,7 @@ fn commit_revalidates_current_environment_catalog_before_returning_future() {
 }
 
 #[test]
-fn commit_revalidates_current_handoff_enablement_before_returning_future() {
+fn execute_revalidates_current_handoff_enablement_before_returning_future() {
     let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
     let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(false);
     App::test((), |mut app| async move {
@@ -136,7 +169,7 @@ fn commit_revalidates_current_handoff_enablement_before_returning_future() {
         let client: Arc<dyn AIClient> = Arc::new(mock);
         let pending = pending(client.clone(), None, false, "continue");
 
-        let future = app.update(|ctx| commit_handoff(pending, client, None, ctx));
+        let future = app.update(|ctx| execute_handoff(pending, client, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("disabled handoff must reject before external work");
         };
@@ -261,27 +294,137 @@ fn explicit_selection_precedence_and_restoration_are_exactly_once() {
 }
 
 #[test]
-fn preparation_guardrails_reject_before_cancellation_eligible_state() {
-    assert_eq!(
-        validate_prepare_guard(false, true, false, false, false, false, false),
-        Err(HandoffPrepareError::EmptySourceAndPrompt)
-    );
-    assert_eq!(
-        validate_prepare_guard(true, false, true, false, false, false, false),
-        Err(HandoffPrepareError::SourceNotInProgress)
-    );
-    assert_eq!(
-        validate_prepare_guard(true, true, false, true, true, true, false),
-        Err(HandoffPrepareError::LongRunningCommand)
-    );
-    assert_eq!(
-        validate_prepare_guard(true, true, false, true, true, false, true),
-        Err(HandoffPrepareError::ActiveOrBlockedChild)
-    );
-    assert_eq!(
-        validate_prepare_guard(true, true, false, true, true, false, false),
-        Ok(())
-    );
+fn prepare_rejects_an_empty_source_without_a_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let result = terminal.update(&mut app, |view, ctx| {
+            let provider = ServerApiProvider::as_ref(ctx);
+            prepare_handoff(
+                HandoffPrepareInput {
+                    terminal_surface_id: view.id(),
+                    expected_conversation_id: None,
+                    history: BlocklistAIHistoryModel::handle(ctx),
+                    controller: view.ai_controller().clone(),
+                    context: view.ai_context_model().clone(),
+                    current_working_directory: None,
+                    snapshot_target: SnapshotUploadTarget::Local {
+                        ai_client: provider.get_ai_client(),
+                        http: provider.get_http_client(),
+                    },
+                    has_long_running_command: false,
+                    launch: None,
+                    environment_id: None,
+                    environment_required: false,
+                    entry_point: HandoffEntryPoint::Ampersand,
+                    surface: HandoffSurface::Gui,
+                    cancellation_reason: CancellationReason::ManuallyCancelled,
+                    require_in_progress_source: false,
+                },
+                ctx,
+            )
+        });
+        assert!(matches!(
+            result,
+            Err(HandoffPrepareError::EmptySourceAndPrompt)
+        ));
+    });
+}
+
+#[test]
+fn prepare_collects_completed_descendant_paths() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let parent_id = terminal.update(&mut app, |view, ctx| {
+            let terminal_surface_id = view.id();
+            let parent = AIConversation::new(false, false);
+            let parent_id = parent.id();
+            let mut child = AIConversation::new(false, false);
+            child.set_parent_conversation_id(parent_id);
+            let child_id = child.id();
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.restore_conversations(terminal_surface_id, vec![parent, child], ctx);
+                let finished_output = || AIAgentOutputStatus::Finished {
+                    finished_output: FinishedAIAgentOutput::Success {
+                        output: Shared::new(Default::default()),
+                    },
+                };
+                history
+                    .conversation_mut(&parent_id)
+                    .expect("parent")
+                    .append_reassigned_exchange(
+                        &ResponseStreamId::new_for_test(),
+                        exchange_with_working_directory("/parent", finished_output()),
+                        terminal_surface_id,
+                        ctx,
+                    )
+                    .expect("append parent exchange");
+                history
+                    .conversation_mut(&child_id)
+                    .expect("child")
+                    .append_reassigned_exchange(
+                        &ResponseStreamId::new_for_test(),
+                        exchange_with_working_directory("/completed-child", finished_output()),
+                        terminal_surface_id,
+                        ctx,
+                    )
+                    .expect("append child exchange");
+                history.update_conversation_status(
+                    terminal_surface_id,
+                    parent_id,
+                    ConversationStatus::Success,
+                    ctx,
+                );
+                history.update_conversation_status(
+                    terminal_surface_id,
+                    child_id,
+                    ConversationStatus::Success,
+                    ctx,
+                );
+                history.set_server_conversation_token_for_conversation(
+                    parent_id,
+                    "server-conversation".to_owned(),
+                );
+            });
+            parent_id
+        });
+
+        let pending = terminal
+            .update(&mut app, |view, ctx| {
+                let provider = ServerApiProvider::as_ref(ctx);
+                prepare_handoff(
+                    HandoffPrepareInput {
+                        terminal_surface_id: view.id(),
+                        expected_conversation_id: Some(parent_id),
+                        history: BlocklistAIHistoryModel::handle(ctx),
+                        controller: view.ai_controller().clone(),
+                        context: view.ai_context_model().clone(),
+                        current_working_directory: None,
+                        snapshot_target: SnapshotUploadTarget::Local {
+                            ai_client: provider.get_ai_client(),
+                            http: provider.get_http_client(),
+                        },
+                        has_long_running_command: false,
+                        launch: Some(PendingCloudLaunch {
+                            prompt: "continue".to_owned(),
+                            attachments: HandoffLaunchAttachments::default(),
+                        }),
+                        environment_id: None,
+                        environment_required: false,
+                        entry_point: HandoffEntryPoint::Ampersand,
+                        surface: HandoffSurface::Gui,
+                        cancellation_reason: CancellationReason::ManuallyCancelled,
+                        require_in_progress_source: false,
+                    },
+                    ctx,
+                )
+            })
+            .expect("completed source and child should prepare");
+        assert!(pending.source_paths.contains(
+            &StandardizedPath::try_new("/completed-child").expect("absolute child path")
+        ));
+    });
 }
 
 #[test]
@@ -295,17 +438,17 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
             file_path: attachment_file.path().to_path_buf(),
             mime_type: "text/plain".to_owned(),
         });
-        let launch = PendingCloudLaunch::new(
-            "continue".to_owned(),
-            HandoffLaunchAttachments::new(
-                vec![AttachmentInput {
+        let launch = PendingCloudLaunch {
+            prompt: "continue".to_owned(),
+            attachments: HandoffLaunchAttachments {
+                request_attachments: vec![AttachmentInput {
                     file_name: "context.txt".to_owned(),
                     mime_type: "text/plain".to_owned(),
                     data: "contents".to_owned(),
                 }],
-                vec![pending_attachment.clone()],
-            ),
-        );
+                display_attachments: vec![pending_attachment.clone()],
+            },
+        };
 
         let conversation_id = terminal.update(&mut app, |view, ctx| {
             view.ai_context_model().update(ctx, |context, ctx| {
@@ -541,7 +684,7 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
         }
     });
 
-    let outcome = execute_committed_handoff(
+    let outcome = execute_validated_handoff(
         pending(
             client.clone(),
             Some("source-conversation".to_owned()),
@@ -612,7 +755,7 @@ async fn fresh_launch_skips_fork_and_materializes_before_spawn() {
         }
     });
 
-    let outcome = execute_committed_handoff(
+    let outcome = execute_validated_handoff(
         pending(client.clone(), None, false, "new task"),
         client,
         Some(materialize),
@@ -654,7 +797,7 @@ async fn snapshot_failure_degrades_to_spawn_without_token() {
     let mut pending = pending(client.clone(), None, false, "continue");
     pending.source_paths = vec![path];
 
-    let outcome = execute_committed_handoff(pending, client, None).await;
+    let outcome = execute_validated_handoff(pending, client, None).await;
     let HandoffCommitOutcome::Created(created) = outcome else {
         panic!("snapshot failure should not fail the handoff");
     };
