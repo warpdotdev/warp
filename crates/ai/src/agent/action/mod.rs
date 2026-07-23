@@ -1,4 +1,5 @@
 mod convert;
+mod review_comments;
 
 use std::fmt::Display;
 use std::ops::Range;
@@ -6,6 +7,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use itertools::Itertools as _;
+pub use review_comments::{
+    ReviewCommentThread, ReviewCommentThreadItem, format_review_comment_thread,
+    group_review_comment_threads,
+};
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumDiscriminants;
 use uuid::Uuid;
