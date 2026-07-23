@@ -710,7 +710,10 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     [[ -z "${_WARP_RAW_PROMPT:-}" ]] && return
     local REPLY
     warp_strip_glitch_width_constructs "${(e)_WARP_RAW_PROMPT}"
-    print -rn -- "$REPLY"
+    # Append %{%} (a zero-width no-op in zsh prompt syntax) so that command
+    # substitution does not strip any trailing newlines from the prompt content.
+    # %{%} is harmless: it outputs nothing and has no effect on width counting.
+    print -rn -- "${REPLY}%{%}"
   }
 
   # Check whether the prompt-related variables have OSC prompt marker sequences,
