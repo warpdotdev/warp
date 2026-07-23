@@ -130,6 +130,7 @@ fn make_task_with_name(
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: session_id.map(String::from),
         session_link: None,
         creator: None,

@@ -12,7 +12,9 @@ use super::{
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
+use crate::ai::ambient_agents::{
+    AgentSource, AmbientAgentTask, AmbientAgentTaskId, ExecutionLocation,
+};
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
 use crate::ai::conversation_navigation::ConversationNavigationData;
@@ -99,6 +101,7 @@ pub struct AgentConversationDisplayData {
     pub run_time: Option<String>,
     pub session_status: Option<SessionStatus>,
     pub source: Option<AgentSource>,
+    pub execution_location: Option<ExecutionLocation>,
     pub working_directory: Option<String>,
     pub environment_id: Option<String>,
     pub harness: Option<Harness>,
@@ -168,9 +171,7 @@ pub struct AgentConversationCapabilities {
 impl AgentConversationEntry {
     /// Returns whether this entry represents a cloud agent run.
     pub fn is_cloud_agent_run(&self) -> bool {
-        matches!(self.provenance, AgentConversationProvenance::AmbientRun)
-            || self.backing.has_ambient_run
-            || self.identity.ambient_agent_task_id.is_some()
+        self.display.execution_location == Some(ExecutionLocation::Remote)
     }
 
     pub(super) fn matches_filters(
@@ -520,6 +521,7 @@ pub(super) fn entry_for_task(
             run_time: task_run_time(task),
             session_status: Some(task_session_status(task)),
             source: task.source.clone(),
+            execution_location: task.execution_location,
             working_directory: conversation_metadata
                 .and_then(|metadata| metadata.initial_working_directory.clone()),
             environment_id: task
@@ -627,6 +629,7 @@ fn entry_for_conversation_parts(
             run_time: None,
             session_status: None,
             source: Some(AgentSource::Interactive),
+            execution_location: None,
             working_directory: metadata
                 .nav_data
                 .latest_working_directory

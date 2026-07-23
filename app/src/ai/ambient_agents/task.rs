@@ -112,6 +112,23 @@ impl AgentSource {
     }
 }
 
+/// Where the server executed an agent run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum ExecutionLocation {
+    Local,
+    Remote,
+}
+
+impl ExecutionLocation {
+    pub(crate) fn as_query_param(self) -> &'static str {
+        match self {
+            ExecutionLocation::Local => "LOCAL",
+            ExecutionLocation::Remote => "REMOTE",
+        }
+    }
+}
+
 fn deserialize_ambient_agent_source<'de, D>(
     deserializer: D,
 ) -> Result<Option<AgentSource>, D::Error>
@@ -155,6 +172,8 @@ pub struct AmbientAgentTask {
     pub status_message: Option<TaskStatusMessage>,
     #[serde(default, deserialize_with = "deserialize_ambient_agent_source")]
     pub source: Option<AgentSource>,
+    #[serde(default)]
+    pub execution_location: Option<ExecutionLocation>,
     pub session_id: Option<String>,
     pub session_link: Option<String>,
     pub creator: Option<TaskPrincipalInfo>,
