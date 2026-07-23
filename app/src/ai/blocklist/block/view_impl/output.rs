@@ -84,6 +84,7 @@ use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::ask_user_question_view::AskUserQuestionView;
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
 use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
+use crate::ai::blocklist::inline_action::gemini_enterprise_credentials_error::GeminiEnterpriseCredentialsErrorView;
 use crate::ai::blocklist::inline_action::inline_action_header::{
     HeaderConfig, INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
     InteractionMode,
@@ -189,6 +190,8 @@ pub(crate) struct Props<'a> {
     pub(super) is_cloud_agent_context: bool,
     pub(super) aws_bedrock_credentials_error_view:
         Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
+    pub(super) gemini_enterprise_credentials_error_view:
+        Option<&'a ViewHandle<GeminiEnterpriseCredentialsErrorView>>,
     pub(super) imported_comments: &'a HashMap<AIAgentActionId, ImportedCommentGroup>,
     /// Per-orchestrate-action card view. Each `RunAgentsCardView` owns
     /// its own edit state, button + picker handles, and in-flight
@@ -834,30 +837,6 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 .add_child(render_request_computer_use(props, id, request, app));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
-                            action:
-                                AIAgentActionType::StartAgent {
-                                    version: _,
-                                    name,
-                                    prompt,
-                                    execution_mode,
-                                    lifecycle_subscription: _,
-                                },
-                            id,
-                            ..
-                        }) => {
-                            should_render_footer = false;
-                            should_render_suggestions = false;
-                            output_items.add_child(orchestration::render_start_agent(
-                                props,
-                                id,
-                                name,
-                                prompt,
-                                execution_mode,
-                                &output_message.id,
-                                app,
-                            ));
-                        }
-                        AIAgentOutputMessageType::Action(AIAgentAction {
                             action: AIAgentActionType::RunAgents(_req),
                             id,
                             ..
@@ -1246,6 +1225,8 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                         subscribe_button_handle: &props.state_handles.subscribe_button_handle,
                         aws_bedrock_credentials_error_view: props
                             .aws_bedrock_credentials_error_view,
+                        gemini_enterprise_credentials_error_view: props
+                            .gemini_enterprise_credentials_error_view,
                         icon_right_margin: 16.,
                     },
                     app,
@@ -3066,6 +3047,10 @@ fn stop_recording_card_text(result: Option<&StopRecordingResult>) -> RecordingCa
                 subtext: None,
             }
         }
+        Some(StopRecordingResult::Discarded) => RecordingCardText {
+            primary: "Recording discarded".to_string(),
+            subtext: None,
+        },
         None => RecordingCardText {
             primary: "Saving recording".to_string(),
             subtext: None,

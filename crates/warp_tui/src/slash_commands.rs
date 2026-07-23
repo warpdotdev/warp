@@ -10,6 +10,7 @@ use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
+use warp::settings::AISettings;
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, ConversationSelectionHandle, ParsedSlashCommandInput,
     SlashCommandDataSource as _, SlashCommandMixer, TuiSlashCommandDataSource,
@@ -18,6 +19,7 @@ use warp::tui_export::{
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InputDrivenInlineMenuLifecycle};
+use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
@@ -265,16 +267,7 @@ impl TuiSlashCommandModel {
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
                     description: row.description.clone(),
-                    state_suffix: (row.title == slash_commands::AUTO_APPROVE.name).then(|| {
-                        format!(
-                            "(currently {})",
-                            if self.auto_approve_enabled(ctx) {
-                                "on"
-                            } else {
-                                "off"
-                            }
-                        )
-                    }),
+                    state_suffix: self.state_suffix(&row.title, ctx),
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })
@@ -291,6 +284,20 @@ impl TuiSlashCommandModel {
             .as_ref(ctx)
             .pending_query_autoexecute_override(ctx)
             .is_autoexecute_any_action()
+    }
+
+    fn state_suffix(&self, title: &str, ctx: &AppContext) -> Option<String> {
+        let enabled = if title == slash_commands::AUTO_APPROVE.name {
+            self.auto_approve_enabled(ctx)
+        } else if title == slash_commands::NATURAL_LANGUAGE_DETECTION.name {
+            AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
+        } else {
+            return None;
+        };
+        Some(format!(
+            "(currently {})",
+            if enabled { "on" } else { "off" }
+        ))
     }
 
     fn update_from_input(&mut self, force_query: bool, ctx: &mut ModelContext<Self>) {

@@ -136,6 +136,7 @@ fn mixed_message_types_produce_sequentially_indexed_files() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn run_agents_result_serializes_agent_ids() {
     let task_id = "root";
     let tasks = vec![create_api_task(
@@ -159,6 +160,9 @@ fn run_agents_result_serializes_agent_ids() {
                         agents: vec![
                             api::run_agents_result::AgentOutcome {
                                 name: "child".to_string(),
+                                model_id: String::new(),
+                                harness: None,
+                                execution_mode: None,
                                 result: Some(
                                     api::run_agents_result::agent_outcome::Result::Launched(
                                         api::run_agents_result::LaunchedAgent {
@@ -169,6 +173,9 @@ fn run_agents_result_serializes_agent_ids() {
                             },
                             api::run_agents_result::AgentOutcome {
                                 name: "other".to_string(),
+                                model_id: String::new(),
+                                harness: None,
+                                execution_mode: None,
                                 result: Some(
                                     api::run_agents_result::agent_outcome::Result::Failed(
                                         api::run_agents_result::FailedAgent {
@@ -378,91 +385,6 @@ fn server_tool_calls_are_skipped() {
     // Index should still be sequential (000, 001) since server call was skipped.
     assert!(files[0].starts_with("000"));
     assert!(files[1].starts_with("001"));
-
-    cleanup_dir(&dir);
-}
-
-#[test]
-fn start_agent_v2_tool_call_serializes_name_and_prompt() {
-    let task_id = "root";
-    let tasks = vec![create_api_task(
-        task_id,
-        vec![make_tool_call_message(
-            "m1",
-            task_id,
-            "tc_start_agent_v2",
-            api::message::tool_call::Tool::StartAgentV2(api::StartAgentV2 {
-                name: "Remote child".to_string(),
-                prompt: "Investigate the build failure".to_string(),
-                execution_mode: None,
-                lifecycle_subscription: None,
-            }),
-        )],
-    )];
-
-    let dir = materialize_tasks_to_yaml(&tasks).unwrap();
-    let files = list_dir_sorted(Path::new(&dir));
-    let content = fs::read_to_string(Path::new(&dir).join(&files[0])).unwrap();
-
-    assert!(content.contains("tool_name: start_agent"));
-    assert!(content.contains("name: \"Remote child\""));
-    assert!(content.contains("prompt: |"));
-    assert!(content.contains("Investigate the build failure"));
-
-    cleanup_dir(&dir);
-}
-
-#[test]
-fn start_agent_v2_tool_call_result_serializes_agent_id_and_error() {
-    let task_id = "root";
-    let tasks = vec![create_api_task(
-        task_id,
-        vec![
-            make_tool_call_message(
-                "m1",
-                task_id,
-                "tc_start_agent_v2",
-                api::message::tool_call::Tool::StartAgentV2(api::StartAgentV2 {
-                    name: "Remote child".to_string(),
-                    prompt: "Investigate the build failure".to_string(),
-                    execution_mode: None,
-                    lifecycle_subscription: None,
-                }),
-            ),
-            make_tool_call_result_message(
-                "m2",
-                task_id,
-                "tc_start_agent_v2",
-                api::message::tool_call_result::Result::StartAgentV2(api::StartAgentV2Result {
-                    result: Some(api::start_agent_v2_result::Result::Success(
-                        api::start_agent_v2_result::Success {
-                            agent_id: "agent-123".to_string(),
-                        },
-                    )),
-                }),
-            ),
-            make_tool_call_result_message(
-                "m3",
-                task_id,
-                "tc_start_agent_v2",
-                api::message::tool_call_result::Result::StartAgentV2(api::StartAgentV2Result {
-                    result: Some(api::start_agent_v2_result::Result::Error(
-                        api::start_agent_v2_result::Error {
-                            error: "child failed".to_string(),
-                        },
-                    )),
-                }),
-            ),
-        ],
-    )];
-
-    let dir = materialize_tasks_to_yaml(&tasks).unwrap();
-    let files = list_dir_sorted(Path::new(&dir));
-    let success_content = fs::read_to_string(Path::new(&dir).join(&files[1])).unwrap();
-    let error_content = fs::read_to_string(Path::new(&dir).join(&files[2])).unwrap();
-
-    assert!(success_content.contains("agent_id: agent-123"));
-    assert!(error_content.contains("error: child failed"));
 
     cleanup_dir(&dir);
 }

@@ -10,7 +10,6 @@ use ai::agent::action_result::{RunAgentsAgentOutcomeKind, RunAgentsResult};
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warp_graphql::queries::get_runners::RunnerSortBy;
@@ -61,6 +60,7 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -422,8 +422,13 @@ impl RunAgentsCardView {
                 );
                 // The runner picker isn't part of the shared picker sync
                 // (its options load asynchronously and are cached on the
-                // view), so re-apply its selection now that the streamed
-                // request has finalized with the requested runner.
+                // view). Lazily create it now if the final streamed
+                // execution mode is Remote but `new()` started with Local
+                // (ensure_runner_picker is idempotent and a no-op when the
+                // picker already exists or the flag/mode gate is not met).
+                me.ensure_runner_picker(ctx);
+                // Re-apply its selection now that the streamed request has
+                // finalized with the requested runner.
                 me.resync_runner_selection(ctx);
                 me.refresh_accept_button_state(ctx);
                 me.maybe_auto_open_create_modal(ctx);
@@ -433,6 +438,18 @@ impl RunAgentsCardView {
                 ctx.notify();
             }
             _ => {}
+        });
+
+        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, _, event, ctx| {
+            let ServerExperimentsEvent::ExperimentsUpdated = event;
+            if !oc::runner_controls_enabled(ctx) {
+                me.handles.pickers.runner_picker = None;
+                me.runners.clear();
+                me.runners_loading = false;
+            } else {
+                me.ensure_runner_picker(ctx);
+            }
+            ctx.notify();
         });
 
         // Repopulate the model picker when available Warp LLMs change.
@@ -663,6 +680,12 @@ impl RunAgentsCardView {
                 new_state.orchestration_config_state;
             self.card = new_state.card;
             if harness_or_model_changed {
+                // If the execution mode switched to Remote, lazily build the
+                // Runner picker now (same as the ExecutionModeToggled handler).
+                // Without this, a Local→Remote mode change during streaming
+                // would leave runner_picker as None, causing the "Runner"
+                // label to render with no dropdown below it.
+                self.ensure_runner_picker(ctx);
                 // Repopulate pickers and re-arm auto-open for the newly-
                 // streamed harness.
                 oc::repopulate_all_pickers(
@@ -1010,13 +1033,14 @@ impl RunAgentsCardView {
     }
 
     /// Builds the Runner picker and kicks off the `getRunners` fetch, but
-    /// only when the `CloudAgentRunners` feature is enabled and the card is
+    /// only when the `CloudAgentRunners` feature is enabled and the macOS
+    /// runner experiment is active, and the card is
     /// in remote mode — otherwise the Runner control is not rendered, so
     /// there is no reason to create the picker or hit `getRunners`.
     /// Idempotent, and re-invoked on the Local→Cloud toggle so the picker
     /// appears (and loads) the first time the card enters remote mode.
     fn ensure_runner_picker(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::CloudAgentRunners.is_enabled() {
+        if !oc::runner_controls_enabled(ctx) {
             return;
         }
         if !self
@@ -1827,6 +1851,7 @@ fn render_editor(
         orchestration_config_state,
         &handles.pickers,
         appearance,
+        oc::runner_controls_enabled(app),
     ));
 
     if let Some(reason) = oc::accept_disabled_reason_with_auth(orchestration_config_state, app) {

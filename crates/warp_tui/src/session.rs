@@ -24,8 +24,15 @@ use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiConversationRestoreTarget};
 
-#[derive(Parser)]
-#[command(name = "warp")]
+/// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
+/// local cargo builds fall back to a numeric placeholder.
+const CLI_VERSION: &str = match option_env!("GIT_RELEASE_TAG") {
+    Some(version) => version,
+    None => "v0.0.0.0.0.0",
+};
+
+#[derive(Debug, Parser)]
+#[command(name = "warp", version = CLI_VERSION)]
 struct TuiArgs {
     /// Resume an Oz/Warp conversation by server token.
     #[arg(long)]
@@ -45,6 +52,9 @@ fn parse_resume_token(token: String) -> Result<ServerConversationToken> {
 
 /// Boots the headless Warp app and mounts the transcript-capable TUI session.
 pub fn run() -> Result<()> {
+    // Protect this managed version before any worker dispatch or resource
+    // access. The guard stays alive until this process exits.
+    let _version_lease = crate::autoupdate::VersionLease::acquire_for_current_process()?;
     // If this process was re-exec'd as a Warp worker (e.g. the terminal
     // server), dispatch that instead of starting another TUI — otherwise the
     // worker re-exec would recursively launch TUIs.
@@ -53,12 +63,12 @@ pub fn run() -> Result<()> {
     }
     let args = match TuiArgs::try_parse() {
         Ok(args) => args,
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            ) =>
-        {
+        // Match the zero-state version line: bare tag/version, no binary name prefix.
+        Err(error) if error.kind() == ErrorKind::DisplayVersion => {
+            println!("{CLI_VERSION}");
+            return Ok(());
+        }
+        Err(error) if error.kind() == ErrorKind::DisplayHelp => {
             error.print()?;
             return Ok(());
         }
@@ -96,6 +106,7 @@ fn init(
     // release builds installed via the managed versioned layout; see the
     // `autoupdate` module docs).
     crate::autoupdate::TuiAutoupdater::register(ctx);
+    crate::zero_state_animation::ZeroStateAnimationConfig::register(ctx);
 
     // Theme the transcript to match the host terminal. Keep this scoped to
     // the TUI process by overriding the already-initialized Appearance theme at

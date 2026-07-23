@@ -189,6 +189,9 @@ fn collect_buttons(
                     make_file_button(button_text, artifact_uid.clone(), theme)
                 }));
             }
+            // External references are reported for reverse-lookup and have no
+            // actionable button in the artifact row.
+            Artifact::ExternalReference { .. } => {}
         }
     }
 

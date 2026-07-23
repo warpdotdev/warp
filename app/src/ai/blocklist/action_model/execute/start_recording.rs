@@ -117,6 +117,7 @@ impl StartRecordingExecutor {
                             frame_rate,
                             summary,
                             description,
+                            target,
                         );
                     });
                     #[cfg(not(target_family = "wasm"))]

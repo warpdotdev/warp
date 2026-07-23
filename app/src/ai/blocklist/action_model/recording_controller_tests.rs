@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use ai::agent::action_result::StopRecordingResult;
-use computer_use::RecordingHandle;
+use computer_use::{MouseButton, PointerEvent, PointerEventKind, RecordingHandle, Vector2I};
 use futures::executor::block_on;
 
 use super::*;
@@ -17,6 +17,7 @@ fn active_controller(recording_id: &str, conversation_id: AIConversationId) -> R
         15,
         None,
         None,
+        computer_use::Target::Screen,
     );
     controller
 }
@@ -151,7 +152,7 @@ fn begin_and_commit_record_finish_offset_and_labels() {
             .begin_action_group(owner, vec!["ctrl+a".to_string()])
             .is_some()
     );
-    controller.commit_action_group(owner, Duration::from_millis(500));
+    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -174,7 +175,7 @@ fn commit_clamps_finish_to_start() {
     controller.begin_action_group(owner, vec!["a".to_string()]);
     // A finish before the start is clamped up to the start so the segment
     // builder's one-frame minimum can apply downstream.
-    controller.commit_action_group(owner, Duration::ZERO);
+    controller.commit_action_group(owner, Duration::ZERO, Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -186,12 +187,18 @@ fn commit_clamps_finish_to_start() {
 }
 
 #[test]
-fn pointer_only_group_commits_with_empty_labels() {
+fn pointer_only_group_commits_with_empty_labels_and_geometry() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
     controller.begin_action_group(owner, vec![]);
-    controller.commit_action_group(owner, Duration::from_millis(200));
+    let pointer_events = vec![PointerEvent {
+        offset: Duration::from_millis(50),
+        kind: PointerEventKind::Down,
+        button: Some(MouseButton::Left),
+        point: Vector2I::new(10, 20),
+    }];
+    controller.commit_action_group(owner, Duration::from_millis(200), pointer_events);
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -199,7 +206,9 @@ fn pointer_only_group_commits_with_empty_labels() {
         panic!("active recording should be claimed");
     };
     assert_eq!(recording.actions.len(), 1);
+    // A pointer-only group keeps its geometry even though it has no text labels.
     assert!(recording.actions[0].labels.is_empty());
+    assert_eq!(recording.actions[0].pointer_events.len(), 1);
 }
 
 #[test]
@@ -225,7 +234,7 @@ fn commit_without_begin_is_noop() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    controller.commit_action_group(owner, Duration::from_millis(500));
+    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -253,8 +262,8 @@ fn begin_and_commit_are_scoped_to_the_owning_conversation() {
             .begin_action_group(other, vec!["other".to_string()])
             .is_none()
     );
-    controller.commit_action_group(other, Duration::from_millis(999));
-    controller.commit_action_group(owner, Duration::from_millis(300));
+    controller.commit_action_group(other, Duration::from_millis(999), Vec::new());
+    controller.commit_action_group(owner, Duration::from_millis(300), Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -280,7 +289,7 @@ fn begin_while_pending_auto_commits_prior_group() {
     // rather than silently discarding it.
     controller.begin_action_group(owner, vec!["type".to_string()]);
     // Commit the second group explicitly.
-    controller.commit_action_group(owner, Duration::from_millis(700));
+    controller.commit_action_group(owner, Duration::from_millis(700), Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -319,6 +328,6 @@ fn commit_after_finalization_is_noop() {
     };
     // A late commit lands on a controller that is now Finalizing, so it commits
     // nothing rather than recording on the wrong (finalized) recording.
-    controller.commit_action_group(owner, Duration::from_millis(500));
+    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
     assert!(recording.actions.is_empty());
 }

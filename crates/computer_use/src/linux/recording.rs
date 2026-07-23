@@ -480,7 +480,7 @@ async fn burn_overlays_into_cut(
 /// returns an error rather than producing a video; the caller falls back to
 /// uploading the untouched source for an unexpected processing failure after at
 /// least one committed action.
-pub async fn burn_in_action_log(
+pub async fn post_process_recording(
     input: &Path,
     entries: &[crate::ActionLogEntry],
     dimensions: (u32, u32),

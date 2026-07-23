@@ -30,8 +30,8 @@ pub use crate::ai::agent::{
     FileGlobV2Result, GrepResult, ImageContext, MessageId, ReceivedMessageDisplay,
     RenderableAIError, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
-    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UserQueryMode,
+    StartAgentExecutionMode, StopRecordingResult, SuggestNewConversationResult, SummarizationType,
+    TodoOperation, UserQueryMode,
 };
 pub use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,
@@ -132,8 +132,12 @@ pub use crate::code_review::git_repo_model::{
 };
 pub use crate::completer::SessionContext;
 pub use crate::persistence::PersistenceWriter;
+pub use crate::prefix::longest_common_prefix;
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
+};
+pub use crate::search::slash_command_menu::static_commands::{
+    SlashCommandKind, SlashCommandSurfaces,
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 pub use crate::server::server_api::ServerApiProvider;
@@ -162,11 +166,11 @@ pub use crate::terminal::input::slash_command_model::{
 pub use crate::terminal::input::slash_commands::{
     AcceptSlashCommandOrSavedPrompt, InlineItem, SlashCommandDataSource, SlashCommandMixer,
     SlashCommandSelectionBehavior, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
-    TuiSlashCommand, TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
+    TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
     build_slash_command_mixer, record_autodetection_toggle_from_slash_command,
     record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     should_close_slash_command_menu_for_exact_match, slash_command_is_submitted_as_prompt,
-    slash_command_is_supported_in_tui, slash_command_query, slash_command_selection_behavior,
+    slash_command_query, slash_command_selection_behavior,
 };
 pub use crate::terminal::local_tty::{
     TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceInit,

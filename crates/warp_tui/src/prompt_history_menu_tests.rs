@@ -9,11 +9,8 @@ use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityId, ModelHandle};
 
-use super::{
-    TuiPromptHistoryMenuModel, TuiPromptHistoryRow, prompt_history_title,
-    reconciled_selection_index,
-};
-use crate::inline_menu::render_inline_menu;
+use super::{TuiPromptHistoryMenuModel, TuiPromptHistoryRow, reconciled_selection_index};
+use crate::inline_menu::{render_inline_menu, single_line_menu_title};
 use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
 use crate::tui_builder::TuiUiBuilder;
 
@@ -183,7 +180,7 @@ fn multiline_prompt_uses_single_line_title_without_changing_prompt_text() {
 #[test]
 fn prompt_history_title_handles_windows_line_endings() {
     assert_eq!(
-        prompt_history_title("deploy the app\r\nthen verify it"),
+        single_line_menu_title("deploy the app\r\nthen verify it"),
         "deploy the app..."
     );
 }

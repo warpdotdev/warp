@@ -631,7 +631,7 @@ settings::macros::implement_setting_for_enum!(
     description: "Controls how child-agent messages are displayed.",
 );
 
-/// Which unit the TUI's usage entry displays.
+/// Which unit the usage entry displays in Warp Agent CLI.
 #[derive(
     Default,
     Debug,
@@ -645,7 +645,7 @@ settings::macros::implement_setting_for_enum!(
     settings_value::SettingsValue,
 )]
 #[schemars(
-    description = "Which unit the TUI's usage entry displays.",
+    description = "Which unit the usage entry displays in Warp Agent CLI.",
     rename_all = "snake_case"
 )]
 pub enum TuiUsageDisplayMode {
@@ -664,7 +664,7 @@ settings::macros::implement_setting_for_enum!(
     surface: settings::SettingSurfaces::TUI,
     private: false,
     toml_path: "agents.usage_display_mode",
-    description: "Which unit the TUI's usage entry displays: credits or provider cost.",
+    description: "Which unit the usage entry displays in Warp Agent CLI: credits or provider cost.",
 );
 
 impl TuiUsageDisplayMode {
@@ -2011,6 +2011,22 @@ impl AISettings {
         *self.is_any_ai_enabled
             && !is_anonymous_or_logged_out
             && !self.is_ai_disabled_due_to_remote_session_org_policy(app)
+    }
+
+    /// Returns whether conversation history is available for the current
+    /// account and AI state.
+    ///
+    /// The stored `show_conversation_history` preference is kept separately so
+    /// an onboarding choice can take effect automatically after signup and AI
+    /// enablement without asking the user to toggle the setting again.
+    pub fn is_conversation_history_available(&self, app: &AppContext) -> bool {
+        self.is_any_ai_enabled(app)
+    }
+
+    /// Returns whether conversation history should currently appear in the
+    /// tools panel.
+    pub fn is_conversation_history_enabled(&self, app: &AppContext) -> bool {
+        *self.show_conversation_history && self.is_conversation_history_available(app)
     }
 
     pub fn default_session_mode(&self, app: &AppContext) -> DefaultSessionMode {

@@ -30,6 +30,40 @@ fn render_at_height(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String>
 fn render(snapshot: TuiInlineMenuSnapshot) -> Vec<String> {
     render_at_height(snapshot, 12)
 }
+fn rendered_labels(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String> {
+    let mut lines = render_at_height(snapshot, height)
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .collect::<Vec<_>>();
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+fn rows_snapshot(
+    row_count: usize,
+    selected_index: usize,
+    scroll_offset: usize,
+    max_visible_rows: usize,
+) -> TuiInlineMenuSnapshot {
+    TuiInlineMenuSnapshot {
+        header: None,
+        rows: (0..row_count)
+            .map(|index| TuiInlineMenuRow {
+                title: format!("Conversation {index}"),
+                description: None,
+                state_suffix: None,
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::Default,
+            })
+            .collect(),
+        selected_index: Some(selected_index),
+        scroll_offset,
+        max_visible_rows,
+        status: None,
+    }
+}
 
 fn status_snapshot(status: TuiInlineMenuStatus) -> TuiInlineMenuSnapshot {
     TuiInlineMenuSnapshot {
@@ -65,27 +99,71 @@ fn renders_loading_and_empty_statuses() {
 
 #[test]
 fn renders_only_the_visible_row_window() {
-    let lines = render(TuiInlineMenuSnapshot {
-        header: None,
-        rows: (0..5)
-            .map(|index| TuiInlineMenuRow {
-                title: format!("Conversation {index}"),
-                description: None,
-                state_suffix: None,
-                is_selectable: true,
-                style: TuiInlineMenuRowStyle::Default,
-            })
-            .collect(),
-        selected_index: Some(3),
-        scroll_offset: 2,
-        max_visible_rows: 2,
-        status: None,
-    });
-    let rendered = lines.join("\n");
-    assert!(!rendered.contains("Conversation 1"));
-    assert!(rendered.contains("Conversation 2"));
-    assert!(rendered.contains("Conversation 3"));
-    assert!(!rendered.contains("Conversation 4"));
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 3, 2, 2), 12),
+        vec!["Conversation 2", "Conversation 3"]
+    );
+}
+
+#[test]
+fn fitting_rows_render_without_overflow_indicators() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(3, 1, 0, 4), 4),
+        vec!["Conversation 0", "Conversation 1", "Conversation 2"]
+    );
+}
+
+#[test]
+fn lower_overflow_renders_a_down_arrow_as_the_last_row() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 1, 0, 4), 4),
+        vec!["Conversation 0", "Conversation 1", "Conversation 2", "↓"]
+    );
+}
+#[test]
+fn multiline_conversation_title_is_ellipsized_without_hiding_lower_overflow() {
+    let mut snapshot = rows_snapshot(5, 0, 0, 4);
+    snapshot.rows[0].title = "Conversation 0\ncontinued title".to_owned();
+
+    assert_eq!(
+        rendered_labels(snapshot, 4),
+        vec!["Conversation 0...", "Conversation 1", "Conversation 2", "↓"]
+    );
+}
+
+#[test]
+fn upper_overflow_renders_an_up_arrow_as_the_first_row() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 4, 3, 4), 4),
+        vec!["↑", "Conversation 2", "Conversation 3", "Conversation 4"]
+    );
+}
+
+#[test]
+fn overflow_in_both_directions_renders_both_arrows_and_keeps_selection_visible() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(7, 4, 0, 5), 5),
+        vec![
+            "↑",
+            "Conversation 2",
+            "Conversation 3",
+            "Conversation 4",
+            "↓"
+        ]
+    );
+}
+
+#[test]
+fn short_viewport_prioritizes_three_real_rows_over_scroll_indicators() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(7, 3, 0, 4), 4),
+        vec![
+            "Conversation 0",
+            "Conversation 1",
+            "Conversation 2",
+            "Conversation 3"
+        ]
+    );
 }
 
 #[test]
@@ -393,6 +471,16 @@ fn shared_list_navigation_wraps_skips_disabled_rows_and_scrolls() {
 
     list.select_previous(2, |row| *row);
     assert_eq!(list.selected_index(), Some(3));
+    assert_eq!(list.scroll_offset(), 2);
+}
+
+#[test]
+fn shared_list_reserves_space_for_scroll_indicators() {
+    let mut list = TuiInlineMenuListState::default();
+
+    list.replace_rows(vec![(); 11], false, Some(10), 10, |_| true);
+
+    assert_eq!(list.selected_index(), Some(10));
     assert_eq!(list.scroll_offset(), 2);
 }
 
