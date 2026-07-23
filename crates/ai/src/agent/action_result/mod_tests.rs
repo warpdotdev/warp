@@ -9,6 +9,7 @@ fn launched_agent(name: &str) -> RunAgentsAgentOutcome {
         kind: RunAgentsAgentOutcomeKind::Launched {
             agent_id: format!("{name}-id"),
         },
+        resolved_model_id: String::new(),
     }
 }
 
@@ -18,6 +19,7 @@ fn failed_agent(name: &str) -> RunAgentsAgentOutcome {
         kind: RunAgentsAgentOutcomeKind::Failed {
             error: "launch failed".to_string(),
         },
+        resolved_model_id: String::new(),
     }
 }
 
