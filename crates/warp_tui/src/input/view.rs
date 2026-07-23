@@ -48,12 +48,12 @@ use crate::editor_interaction::{
     apply_editor_action, apply_editor_clipboard_action, follow_editor_cursor,
 };
 use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, active_inline_menu};
-use crate::input_hints;
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP,
 };
+use crate::terminal_session_view::state::TuiTerminalSessionState;
 use crate::transcript_view::TuiTranscriptView;
 use crate::tui_builder::TuiUiBuilder;
 use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
@@ -434,22 +434,22 @@ impl TuiInputView {
         // state.
         let input_mode = self.input_mode.clone();
         let transcript = self.transcript.clone();
+        let suggestions_mode = self.suggestions_mode.clone();
         let orchestration_tabs_available = self.orchestration_tabs_available.clone();
         element.with_placeholder_ghost_text(move |app| {
-            let hint = if input_mode_policy::is_shell_mode(input_mode.as_ref(app)) {
-                input_hints::SHELL_HINT.to_owned()
-            } else {
-                // Inputs constructed without a transcript (isolated tests)
-                // count as zero-state.
-                let transcript_is_empty = transcript
-                    .as_ref()
-                    .is_none_or(|transcript| transcript.as_ref(app).is_empty());
-                input_hints::agent_input_hint(
-                    transcript_is_empty,
-                    orchestration_tabs_available(app),
-                )
-            };
-            Some((hint, TuiUiBuilder::from_app(app).muted_text_style()))
+            // Inputs constructed without a transcript (isolated tests) count
+            // as zero-state.
+            let transcript_is_empty = transcript
+                .as_ref()
+                .is_none_or(|transcript| transcript.as_ref(app).is_empty());
+            TuiTerminalSessionState::for_input(
+                input_mode_policy::is_shell_mode(input_mode.as_ref(app)),
+                suggestions_mode.as_ref(app).mode(),
+                transcript_is_empty,
+                orchestration_tabs_available(app),
+            )
+            .hint_text()
+            .map(|hint| (hint, TuiUiBuilder::from_app(app).muted_text_style()))
         })
     }
     /// Collapses the current text selection to its head without changing text.
@@ -543,8 +543,10 @@ impl TuiView for TuiInputView {
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
+        let suggestions_mode = self.suggestions_mode.as_ref(ctx).mode();
         input_keymap_context(InputKeymapContextConfig {
             input_handles_escape: self.active_inline_menu(ctx).is_some()
+                || matches!(suggestions_mode, TuiInputSuggestionsMode::Shortcuts)
                 || self.is_shell_mode(ctx)
                 || self.voice_is_active(ctx),
             plan_toggle_available: self.plan_toggle_available(ctx),
@@ -602,8 +604,38 @@ impl TypedActionView for TuiInputView {
         }
         let outcome = match action {
             TuiInputAction::Editor(editor_action) => {
+                let shortcuts_visible = matches!(
+                    self.suggestions_mode.as_ref(ctx).mode(),
+                    TuiInputSuggestionsMode::Shortcuts
+                );
                 if let TuiEditorAction::PasteText(text) = editor_action {
+                    if shortcuts_visible {
+                        self.suggestions_mode.update(ctx, |mode, ctx| {
+                            mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+                        });
+                    }
                     ctx.emit(TuiInputViewEvent::Pasted(text.clone()));
+                    return;
+                }
+                if shortcuts_visible {
+                    self.suggestions_mode.update(ctx, |mode, ctx| {
+                        mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+                    });
+                    if matches!(editor_action, TuiEditorAction::InsertChar('?')) {
+                        return;
+                    }
+                } else if matches!(editor_action, TuiEditorAction::InsertChar('?'))
+                    && !self.is_shell_mode(ctx)
+                    && self.plain_text(ctx).is_empty()
+                    && self.is_cursor_at_start(ctx)
+                    && matches!(
+                        self.suggestions_mode.as_ref(ctx).mode(),
+                        TuiInputSuggestionsMode::Closed
+                    )
+                {
+                    self.suggestions_mode.update(ctx, |mode, ctx| {
+                        mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                    });
                     return;
                 }
                 // A `!` typed at the very start of the input enters shell mode
@@ -1003,6 +1035,15 @@ impl TuiInputView {
     /// order. New input modes should be added after the inline-menu branch so
     /// one Escape always closes the most local surface first.
     fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if matches!(
+            self.suggestions_mode.as_ref(ctx).mode(),
+            TuiInputSuggestionsMode::Shortcuts
+        ) {
+            self.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
+            return true;
+        }
         if let Some(inline_menu) = self.active_inline_menu(ctx) {
             inline_menu.dismiss(ctx);
             ctx.notify();

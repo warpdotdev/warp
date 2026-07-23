@@ -17,6 +17,7 @@ pub(crate) enum TuiInputSuggestionsMode {
     Mcp,
     PromptHistory,
     CompletionSuggestions,
+    Shortcuts,
 }
 
 impl TuiInputSuggestionsMode {
@@ -75,7 +76,8 @@ impl TuiInputSuggestionsModeModel {
             | TuiInputSuggestionsMode::SkillMenu
             | TuiInputSuggestionsMode::Mcp
             | TuiInputSuggestionsMode::PromptHistory
-            | TuiInputSuggestionsMode::CompletionSuggestions => false,
+            | TuiInputSuggestionsMode::CompletionSuggestions
+            | TuiInputSuggestionsMode::Shortcuts => false,
         }
     }
 

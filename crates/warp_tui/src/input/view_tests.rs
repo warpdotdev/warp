@@ -514,11 +514,11 @@ fn orchestration_hint_is_ghosted_only_while_tabs_are_available_and_input_is_empt
         orchestration_tabs_available.set(true);
         app.read(|ctx| {
             let line = &render_input_buffer(&view, ctx).to_lines()[0];
-            let hint = crate::input_hints::agent_input_hint(true, true);
             assert!(
-                line.starts_with(&format!(" {hint}")),
+                line.starts_with(" ? for shortcuts"),
                 "unexpected line: {line:?}"
             );
+            assert!(line.contains("Shift + ↑ for other agents"));
         });
 
         app.update(|ctx| type_str(&view, ctx, "x"));
@@ -2502,6 +2502,73 @@ fn bang_at_start_enters_shell_mode() {
     });
 }
 
+#[test]
+fn question_mark_at_empty_agent_input_toggles_shortcuts() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "?");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Shortcuts
+            );
+            assert_eq!(text(&view, ctx), "");
+            assert!(
+                view.as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(INPUT_HANDLES_ESCAPE_FLAG)
+            );
+
+            type_str(&view, ctx, "?");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert_eq!(text(&view, ctx), "");
+        });
+    });
+}
+
+#[test]
+fn escape_closes_shortcuts_before_other_input_modes() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "?");
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert!(!view.as_ref(ctx).is_shell_mode(ctx));
+
+            type_str(&view, ctx, "!");
+            type_str(&view, ctx, "?");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert_eq!(text(&view, ctx), "?");
+        });
+    });
+}
+
+#[test]
+fn typing_into_an_open_shortcuts_surface_closes_it_and_inserts() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "?a");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert_eq!(text(&view, ctx), "a");
+        });
+    });
+}
 #[test]
 fn explicit_shell_mode_survives_deleting_the_buffer() {
     App::test((), |mut app| async move {

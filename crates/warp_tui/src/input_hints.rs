@@ -9,6 +9,7 @@
 
 const ASK_AGENT_HINT: &str = "Ask the agent anything";
 const ORCHESTRATION_HINT: &str = "Shift + ↑ for other agents";
+const SHORTCUTS_HINT: &str = "? for shortcuts";
 const SHELL_MODE_HINT: &str = "! for shell mode";
 const COMMANDS_HINT: &str = "/ for commands";
 const CONVERSATIONS_HINT: &str = "← for conversations";
@@ -30,14 +31,16 @@ pub(crate) fn agent_input_hint(
     transcript_is_empty: bool,
     orchestration_tabs_available: bool,
 ) -> String {
-    let mut hints = Vec::with_capacity(4);
+    let mut hints = Vec::with_capacity(5);
     if transcript_is_empty {
+        hints.push(SHORTCUTS_HINT);
         if orchestration_tabs_available {
             hints.push(ORCHESTRATION_HINT);
         }
         hints.extend([COMMANDS_HINT, CONVERSATIONS_HINT]);
     } else {
         hints.push(ASK_AGENT_HINT);
+        hints.push(SHORTCUTS_HINT);
         if orchestration_tabs_available {
             hints.push(ORCHESTRATION_HINT);
         }

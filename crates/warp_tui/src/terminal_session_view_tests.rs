@@ -47,6 +47,7 @@ use super::{
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
+use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::keybindings::{
     CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
     PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
@@ -851,6 +852,30 @@ fn render_session(
     })
 }
 
+#[test]
+fn shortcuts_surface_renders_above_the_input() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
+        });
+
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(rendered.contains("Shortcuts"), "{rendered}");
+        assert!(rendered.contains("? shortcuts"), "{rendered}");
+        assert!(rendered.contains("/ commands"), "{rendered}");
+        assert!(rendered.contains("! shell mode"), "{rendered}");
+        assert!(rendered.contains("← conversations"), "{rendered}");
+        assert!(rendered.contains("↑ input history"), "{rendered}");
+
+        let narrow = render_session(&mut app, &view, 40, 24).join("\n");
+        assert!(narrow.contains("Shortcuts"), "{narrow}");
+        assert!(narrow.contains("? shortcuts"), "{narrow}");
+    });
+}
 fn input_text(view: &ViewHandle<super::TuiTerminalSessionView>, ctx: &AppContext) -> String {
     view.as_ref(ctx)
         .input_view

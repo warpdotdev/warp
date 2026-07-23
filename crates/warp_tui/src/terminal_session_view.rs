@@ -45,11 +45,11 @@ use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
-use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
-    TuiSize, TuiStyle, TuiText,
+    Modifier, TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex,
+    TuiHoverable, TuiParentElement, TuiSize, TuiStyle, TuiText,
 };
+use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
 use warpui_core::platform::TerminationMode;
@@ -115,9 +115,14 @@ use crate::zero_state_animation::{
 };
 mod completions;
 mod input_detection;
+pub(crate) mod state;
 
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
+use self::state::{
+    TuiShortcut, TuiTerminalSessionPrimaryState, TuiTerminalSessionState,
+    TuiTerminalSessionStateFacts, TuiTerminalUseState,
+};
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -780,6 +785,48 @@ impl TuiTerminalSessionView {
     fn input_target(&self) -> TuiInputTarget {
         let terminal_model = self.terminal_model.lock();
         tui_input_target(&terminal_model)
+    }
+
+    fn session_state(&self, ctx: &AppContext) -> TuiTerminalSessionState {
+        let (alt_screen_active, input_target, user_owns_running_command) = {
+            let terminal_model = self.terminal_model.lock();
+            (
+                terminal_model.is_alt_screen_active(),
+                tui_input_target(&terminal_model),
+                inline_process_owns_input(&terminal_model),
+            )
+        };
+        let terminal_use = self
+            .cli_subagent_controller
+            .as_ref(ctx)
+            .active_target()
+            .map_or_else(
+                || {
+                    if user_owns_running_command {
+                        TuiTerminalUseState::PlainUserCommand
+                    } else {
+                        TuiTerminalUseState::None
+                    }
+                },
+                |target| {
+                    if target.control_state.is_agent_in_control() {
+                        TuiTerminalUseState::AgentControlled
+                    } else {
+                        TuiTerminalUseState::UserControlled
+                    }
+                },
+            );
+        TuiTerminalSessionState::new(TuiTerminalSessionStateFacts {
+            alt_screen_active,
+            blocker_active: self.active_blocking_child(ctx).is_some(),
+            input_target,
+            input_is_shell: self.is_shell_mode(ctx),
+            suggestions_mode: self.suggestions_mode.as_ref(ctx).mode(),
+            transcript_is_empty: self.transcript.as_ref(ctx).is_empty(),
+            orchestration_available: self.orchestration_tab_bar.as_ref(ctx).has_tabs(),
+            plan_available: self.transcript.as_ref(ctx).has_toggleable_plan(ctx),
+            terminal_use,
+        })
     }
 
     fn update_process_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1865,6 +1912,7 @@ impl TuiTerminalSessionView {
 
     fn render_input_area(
         &self,
+        state: TuiTerminalSessionState,
         input_target: TuiInputTarget,
         inline_menu: Option<Box<dyn TuiElement>>,
         builder: &TuiUiBuilder,
@@ -1880,6 +1928,13 @@ impl TuiTerminalSessionView {
                 )
                 .with_max_rows(MAX_INLINE_MENU_ROWS + INLINE_MENU_TOP_PADDING_ROWS)
                 .finish(),
+            );
+        }
+        if state.should_render_shortcuts() {
+            content = content.child(
+                TuiContainer::new(self.render_shortcuts(state, ctx))
+                    .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
+                    .finish(),
             );
         }
         let input = if self.input_view.as_ref(ctx).voice_state(ctx) == TuiVoiceInputState::Listening
@@ -2586,6 +2641,56 @@ impl TuiTerminalSessionView {
             TuiVoiceInputState::Idle => {}
         }
         None
+    }
+    fn render_shortcut_entry(
+        shortcut: &TuiShortcut,
+        builder: &TuiUiBuilder,
+    ) -> Box<dyn TuiElement> {
+        TuiText::from_spans([
+            (format!("{} ", shortcut.key), builder.link_text_style()),
+            (
+                shortcut.description.to_owned(),
+                builder.primary_text_style(),
+            ),
+        ])
+        .truncate()
+        .finish()
+    }
+
+    fn render_shortcuts(
+        &self,
+        state: TuiTerminalSessionState,
+        ctx: &AppContext,
+    ) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(ctx);
+        let context = self.keymap_context(ctx);
+        let sections = state.shortcut_sections(&context, ctx);
+        let mut panel = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        for (section_index, section) in sections.iter().enumerate() {
+            if section_index > 0 {
+                panel.add_child(TuiText::new(" ").finish());
+            }
+            panel.add_child(
+                TuiText::new(section.title)
+                    .with_style(builder.primary_text_style().add_modifier(Modifier::BOLD))
+                    .truncate()
+                    .finish(),
+            );
+            for shortcuts in section.shortcuts.chunks(2) {
+                let mut row = TuiFlex::row();
+                for shortcut in shortcuts {
+                    row = row.flex_child(Self::render_shortcut_entry(shortcut, &builder));
+                }
+                if shortcuts.len() == 1 {
+                    row = row.flex_child(TuiText::new("").finish());
+                }
+                panel.add_child(row.finish());
+            }
+        }
+        TuiContainer::new(panel.finish())
+            .with_padding_x(1)
+            .with_background(builder.shortcuts_background())
+            .finish()
     }
 
     /// Builds the status footer under the input box. The row is left-aligned:
@@ -3586,14 +3691,15 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
+        let state = self.session_state(ctx);
         let mut context = Self::default_keymap_context();
-        if self.orchestration_tabs_focused && self.input_target().agent_editor_owns_input() {
+        if self.orchestration_tabs_focused && state.input_target().agent_editor_owns_input() {
             context.set.insert(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
         }
         if self.is_conversation_restore_loading() {
             context.set.insert(SESSION_CAN_CANCEL_RESTORE_FLAG);
         }
-        if self.active_user_controlled_target(ctx).is_some() {
+        if state.can_hand_back_terminal_use() {
             context.set.insert(SESSION_CAN_HAND_BACK_CONTROL_FLAG);
         }
         if self
@@ -3604,15 +3710,13 @@ impl TuiView for TuiTerminalSessionView {
                 .set
                 .insert(SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG);
         }
-        if self.transcript.as_ref(ctx).has_toggleable_plan(ctx) {
+        if state.plan_available() {
             context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
         }
         if self.keyboard_enhancement_supported {
             context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
         }
-        if self.input_target().agent_editor_owns_input()
-            && !self.suggestions_mode.as_ref(ctx).mode().is_visible()
-        {
+        if state.composer_owns_input() {
             context.set.insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
             if attachment_focus_available(
                 self.is_shell_mode(ctx),
@@ -3639,15 +3743,13 @@ impl TuiView for TuiTerminalSessionView {
             }
             ConversationRestoreState::Idle => {}
         }
-        let (alt_screen_active, input_target, user_owns_running_command, cli_subagent_view) = {
+
+        let state = self.session_state(ctx);
+        let input_target = state.input_target();
+        let cli_subagent_view = {
             let terminal_model = self.terminal_model.lock();
             let active_block = terminal_model.block_list().active_block();
-            (
-                terminal_model.is_alt_screen_active(),
-                tui_input_target(&terminal_model),
-                inline_process_owns_input(&terminal_model),
-                self.cli_subagent_views.get(active_block.id()).cloned(),
-            )
+            self.cli_subagent_views.get(active_block.id()).cloned()
         };
         let inline_menu = input_target
             .agent_editor_owns_input()
@@ -3661,10 +3763,16 @@ impl TuiView for TuiTerminalSessionView {
             })
             .flatten();
         let builder = TuiUiBuilder::from_app(ctx);
-        let orchestration_tabs_available = self.orchestration_tab_bar.as_ref(ctx).has_tabs();
-        let blocker_active = self.active_blocking_child(ctx).is_some();
+        let orchestration_tabs_available = state.orchestration_available();
+        let blocker_active = matches!(
+            state.primary(),
+            TuiTerminalSessionPrimaryState::Blocking
+        );
 
-        if alt_screen_active {
+        if matches!(
+            state.primary(),
+            TuiTerminalSessionPrimaryState::AltScreen
+        ) {
             let terminal_content = TuiTerminalContentElement::new(
                 self.terminal_resize_tx.clone(),
                 AltScreenElement::new(self.terminal_model.clone()).finish(),
@@ -3684,6 +3792,7 @@ impl TuiView for TuiTerminalSessionView {
                     agent_area = agent_area.child(blocker.view_element());
                 } else {
                     agent_area = agent_area.child(self.render_input_area(
+                        state,
                         input_target,
                         inline_menu,
                         &builder,
@@ -3813,7 +3922,7 @@ impl TuiView for TuiTerminalSessionView {
         // PTY but is not a command the user should be told to interrupt.
         // (Agent-driven terminal use keeps the composer, and its control
         // hints come from the CLI-subagent status line.)
-        if !blocker_active && user_owns_running_command {
+        if !blocker_active && state.user_owns_running_command() {
             content = content.child(
                 TuiContainer::new(
                     TuiText::new(input_hints::LONG_RUNNING_COMMAND_HINT)
@@ -3829,8 +3938,13 @@ impl TuiView for TuiTerminalSessionView {
             && (input_target.agent_editor_owns_input()
                 || matches!(input_target, TuiInputTarget::Disabled))
         {
-            content =
-                content.child(self.render_input_area(input_target, inline_menu, &builder, ctx));
+            content = content.child(self.render_input_area(
+                state,
+                input_target,
+                inline_menu,
+                &builder,
+                ctx,
+            ));
         }
         let content = content.finish();
         let terminal_content =
