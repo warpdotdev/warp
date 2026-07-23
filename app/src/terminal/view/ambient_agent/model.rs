@@ -1651,6 +1651,33 @@ impl AmbientAgentViewModel {
         self.spawn_internal(request, ctx);
     }
 
+    /// Retry a failed cloud environment setup by re-running the full spawn.
+    ///
+    /// Unlike `TerminalAction::ResumeConversation` (`Cmd+Shift+R`), which
+    /// re-drives the existing conversation without re-establishing the cloud
+    /// environment, this replays the original spawn request through
+    /// [`Self::spawn_internal`]. That re-runs environment setup first and only
+    /// runs the prompt once the session is ready
+    /// ([`AmbientAgentEvent::SessionStarted`]), giving a correct
+    /// setup-then-run ordering. Mirrors [`Self::handle_github_auth_completed`].
+    /// No-op unless we are in [`Status::Failed`] and still hold the request.
+    pub fn retry_setup(&mut self, ctx: &mut ModelContext<Self>) {
+        if !matches!(self.status, Status::Failed { .. }) {
+            return;
+        }
+        let Some(request) = self.request.clone() else {
+            return;
+        };
+        self.spawn_internal(request, ctx);
+    }
+
+    /// Whether a failed cloud environment setup can be retried: we are in the
+    /// [`Status::Failed`] state and still hold the original spawn request to
+    /// replay via [`Self::retry_setup`].
+    pub fn can_retry_setup(&self) -> bool {
+        matches!(self.status, Status::Failed { .. }) && self.request.is_some()
+    }
+
     /// Handles cancellation by transitioning to the Cancelled state.
     fn handle_cancellation(&mut self, ctx: &mut ModelContext<Self>) {
         self.stop_progress_timer();

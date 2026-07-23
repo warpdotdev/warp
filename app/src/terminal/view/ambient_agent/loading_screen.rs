@@ -20,6 +20,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 use crate::ai::agent_tips::{AITip, AITipModel};
 use crate::ai::loading::shimmering_warp_loading_text;
 use crate::terminal::view::ambient_agent::CloudModeTip;
+use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -211,11 +212,18 @@ fn render_tier_limits_footer(
 }
 
 /// Renders the cloud mode error screen.
+///
+/// When `can_retry` is set, a "Retry" button is shown that re-runs the full
+/// cloud environment setup (via [`TerminalAction::RetryCloudEnvironmentSetup`]),
+/// rather than the generic conversation resume, which does not re-establish the
+/// cloud environment.
 pub fn render_cloud_mode_error_screen(
     error_message: &str,
     appearance: &Appearance,
     selection_handle: &SelectionHandle,
     selected_text: &std::rc::Rc<parking_lot::RwLock<Option<String>>>,
+    can_retry: bool,
+    retry_button_mouse_state: &MouseStateHandle,
     _app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -264,13 +272,30 @@ pub fn render_cloud_mode_error_screen(
     .finish();
 
     // Content column with icon, title, and message stacked vertically
-    let content = Flex::column()
+    let mut content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(12.)
         .with_child(error_icon)
         .with_child(title_text)
-        .with_child(selectable_error_text)
-        .finish();
+        .with_child(selectable_error_text);
+
+    // Offer a Retry that re-runs environment setup (a full re-spawn), which is
+    // the correct way to recover from a failed cloud setup — the generic
+    // conversation resume does not re-establish the cloud environment.
+    if can_retry {
+        let retry_button = appearance
+            .ui_builder()
+            .button(ButtonVariant::Accent, retry_button_mouse_state.clone())
+            .with_centered_text_label("Retry".to_string())
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(TerminalAction::RetryCloudEnvironmentSetup);
+            })
+            .finish();
+        content = content.with_child(Container::new(retry_button).with_margin_top(8.).finish());
+    }
+
+    let content = content.finish();
 
     // Red bordered container with 10% opacity background
     let error_background = warp_core::ui::color::coloru_with_opacity(error_color.into(), 10);

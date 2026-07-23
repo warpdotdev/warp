@@ -334,6 +334,85 @@ fn github_auth_completed_retries_stored_initial_run_request() {
 }
 
 #[test]
+fn retry_setup_respawns_failed_env_setup_request() {
+    // A failed cloud env setup (e.g. the reporter's 403) must be retriable by
+    // re-running the full spawn: retry re-enters WaitingForSession for an
+    // initial run (so environment setup runs before the prompt), reusing the
+    // stored request. This is the correct alternative to `Cmd+Shift+R`, which
+    // only re-drives the conversation without re-establishing the cloud env.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.status = Status::Failed {
+                progress: AgentProgress::new(),
+                error_message: "API request failed with status 403 Forbidden".to_string(),
+            };
+            model.request = Some(retry_request("retry this"));
+
+            assert!(model.can_retry_setup());
+
+            model.retry_setup(ctx);
+
+            assert!(matches!(
+                model.status(),
+                Status::WaitingForSession {
+                    kind: SessionStartupKind::InitialRun,
+                    ..
+                }
+            ));
+            let request = model.request().expect("retry should spawn a request");
+            assert_eq!(request.prompt.as_deref(), Some("retry this"));
+            assert_eq!(request.interactive, Some(true));
+        });
+    });
+}
+
+#[test]
+fn retry_setup_is_noop_when_not_failed() {
+    // Retry only applies to the Failed state; from any other state it must not
+    // re-spawn or change status.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.status = Status::Composing;
+            model.request = Some(retry_request("do not retry"));
+
+            assert!(!model.can_retry_setup());
+
+            model.retry_setup(ctx);
+
+            assert!(matches!(model.status(), Status::Composing));
+        });
+    });
+}
+
+#[test]
+fn can_retry_setup_requires_failed_status_and_request() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, _ctx| {
+            // Failed but no stored request -> cannot retry.
+            model.status = Status::Failed {
+                progress: AgentProgress::new(),
+                error_message: "boom".to_string(),
+            };
+            model.request = None;
+            assert!(!model.can_retry_setup());
+
+            // Failed with a stored request -> can retry.
+            model.request = Some(retry_request("retry this"));
+            assert!(model.can_retry_setup());
+        });
+    });
+}
+
+#[test]
 fn viewed_task_config_preserves_environment_before_cloud_model_load() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
