@@ -160,6 +160,34 @@ fn narrow_header_keeps_chevron_on_first_row_while_label_wraps() {
 }
 
 #[test]
+fn very_narrow_header_keeps_chevron_visible_without_a_truncated_spacer() {
+    for (width, collapsed, glyph) in [
+        (1, true, '▸'),
+        (1, false, '▾'),
+        (2, true, '▸'),
+        (2, false, '▾'),
+        (3, true, '▸'),
+        (3, false, '▾'),
+    ] {
+        let lines = render_collapsible_to_lines(
+            tui_collapsible(
+                collapsed,
+                [("Long shell command".to_owned(), TuiStyle::default())],
+                TuiStyle::default(),
+                MouseStateHandle::default(),
+                || TuiText::new("body").finish(),
+                |_, _| {},
+            ),
+            TuiSize::new(width, 2),
+        );
+        assert!(
+            lines[0].contains(glyph),
+            "chevron {glyph} should remain visible at width {width}; got: {lines:?}",
+        );
+    }
+}
+
+#[test]
 fn narrow_header_keeps_chevron_on_first_row_when_expanded() {
     // The expanded disclosure glyph (▾) stays on the first row at narrow
     // widths too, with the label wrapping below it.

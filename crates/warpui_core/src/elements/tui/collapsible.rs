@@ -51,8 +51,13 @@ fn disclosure_chevron(collapsed: bool) -> &'static str {
 struct TuiCollapsibleHeader {
     /// The wrapping label text (header spans without the chevron).
     label: TuiText,
-    /// The reserved, non-wrapping disclosure chevron (e.g. `" ▸"`).
+    /// The reserved, non-wrapping disclosure chevron (e.g. `"▸"`).
     chevron: TuiText,
+    /// Whether to leave a one-cell gap between the label and chevron.
+    ///
+    /// At the smallest widths the gap is omitted so the glyph itself remains
+    /// visible instead of truncating to a leading spacer.
+    chevron_gap: u16,
     /// The label's size retained from the most recent layout, used to place
     /// the chevron during render.
     label_size: Option<TuiSize>,
@@ -65,6 +70,7 @@ impl TuiCollapsibleHeader {
         Self {
             label,
             chevron,
+            chevron_gap: 0,
             label_size: None,
             size: None,
             origin: None,
@@ -81,15 +87,26 @@ impl TuiElement for TuiCollapsibleHeader {
     ) -> TuiSize {
         let available = constraint.max.width;
         // Lay out the chevron first so its column is reserved; it is a single
-        // truncated glyph, so it takes its natural width (clamped to what is
-        // available) and never wraps onto a later row.
+        // glyph, so it takes one cell and never wraps onto a later row.
         let chevron_size = self
             .chevron
             .layout(TuiConstraint::loose(constraint.max), ctx, app);
+        // Preserve the normal label/chevron spacing whenever there is room for
+        // at least one label cell. At widths one and two, omit the gap so the
+        // glyph itself remains visible instead of truncating to a spacer or
+        // displacing the label entirely.
+        let chevron_gap = if available >= chevron_size.width.saturating_add(2) {
+            1
+        } else {
+            0
+        };
+        self.chevron_gap = chevron_gap;
         // The label wraps into whatever width remains after the chevron's
         // reserved column, so wrapping label text can never push the chevron
         // off the first row.
-        let label_max_width = available.saturating_sub(chevron_size.width);
+        let label_max_width = available
+            .saturating_sub(chevron_size.width)
+            .saturating_sub(chevron_gap);
         let label_constraint = TuiConstraint::new(
             TuiSize::new(0, constraint.min.height),
             TuiSize::new(label_max_width, constraint.max.height),
@@ -99,6 +116,7 @@ impl TuiElement for TuiCollapsibleHeader {
 
         let width = label_size
             .width
+            .saturating_add(chevron_gap)
             .saturating_add(chevron_size.width)
             .min(available);
         let height = label_size.height.max(chevron_size.height);
@@ -125,7 +143,10 @@ impl TuiElement for TuiCollapsibleHeader {
         // The label paints from the header's origin; the chevron is pinned to
         // the first row, immediately after the label's laid-out content edge.
         self.label.render(origin, surface, ctx);
-        let chevron_origin = origin.offset(i32::from(label_size.width), 0);
+        let chevron_origin = origin.offset(
+            i32::from(label_size.width.saturating_add(self.chevron_gap)),
+            0,
+        );
         self.chevron.render(chevron_origin, surface, ctx);
     }
 
@@ -153,7 +174,7 @@ pub fn tui_collapsible(
     on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
 ) -> Box<dyn TuiElement> {
     let label = TuiText::from_spans(header_spans);
-    let chevron = TuiText::new(format!(" {}", disclosure_chevron(collapsed)))
+    let chevron = TuiText::new(disclosure_chevron(collapsed))
         .with_style(chevron_style)
         .truncate();
     let header = TuiCollapsibleHeader::new(label, chevron).finish();
