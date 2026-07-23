@@ -330,6 +330,12 @@ fn test_tab_bar_traffic_light_space_regression_for_resource_center_overlap() {
 #[test]
 fn bonus_grant_notifications_use_ephemeral_toasts() {
     App::test((), |mut app| async move {
+        // `add_window` flushes effects on drop, which builds the window's scene
+        // and renders the toast stack. Rendering a toast reads the `Appearance`
+        // singleton, so the singletons `initialize_app` registers (Appearance,
+        // AppearanceManager, etc.) must be in place before the window is added.
+        initialize_app(&mut app);
+
         let (_, toast_stack) = app.add_window(WindowStyle::NotStealFocus, |_| {
             DismissibleToastStack::<WorkspaceAction>::new(Duration::from_millis(1))
         });
