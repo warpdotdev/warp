@@ -15,6 +15,7 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::{AppContext, ModelHandle};
 
+use crate::completion_menu::{TuiCompletionAcceptance, TuiCompletionMenuModel};
 use crate::conversation_menu::TuiConversationMenuModel;
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::mcp_menu::TuiMcpMenuModel;
@@ -86,6 +87,44 @@ impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
     fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
         self.update(ctx, |model, ctx| model.accept_selected(ctx))
             .map(TuiInlineMenuAccepted::Mcp)
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot(ctx)
+    }
+}
+impl TuiInlineMenuHandle for ModelHandle<TuiCompletionMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::CompletionSuggestions
+    }
+
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open(ctx)
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+            .map(TuiInlineMenuAccepted::Completion)
     }
 
     fn dismiss(&self, ctx: &mut AppContext) {
@@ -274,6 +313,8 @@ pub(crate) enum TuiInlineMenuAccepted {
     Mcp(TuiMcpAction),
     /// The text of a prompt accepted from the up-arrow prompt-history menu.
     PromptHistory(String),
+    /// A shell completion and the exact input span it replaces.
+    Completion(TuiCompletionAcceptance),
 }
 
 /// Type-erased operations shared by TUI inline-menu model handles.
