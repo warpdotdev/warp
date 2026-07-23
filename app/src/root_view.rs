@@ -32,7 +32,7 @@ use warpui::presenter::ChildView;
 use warpui::rendering::OnGPUDeviceSelected;
 use warpui::windowing::WindowManager;
 use warpui::{
-    AddWindowOptions, AppContext, DisplayId, Element, Entity, EntityId, FocusContext,
+    AddWindowOptions, AppContext, DisplayId, DisplayIdx, Element, Entity, EntityId, FocusContext,
     NextNewWindowsHasThisWindowsBoundsUponClose, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WindowId, id,
 };
@@ -888,12 +888,21 @@ pub(crate) fn open_new_with_workspace_source(
 ) -> (WindowId, ViewHandle<RootView>) {
     let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
     let window_settings = WindowSettings::as_ref(ctx);
+    let opened_from_quake_window = opening_from_quake_window(ctx);
     let options = default_window_options(window_settings, ctx);
-    ctx.add_window(options, |ctx| {
+    let result = ctx.add_window(options, |ctx| {
         let mut view = RootView::new(global_resource_handles, source, ctx);
         view.focus(ctx);
         view
-    })
+    });
+    if opened_from_quake_window {
+        // The dedicated hotkey window is a non-activating panel, so opening a
+        // regular window from it does not bring the app forward on its own.
+        // Activate so the new window is focused in place on the current screen,
+        // matching a normal new-window open (see #13514).
+        ctx.windows().activate_app();
+    }
+    result
 }
 
 pub(crate) fn open_new_from_path(
@@ -1239,11 +1248,108 @@ fn open_new_tab_insert_subshell_command_and_bootstrap_if_supported(
     });
 }
 
+/// Default size of a newly-opened regular window, mirroring the platform
+/// default used when no other size is available (`INITIAL_WINDOW_WIDTH` /
+/// `INITIAL_WINDOW_HEIGHT` in the macOS window backend). Used when opening a
+/// window from the dedicated hotkey window, where there is no meaningful
+/// previous regular-window size to inherit.
+const DEFAULT_NEW_WINDOW_WIDTH: f32 = 1280.0;
+const DEFAULT_NEW_WINDOW_HEIGHT: f32 = 800.0;
+
+/// Returns bounds for a window of `size` centered on `screen`.
+///
+/// The size is clamped so the window never overflows the display, and the origin
+/// is recomputed for the (possibly clamped) size so it stays centered — used when
+/// opening a new window from the dedicated hotkey (quake) window so it appears on
+/// the hotkey window's current screen instead of inheriting a stale last-closed
+/// position on another display or the quake panel's pinned-strip geometry.
+fn window_bounds_centered_on(size: Vector2F, screen: RectF) -> WindowBounds {
+    let size = vec2f(size.x().min(screen.width()), size.y().min(screen.height()));
+    let origin = vec2f(
+        screen.origin().x() + (screen.width() - size.x()) * 0.5,
+        screen.origin().y() + (screen.height() - size.y()) * 0.5,
+    );
+    WindowBounds::ExactPosition(RectF::new(origin, size))
+}
+
+/// Returns bounds for a default-sized regular window centered on `screen`.
+fn centered_default_window_bounds(screen: RectF) -> WindowBounds {
+    window_bounds_centered_on(
+        vec2f(DEFAULT_NEW_WINDOW_WIDTH, DEFAULT_NEW_WINDOW_HEIGHT),
+        screen,
+    )
+}
+
+/// True when a new window is being opened while the dedicated hotkey (quake)
+/// window is the active window. In that case the new regular window should open
+/// on the hotkey window's current screen and be activated, rather than following
+/// the usual last-closed / cascade placement (which sends it to another display
+/// and, since the hotkey window is a non-activating panel, leaves it unfocused).
+fn opening_from_quake_window(ctx: &AppContext) -> bool {
+    let active_window_id = ctx.windows().active_window();
+    quake_mode_window_is_open()
+        && active_window_id.is_some()
+        && active_window_id == quake_mode_window_id()
+}
+
+/// Returns the bounds of the display the dedicated hotkey (quake) window is on.
+///
+/// The hotkey window is a non-activating panel, so it can be the key window on a
+/// non-main display while the app itself is inactive — in which case
+/// `NSScreen.mainScreen` (what `active_display_bounds` reports) points at the
+/// wrong display. Locate the display that actually contains the panel instead,
+/// falling back to the reported active display if it can't be resolved.
+fn hotkey_window_screen(ctx: &AppContext) -> RectF {
+    let panel_center = quake_mode_window_id()
+        .and_then(|panel_id| ctx.window_bounds(&panel_id))
+        .map(|bounds| {
+            vec2f(
+                bounds.origin().x() + bounds.width() * 0.5,
+                bounds.origin().y() + bounds.height() * 0.5,
+            )
+        });
+    if let Some(center) = panel_center {
+        let display_count = ctx.windows().display_count();
+        let candidates = std::iter::once(DisplayIdx::Primary)
+            .chain((0..display_count.saturating_sub(1)).map(DisplayIdx::External));
+        for idx in candidates {
+            if let Some(screen) = ctx.windows().bounds_for_display_idx(idx) {
+                if screen.contains_point(center) {
+                    return screen;
+                }
+            }
+        }
+    }
+    ctx.windows().active_display_bounds()
+}
+
 /// Returns the common configuration for a new "regular" window (not Quake Mode).
 fn default_window_options(window_settings: &WindowSettings, ctx: &AppContext) -> AddWindowOptions {
-    let (inherited_bounds, window_style) = ctx.next_window_bounds_and_style();
-    let next_bounds =
-        bounds_for_opening_at_custom_window_size(inherited_bounds, window_settings, ctx);
+    let (next_bounds, window_style) = if opening_from_quake_window(ctx) {
+        let screen = hotkey_window_screen(ctx);
+        // Respect a configured custom new-window size, but keep the window
+        // centered on and clamped to the hotkey window's screen: run the custom
+        // size logic to get the final size, then recenter it (the custom-size
+        // helper keeps the incoming origin, which would otherwise leave the
+        // window off-center or overflowing the display).
+        let sized = bounds_for_opening_at_custom_window_size(
+            centered_default_window_bounds(screen),
+            window_settings,
+            ctx,
+        );
+        let size = match sized {
+            WindowBounds::ExactPosition(rect) => rect.size(),
+            WindowBounds::ExactSize(size) => size,
+            WindowBounds::Default => vec2f(DEFAULT_NEW_WINDOW_WIDTH, DEFAULT_NEW_WINDOW_HEIGHT),
+        };
+        (window_bounds_centered_on(size, screen), WindowStyle::Normal)
+    } else {
+        let (inherited_bounds, window_style) = ctx.next_window_bounds_and_style();
+        (
+            bounds_for_opening_at_custom_window_size(inherited_bounds, window_settings, ctx),
+            window_style,
+        )
+    };
 
     AddWindowOptions {
         window_style,
