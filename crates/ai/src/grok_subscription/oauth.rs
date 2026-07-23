@@ -204,7 +204,7 @@ fn bind_callback_listener() -> anyhow::Result<TcpListener> {
     let listener = TcpListener::bind((REDIRECT_HOST, REDIRECT_PORT)).with_context(|| {
         format!(
             "couldn't bind the Grok OAuth callback server to {REDIRECT_HOST}:{REDIRECT_PORT}. \
-             Another login may be in progress, or another app (e.g. Grok CLI) is using the port."
+             Another login may be in progress, or another app (e.g. Grok Build) is using the port."
         )
     })?;
     listener

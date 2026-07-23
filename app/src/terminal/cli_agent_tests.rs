@@ -20,6 +20,7 @@ use crate::code_review::comments::{
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::ui_components::icons::Icon;
 use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
@@ -266,6 +267,7 @@ fn test_detect_known_agents() {
                 ("vibe", CLIAgent::Vibe),
                 ("agy", CLIAgent::Antigravity),
                 ("omp", CLIAgent::OhMyPi),
+                ("grok", CLIAgent::Grok),
             ] {
                 assert_eq!(
                     CLIAgent::detect(command, None, None, ctx),
@@ -289,6 +291,32 @@ fn test_detect_with_arguments() {
                 CLIAgent::detect("gemini chat", None, None, ctx),
                 Some(CLIAgent::Gemini),
             );
+            assert_eq!(
+                CLIAgent::detect("grok \"fix the bug\"", None, None, ctx),
+                Some(CLIAgent::Grok),
+            );
+        });
+    });
+}
+
+#[test]
+fn test_detect_grok_not_agent_basename() {
+    // Grok installs an `agent` symlink, but Warp maps bare `agent` to Cursor CLI.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            assert_eq!(
+                CLIAgent::detect("agent", None, None, ctx),
+                Some(CLIAgent::CursorCli),
+            );
+            assert_eq!(
+                CLIAgent::detect("grok", None, None, ctx),
+                Some(CLIAgent::Grok),
+            );
+            assert_eq!(CLIAgent::Grok.command_prefix(), "grok");
+            assert_eq!(CLIAgent::Grok.display_name(), "Grok Build");
+            assert!(CLIAgent::Grok.supports_bash_mode());
+            assert_eq!(CLIAgent::Grok.skill_command_prefix(), "/");
+            assert_eq!(CLIAgent::Grok.icon(), Some(Icon::GrokLogo));
         });
     });
 }

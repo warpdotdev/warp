@@ -1,6 +1,7 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod gemini;
+pub(crate) mod grok;
 pub(crate) mod opencode;
 
 use std::cmp::Ordering;
@@ -12,6 +13,7 @@ use async_trait::async_trait;
 use claude::ClaudeCodePluginManager;
 use codex::CodexPluginManager;
 use gemini::GeminiPluginManager;
+use grok::GrokPluginManager;
 use opencode::OpenCodePluginManager;
 
 use crate::features::FeatureFlag;
@@ -285,6 +287,7 @@ pub(crate) fn plugin_manager_for_with_shell(
                 path_env_var,
             )))
         }
+        CLIAgent::Grok => Some(Box::new(GrokPluginManager)),
         CLIAgent::OpenCode
         | CLIAgent::Codex
         | CLIAgent::Gemini

@@ -12003,13 +12003,14 @@ impl TerminalView {
                                         },
                                     );
 
-                                    // Codex doesn't use the sentinel-based plugin protocol,
-                                    // so create the listener proactively on command detection
-                                    // (rather than waiting for a SessionStart event).
-                                    if matches!(detection, Some((CLIAgent::Codex, _))) {
+                                    // Codex and Grok use OSC 9 (and optional rich OSC 777)
+                                    // without requiring a SessionStart sentinel first, so
+                                    // create the listener proactively on command detection.
+                                    if let Some((agent @ (CLIAgent::Codex | CLIAgent::Grok), _)) =
+                                        detection
+                                    {
                                         me.register_cli_agent_listener_without_session_start_event(
-                                            CLIAgent::Codex,
-                                            ctx,
+                                            agent, ctx,
                                         );
                                     }
 
