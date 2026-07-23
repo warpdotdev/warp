@@ -941,9 +941,7 @@ impl TerminalManager<TerminalView> {
                 }
 
                 // Stream historical agent conversations so viewers have conversation and task context.
-                if FeatureFlag::AgentSharedSessions.is_enabled() {
-                    Self::stream_historical_agent_conversations(&terminal_view, &model, ctx);
-                }
+                Self::stream_historical_agent_conversations(&terminal_view, &model, ctx);
 
                 // `LocalAgentTaskSyncModel` fires the (task_id,
                 // session_id) link in response to the event emitted above.
@@ -1037,10 +1035,6 @@ impl TerminalManager<TerminalView> {
                 request_id,
                 action,
             } => {
-                if !FeatureFlag::AgentSharedSessions.is_enabled() {
-                    return;
-                }
-
                 let viewer_is_executor = terminal_view
                     .as_ref(ctx)
                     .shared_session_presence_manager()
@@ -1291,10 +1285,6 @@ impl TerminalManager<TerminalView> {
                 participant_id,
                 request,
             } => {
-                if !FeatureFlag::AgentSharedSessions.is_enabled() {
-                    return;
-                }
-
                 // Validate permissions for the participant that initiated the prompt.
                 // For viewers, we require Executor role. For the sharer, we allow the prompt
                 // even if they are not present in the viewer list.
@@ -1668,8 +1658,7 @@ impl TerminalManager<TerminalView> {
         let session_sharer = shared_session_model.clone();
         let model = model.clone();
 
-        let is_ambient_agent = FeatureFlag::AgentSharedSessions.is_enabled()
-            && AppExecutionMode::as_ref(ctx).is_autonomous();
+        let is_ambient_agent = AppExecutionMode::as_ref(ctx).is_autonomous();
         // TODO(ben): This is a very suboptimal way of exposing this; lifetime should be a user-visible option.
         let session_lifetime = if is_ambient_agent {
             Lifetime::Lingering

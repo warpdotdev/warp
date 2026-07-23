@@ -448,9 +448,6 @@ pub enum FeatureFlag {
     /// Enables asynchronous find in terminal, running search on a background thread.
     AsyncFind,
 
-    /// Enables using Agent Mode in shared sessions.
-    AgentSharedSessions,
-
     /// Enables auto-opening code review pane on first agent change and its setting UI.
     AutoOpenCodeReviewPane,
 
@@ -1081,9 +1078,6 @@ impl FeatureFlag {
         // very least, the feature flag should be removed from the Preview changelog by removing it from PREVIEW_FLAGS.
         // ** ONLY Preview-exclusive features should be added to this list! **
         match self {
-            AgentSharedSessions => {
-                Some("Enables viewing agent conversations within shared sessions.")
-            }
             CodeReviewFind => Some("Enables the find bar in the code review pane."),
             BlocklistMarkdownImages => {
                 Some("Enables rendering markdown images inline in AI block list responses.")

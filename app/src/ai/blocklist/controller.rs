@@ -62,7 +62,6 @@ use crate::ai::document::ai_document_model::{
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::skills::{ActiveSkillLookupError, SkillManager};
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::features::FeatureFlag;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
@@ -2857,35 +2856,36 @@ impl BlocklistAIController {
                 match event {
                     Ok(event) => {
                         // If this controller is part of a shared session, forward the entire response event to viewers first.
-                        if FeatureFlag::AgentSharedSessions.is_enabled() {
-                            let mut model = self.terminal_model.lock();
-                            if model.shared_session_status().is_sharer() {
-                                // Get the participant who initiated this response, falling back to the sharer if needed.
-                                let participant_id = self
-                                    .get_current_response_initiator()
-                                    .or_else(|| self.get_sharer_participant_id());
+                        let mut model = self.terminal_model.lock();
+                        if model.shared_session_status().is_sharer() {
+                            // Get the participant who initiated this response, falling back to the sharer if needed.
+                            let participant_id = self
+                                .get_current_response_initiator()
+                                .or_else(|| self.get_sharer_participant_id());
 
-                                // For forked conversations (e.g. when loading from cloud), include
-                                // the original conversation token so viewers can link the new
-                                // server-assigned token to their existing conversation.
-                                //
-                                // This token is cleared after the first Init event (see below),
-                                // so it's only sent once per forked conversation.
-                                let forked_from_token = history_model
-                                    .as_ref(ctx)
-                                    .conversation(&conversation_id)
-                                    .and_then(|conv| {
-                                        conv.forked_from_server_conversation_token()
-                                            .map(|t| t.as_str().to_string())
-                                    });
+                            // For forked conversations (e.g. when loading from cloud), include
+                            // the original conversation token so viewers can link the new
+                            // server-assigned token to their existing conversation.
+                            //
+                            // This token is cleared after the first Init event (see below),
+                            // so it's only sent once per forked conversation.
+                            let forked_from_token = history_model
+                                .as_ref(ctx)
+                                .conversation(&conversation_id)
+                                .and_then(|conv| {
+                                    conv.forked_from_server_conversation_token()
+                                        .map(|t| t.as_str().to_string())
+                                });
 
-                                model.send_agent_response_for_shared_session(
-                                    &event,
-                                    participant_id,
-                                    forked_from_token,
-                                );
-                            }
+                            model.send_agent_response_for_shared_session(
+                                &event,
+                                participant_id,
+                                forked_from_token,
+                            );
                         }
+                        // Release the terminal model lock before handling the event below,
+                        // which requires a mutable borrow of `self`.
+                        drop(model);
                         let Some(event) = event.r#type else {
                             return;
                         };
@@ -3082,12 +3082,10 @@ impl BlocklistAIController {
                     // of any user-initiated cancellation. We skip internal cancellations that preserve
                     // the conversation's InProgress status, such as follow-ups and CLI subagent user
                     // takeover, because those do not end the conversation.
-                    if FeatureFlag::AgentSharedSessions.is_enabled()
-                        && !matches!(
-                            stream_cancellation.reason.conversation_outcome(),
-                            CancellationOutcome::KeepInProgress
-                        )
-                    {
+                    if !matches!(
+                        stream_cancellation.reason.conversation_outcome(),
+                        CancellationOutcome::KeepInProgress
+                    ) {
                         // For any terminal status (not just canceled), we need to inform viewers the stream has stopped.
                         self.send_cancellation_to_viewers(ctx);
                     }

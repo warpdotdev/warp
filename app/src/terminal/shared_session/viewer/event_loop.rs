@@ -314,42 +314,38 @@ impl EventLoop {
                     response_event,
                     forked_from_conversation_token,
                 } => {
-                    if FeatureFlag::AgentSharedSessions.is_enabled() {
-                        match decode_agent_response_event(&response_event) {
-                            Ok(resp) => {
-                                if let Some(view) = self.terminal_view.upgrade(ctx) {
-                                    let event_clone = resp.clone();
-                                    let forked_from_token = forked_from_conversation_token.clone();
-                                    view.update(ctx, move |view, ctx| {
-                                        view.ai_controller().update(ctx, |c, ctx| {
-                                            // Set the participant who initiated this response
-                                            if let Some(response_initiator) = response_initiator {
-                                                c.set_current_response_initiator(
-                                                    response_initiator,
-                                                );
-                                            }
+                    match decode_agent_response_event(&response_event) {
+                        Ok(resp) => {
+                            if let Some(view) = self.terminal_view.upgrade(ctx) {
+                                let event_clone = resp.clone();
+                                let forked_from_token = forked_from_conversation_token.clone();
+                                view.update(ctx, move |view, ctx| {
+                                    view.ai_controller().update(ctx, |c, ctx| {
+                                        // Set the participant who initiated this response
+                                        if let Some(response_initiator) = response_initiator {
+                                            c.set_current_response_initiator(response_initiator);
+                                        }
 
-                                            // For forked conversations, update the viewer's conversation
-                                            // to use the new server token (only sent once per fork).
-                                            if let Some(forked_from) = forked_from_token {
-                                                c.link_forked_conversation_token(
-                                                    &forked_from,
-                                                    &event_clone,
-                                                    ctx,
-                                                );
-                                            }
-
-                                            c.handle_shared_session_response_event(
-                                                event_clone.clone(),
+                                        // For forked conversations, update the viewer's conversation
+                                        // to use the new server token (only sent once per fork).
+                                        if let Some(forked_from) = forked_from_token {
+                                            c.link_forked_conversation_token(
+                                                &forked_from,
+                                                &event_clone,
                                                 ctx,
                                             );
-                                        });
+                                        }
+
+                                        c.handle_shared_session_response_event(
+                                            event_clone.clone(),
+                                            ctx,
+                                        );
                                     });
-                                }
+                                });
                             }
-                            Err(err) => {
-                                log::warn!("Failed to decode agent response event: {err}");
-                            }
+                        }
+                        Err(err) => {
+                            log::warn!("Failed to decode agent response event: {err}");
                         }
                     }
                 }
