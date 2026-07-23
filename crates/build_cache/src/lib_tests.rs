@@ -13,9 +13,9 @@ use instant::Instant;
 use warp_errors::ErrorExt as _;
 
 use super::{
-    CacheScope, CacheSetupError, DetectedCacheModes, RepoCacheKey, RepoIdentity, RepositoryCacheSource,
-    aggregate_mode_stats, build_export_script, construct_plan, create_retained_scratch_directory,
-    is_valid_env_name, posix_single_quote, run_command_with_timeout, setup_cache,
+    CacheScope, CacheSetupError, DetectedCacheModes, RepoCacheKey, RepoIdentity,
+    RepositoryCacheSource, aggregate_mode_stats, construct_plan, create_retained_scratch_directory,
+    is_valid_env_name, run_command_with_timeout, setup_cache,
 };
 use crate::spacectl::{Mount, MountInput, MountOutput, MountResponse};
 
@@ -456,30 +456,30 @@ fn invalid_env_names_are_rejected_individually() {
     assert!(!is_valid_env_name(""));
     assert!(!is_valid_env_name("1INVALID"));
     assert!(!is_valid_env_name("BAD-NAME"));
-    let script = build_export_script(&BTreeMap::from([
-        ("BAD-NAME".to_owned(), "ignored".to_owned()),
-        ("GOOD".to_owned(), "kept".to_owned()),
-    ]));
-    assert_eq!(script.as_deref(), Some("export GOOD='kept'"));
-}
 
-#[test]
-fn hostile_env_values_are_posix_single_quote_escaped() {
+    let temp = tempfile::tempdir().unwrap();
+    let report = block_on(setup_cache(
+        temp.path().join("cache"),
+        vec![source(temp.path(), "github.com", "warp", "client")],
+        Vec::new(),
+        move |command| {
+            futures::future::ready(Ok(if is_detect(&command) {
+                response(&["cargo"], &[], &[])
+            } else if is_global(&command) {
+                response(
+                    &["cargo"],
+                    &[("BAD-NAME", "ignored"), ("GOOD", "kept")],
+                    &[],
+                )
+            } else {
+                response(&["cargo"], &[], &[])
+            }))
+        },
+    ));
     assert_eq!(
-        posix_single_quote("$(touch /tmp/pwned);'quoted'"),
-        "'$(touch /tmp/pwned);'\\''quoted'\\'''"
+        report.add_envs,
+        BTreeMap::from([("GOOD".to_owned(), "kept".to_owned())])
     );
-}
-
-#[test]
-fn exports_are_sorted_and_built_once() {
-    let script = build_export_script(&BTreeMap::from([
-        ("Z_VAR".to_owned(), "z".to_owned()),
-        ("A_VAR".to_owned(), "a".to_owned()),
-    ]))
-    .unwrap();
-    assert_eq!(script, "export A_VAR='a'; export Z_VAR='z'");
-    assert_eq!(script.matches("export ").count(), 2);
 }
 
 #[test]

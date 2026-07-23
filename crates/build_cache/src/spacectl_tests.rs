@@ -3,7 +3,7 @@ use std::path::Path;
 
 use command::r#async::Command;
 
-use super::{detect_command, mount_command, parse_mount_response};
+use super::{MountResponse, detect_command, mount_command};
 
 fn args(command: &Command) -> Vec<&OsStr> {
     command.get_args().collect()
@@ -54,8 +54,8 @@ fn mount_command_has_exact_explicit_modes_dry_run_false_root_and_cwd() {
 }
 
 #[test]
-fn parse_mount_response_reads_modes_mounts_add_envs_and_optional_disk_usage() {
-    let response = parse_mount_response(
+fn mount_response_deserializes_spacectl_output() {
+    let response = serde_json::from_slice::<MountResponse>(
         br#"{
             "input": {"modes": ["cargo", "go"], "future": true},
             "output": {
@@ -79,6 +79,6 @@ fn parse_mount_response_reads_modes_mounts_add_envs_and_optional_disk_usage() {
     assert_eq!(disk_usage.total, "20G");
     assert_eq!(disk_usage.used, "4G");
 
-    let response = parse_mount_response(br#"{"input":{},"output":{}}"#).unwrap();
+    let response = serde_json::from_slice::<MountResponse>(br#"{"input":{},"output":{}}"#).unwrap();
     assert_eq!(response.output.disk_usage, None);
 }

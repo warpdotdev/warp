@@ -20,7 +20,6 @@ sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-futures.workspace = true
 warp_errors.workspace = true
 
 [dev-dependencies]

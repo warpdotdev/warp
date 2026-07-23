@@ -1,3 +1,23 @@
+//! Persistent build cache management for sandboxed agents.
+//!
+//! This crate configures a sandbox environment to use attached persistent storage for caching
+//! build artifacts and downloaded dependencies.
+//!
+//! The cache setup is aware of specific repositories and tech stacks. It:
+//! 1. Scans repositories to identify the tools in use, such as the Swift Package Manager, Maven, Go, and more.
+//! 2. Checks for system-level package managers such as Homebrew and `apt-get`.
+//! 3. Consolidates the results into a single caching plan.
+//! 4. Applies the plan to the system. The result is:
+//!    * Per-repo cache mounts, such as `./target` in Rust codebases
+//!    * Global cache mounts, such as the Go module download cache
+//!    * Environment variables to inject into the agent's terminal session
+//!
+//! A cache mount is a redirect from the usual build output location to a location on the
+//! persistent storage volume. On Linux, this is typically a bind mount. On macOS, it will be a
+//! symbolic link.
+//!
+//! Currently, the implementation relies on [`spacectl`](https://github.com/namespacelabs/spacectl),
+//! though this may change in the future.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
@@ -8,19 +28,20 @@ use async_io::Timer;
 use command::Stdio;
 use command::r#async::Command;
 use futures_lite::future;
-use instant::Instant;
 use is_executable::IsExecutable as _;
 use sha2::{Digest, Sha256};
-use tracing_futures::Instrument as _;
 use warp_errors::{ErrorExt, register_error};
 
 pub mod spacectl;
 
-use spacectl::{MountResponse, detect_command, mount_command, parse_mount_response};
+use spacectl::{MountResponse, run_spacectl_mount};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Identifiers for a code repository.
+///
+/// These identifiers are used to scope repo-specific cache locations, such as
+/// project-level build output directories.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct RepoIdentity {
     pub forge_host: String,
@@ -42,7 +63,10 @@ impl RepoIdentity {
     }
 }
 
-/// Key for scoping per-repository build caches.
+/// Key for scoping per-repository build caches. Cache keys are derived from [`RepoIdentity`] values.
+///
+/// The key format is opaque, but should be as stable as possible. Any changes make existing cache
+/// data inaccessible.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RepoCacheKey(String);
 
@@ -73,6 +97,9 @@ impl fmt::Display for RepoCacheKey {
 pub struct InvalidRepoCacheKey;
 
 /// Ownership scope for a given cache mount.
+///
+/// The scope determines whether multiple repositories using the same toolchain may share their
+/// cache or not.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CacheScope {
     /// This cache mount is specific to a particular repository (e.g. a Rust `./target` directory).
@@ -104,17 +131,29 @@ pub struct RepositoryCacheSource {
     pub cwd: PathBuf,
 }
 
+/// Description of the caches to configure in a particular scope.
+///
+/// For repository scopes, this is essentially the cache plan for that repository. For the global
+/// scope, this is a synthetic combination of all caches to enable in the sandbox.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CacheConfiguration {
+    /// Scope of this configuration.
     pub scope: CacheScope,
+    /// The working directory to resolve cache source locations from. For repository scopes, this
+    /// is the repository root. For global configurations, this has no meaningful value and is set
+    /// to a temporary directory.
     pub cwd: PathBuf,
+    /// Directory to store this configuration's cache data in within the persistent storage volume.
     pub relative_cache_dir: PathBuf,
+    /// Set of cache modes to enable. Each cache mode corresponds to a tool, package manager, or
+    /// language runtime. Values are generally stable, but should be considered opaque.
     pub modes: Vec<String>,
 }
 
 /// An executable plan for setting up build caches on the current host.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CacheSetupPlan {
+    /// The location of the persistent cache volume.
     pub cache_root: PathBuf,
     /// Individual cache configurations. This contains one or more repository-specific
     /// configurations followed by a global configuration.
@@ -134,6 +173,11 @@ impl CacheSetupPlan {
         Ok(plan)
     }
 
+    /// Validate that a cache plan is valid. A valid plan:
+    /// * Contains one or more cache configurations
+    /// * Ends in a globally-scoped cache configuration
+    /// * Lists each repository exactly once, in order by cache key
+    /// * Only uses safe cache locations within the cache volume (no absolute paths, `..`, or `.` components)
     pub fn validate(&self) -> Result<(), PlanInvariantError> {
         let Some((global, repositories)) = self.configurations.split_last() else {
             return Err(PlanInvariantError);
@@ -243,7 +287,8 @@ pub struct ModeCacheStats {
 }
 
 /// Report from preparing caches for a particular scope. This corresponds to a single call to
-/// `spacectl cache mount`.
+/// `spacectl cache mount`. The content is highly coupled to `spacectl`, and should only be used
+/// for telemetry.
 #[derive(Clone, Debug)]
 pub struct CachePreparationReport {
     pub scope: CacheScope,
@@ -267,10 +312,10 @@ pub struct CacheSetupReport {
     pub plan: Option<CacheSetupPlan>,
     pub invocations: Vec<CachePreparationReport>,
     pub add_envs: BTreeMap<String, String>,
-    pub export_script: Option<String>,
 }
 
 impl CacheSetupReport {
+    /// List scoped cache setups which could not be mounted successfully.
     pub fn degradations(&self) -> impl Iterator<Item = &CachePreparationReport> {
         self.invocations
             .iter()
@@ -310,6 +355,8 @@ pub async fn default_run_command(command: Command) -> Result<Vec<u8>, CacheSetup
     run_command_with_timeout(command, SPACECTL_TIMEOUT).await
 }
 
+/// Run a [`Command`] with a timeout. If the timeout expires or the future is dropped, then the
+/// process is forcibly killed.
 async fn run_command_with_timeout(
     mut command: Command,
     timeout: Duration,
@@ -337,7 +384,13 @@ async fn run_command_with_timeout(
     Ok(output.stdout)
 }
 
-/// Set up build caching on the current host.
+/// Set up build caching on the current host. See the crate-level documentation for a description
+/// of the setup process. This configures caches for all detected repositories, as well as any
+/// given global modes.
+///
+/// This should only be called once per sandbox, as it modifies shared filesystem locations.
+/// The calling process need not run with superuser privileges, but the implementation may
+/// escalate privileges with `sudo` or similar.
 #[tracing::instrument(name = "setup_caches", skip_all, fields(tags.cloud_agent = true))]
 pub async fn setup_cache<F, Fut>(
     cache_root: PathBuf,
@@ -359,6 +412,8 @@ where
         .collect();
     keyed_repositories.sort();
 
+    // Step 1: Detect the cache modes that apply to each repository. A mode corresponds to a tool
+    // or language runtime, such as `apt-get` or Swift.
     let mut detected_modes = Vec::new();
     for (key, source) in keyed_repositories {
         let relative_cache_dir = PathBuf::from("repos").join(key.as_str());
@@ -367,6 +422,8 @@ where
             name: source.name.clone(),
             key: key.clone(),
         };
+
+        // We create the scoped cache directory here, as `spacectl` fails if it doesn't exist.
         if std::fs::create_dir_all(&configuration_root).is_err() {
             report.invocations.push(failed_invocation(
                 scope,
@@ -378,6 +435,7 @@ where
             continue;
         }
 
+        // Run `spacectl` in dry-run mode, so that it detects all relevant cache modes.
         let invocation = run_spacectl_mount(
             scope,
             Vec::new(),
@@ -397,6 +455,8 @@ where
         report.invocations.push(invocation);
     }
 
+    // Step 2: Given the per-repository results, construct the cache plan. This tells us which
+    // caches to set up, and in what order.
     let plan = match construct_plan(cache_root, detected_modes, additional_global_modes) {
         Ok(Some(plan)) => plan,
         Ok(None) => return report,
@@ -412,10 +472,12 @@ where
         }
     };
 
+    // Step 3: Run `spacectl cache mount` for real, setting up all the cache mounts.
     let mut repository_env = BTreeMap::new();
     let mut global_env = None;
     for configuration in &plan.configurations {
         let configuration_root = plan.cache_root.join(&configuration.relative_cache_dir);
+        // All repo-scoped cache roots should already exist. However, we still need to create the global root.
         let invocation = if std::fs::create_dir_all(&configuration_root).is_err() {
             failed_invocation(
                 configuration.scope.clone(),
@@ -442,7 +504,9 @@ where
                 CacheScope::Repository { .. } => {
                     for (name, value) in &response.output.add_envs {
                         if repository_env.insert(name.clone(), value.clone()).is_some() {
-                            log::warn!("repository build-cache environment conflict resolved by canonical repository order");
+                            log::warn!(
+                                "repository build-cache environment conflict resolved by canonical repository order"
+                            );
                         }
                     }
                 }
@@ -454,15 +518,53 @@ where
         report.invocations.push(invocation);
     }
 
+    // Step 4: Construct the merged environment variable map. If multiple repo-scoped cache
+    // configurations set the same environment variable, we'll already have deduplicated them
+    // (with last-repo-wins semantics) above. Here, we prefer using the globally-scoped set of
+    // environment variables, but fall back to the combined set of repository environment variables.
+    // We don't need to merge the two - the global cache configuration includes all modes set
+    // by per-repo configurations, so it should have all the same variables.
     report.add_envs = global_env.unwrap_or(repository_env);
-    report.export_script = build_export_script(&report.add_envs);
+    report.add_envs.retain(|name, _| {
+        if is_valid_env_name(name) {
+            true
+        } else {
+            tracing::warn!(
+                target: "build_cache",
+                "ignored invalid build-cache environment variable name"
+            );
+            false
+        }
+    });
     report.plan = Some(plan);
     report
 }
 
 /// Construct a plan for setting up build caches on the current system. This requires:
-/// - Analysis of the toolchains used in each repository (`detections`) 
+/// - Analysis of the toolchains used in each repository (`detections`)
 /// - System-level toolchains such as package managers
+///
+/// The cache plan consists of all per-repository cache configurations, sorted by cache key,
+/// followed by a single global configuration. The global configuration includes all cache
+/// modes across repos, plus any system-level modes.
+///
+/// Putting all repo-derived cache modes in the global configuration is counterintuitive, but
+/// necessary for multi-repo environments. The problem is that a given cache mode might set
+/// both globally-scoped mounts and repo-scoped mounts. For example, the `rust` mode caches
+/// `~/.cargo/registry` and `./target`. Given an environment with two Rust projects, if we
+/// simply mounted caches for each repo in sequence, then the `~/.cargo/registry` mount would
+/// point to the scoped cache directory for an arbitrary repo.
+///
+/// Adding or removing repos from the
+/// environment would therefore change the cache location and make prior data inaccessible.
+/// Mounting all modes from each repo in an additional global scope means that the final cache
+/// location for `~/.cargo/registry` is that globally-scoped location, which is independent of
+/// the specific repos in the environment.
+///
+/// In the example above, the final cache structure would look something like:
+/// - `~/.cargo/registry` => `/cache/shared/$HOME/.cargo/registry`
+/// - `/workspace/repo-a/target` => `/cache/<repo-a-key>/target`
+/// - `/workspace/repo-b/target` => `/cache/<repo-b-key>/target`
 fn construct_plan(
     cache_root: PathBuf,
     mut detections: Vec<DetectedCacheModes>,
@@ -480,6 +582,11 @@ fn construct_plan(
         return Ok(None);
     }
 
+    // This is a quirk to accomodate the global cache scope described above. `spacectl` uses the
+    // current working directory to resolve relative cache paths like `./target`. In the global
+    // scope, we only care about the non-relative cache paths. To satisfy `spacectl`, we use a
+    // throwaway temporary directory for setting up the global cache scope. This creates useless
+    // mounts like `/tmp/abc123/target` => `/cache/shared/target`, but there's no harm in that.
     let scratch = create_retained_scratch_directory(
         detections
             .iter()
@@ -538,90 +645,6 @@ fn create_retained_scratch_directory<'a>(
     Ok(directory.keep())
 }
 
-/// Run `spacectl cache mount`.
-async fn run_spacectl_mount<F, Fut>(
-    scope: CacheScope,
-    modes: Vec<String>,
-    dry_run: bool,
-    relative_cache_dir: PathBuf,
-    cache_root: &Path,
-    cwd: &Path,
-    run_command: &mut F,
-) -> CachePreparationReport
-where
-    F: FnMut(Command) -> Fut,
-    Fut: Future<Output = Result<Vec<u8>, CacheSetupError>>,
-{
-    let command = if dry_run {
-        detect_command(cache_root, cwd)
-    } else {
-        mount_command(cache_root, cwd, &modes)
-    };
-    let started = Instant::now();
-    let scope_name = scope.kind();
-    let repo_key = scope.repo_key().map(RepoCacheKey::as_str).unwrap_or("");
-    let relative_cache_dir_field = relative_cache_dir.to_string_lossy().to_string();
-    let span = tracing::info_span!(
-        "spacectl_cache_mount",
-        tags.cloud_agent = true,
-        scope = scope_name,
-        repo_key,
-        modes = tracing::field::Empty,
-        dry_run,
-        relative_cache_dir = relative_cache_dir_field,
-        error_kind = tracing::field::Empty,
-        duration_ms = tracing::field::Empty,
-        disk_usage_total = tracing::field::Empty,
-        disk_usage_used = tracing::field::Empty,
-    );
-    let result = async {
-        let bytes = run_command(command).await?;
-        parse_mount_response(&bytes)
-    }
-    .instrument(span.clone())
-    .await;
-    let duration = started.elapsed();
-    span.record("duration_ms", duration.as_millis() as u64);
-
-    match result {
-        Ok(response) => {
-            if let Some(disk_usage) = &response.output.disk_usage {
-                span.record("disk_usage_total", disk_usage.total.as_str());
-                span.record("disk_usage_used", disk_usage.used.as_str());
-            }
-            let selected_modes = if dry_run {
-                canonical_modes(response.input.modes.clone())
-            } else {
-                modes.clone()
-            };
-            span.record("modes", selected_modes.join(","));
-            let mode_stats = aggregate_mode_stats(&selected_modes, &response);
-            for (mode, stats) in &mode_stats {
-                tracing::info!(
-                    parent: &span,
-                    mode,
-                    cache_hits = stats.cache_hits,
-                    cache_misses = stats.cache_misses,
-                    "spacectl cache mode result"
-                );
-            }
-            CachePreparationReport {
-                scope,
-                modes: selected_modes,
-                relative_cache_dir,
-                response: Some(response),
-                error: None,
-                duration,
-                mode_stats,
-            }
-        }
-        Err(error) => {
-            span.record("error_kind", error.kind());
-            failed_invocation(scope, modes, relative_cache_dir, error, duration)
-        }
-    }
-}
-
 fn failed_invocation(
     scope: CacheScope,
     modes: Vec<String>,
@@ -668,35 +691,13 @@ fn aggregate_mode_stats(
     stats
 }
 
-pub fn is_valid_env_name(name: &str) -> bool {
+fn is_valid_env_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     let Some(first) = bytes.next() else {
         return false;
     };
     (first.is_ascii_alphabetic() || first == b'_')
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-}
-
-pub fn posix_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-pub fn build_export_script(environment: &BTreeMap<String, String>) -> Option<String> {
-    let exports = environment
-        .iter()
-        .filter_map(|(name, value)| {
-            if is_valid_env_name(name) {
-                Some(format!("export {name}={}", posix_single_quote(value)))
-            } else {
-                tracing::warn!(
-                    target: "build_cache",
-                    "ignored invalid build-cache environment variable name"
-                );
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    (!exports.is_empty()).then(|| exports.join("; "))
 }
 
 #[cfg(test)]

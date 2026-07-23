@@ -18,7 +18,7 @@ use warpui::r#async::FutureExt;
 use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
 use super::AgentDriverError;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "local_fs")]
 use super::cache_setup;
 use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
@@ -158,7 +158,7 @@ async fn prepare_environment_impl(
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "local_fs")]
     if let Some(cache_root) = cache_setup::enabled_cache_root() {
         let result = setup_events
             .record_result(

@@ -1,25 +1,12 @@
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::Path;
-use std::rc::Rc;
 
-use build_cache::{build_export_script, CacheSetupError};
 use cloud_object_models::{CodeForge, SourceRepo};
-use futures::executor::block_on;
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_isolation_platform::IsolationPlatformType;
 
-use super::{apply_export_with, repository_cache_source, should_setup_cache};
-
-fn command_output(status: CommandExitStatus) -> CommandOutput {
-    CommandOutput {
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-        status,
-        exit_code: None,
-    }
-}
+use super::{build_export_command, repository_cache_source, should_setup_cache};
+use crate::terminal::shell::ShellType;
 
 #[test]
 fn gate_matrix_requires_namespace_and_nonempty_root() {
@@ -59,43 +46,25 @@ fn source_repo_maps_to_canonical_identity_and_checkout() {
 }
 
 #[test]
-fn final_valid_export_is_sent_exactly_once_through_silent_executor() {
-    let script = build_export_script(&BTreeMap::from([
-        ("B".to_owned(), "two".to_owned()),
-        ("A".to_owned(), "one".to_owned()),
-    ]))
-    .unwrap();
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    block_on(apply_export_with(script, {
-        let calls = Rc::clone(&calls);
-        move |script| {
-            calls.borrow_mut().push(script);
-            futures::future::ready(Ok(command_output(CommandExitStatus::Success)))
-        }
-    }))
-    .unwrap();
+fn export_commands_use_active_shell_syntax_and_escaping() {
+    let environment = BTreeMap::from([
+        ("A_VAR".to_owned(), "a value".to_owned()),
+        ("QUOTE".to_owned(), "it's quoted".to_owned()),
+    ]);
     assert_eq!(
-        calls.borrow().as_slice(),
-        ["export A='one'; export B='two'"]
+        build_export_command(&environment, ShellType::Bash),
+        "export A_VAR='a value'; export QUOTE='it'\"'\"'s quoted'"
     );
-}
-
-#[test]
-fn invalid_or_empty_env_map_builds_no_export() {
-    assert_eq!(build_export_script(&BTreeMap::new()), None);
     assert_eq!(
-        build_export_script(&BTreeMap::from([(
-            "INVALID-NAME".to_owned(),
-            "value".to_owned()
-        )])),
-        None
+        build_export_command(&environment, ShellType::Zsh),
+        "export A_VAR='a value'; export QUOTE='it'\"'\"'s quoted'"
     );
-}
-
-#[test]
-fn failed_silent_export_is_classified() {
-    let result = block_on(apply_export_with("export A='one'".to_owned(), |_| {
-        futures::future::ready(Ok(command_output(CommandExitStatus::Failure)))
-    }));
-    assert_eq!(result, Err(CacheSetupError::EnvExportFailed));
+    assert_eq!(
+        build_export_command(&environment, ShellType::Fish),
+        "set -gx A_VAR 'a value'; set -gx QUOTE 'it\\'s quoted'"
+    );
+    assert_eq!(
+        build_export_command(&environment, ShellType::PowerShell),
+        "$env:A_VAR = 'a value'; $env:QUOTE = 'it''s quoted'"
+    );
 }
