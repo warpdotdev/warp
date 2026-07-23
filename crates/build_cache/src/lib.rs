@@ -350,11 +350,13 @@ fn has_command(command: &str) -> bool {
         std::env::split_paths(&path).any(|directory| directory.join(command).is_executable())
     })
 }
-/// Create a cache directory, escalating to `sudo` when an ancestor is not writable.
+/// Create a cache directory, escalating to `sudo` when ordinary creation is denied.
 ///
 /// Cache roots may be located on a mounted volume whose parent directories are owned by root.
-/// In that case, create each missing ancestor from the root toward the target and transfer its
-/// ownership to the current effective user before continuing.
+/// After a permission-denied error, Unix hosts try one non-interactive `sudo mkdir -p` for the
+/// target and then transfer ownership of that target directory to the current effective user.
+/// Intermediate directories are not chowned, and any unavailable or unsuccessful fallback
+/// operation degrades to [`CacheSetupError::RootCreationFailed`].
 async fn create_cache_dir_all<F, Fut>(
     path: &Path,
     run_command: &mut F,
@@ -389,7 +391,7 @@ where
     #[cfg(not(unix))]
     {
         let _ = run_command;
-        return Err(CacheSetupError::RootCreationFailed);
+        Err(CacheSetupError::RootCreationFailed)
     }
 
     #[cfg(unix)]

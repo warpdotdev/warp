@@ -12,13 +12,13 @@ use futures::executor::block_on;
 use instant::Instant;
 use warp_errors::ErrorExt as _;
 
-#[cfg(unix)]
-use super::current_owner;
 use super::{
     CacheScope, CacheSetupError, DetectedCacheModes, RepoCacheKey, RepoIdentity,
-    RepositoryCacheSource, aggregate_mode_stats, construct_plan, create_cache_dir_all,
-    create_retained_scratch_directory, is_valid_env_name, run_command_with_timeout, setup_cache,
+    RepositoryCacheSource, aggregate_mode_stats, construct_plan, create_retained_scratch_directory,
+    is_valid_env_name, run_command_with_timeout, setup_cache,
 };
+#[cfg(unix)]
+use super::{create_cache_dir_all, current_owner};
 use crate::spacectl::{Mount, MountInput, MountOutput, MountResponse};
 
 fn identity(host: &str, owner: &str, repo: &str) -> RepoIdentity {
