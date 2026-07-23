@@ -198,9 +198,11 @@ impl TuiFileEditsView {
             .as_ref(ctx)
             .get_action_result(&action_id)
             .is_some();
-        let initial_diffs = is_restored
-            .then(|| restored_file_diffs(file_edits))
-            .unwrap_or_default();
+        let initial_diffs = if is_restored {
+            restored_file_diffs(file_edits)
+        } else {
+            Default::default()
+        };
         let storage = ctx.add_model(|_| TuiDiffStorage::new(initial_diffs, DiffSessionType::Local));
 
         ctx.subscribe_to_model(&storage, |me, _, event, ctx| match event {
