@@ -233,7 +233,7 @@ const SEGMENT_MARGIN_POST: Duration = Duration::from_millis(1000);
 
 // --- Pointer (click ripple / drag trail) annotation constants ----------------
 /// Shared orange fill/stroke for pointer annotations, as ASS `BBGGRR` (RGB
-/// `[255, 80, 40]`). Mirrors the integration-test reference renderer.
+/// `[255, 80, 40]`).
 #[cfg(any(linux, test))]
 const POINTER_COLOR_BGR: &str = "2850FF";
 #[cfg(any(linux, test))]
@@ -248,24 +248,26 @@ const HELD_INDICATOR_RADIUS: f64 = 16.0;
 const DRAG_ANCHOR_RADIUS: f64 = 10.0;
 #[cfg(any(linux, test))]
 const DRAG_TRAIL_THICKNESS: f64 = 4.0;
-/// Design durations for the click ripple and the post-release drag-trail fade.
-/// The effective durations are capped by [`max_animation_tail`] so an animation
-/// can never outlive the footage the smart cut retains after an action.
+/// The click ripple and the post-release drag-trail fade are expressed directly
+/// as a function of the cut's retained post-action margin
+/// ([`SEGMENT_MARGIN_POST`]): each is that margin minus a small headroom, so it
+/// always ends before the retained footage runs out (and can never be clipped
+/// by the cut, shrinking automatically if the margin is reduced). The headroom
+/// also absorbs ASS centisecond rounding and frame quantization. At the current
+/// 1000 ms margin these evaluate to the design values of 900 ms and 600 ms.
 #[cfg(any(linux, test))]
-const CLICK_RING_DURATION: Duration = Duration::from_millis(900);
+const CLICK_RING_TAIL_HEADROOM: Duration = Duration::from_millis(100);
 #[cfg(any(linux, test))]
-const DRAG_TRAIL_FADE_DURATION: Duration = Duration::from_millis(600);
-/// Slack kept between an animation's end and the end of its retained segment,
-/// absorbing ASS centisecond rounding and frame quantization.
-#[cfg(any(linux, test))]
-const ANIMATION_TAIL_SAFETY: Duration = Duration::from_millis(100);
+const DRAG_FADE_TAIL_HEADROOM: Duration = Duration::from_millis(400);
 
-/// The longest an annotation may live past its pointer event. Derived from the
-/// cut's retained post-action margin so animations shrink automatically if that
-/// margin is ever reduced, and are never clipped by the cut.
 #[cfg(any(linux, test))]
-fn max_animation_tail() -> Duration {
-    SEGMENT_MARGIN_POST.saturating_sub(ANIMATION_TAIL_SAFETY)
+fn click_ring_duration() -> Duration {
+    SEGMENT_MARGIN_POST.saturating_sub(CLICK_RING_TAIL_HEADROOM)
+}
+
+#[cfg(any(linux, test))]
+fn drag_trail_fade_duration() -> Duration {
+    SEGMENT_MARGIN_POST.saturating_sub(DRAG_FADE_TAIL_HEADROOM)
 }
 
 /// One retained source segment of the cut recording.
@@ -655,7 +657,7 @@ fn append_click_ring(
     width: u32,
     height: u32,
 ) {
-    let duration = CLICK_RING_DURATION.min(max_animation_tail());
+    let duration = click_ring_duration();
     let Some((out_start, out_end)) = remap_source_interval(offset, offset + duration, segments)
     else {
         return;
@@ -692,10 +694,12 @@ fn append_drag(
         return;
     };
     let last_off = points[points.len() - 1].0;
-    let fade = DRAG_TRAIL_FADE_DURATION.min(max_animation_tail());
+    let fade = drag_trail_fade_duration();
     let vis_end = match release {
         Some(r) => r + fade,
-        None => last_off + max_animation_tail(),
+        // Held with no release: keep it visible for the longest animation tail
+        // (the ring duration), which stays within the retained post-action footage.
+        None => last_off + click_ring_duration(),
     };
     let clamped: Vec<(i32, i32)> = points
         .iter()

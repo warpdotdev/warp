@@ -456,9 +456,9 @@ fn resolve_capture_point(
 }
 
 /// Records a resolved press/move into the pointer sink, tracking the last point
-/// so a later release (which carries no coordinate) can reuse it. A press whose
-/// surface does not match the recording clears the last point so its release is
-/// omitted too.
+/// so a later release (which carries no coordinate) can reuse it. A down or move
+/// whose surface does not match the recording clears the last point so a later
+/// release is not recorded at a stale coordinate.
 fn record_down_move(
     pointer_sink: Option<&PointerSink>,
     last: &mut Option<Vector2I>,
@@ -477,9 +477,10 @@ fn record_down_move(
             push_pointer_event(sink, point, kind, button);
         }
         None => {
-            if matches!(kind, PointerEventKind::Down) {
-                *last = None;
-            }
+            // Any unmatched down or move (a surface that isn't the recorded
+            // one) invalidates the last point, so a following release is not
+            // recorded at a stale in-frame coordinate.
+            *last = None;
         }
     }
 }

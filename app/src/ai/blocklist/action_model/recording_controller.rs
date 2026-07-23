@@ -196,6 +196,11 @@ impl RecordingController {
             // is called for the next call before `commit_action_group` fires.
             if let Some(pending) = recording.pending_group.take() {
                 let implicit_finish = recording.started_at.elapsed().max(pending.start_offset);
+                // Defensive fallback: in the normal flow the executor commits or
+                // discards each group in its completion callback before the next
+                // `begin`, so this rarely fires. The prior group's pointer events
+                // live in that call's own buffer and are not reachable here, so
+                // this path keeps the labels but no pointer geometry.
                 recording.actions.push(computer_use::ActionLogEntry {
                     offset: pending.start_offset,
                     finish_offset: implicit_finish,
