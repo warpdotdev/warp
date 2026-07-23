@@ -82,6 +82,50 @@ pub(super) struct TuiFileEditsView {
 fn restored_file_diffs(file_edits: Vec<FileEdit>) -> Vec<FileDiff> {
     convert_file_edits_to_file_diffs(file_edits, &None, &None)
 }
+
+/// Whether a restored `RequestFileEdits` action should rehydrate its
+/// originally-requested diffs from the `FileEdit` payload.
+///
+/// Only successful edits have a meaningful, applied diff to rehydrate.
+/// Cancelled and failed (`DiffApplicationFailed`) restored actions keep their
+/// terminal fallback label (see [`file_edits_fallback_label`]), mirroring the
+/// GUI's `set_restored_file_edits` which marks non-success results
+/// `CodeDiffState::Rejected` rather than showing the diff. When this returns
+/// `false`, [`TuiFileEditsView::new`] seeds no diffs and `render_diff_content`
+/// falls through to the fallback label.
+fn should_rehydrate_restored_diffs(result: Option<&RequestFileEditsResult>) -> bool {
+    matches!(result, Some(RequestFileEditsResult::Success { .. }))
+}
+
+/// The one-line fallback label for a `RequestFileEdits` action, derived from
+/// its recorded result: a per-file summary for success, a terminal label for
+/// cancelled/failed, or a pending label when no result is recorded yet.
+fn file_edits_fallback_label(result: Option<&RequestFileEditsResult>) -> String {
+    match result {
+        Some(RequestFileEditsResult::Success {
+            updated_files,
+            deleted_files,
+            lines_added,
+            lines_removed,
+            ..
+        }) => {
+            // Updated entries are per-fragment, so de-dupe by file name.
+            let files = updated_files
+                .iter()
+                .map(|file| file.file_context.file_name.as_str())
+                .chain(deleted_files.iter().map(String::as_str))
+                .unique()
+                .count();
+            let files_label = if files == 1 { "file" } else { "files" };
+            format!("Edited {files} {files_label} (+{lines_added} −{lines_removed})")
+        }
+        Some(RequestFileEditsResult::Cancelled) => "File edits cancelled".to_string(),
+        Some(RequestFileEditsResult::DiffApplicationFailed { .. }) => {
+            "File edits failed".to_string()
+        }
+        None => "Preparing edits…".to_string(),
+    }
+}
 /// Events emitted to the owning agent block.
 pub(super) enum TuiFileEditsViewEvent {
     BlockingStateChanged,
@@ -194,11 +238,28 @@ impl TuiFileEditsView {
         action_model: &ModelHandle<BlocklistAIActionModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let is_restored = action_model
-            .as_ref(ctx)
-            .get_action_result(&action_id)
-            .is_some();
-        let initial_diffs = if is_restored {
+        // A recorded result means this is a restored (already-finished) action;
+        // live actions have no result yet and stay executor-backed below. The
+        // borrow into the action model is scoped here so it is released before
+        // the `add_model` / `subscribe_to_model` calls below.
+        let (is_restored, is_restored_success) = {
+            let restored_result = action_model
+                .as_ref(ctx)
+                .get_action_result(&action_id)
+                .and_then(|result| match &result.result {
+                    AIAgentActionResultType::RequestFileEdits(result) => Some(result),
+                    _ => None,
+                });
+            let is_restored = restored_result.is_some();
+            // Only successful restored edits rehydrate their originally-requested
+            // diffs. Cancelled and failed actions keep their terminal fallback
+            // label ("File edits cancelled" / "File edits failed"), mirroring
+            // the GUI's `set_restored_file_edits` which marks non-success
+            // results `CodeDiffState::Rejected` rather than showing the diff.
+            let is_restored_success = should_rehydrate_restored_diffs(restored_result);
+            (is_restored, is_restored_success)
+        };
+        let initial_diffs = if is_restored_success {
             restored_file_diffs(file_edits)
         } else {
             Default::default()
@@ -264,7 +325,7 @@ impl TuiFileEditsView {
             sections: Vec::new(),
             section_states: SectionStates::default(),
         };
-        if is_restored {
+        if is_restored_success {
             view.rebuild_sections(ctx);
         }
         view
@@ -329,39 +390,17 @@ impl TuiFileEditsView {
 
     /// The one-line fallback shown before diffs resolve (or when they never
     /// will): a terminal label from the action's recorded result when there is
-    /// one, else a pending label.
+    /// one, else a pending label. See [`file_edits_fallback_label`].
     fn fallback_label(&self, app: &AppContext) -> String {
         let result = self
             .action_model
             .as_ref(app)
             .get_action_result(&self.action_id);
-        match result.and_then(|result| match &result.result {
+        let file_edits_result = result.and_then(|result| match &result.result {
             AIAgentActionResultType::RequestFileEdits(result) => Some(result),
             _ => None,
-        }) {
-            Some(RequestFileEditsResult::Success {
-                updated_files,
-                deleted_files,
-                lines_added,
-                lines_removed,
-                ..
-            }) => {
-                // Updated entries are per-fragment, so de-dupe by file name.
-                let files = updated_files
-                    .iter()
-                    .map(|file| file.file_context.file_name.as_str())
-                    .chain(deleted_files.iter().map(String::as_str))
-                    .unique()
-                    .count();
-                let files_label = if files == 1 { "file" } else { "files" };
-                format!("Edited {files} {files_label} (+{lines_added} −{lines_removed})")
-            }
-            Some(RequestFileEditsResult::Cancelled) => "File edits cancelled".to_string(),
-            Some(RequestFileEditsResult::DiffApplicationFailed { .. }) => {
-                "File edits failed".to_string()
-            }
-            None => "Preparing edits…".to_string(),
-        }
+        });
+        file_edits_fallback_label(file_edits_result)
     }
 
     /// The summed `(added, removed)` counts across all sections, available
