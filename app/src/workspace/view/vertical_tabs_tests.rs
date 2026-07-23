@@ -202,6 +202,7 @@ fn terminal_primary_line_uses_terminal_title_when_disabled_cli_has_only_prompt()
 
     let line = terminal_primary_line_data(
         false,
+        None,
         conversation_title,
         cli_title,
         "Generated Claude Code title",
@@ -255,6 +256,7 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_has_prompt() {
 
     let line = terminal_primary_line_data(
         false,
+        None,
         conversation_title,
         cli_title,
         "Generated Claude Code title",
@@ -281,6 +283,7 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_is_long_running() {
 
     let line = terminal_primary_line_data(
         true,
+        None,
         conversation_title,
         cli_title,
         "Generated Claude Code title",
@@ -290,6 +293,28 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_is_long_running() {
     );
 
     assert_eq!(line.text(), "Latest CLI prompt");
+}
+
+#[test]
+fn terminal_primary_line_prefers_cloud_setup_status_over_running_command() {
+    let agent_text = TerminalAgentText {
+        is_oz_agent: true,
+        ..Default::default()
+    };
+
+    let line = terminal_primary_line_data(
+        true,
+        Some("Connecting to Host (Step 1/3)".to_string()),
+        Some("Set up environment".to_string()),
+        None,
+        "npm install",
+        "~/warp",
+        terminal_title_fallback_font(&agent_text),
+        None,
+    );
+
+    assert_eq!(line.text(), "Connecting to Host (Step 1/3)");
+    assert!(matches!(line, TerminalPrimaryLineData::StatusText { .. }));
 }
 
 #[test]
@@ -697,6 +722,7 @@ fn terminal_primary_line_prefers_cli_agent_display_title() {
     let line = terminal_primary_line_data(
         false,
         None,
+        None,
         Some("Review the failing tests".to_string()),
         "~/warp",
         "~/warp",
@@ -711,6 +737,7 @@ fn terminal_primary_line_prefers_cli_agent_display_title() {
 fn terminal_primary_line_prefers_cli_agent_display_title_over_conversation_title() {
     let line = terminal_primary_line_data(
         false,
+        None,
         Some("Review the failing tests".to_string()),
         Some("Summarize the failures".to_string()),
         "~/warp",
@@ -728,6 +755,7 @@ fn terminal_primary_line_falls_through_to_terminal_title_when_cli_agent_has_no_p
         false,
         None,
         None,
+        None,
         "codex - ~/warp",
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
@@ -741,6 +769,7 @@ fn terminal_primary_line_falls_through_to_terminal_title_when_cli_agent_has_no_p
 fn terminal_primary_line_uses_terminal_title_as_fallback() {
     let line = terminal_primary_line_data(
         false,
+        None,
         None,
         None,
         "nvim src/workspace/view/vertical_tabs.rs",
@@ -758,6 +787,7 @@ fn terminal_primary_line_uses_last_completed_command_when_shell_title_matches_wo
         false,
         None,
         None,
+        None,
         "~/warp",
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
@@ -771,6 +801,7 @@ fn terminal_primary_line_uses_last_completed_command_when_shell_title_matches_wo
 fn terminal_primary_line_falls_back_to_new_session() {
     let line = terminal_primary_line_data(
         false,
+        None,
         None,
         None,
         "~/warp",
@@ -793,6 +824,7 @@ fn terminal_primary_line_falls_back_to_new_session() {
 fn terminal_primary_line_uses_monospace_for_last_completed_command() {
     let line = terminal_primary_line_data(
         false,
+        None,
         None,
         None,
         "~/warp",

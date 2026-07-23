@@ -119,10 +119,16 @@ impl TerminalView {
         let is_ambient_agent = self.is_ambient_agent_session(ctx);
         let selected_conversation_title = self.selected_conversation_display_title(ctx);
         let selected_cli_agent_title = self.selected_cli_agent_title_for_chrome(ctx);
+        let cloud_setup_status = self.cloud_agent_setup_status_text(ctx);
 
-        // Prefer CLI agent session text before the terminal title,
+        // While a cloud agent is provisioning its environment, show the setup step
+        // (e.g. "Connecting to Host") rather than the raw setup command.
+        // Otherwise prefer CLI agent session text before the terminal title,
         // matching the vertical-tab behavior in terminal_primary_line_data().
-        let new_pane_title = if let Some(cli_agent_title) = selected_cli_agent_title {
+        let new_pane_title = if let Some(setup_status) = cloud_setup_status {
+            self.is_using_conversation_for_pane_header_title = false;
+            setup_status
+        } else if let Some(cli_agent_title) = selected_cli_agent_title {
             self.is_using_conversation_for_pane_header_title = false;
             cli_agent_title
         } else if self.is_long_running_and_user_controlled() && !self.terminal_title.is_empty() {
@@ -977,6 +983,31 @@ impl TerminalView {
             &model,
             ctx,
         )
+    }
+
+    /// User-facing setup-step text for tab and pane titles while this cloud (ambient) agent
+    /// pane provisions its environment, e.g. "Connecting to Host (Step 1/3)" or
+    /// "Running setup commands...". Returns `None` for non-cloud sessions and once setup is
+    /// done, so titles fall back to the conversation title or terminal command.
+    pub fn cloud_agent_setup_status_text(&self, ctx: &AppContext) -> Option<String> {
+        if !self.is_ambient_agent_session(ctx) {
+            return None;
+        }
+        let model = self.ambient_agent_view_model.as_ref()?.as_ref(ctx);
+        if model.is_waiting_for_session() {
+            if let Some(progress) = model.agent_progress() {
+                return Some(progress.setup_status_text().to_string());
+            }
+        }
+        if self
+            .model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands()
+        {
+            return Some("Running setup commands...".to_string());
+        }
+        None
     }
 
     /// Selected conversation status for chrome, or [`ConversationStatus::InProgress`] while the

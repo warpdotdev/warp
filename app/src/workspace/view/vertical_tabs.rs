@@ -3683,6 +3683,7 @@ fn build_vertical_tabs_summary_data(
 
                 let primary_label = terminal_primary_line_data(
                     terminal_view.is_long_running_and_user_controlled(),
+                    terminal_view.cloud_agent_setup_status_text(app),
                     conversation_display_title,
                     cli_agent_title,
                     title_text.as_str(),
@@ -3978,6 +3979,7 @@ fn terminal_pane_search_text_fragments(
         .unwrap_or_else(|| {
             terminal_primary_line_data(
                 terminal_view.is_long_running_and_user_controlled(),
+                terminal_view.cloud_agent_setup_status_text(app),
                 conversation_display_title,
                 cli_agent_title,
                 title_text.as_str(),
@@ -4024,8 +4026,10 @@ fn terminal_search_text_fragments(
     fragments
 }
 
+#[allow(clippy::too_many_arguments)]
 fn terminal_primary_line_data(
     is_long_running: bool,
+    cloud_setup_status: Option<String>,
     conversation_display_title: Option<String>,
     cli_agent_title: Option<String>,
     terminal_title: &str,
@@ -4035,6 +4039,13 @@ fn terminal_primary_line_data(
 ) -> TerminalPrimaryLineData {
     let trimmed_title = terminal_title.trim();
     let trimmed_working_directory = working_directory.trim();
+    // While a cloud agent is provisioning its environment, surface the setup step instead of
+    // the raw setup command that would otherwise win via the long-running branch below.
+    if let Some(cloud_setup_status) = cloud_setup_status {
+        return TerminalPrimaryLineData::StatusText {
+            text: cloud_setup_status,
+        };
+    }
     if let Some(cli_agent_title) = cli_agent_title {
         return TerminalPrimaryLineData::StatusText {
             text: cli_agent_title,
@@ -4266,8 +4277,10 @@ fn resolved_terminal_working_directory(
         .or(working_directory)
 }
 
-/// For cloud agent panes, builds a composite string from the environment name,
-/// setup status, and/or working directory. Returns `None` for non-cloud sessions.
+/// For cloud agent panes, builds a composite string from the environment name and working
+/// directory. The setup status is surfaced on the primary line (see
+/// [`TerminalView::cloud_agent_setup_status_text`]) rather than here. Returns `None` for
+/// non-cloud sessions.
 fn cloud_agent_working_directory_and_env(
     terminal_view: &TerminalView,
     working_directory: Option<&str>,
@@ -4283,14 +4296,10 @@ fn cloud_agent_working_directory_and_env(
         .and_then(|id| CloudAmbientAgentEnvironment::get_by_id(id, app))
         .map(|env| env.model().string_model.display_name());
 
-    let setup_status: Option<&str> = model_ref.agent_progress().map(|p| p.setup_status_text());
-
-    match (env_name, setup_status, working_directory) {
-        (Some(env), Some(status), _) => Some(format!("{env} · {status}")),
-        (Some(env), None, Some(wd)) => Some(format!("{env} · {wd}")),
-        (Some(env), None, None) => Some(env),
-        (None, Some(status), _) => Some(status.to_string()),
-        (None, None, _) => None,
+    match (env_name, working_directory) {
+        (Some(env), Some(wd)) => Some(format!("{env} · {wd}")),
+        (Some(env), None) => Some(env),
+        (None, _) => None,
     }
 }
 
@@ -5178,6 +5187,7 @@ fn render_terminal_primary_line_for_view(
     render_terminal_primary_line(
         terminal_primary_line_data(
             terminal_view.is_long_running_and_user_controlled(),
+            terminal_view.cloud_agent_setup_status_text(app),
             conversation_display_title,
             cli_agent_title,
             title_text.as_str(),
@@ -6728,6 +6738,7 @@ fn render_terminal_detail_section(
     let title_text = terminal_view.terminal_title_from_shell();
     let primary_line = terminal_primary_line_data(
         terminal_view.is_long_running_and_user_controlled(),
+        terminal_view.cloud_agent_setup_status_text(app),
         conversation_display_title,
         cli_agent_title,
         title_text.as_str(),
@@ -7241,6 +7252,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                         preferred_agent_tab_titles(&agent_text, agent_tab_text_preference(app));
                     let line_data = terminal_primary_line_data(
                         terminal_view.is_long_running_and_user_controlled(),
+                        terminal_view.cloud_agent_setup_status_text(app),
                         conv_title,
                         cli_title,
                         terminal_title.as_str(),
