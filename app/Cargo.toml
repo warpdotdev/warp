@@ -683,6 +683,7 @@ default = [
     "settings_file",
     "directory_tab_colors",
     "git_credential_refresh",
+    "ime_marked_text",
     "oz_handoff",
     "handoff_local_cloud",
     "pending_user_query_indicator",
