@@ -1174,6 +1174,15 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
             "animation content should use columns beyond the former 48 + 100 column cap:\n{}",
             lines.join("\n")
         );
+        assert!(
+            lines
+                .iter()
+                .take(28)
+                .skip(20)
+                .any(|line| line.chars().take(48).any(|character| character != ' ')),
+            "animation content should paint beneath the status column:\n{}",
+            lines.join("\n")
+        );
     });
 }
 
