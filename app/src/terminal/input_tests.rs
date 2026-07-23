@@ -9473,14 +9473,14 @@ fn build_followup_attachment_upload_payload_reads_files_and_decodes_images() {
 
     assert!(skipped.is_empty(), "no attachments should be skipped");
     assert_eq!(files.len(), 2);
-    let by_name: std::collections::HashMap<&str, &(String, String, Vec<u8>)> =
+    let by_name: std::collections::HashMap<&str, &FollowupUploadFile> =
         files.iter().map(|t| (t.0.as_str(), t)).collect();
     let file_entry = by_name["script.py"];
     assert_eq!(file_entry.1, "text/x-python");
     assert_eq!(file_entry.2, b"print('hi')");
     let image_entry = by_name["pic.png"];
     assert_eq!(image_entry.1, "image/png");
-    assert_eq!(image_entry.2, &image_bytes);
+    assert_eq!(image_entry.2, image_bytes);
 
     let _ = std::fs::remove_file(file_path);
 }

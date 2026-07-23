@@ -394,6 +394,11 @@ const SHORT_CIRCUIT_HIGHLIGHTING_ACTIONS: [Option<PlainTextEditorViewAction>; 7]
     Some(PlainTextEditorViewAction::NewLine),
 ];
 
+/// A decoded file ready for GCS upload: `(file_name, mime_type, bytes)`.
+/// Factored into a `type` alias so the return type of
+/// [`Input::build_followup_attachment_upload_payload`] stays under the `type_complexity` lint.
+type FollowupUploadFile = (String, String, Vec<u8>);
+
 /// Border width for the line at the top of the input box in pixels
 pub fn get_input_box_top_border_width() -> f32 {
     if FeatureFlag::MinimalistUI.is_enabled() {
@@ -14759,14 +14764,14 @@ impl Input {
 
     /// Builds the GCS upload payload for follow-up attachments: decodes pending images and reads
     /// pending files from disk, dropping any that exceed the 10MB size limit. Returns
-    /// `(files, skipped)` where `files` are `(filename, mime_type, bytes)` ready to upload and
+    /// `(files, skipped)` where `files` are [`FollowupUploadFile`]s ready to upload and
     /// `skipped` are the filenames left behind for being oversized.
     ///
     /// Pure and allocation-only so it can be unit-tested without a view context.
     fn build_followup_attachment_upload_payload(
         attachments: &[PendingAttachment],
-    ) -> (Vec<(String, String, Vec<u8>)>, Vec<String>) {
-        let mut files: Vec<(String, String, Vec<u8>)> = Vec::new();
+    ) -> (Vec<FollowupUploadFile>, Vec<String>) {
+        let mut files: Vec<FollowupUploadFile> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
         for attachment in attachments {
             match attachment {
