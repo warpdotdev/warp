@@ -1,10 +1,12 @@
-//! Rotating Warp logo animation for the TUI zero state.
+//! Rotating object animation for the TUI zero state.
 //!
-//! The two faces from the Warp mark are sampled into a shallow, ghosted
-//! wireframe, rotated around its vertical axis, and projected back onto terminal
-//! cells. A tiny z-buffer keeps the front-most sample for each cell, while
-//! directional ASCII edges and sparse stippling retain depth without a solid fill.
+//! The built-in Warp mark or a user-provided ASCII silhouette is sampled into a
+//! shallow, ghosted wireframe, rotated around its vertical axis, and projected
+//! back onto terminal cells. A tiny z-buffer keeps the front-most sample for
+//! each cell, while directional ASCII edges and sparse stippling retain depth
+//! without a solid fill.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use warpui_core::AppContext;
@@ -14,16 +16,22 @@ use warpui_core::elements::tui::{
     TuiScreenPosition, TuiSize, TuiStyle,
 };
 
+#[path = "zero_state_animation_config.rs"]
+mod config;
+
+pub(crate) use config::ZeroStateAnimationConfig;
+use config::ZeroStateShape;
+
 /// A terminal does not need a 30 fps repaint for this deliberately slow motion.
 const REPAINT_INTERVAL: Duration = Duration::from_millis(66);
-const REVOLUTION_SECS: f64 = 5.0;
 
 const MIN_ANIMATION_COLS: u16 = 18;
 const MIN_ANIMATION_ROWS: u16 = 7;
 const MAX_LOGO_COLS: u16 = 42;
 const MAX_LOGO_ROWS: u16 = 17;
-const LOGO_CELL_ASPECT_RATIO: f64 = 2.5;
-const LOGO_DEPTH: f64 = 0.18;
+const MIN_OBJECT_COLS: u16 = 5;
+const MIN_OBJECT_ROWS: u16 = 5;
+const BUILT_IN_LOGO_CELL_ASPECT_RATIO: f64 = 2.5;
 const SURFACE_SAMPLES: usize = 3;
 const DEPTH_SAMPLES: usize = 6;
 const GHOST_STIPPLE_MODULUS: usize = 97;
@@ -33,6 +41,9 @@ const STARFIELD_REFERENCE_COUNT: usize = 36;
 const STARFIELD_MIN_COUNT: usize = 18;
 const STARFIELD_MAX_COUNT: usize = 48;
 const STAR_TRAVEL_SECS: f64 = 7.0;
+const MAX_ASCII_ART_BYTES: u64 = 64 * 1024;
+const MAX_ASCII_ART_COLS: usize = 128;
+const MAX_ASCII_ART_ROWS: usize = 64;
 
 /// Approximate visible bounds of the bundled Warp logo SVG.
 const SVG_MIN_X: f64 = 35.0;
@@ -159,15 +170,21 @@ impl LogoFrame {
 
 pub struct ZeroStateAnimationElement {
     clock: AnimationClock,
+    config: Arc<ZeroStateAnimationConfig>,
     styles: WarpLogoStyles,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
 
 impl ZeroStateAnimationElement {
-    pub(crate) fn new(clock: AnimationClock, styles: WarpLogoStyles) -> Self {
+    pub(crate) fn new(
+        clock: AnimationClock,
+        config: Arc<ZeroStateAnimationConfig>,
+        styles: WarpLogoStyles,
+    ) -> Self {
         Self {
             clock,
+            config,
             styles,
             size: None,
             origin: None,
@@ -201,7 +218,7 @@ impl TuiElement for ZeroStateAnimationElement {
     ) {
         self.origin = Some(ctx.scene_point(origin));
         let Some(size) = self.size else { return };
-        let Some(frame) = logo_frame_at(self.clock.elapsed(), size) else {
+        let Some(frame) = object_frame_at(self.clock.elapsed(), size, &self.config) else {
             return;
         };
 
@@ -229,9 +246,20 @@ impl TuiElement for ZeroStateAnimationElement {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn logo_frame_at(elapsed: Duration, size: TuiSize) -> Option<LogoFrame> {
-    let (logo_cols, logo_rows) = fitted_logo_size(size)?;
-    let angle = (elapsed.as_secs_f64() % REVOLUTION_SECS) / REVOLUTION_SECS * std::f64::consts::TAU;
+    object_frame_at(elapsed, size, &ZeroStateAnimationConfig::default())
+}
+
+fn object_frame_at(
+    elapsed: Duration,
+    size: TuiSize,
+    config: &ZeroStateAnimationConfig,
+) -> Option<LogoFrame> {
+    let cell_aspect_ratio = config.shape.cell_aspect_ratio();
+    let (logo_cols, logo_rows) = fitted_logo_size(size, cell_aspect_ratio)?;
+    let revolution_secs = config.rotation_period.as_secs_f64();
+    let angle = (elapsed.as_secs_f64() % revolution_secs) / revolution_secs * std::f64::consts::TAU;
     let (sin, cos) = angle.sin_cos();
     let mut frame = LogoFrame::new(size);
     draw_background_stars(&mut frame, elapsed);
@@ -248,10 +276,18 @@ pub(crate) fn logo_frame_at(elapsed: Duration, size: TuiSize) -> Option<LogoFram
         let model_y = sample_coordinate(source_y, source_rows);
         for source_x in 0..source_cols {
             let model_x = sample_coordinate(source_x, source_cols);
-            if !warp_logo_contains(model_x, model_y) {
+            if !config.shape.contains(model_x, model_y) {
                 continue;
             }
-            let outline_glyph = logo_outline_glyph(model_x, model_y, source_cols, source_rows, cos);
+            let outline_glyph = logo_outline_glyph(
+                config.shape.as_ref(),
+                model_x,
+                model_y,
+                source_cols,
+                source_rows,
+                cos,
+                cell_aspect_ratio,
+            );
             let is_ghost_sample = (source_x * 17 + source_y * 31) % GHOST_STIPPLE_MODULUS == 0;
             let is_side_stitch = (source_x * 13 + source_y * 7) % SIDE_STITCH_MODULUS == 0;
             if outline_glyph.is_none() && !is_ghost_sample {
@@ -263,8 +299,8 @@ pub(crate) fn logo_frame_at(elapsed: Duration, size: TuiSize) -> Option<LogoFram
                 if !is_face && (outline_glyph.is_none() || !is_side_stitch) {
                     continue;
                 }
-                let model_z =
-                    -LOGO_DEPTH + 2.0 * LOGO_DEPTH * depth_index as f64 / DEPTH_SAMPLES as f64;
+                let model_z = -config.extrusion_depth
+                    + 2.0 * config.extrusion_depth * depth_index as f64 / DEPTH_SAMPLES as f64;
                 let rotated_x = model_x * cos + model_z * sin;
                 let rotated_depth = -model_x * sin + model_z * cos;
                 let projected_x = (center_x + rotated_x * scale_x).round() as i32;
@@ -373,7 +409,7 @@ fn unit_random(seed: u64) -> f64 {
     ((value ^ (value >> 31)) >> 11) as f64 / (1_u64 << 53) as f64
 }
 
-fn fitted_logo_size(size: TuiSize) -> Option<(u16, u16)> {
+fn fitted_logo_size(size: TuiSize, cell_aspect_ratio: f64) -> Option<(u16, u16)> {
     if size.width < MIN_ANIMATION_COLS || size.height < MIN_ANIMATION_ROWS {
         return None;
     }
@@ -381,38 +417,40 @@ fn fitted_logo_size(size: TuiSize) -> Option<(u16, u16)> {
     let available_cols = size.width.saturating_sub(2);
     let available_rows = size.height.saturating_sub(2);
     let mut rows = available_rows.min(MAX_LOGO_ROWS);
-    let mut cols = ((f64::from(rows) * LOGO_CELL_ASPECT_RATIO).round() as u16)
+    let mut cols = ((f64::from(rows) * cell_aspect_ratio).round() as u16)
         .min(available_cols)
         .min(MAX_LOGO_COLS);
-    rows = rows.min((f64::from(cols) / LOGO_CELL_ASPECT_RATIO).round() as u16);
-    cols = ((f64::from(rows) * LOGO_CELL_ASPECT_RATIO).round() as u16).min(cols);
+    rows = rows.min((f64::from(cols) / cell_aspect_ratio).round() as u16);
+    cols = ((f64::from(rows) * cell_aspect_ratio).round() as u16).min(cols);
 
-    (cols >= 16 && rows >= 5).then_some((cols, rows))
+    (cols >= MIN_OBJECT_COLS && rows >= MIN_OBJECT_ROWS).then_some((cols, rows))
 }
 
 fn sample_coordinate(index: usize, sample_count: usize) -> f64 {
     ((index as f64 + 0.5) / sample_count as f64) * 2.0 - 1.0
 }
 fn logo_outline_glyph(
+    shape: &ZeroStateShape,
     x: f64,
     y: f64,
     source_cols: usize,
     source_rows: usize,
     rotation_cos: f64,
+    cell_aspect_ratio: f64,
 ) -> Option<LogoGlyph> {
     let dx = 2.0 / source_cols as f64;
     let dy = 2.0 / source_rows as f64;
-    let left = warp_logo_contains(x - dx, y);
-    let right = warp_logo_contains(x + dx, y);
-    let above = warp_logo_contains(x, y - dy);
-    let below = warp_logo_contains(x, y + dy);
+    let left = shape.contains(x - dx, y);
+    let right = shape.contains(x + dx, y);
+    let above = shape.contains(x, y - dy);
+    let below = shape.contains(x, y + dy);
     if left && right && above && below {
         return None;
     }
 
     let normal_x = bool_as_scalar(left) - bool_as_scalar(right);
     let normal_y = bool_as_scalar(above) - bool_as_scalar(below);
-    let tangent_x = -normal_y * rotation_cos * LOGO_CELL_ASPECT_RATIO;
+    let tangent_x = -normal_y * rotation_cos * cell_aspect_ratio;
     let tangent_y = normal_x;
     if tangent_x.abs() > tangent_y.abs() * 1.8 {
         Some(LogoGlyph::Horizontal)
