@@ -267,7 +267,10 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         input_name: Some("tui:input:kill_to_line_end"),
         editor_name: Some("tui:editor:kill_to_line_end"),
         description: "Delete to end of line",
-        keys: &["ctrl-k"],
+        // `cmd-delete` mirrors the GUI's `editor_view:delete_all_right`
+        // (cmd-delete on macOS, a.k.a. delete-all-right). `ctrl-k` keeps the
+        // Emacs/readline binding that terminals and shell prompts expect.
+        keys: &["ctrl-k", "cmd-delete"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::KillToLineStart,

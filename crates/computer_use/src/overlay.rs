@@ -195,11 +195,15 @@ const PILL_HORIZONTAL_PADDING: i32 = 32;
 const PILL_GAP: i32 = 24;
 #[cfg(any(linux, test))]
 const PILL_BOTTOM_MARGIN: i32 = 90;
-/// Context margin retained on each side of a real action window before cutting.
-/// Supplies visible context and smoothness around each kept segment; it is not a
-/// transition and does not change the 1x playback rate inside a segment.
+/// Context margins retained around a real action window before cutting. The
+/// pre-action lead-in is short because those frames are mostly the thinking/
+/// blocked gap the cut removes; the post-action window is longer so the action's
+/// on-screen effect (and its overlay pill) stays visible. Neither is a
+/// transition and neither changes the 1x playback rate inside a segment.
 #[cfg(any(linux, test))]
-const SEGMENT_MARGIN: Duration = Duration::from_millis(500);
+const SEGMENT_MARGIN_PRE: Duration = Duration::from_millis(250);
+#[cfg(any(linux, test))]
+const SEGMENT_MARGIN_POST: Duration = Duration::from_millis(1000);
 
 /// One retained source segment of the cut recording.
 ///
@@ -243,11 +247,40 @@ fn group_source_interval(
     (finish > start).then_some((start, finish))
 }
 
+/// The source interval over which an entry's overlay pill is shown. Unlike
+/// [`group_source_interval`] (the action window that drives the cut), this
+/// lingers [`SEGMENT_MARGIN_POST`] past `finish_offset` so the pill stays
+/// readable instead of flashing for a single frame on an instantaneous action.
+/// It is bounded by `source_duration` and by the next group's start so pills
+/// never extend past kept frames or overlap. Returns `None` when the interval
+/// is empty.
+#[cfg(any(linux, test))]
+fn overlay_display_interval(
+    entry: &ActionLogEntry,
+    next_offset: Option<Duration>,
+    source_duration: Duration,
+    frame: Duration,
+) -> Option<(Duration, Duration)> {
+    let (start, action_finish) = group_source_interval(entry, source_duration, frame)?;
+    // Reuse the post-action margin as the linger so the pill never outlasts the
+    // footage the cut retained after the action.
+    let mut end = entry
+        .finish_offset
+        .saturating_add(SEGMENT_MARGIN_POST)
+        .min(source_duration)
+        .max(action_finish);
+    if let Some(next_offset) = next_offset {
+        end = end.min(next_offset);
+    }
+    (end > start).then_some((start, end))
+}
+
 /// Builds the ordered retained segments for a post-stop cut.
 ///
 /// Each committed action group contributes a `[start, finish]` window (with a
-/// one-frame minimum). Every window is expanded by [`SEGMENT_MARGIN`] on both
-/// sides and clamped to `[0, source_duration]`. The expanded windows are then
+/// one-frame minimum). Every window is expanded by [`SEGMENT_MARGIN_PRE`] before
+/// its start and [`SEGMENT_MARGIN_POST`] after its finish, then clamped to
+/// `[0, source_duration]`. The expanded windows are then
 /// sorted by source start and merged whenever they overlap or touch (adjacent
 /// windows become one contiguous segment), and each merged segment is assigned
 /// an `output_start` equal to the cumulative duration of the segments before
@@ -264,8 +297,8 @@ pub(crate) fn build_keep_segments(
         .iter()
         .filter_map(|entry| group_source_interval(entry, source_duration, frame))
         .map(|(start, finish)| {
-            let expanded_start = start.saturating_sub(SEGMENT_MARGIN);
-            let expanded_end = finish.saturating_add(SEGMENT_MARGIN);
+            let expanded_start = start.saturating_sub(SEGMENT_MARGIN_PRE);
+            let expanded_end = finish.saturating_add(SEGMENT_MARGIN_POST);
             (
                 expanded_start.min(source_duration),
                 expanded_end.min(source_duration),
@@ -339,12 +372,13 @@ pub(crate) fn remap_source_interval(
 
 /// Builds an ASS subtitle document that renders each entry as a bottom-center
 /// row on the compacted output timeline. Entries are ordered by source start;
-/// each group's `[offset, finish_offset]` interval (one-frame minimum) is
+/// each group's overlay display interval (its action window lingered
+/// `SEGMENT_MARGIN_POST` past `finish_offset`, bounded by the next group's start) is
 /// remapped through the retained segments before timecode formatting, so pills
-/// stay aligned with their actions after the cut. Groups whose remapped
-/// interval is empty (for example wholly inside a removed gap) emit no dialogue.
-/// Pointer-only groups with empty labels commit to the timeline (keeping their
-/// segment) but render no pill.
+/// stay aligned with their actions after the cut and remain readable. Groups
+/// whose remapped interval is empty (for example wholly inside a removed gap)
+/// emit no dialogue. Pointer-only groups with empty labels commit to the
+/// timeline (keeping their segment) but render no pill.
 #[cfg(any(linux, test))]
 pub(crate) fn build_overlay_ass(
     entries: &[ActionLogEntry],
@@ -382,11 +416,13 @@ pub(crate) fn build_overlay_ass(
     let mut ordered: Vec<&ActionLogEntry> = entries.iter().collect();
     ordered.sort_by_key(|entry| entry.offset);
 
-    for entry in ordered.iter() {
-        let (start, finish) = match group_source_interval(entry, source_duration, frame) {
-            Some(interval) => interval,
-            None => continue,
-        };
+    for (index, entry) in ordered.iter().enumerate() {
+        let next_offset = ordered.get(index + 1).map(|next| next.offset);
+        let (start, finish) =
+            match overlay_display_interval(entry, next_offset, source_duration, frame) {
+                Some(interval) => interval,
+                None => continue,
+            };
         let Some((out_start, out_end)) = remap_source_interval(start, finish, &segments) else {
             continue;
         };

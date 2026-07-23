@@ -6,8 +6,8 @@ use warp::appearance::Appearance;
 use warp::settings::{AISettings, TuiUsageDisplayMode};
 use warp::terminal::model::ansi::{Handler, InputBufferValue};
 use warp::tui_export::{
-    AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
-    BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals, Harness, InputType,
+    AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin,
+    BlockPadding, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals, Harness,
     LLMPreferences, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, TranscriptScope,
     export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
 };
@@ -30,10 +30,12 @@ use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
 
 use super::{
-    AUTO_APPROVE_FEEDBACK_DURATION, AUTO_APPROVE_TOGGLE_BINDING_NAME, CTRL_C_EXIT_HINT,
-    ConversationRestoreState, FooterSegments, INLINE_MENU_TOP_PADDING_ROWS,
-    LOADING_CONVERSATION_HINT, SHELL_MODE_HINT, TuiConversationRestoreOrigin,
-    TuiTerminalSessionAction, TuiTerminalSessionEvent, TuiTerminalSessionView,
+    AUTO_APPROVE_FEEDBACK_DURATION, AUTO_APPROVE_TOGGLE_BINDING_NAME,
+    COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
+    COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegments,
+    INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
+    SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
+    TuiTerminalSessionEvent, TuiTerminalSessionView, cost_command_unavailable_hint,
     export_file_success_message, log_bundle_success_message, raw_prompt_if_not_blank,
     render_status_footer_row,
 };
@@ -69,6 +71,14 @@ fn log_bundle_success_message_includes_the_absolute_path() {
         log_bundle_success_message(path),
         "Log bundle saved to /tmp/warp-20260718-132640.zip"
     );
+}
+
+#[test]
+fn log_bundle_failure_hint_does_not_hardcode_a_frontend_path() {
+    assert!(!LOG_BUNDLE_FAILED_HINT.contains("warp.log"));
+    assert!(!LOG_BUNDLE_FAILED_HINT.contains("/oz/"));
+    assert!(!LOG_BUNDLE_FAILED_HINT.contains("/tui/"));
+    assert!(!LOG_BUNDLE_FAILED_HINT.contains("/warp-cli/"));
 }
 #[test]
 fn inline_menu_padding_preserves_result_capacity() {
@@ -285,6 +295,145 @@ fn auto_approve_slash_command_toggles_selected_conversation_off_on_off() {
                     .selected_conversation_id(ctx)
             );
         });
+    });
+}
+
+#[test]
+fn cost_slash_command_rejects_an_empty_conversation_like_the_gui() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection
+                    .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
+                    .expect("test conversation should start");
+            });
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COST, None, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(view.hidden_response_summary_exchange_ids.is_empty());
+            assert_eq!(
+                view.transient_hint.current().map(|(text, _)| text),
+                Some(COST_EMPTY_CONVERSATION_HINT),
+            );
+        });
+    });
+}
+
+#[test]
+fn cost_command_uses_the_gui_eligibility_rules() {
+    assert_eq!(
+        cost_command_unavailable_hint(None),
+        Some(COST_NO_ACTIVE_CONVERSATION_HINT),
+    );
+    assert_eq!(
+        cost_command_unavailable_hint(Some((true, false))),
+        Some(COST_EMPTY_CONVERSATION_HINT),
+    );
+    assert_eq!(
+        cost_command_unavailable_hint(Some((false, false))),
+        Some(COST_CONVERSATION_IN_PROGRESS_HINT),
+    );
+    assert_eq!(cost_command_unavailable_hint(Some((false, true))), None);
+}
+
+/// Renders the agent-mode footer row (`render_status_footer_row` + the real
+/// `UsageToggle::render_entry`) to text lines with fixed totals.
+fn render_usage_footer_row(app: &mut App, totals: ConversationUsageTotals) -> Vec<String> {
+    app.update(|ctx| {
+        let builder = TuiUiBuilder::from_app(ctx);
+        let mode = AISettings::as_ref(ctx).usage_display_mode;
+        let usage = UsageToggle::default().render_entry(mode, totals, ctx, |_, _| {});
+        let row = render_status_footer_row(
+            FooterSegments {
+                shell_mode: false,
+                model_label: Some(
+                    TuiText::new("TestModel")
+                        .with_style(builder.primary_text_style())
+                        .truncate()
+                        .finish(),
+                ),
+                cwd: None,
+                branch: None,
+                usage: Some(usage),
+                diff_additions: 0,
+                diff_deletions: 0,
+            },
+            &builder,
+        )
+        .finish();
+        render_element(row, ctx, 60).to_lines()
+    })
+}
+
+#[test]
+fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let exchange_id = AIAgentExchangeId::new();
+
+        let totals = ConversationUsageTotals {
+            credits_spent: 2.5,
+            cost_in_cents: 3.2,
+        };
+
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).usage_display_mode),
+            TuiUsageDisplayMode::Credits,
+        );
+        let footer_before = render_usage_footer_row(&mut app, totals);
+        let summary_before = view.read(&app, |view, ctx| {
+            view.render_response_summary_for_exchange(
+                exchange_id,
+                Duration::from_secs(2),
+                Some(3.0),
+                ctx,
+            )
+            .map(|summary| render_element(summary, ctx, 60).to_lines())
+        });
+        assert_eq!(summary_before, Some(vec!["∷ 2s • 3 credits".to_owned()]),);
+
+        view.update(&mut app, |view, _| {
+            view.toggle_response_summary_visibility_for_exchange(exchange_id);
+        });
+        let summary_hidden = view.read(&app, |view, ctx| {
+            view.render_response_summary_for_exchange(
+                exchange_id,
+                Duration::from_secs(2),
+                Some(3.0),
+                ctx,
+            )
+        });
+        assert!(summary_hidden.is_none());
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).usage_display_mode),
+            TuiUsageDisplayMode::Credits,
+        );
+        assert_eq!(
+            render_usage_footer_row(&mut app, totals),
+            footer_before,
+            "hiding the response summary must not change the persistent footer",
+        );
+
+        view.update(&mut app, |view, _| {
+            view.toggle_response_summary_visibility_for_exchange(exchange_id);
+        });
+        let summary_again = view.read(&app, |view, ctx| {
+            view.render_response_summary_for_exchange(
+                exchange_id,
+                Duration::from_secs(2),
+                Some(3.0),
+                ctx,
+            )
+            .map(|summary| render_element(summary, ctx, 60).to_lines())
+        });
+        assert_eq!(summary_again, Some(vec!["∷ 2s • 3 credits".to_owned()]),);
     });
 }
 
@@ -1002,14 +1151,10 @@ fn zero_state_transitions_through_bootstrap_lifecycle() {
 fn render_footer_lines(
     app: &mut App,
     view: &ViewHandle<super::TuiTerminalSessionView>,
-    orchestration_tabs_available: bool,
     width: u16,
 ) -> Vec<String> {
     app.update(|ctx| {
-        let footer = view
-            .as_ref(ctx)
-            .render_footer(orchestration_tabs_available, ctx)
-            .finish();
+        let footer = view.as_ref(ctx).render_footer(ctx).finish();
         render_element(footer, ctx, width).to_lines()
     })
 }
@@ -1248,7 +1393,7 @@ fn footer_transient_state_replaces_all_sections() {
         view.update(&mut app, |view, _| {
             view.exit_confirmation.arm(Instant::now());
         });
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         assert_eq!(lines, vec![CTRL_C_EXIT_HINT]);
         assert_footer_segments_absent(&lines);
 
@@ -1261,7 +1406,7 @@ fn footer_transient_state_replaces_all_sections() {
                 future: None,
             };
         });
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         assert_eq!(lines, vec![LOADING_CONVERSATION_HINT]);
         assert_footer_segments_absent(&lines);
 
@@ -1270,7 +1415,7 @@ fn footer_transient_state_replaces_all_sections() {
             view.conversation_restore_state = ConversationRestoreState::Idle;
             view.show_transient_hint("transient notice".to_owned(), ctx);
         });
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         assert_eq!(lines, vec!["transient notice"]);
         assert_footer_segments_absent(&lines);
 
@@ -1285,40 +1430,8 @@ fn footer_transient_state_replaces_all_sections() {
             };
             view.show_transient_hint("transient notice".to_owned(), ctx);
         });
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         assert_eq!(lines, vec![CTRL_C_EXIT_HINT]);
-    });
-}
-
-#[test]
-fn footer_orchestration_callout_replaces_sections() {
-    App::test((), |mut app| async move {
-        let fixture = focus_test_fixture(&mut app);
-        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-
-        // With orchestration tabs available and the session in agent mode, the
-        // callout replaces the entire status row.
-        let lines = render_footer_lines(&mut app, &view, true, 80);
-        assert_eq!(lines, vec!["Shift + ↑ sub-agents"]);
-        assert_footer_segments_absent(&lines);
-
-        // Shell mode wins over the orchestration callout: the bash row leads
-        // with the shell-mode indicator instead.
-        view.update(&mut app, |view, ctx| {
-            view.ai_input_model.update(ctx, |input_mode, ctx| {
-                input_mode.set_input_type(InputType::Shell, None, ctx);
-            });
-        });
-        let lines = render_footer_lines(&mut app, &view, true, 80);
-        let row = lines.join("\n");
-        assert!(
-            row.starts_with(SHELL_MODE_HINT),
-            "shell mode wins over the orchestration callout: {row}"
-        );
-        assert!(
-            !row.contains("Shift + ↑ sub-agents"),
-            "the orchestration callout yields to shell mode: {row}"
-        );
     });
 }
 
@@ -1332,7 +1445,7 @@ fn footer_conversations_callout_no_longer_renders() {
         // left-aligned sectioned row — never the obsolete `← for conversations`
         // callout (render_left_footer_hint and the show_conversations_hint
         // branch are removed, not merely unreachable).
-        let lines = render_footer_lines(&mut app, &view, false, 80);
+        let lines = render_footer_lines(&mut app, &view, 80);
         let row = lines.join("\n");
         assert!(
             !row.contains("← for conversations"),

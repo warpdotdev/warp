@@ -1129,6 +1129,9 @@ impl View for AIBlock {
                 aws_bedrock_credentials_error_view: self
                     .aws_bedrock_credentials_error_view
                     .as_ref(),
+                gemini_enterprise_credentials_error_view: self
+                    .gemini_enterprise_credentials_error_view
+                    .as_ref(),
                 imported_comments: &self.imported_comments,
                 run_agents_card_views: &self.run_agents_card_views,
                 #[cfg(feature = "local_fs")]

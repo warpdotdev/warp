@@ -145,6 +145,8 @@ async fn driver_skips_duplicate_sequences_and_persists_new_cursor() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -191,6 +193,8 @@ async fn driver_resets_failures_after_successful_event_delivery() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -236,6 +240,8 @@ async fn driver_ignores_persist_cursor_errors() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -270,6 +276,8 @@ async fn driver_ignores_driver_state_errors() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -306,6 +314,8 @@ async fn driver_retries_initial_connection_until_stream_opens() {
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -444,6 +454,8 @@ async fn driver_uses_slow_backoff_on_permanent_http_error() {
         permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -461,6 +473,186 @@ async fn driver_uses_slow_backoff_on_permanent_http_error() {
         })
         .unwrap();
     assert_eq!(retry_backoff, Duration::from_secs(0));
+}
+
+#[tokio::test]
+async fn driver_gives_up_after_consecutive_auth_failures() {
+    // Every open attempt fails with a 401. With a give-up threshold of 3, the
+    // driver should stop and return an error rather than reconnecting forever.
+    let source = FakeAgentEventSource::new(vec![
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(401)),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: Some(3),
+        max_retry_duration: None,
+    };
+
+    let result = run_agent_event_driver(source, config, &mut consumer).await;
+    assert!(
+        result.is_err(),
+        "driver should give up on persistent auth errors"
+    );
+    assert!(consumer.handled_sequences.is_empty());
+}
+
+#[tokio::test]
+async fn driver_does_not_give_up_on_non_auth_error_when_only_auth_bounded() {
+    // A non-auth (500) error must not trip the auth give-up path: the driver
+    // reconnects and succeeds.
+    let source = FakeAgentEventSource::new(vec![
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(500)),
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Ok(AgentEventSourceItem::Event(make_run_event(
+                1,
+                "new_message",
+                "child-run",
+                Some("msg-1"),
+            ))),
+        ]),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: Some(3),
+        max_retry_duration: None,
+    };
+
+    run_agent_event_driver(source, config, &mut consumer)
+        .await
+        .unwrap();
+    assert_eq!(consumer.handled_sequences, vec![1]);
+}
+
+#[tokio::test]
+async fn driver_does_not_count_non_auth_failures_toward_auth_give_up() {
+    // Regression: the auth give-up must count only *consecutive* auth failures.
+    // A mix of non-auth failures followed by a single 401 must NOT trip a
+    // threshold-of-3 policy (only 1 consecutive auth failure has occurred).
+    let source = FakeAgentEventSource::new(vec![
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(401)),
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Ok(AgentEventSourceItem::Event(make_run_event(
+                1,
+                "new_message",
+                "child-run",
+                Some("msg-1"),
+            ))),
+        ]),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: Some(3),
+        max_retry_duration: None,
+    };
+
+    run_agent_event_driver(source, config, &mut consumer)
+        .await
+        .unwrap();
+    assert_eq!(consumer.handled_sequences, vec![1]);
+}
+
+#[tokio::test]
+async fn driver_resets_auth_streak_after_non_auth_failure() {
+    // A non-auth failure in the middle of an auth run resets the streak, so the
+    // driver only gives up once it sees a *fresh* run of 3 consecutive 401s.
+    let source = FakeAgentEventSource::new(vec![
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(401)),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: Some(3),
+        max_retry_duration: None,
+    };
+
+    // If the streak were not reset by the 500, the driver would give up before
+    // consuming all five responses; a give-up after exactly the last 401 means
+    // every response was consumed (the fake source panics if over-polled).
+    let result = run_agent_event_driver(source, config, &mut consumer).await;
+    assert!(
+        result.is_err(),
+        "driver should give up after a fresh run of 3 consecutive auth failures"
+    );
+    assert!(consumer.handled_sequences.is_empty());
+}
+
+#[tokio::test]
+async fn driver_gives_up_after_max_retry_duration() {
+    // A zero-length max retry window means the driver gives up on the first
+    // failure regardless of error class.
+    let source = FakeAgentEventSource::new(vec![Err(make_http_status_error(500))]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: Some(Duration::from_secs(0)),
+    };
+
+    let result = run_agent_event_driver(source, config, &mut consumer).await;
+    assert!(
+        result.is_err(),
+        "driver should give up once the max retry duration elapses"
+    );
 }
 
 #[tokio::test]
@@ -495,6 +687,8 @@ async fn driver_uses_fast_backoff_on_transient_http_error() {
         permanent_error_backoff_steps: &[9999],
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)

@@ -15770,7 +15770,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=156cb6206fa314d26ac73879576cd84b76165774#156cb6206fa314d26ac73879576cd84b76165774"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=8b219c82aae7ce7bdcc399a95e86003fca1e121d#8b219c82aae7ce7bdcc399a95e86003fca1e121d"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -15974,6 +15974,7 @@ dependencies = [
  "clap",
  "command",
  "dirs 6.0.0",
+ "fs4",
  "futures",
  "futures-lite 1.13.0",
  "http_client",

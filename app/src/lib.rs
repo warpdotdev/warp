@@ -230,7 +230,7 @@ pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
 use warp_errors::{report_error, report_if_error};
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warp_logging::LogDestination;
+use warp_logging::{LogDestination, LogFrontend};
 use warp_managed_secrets::ManagedSecretManager;
 use warp_server_client::iap::{IapManager, IapManagerEvent, IapState, ManagedIapMint};
 use warp_server_client::network_logging::NetworkLogModel;
@@ -639,6 +639,16 @@ impl LaunchMode {
         }
     }
 
+    fn log_frontend(&self) -> LogFrontend {
+        match self {
+            LaunchMode::Tui { .. } => LogFrontend::Tui,
+            LaunchMode::App { .. } | LaunchMode::Test { .. } => LogFrontend::Gui,
+            LaunchMode::CommandLine { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. } => LogFrontend::Cli,
+        }
+    }
+
     fn as_str_for_tracing(&self) -> &'static str {
         match self {
             LaunchMode::App { .. } => "app",
@@ -824,7 +834,7 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             let launch_mode = LaunchMode::RemoteServerProxy;
             let mut tracing_initialization = tracing::init()?;
             warp_logging::init(warp_logging::LogConfig {
-                is_cli: true,
+                frontend: launch_mode.log_frontend(),
                 log_destination: launch_mode.log_destination(),
                 ..Default::default()
             })?;
@@ -962,7 +972,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
-    let is_cli = log_destination.is_some();
 
     cfg_if::cfg_if! {
         if #[cfg(enable_crash_recovery)] {
@@ -970,14 +979,14 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
                 warp_logging::init_for_crash_recovery_process()?;
             } else {
                 warp_logging::init(warp_logging::LogConfig {
-                    is_cli,
+                    frontend: launch_mode.log_frontend(),
                     log_destination,
                     ..Default::default()
                 })?;
             }
         } else {
             warp_logging::init(warp_logging::LogConfig {
-                is_cli,
+                frontend: launch_mode.log_frontend(),
                 log_destination,
                 ..Default::default()
             })?;
