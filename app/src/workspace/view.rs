@@ -11974,6 +11974,13 @@ impl Workspace {
             _ => {}
         }
 
+        let window_id = ctx.window_id();
+        if SyncedInputState::handle(ctx).update(ctx, |status, _| {
+            status.remove_pane_group_from_sync(window_id, removed_pane_group_id, self.tab_count())
+        }) {
+            self.process_updated_sync_state(ctx);
+        }
+
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
@@ -16085,6 +16092,18 @@ impl Workspace {
                 self.process_sync_event_for_all_synced_pane_groups(input_type, ctx);
             }
             pane_group::Event::TerminalViewStateChanged => {
+                let window_id = ctx.window_id();
+                if pane_group.as_ref(ctx).visible_terminal_pane_count() <= 1
+                    && SyncedInputState::handle(ctx).update(ctx, |status, _| {
+                        status.remove_pane_group_from_sync(
+                            window_id,
+                            pane_group.id(),
+                            self.tab_count(),
+                        )
+                    })
+                {
+                    self.process_updated_sync_state(ctx);
+                }
                 self.update_active_session(ctx);
                 ctx.notify();
             }

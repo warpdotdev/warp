@@ -4192,6 +4192,14 @@ impl PaneGroup {
         self.panes.visible_pane_ids()
     }
 
+    pub fn visible_terminal_pane_count(&self) -> usize {
+        self.panes
+            .visible_pane_ids()
+            .into_iter()
+            .filter(|pane_id| pane_id.is_terminal_pane())
+            .count()
+    }
+
     pub fn original_pane_for_replacement(&self, replacement_pane_id: PaneId) -> Option<PaneId> {
         self.panes
             .original_pane_for_replacement(replacement_pane_id)
