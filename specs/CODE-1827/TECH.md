@@ -51,22 +51,22 @@ Add `crates/warp_tui/src/handoff_block.rs` with `TuiHandoffBlock`.
 
 The view owns presentation state only:
 
-- Configuring with `PendingHandoff`.
-- Environment selector.
-- Model selector.
+- Acceptance summary with `PendingHandoff`.
+- Two-page environment/model configuration flow.
 - No-environment state.
 - Committed progress.
-- Static created result.
+- Static created decision.
+- Compact persisted result after local continuation.
 
 It installs as the session-owned input-area interaction in downstack `TuiBlockingInteractionModel`. The transcript stays visible while the normal input, attachments, menus, footer, and response-status rows are suppressed.
 
-Embed `TuiOptionSelector` for environment/model selection. Follow the orchestration card’s tinted header/body, metadata hierarchy, inline attention/error treatment, spacing, and key-hint grammar. Reuse theme recipes based on `terminal_colors().normal.magenta`, matching GUI `ai_brand_color(theme)`; do not hard-code RGB values.
+Embed `TuiOptionSelector` for environment/model selection. Both pages use its existing search editor. Follow the orchestration card’s acceptance/configuration split, page header and position treatment, tinted header/body, metadata hierarchy, inline attention/error treatment, spacing, and key-hint grammar. Add one blank row above the active card. Reuse theme recipes based on `terminal_colors().normal.magenta`, matching GUI `ai_brand_color(theme)`; do not hard-code RGB values.
 
 Register phase-scoped fixed bindings:
 
-- Configuring: `E`, `M`, Enter, Escape, Ctrl-C.
-- No environment: Enter, `R`, Escape, Ctrl-C.
-- Selector: existing selector navigation plus Escape back.
+- Acceptance: Enter, Ctrl-E, Ctrl-C.
+- Configuration pages: Enter, Left, Right, Tab, Escape, Ctrl-C.
+- No environment: Enter, `R`, Ctrl-C.
 - Committed progress: consume Ctrl-C without cancellation.
 - Created: Enter, `C`, `N`.
 
@@ -74,7 +74,7 @@ Register phase-scoped fixed bindings:
 
 - On successful preparation, transfer pending images from shared input context into `PendingHandoff`.
 - On pre-confirmation cancellation or fatal outcome, restore prompt/images exactly once.
-- On successful creation, consume them; continuing locally opens clean input.
+- On successful creation, consume them. Local input remains blocked until the user chooses Continue locally or Start new conversation.
 - Never manipulate image ownership through `TuiAttachmentModel` view state.
 
 ### Commit and outcomes
@@ -88,12 +88,13 @@ On valid Enter:
 
 On created outcome:
 
-- Store only run URL and whether a source conversation existed.
+- Store the run URL and whether a source conversation existed.
 - Do not create `TuiCloudRunView` or task-status subscriptions.
-- Enter opens the URL without dismissing.
-- `C` removes the card and focuses existing input.
-- `N` removes the card and invokes existing new-conversation behavior.
-- Omit `C` for fresh launch with no source conversation.
+- Keep the static created card installed as the session-owned blocking interaction.
+- Enter opens the URL without dismissing the card.
+- For a forked conversation, `C` transitions the same view to compact persisted presentation, removes the blocker, registers it as canonical transcript rich content, and focuses existing local input.
+- `N` removes the blocker and invokes existing new-conversation behavior without registering transcript rich content.
+- Omit `C` for a fresh launch with no source conversation.
 
 On fatal outcome:
 
@@ -126,10 +127,12 @@ flowchart LR
   Card -->|cancel| Restore["Restore prompt/images"]
   Card -->|confirm| Commit["commit_handoff"]
   Commit -->|failed| Restore
-  Commit -->|created| Static["Static run-link card"]
-  Static --> Browser["Enter: open Oz"]
-  Static --> Local["C: continue locally"]
-  Static --> New["N: new conversation"]
+  Commit -->|created| Created["Created decision card"]
+  Created --> Browser["Enter: open Oz"]
+  Created --> Continue["C: continue locally"]
+  Created --> New["N: new conversation"]
+  Continue --> Static["Compact transcript banner"]
+  Static --> Local["Local input reopens"]
 ```
 
 ## Testing and validation
@@ -141,10 +144,10 @@ Map [`PRODUCT.md`](PRODUCT.md) invariants:
 - 1-7: command availability, insertion, ghost argument, parsing, fresh launch.
 - 8-15: guard errors, eager cancellation, and source-state capture through the shared API.
 - 16-20: input-area placement, focus, hidden-input preservation, and magenta theme.
-- 21-35: metadata, `E`/`M` selectors, no-environment docs/refresh, automatic environment transition, incompatible model.
+- 21-35: metadata, Ctrl-E editing, searchable environment/model pages, page navigation, no-environment docs/refresh, automatic environment transition, incompatible model.
 - 36-41: image transfer/restoration and pre-confirmation cancellation.
 - 42-52: progress state, point of no return, shared commit integration, snapshot degradation, prompt semantics.
-- 53-60: static card, URL open without dismissal, local continuation, fresh-launch behavior, new conversation.
+- 53-60: created decision card, URL open without dismissal, `C` persistence and local continuation, fresh-launch behavior, and `N` new-conversation behavior.
 - 61-66: fatal cleanup, single-card invariant, settings changes, and stale callbacks.
 
 Use real `App::dispatch_keystroke` paths and render-to-lines assertions.
@@ -164,7 +167,7 @@ Run `./script/run-tui` in a real terminal and verify:
 4. Image transfer/cancellation restoration.
 5. Long-running command and active-child rejection.
 6. Snapshot success and induced snapshot failure.
-7. Browser open, continue locally, and new conversation.
+7. Browser open, persistent completed banner, local continuation, and new conversation.
 8. Narrow terminal plus light and dark themes.
 
 Do not use GUI integration tests for the TUI card.

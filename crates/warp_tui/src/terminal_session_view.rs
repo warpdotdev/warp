@@ -2903,6 +2903,7 @@ impl TuiTerminalSessionView {
         let source_model_id = selected_conversation
             .and_then(|conversation| conversation.latest_exchange())
             .map(|exchange| exchange.model_id.to_string());
+        let source_conversation_id = selected_conversation.map(|conversation| conversation.id());
         let source_was_active = selected_conversation.is_some_and(|conversation| {
             conversation.status().is_in_progress() || conversation.status().is_blocked()
         });
@@ -2928,10 +2929,7 @@ impl TuiTerminalSessionView {
         let pending = prepare_handoff(
             HandoffPrepareInput {
                 terminal_surface_id: self.terminal_surface_id,
-                expected_conversation_id: self
-                    .conversation_selection
-                    .as_ref(ctx)
-                    .selected_conversation_id(ctx),
+                expected_conversation_id: source_conversation_id,
                 history: BlocklistAIHistoryModel::handle(ctx),
                 controller: self.ai_controller.clone(),
                 context: self.ai_context_model.clone(),
@@ -2975,10 +2973,16 @@ impl TuiTerminalSessionView {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
         let current_working_directory = self.current_working_directory(ctx);
         let handoff = ctx.add_typed_action_tui_view(move |ctx| {
-            TuiHandoffBlock::new(pending, current_working_directory, ctx)
+            TuiHandoffBlock::new(
+                pending,
+                current_working_directory,
+                source_conversation_id,
+                ctx,
+            )
         });
-        ctx.subscribe_to_view(&handoff, |view, _, event, ctx| {
-            view.handle_handoff_event(event, ctx);
+        let handoff_for_events = handoff.clone();
+        ctx.subscribe_to_view(&handoff, move |view, _, event, ctx| {
+            view.handle_handoff_event(&handoff_for_events, event, ctx);
         });
         self.blocking_interaction_model.update(ctx, |model, ctx| {
             model.set_session_interaction(
@@ -3012,7 +3016,12 @@ impl TuiTerminalSessionView {
             .update(ctx, |model, ctx| model.set_session_interaction(None, ctx));
     }
 
-    fn handle_handoff_event(&mut self, event: &TuiHandoffBlockEvent, ctx: &mut ViewContext<Self>) {
+    fn handle_handoff_event(
+        &mut self,
+        handoff: &ViewHandle<TuiHandoffBlock>,
+        event: &TuiHandoffBlockEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
         match event {
             TuiHandoffBlockEvent::Cancelled(restoration) => {
                 self.clear_handoff_interaction(ctx);
@@ -3032,10 +3041,17 @@ impl TuiTerminalSessionView {
             }
             TuiHandoffBlockEvent::ContinueLocally => {
                 self.clear_handoff_interaction(ctx);
+                self.transcript.update(ctx, |transcript, ctx| {
+                    transcript.attach_handoff(handoff.clone(), ctx);
+                });
             }
             TuiHandoffBlockEvent::StartNewConversation => {
                 self.clear_handoff_interaction(ctx);
                 self.start_new_conversation(None, ctx);
+            }
+            TuiHandoffBlockEvent::LayoutInvalidated => {
+                ctx.notify();
+                return;
             }
         }
         self.focus_current_owner_if_active(ctx);

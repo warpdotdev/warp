@@ -9,16 +9,16 @@ use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
 use warpui::{
-    AddWindowOptions, App, SingletonEntity, TuiView as _, TypedActionView as _, ViewHandle,
-    WindowInvalidation,
+    AddWindowOptions, App, EntityIdMap, SingletonEntity, TuiView as _, TypedActionView as _,
+    ViewHandle, WindowInvalidation,
 };
-use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize};
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
 
 use super::TuiTerminalSessionView;
 use crate::autoupdate::TuiAutoupdater;
-use crate::handoff_block::{TuiHandoffBlock, TuiHandoffBlockAction};
+use crate::handoff_block::TuiHandoffBlock;
 use crate::option_selector::TuiOptionSelectorAction;
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::root_view::RootTuiView;
@@ -109,9 +109,24 @@ fn render_session(app: &mut App, fixture: &Fixture) -> Vec<String> {
     app.update(|ctx| {
         let mut invalidation = WindowInvalidation::default();
         invalidation.updated.insert(fixture.view.id());
+        let session = fixture.view.as_ref(ctx);
+        invalidation.updated.extend(session.child_view_ids(ctx));
         invalidation
             .updated
-            .extend(fixture.view.as_ref(ctx).child_view_ids(ctx));
+            .extend(session.transcript.as_ref(ctx).child_view_ids(ctx));
+        if let Some(handoff) = session
+            .blocking_interaction_model
+            .as_ref(ctx)
+            .handoff_for_test()
+        {
+            invalidation
+                .updated
+                .extend(handoff.as_ref(ctx).child_view_ids(ctx));
+            let selector = handoff.as_ref(ctx).selector_for_test();
+            invalidation
+                .updated
+                .extend(selector.as_ref(ctx).child_view_ids(ctx));
+        }
         presenter.invalidate(&invalidation, ctx, fixture.window_id);
         presenter
             .present(ctx, &fixture.view, TuiRect::new(0, 0, 100, 40))
@@ -130,6 +145,49 @@ fn slash_menu_selection_inserts_handoff_for_optional_prompt_composition() {
             view.select_tui_slash_command(&slash_commands::MOVE_TO_CLOUD, ctx);
         });
         assert_eq!(input_text(&app, &fixture), "/handoff ");
+    });
+}
+
+#[test]
+fn fresh_created_card_omits_continue_and_n_starts_a_new_conversation() {
+    let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
+    let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+    App::test((), |mut app| async move {
+        let fixture = fixture(&mut app);
+        let handoff = submit_handoff(&mut app, &fixture, "/handoff launch");
+        handoff.update(&mut app, |block, ctx| {
+            block.set_created_for_test(
+                "https://app.warp.dev/agent/fresh-run".to_owned(),
+                false,
+                ctx,
+            );
+        });
+
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(lines.contains("Enter open cloud run"), "{lines}");
+        assert!(!lines.contains("C continue locally"), "{lines}");
+        assert!(lines.contains("N new conversation"), "{lines}");
+        assert!(dispatch(
+            &mut app,
+            fixture.window_id,
+            &[fixture.view.id(), handoff.id()],
+            "n",
+        ));
+        fixture.view.read(&app, |view, ctx| {
+            assert!(
+                view.blocking_interaction_model
+                    .as_ref(ctx)
+                    .handoff_for_test()
+                    .is_none()
+            );
+            assert!(
+                view.terminal_model
+                    .lock()
+                    .block_list()
+                    .rich_content_row_range(handoff.id())
+                    .is_none()
+            );
+        });
     });
 }
 
@@ -170,7 +228,7 @@ fn local_conversation_with_task_id_remains_handoff_eligible() {
 }
 
 #[test]
-fn no_environment_card_blocks_input_and_escape_restores_prompt_and_images() {
+fn no_environment_card_has_top_padding_and_ctrl_c_restores_prompt_and_images() {
     let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
     let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(true);
     App::test((), |mut app| async move {
@@ -204,12 +262,23 @@ fn no_environment_card_blocks_input_and_escape_restores_prompt_and_images() {
         assert!(lines.contains("A cloud environment is required"), "{lines}");
         assert!(lines.contains("Enter open setup guide"), "{lines}");
         assert!(!lines.contains("finish the task"), "{lines}");
+        let title_row = lines
+            .lines()
+            .position(|line| line.contains("Hand off to cloud"))
+            .expect("handoff title renders");
+        assert!(
+            lines
+                .lines()
+                .nth(title_row.saturating_sub(1))
+                .is_some_and(|line| line.trim().is_empty()),
+            "the handoff card has a blank row above it:\n{lines}"
+        );
 
         assert!(dispatch(
             &mut app,
             fixture.window_id,
             &[fixture.view.id(), handoff.id()],
-            "escape",
+            "ctrl-c",
         ));
         assert_eq!(input_text(&app, &fixture), "finish the task");
         fixture.view.read(&app, |view, ctx| {
@@ -219,6 +288,13 @@ fn no_environment_card_blocks_input_and_escape_restores_prompt_and_images() {
                     .pending_attachments()
                     .len(),
                 1
+            );
+            assert!(
+                view.terminal_model
+                    .lock()
+                    .block_list()
+                    .rich_content_row_range(handoff.id())
+                    .is_none()
             );
             assert!(
                 view.blocking_interaction_model
@@ -247,7 +323,7 @@ fn environment_projection_transitions_the_same_card_and_selector_dispatches_real
                 ctx,
             );
         });
-        assert!(handoff.read(&app, |block, _| block.is_configuring_for_test()));
+        assert!(handoff.read(&app, |block, _| block.is_accepting_for_test()));
         let lines = render_session(&mut app, &fixture).join("\n");
         assert!(
             lines.contains("Environment: Select an environment"),
@@ -259,21 +335,74 @@ fn environment_projection_transitions_the_same_card_and_selector_dispatches_real
             &mut app,
             fixture.window_id,
             &[fixture.view.id(), handoff.id()],
-            "e",
+            "ctrl-e",
         ));
         let selector = handoff.read(&app, |block, _| block.selector_for_test());
         assert!(app.read(|ctx| selector.is_focused(ctx)));
+        let search = selector.read(&app, |selector, _| {
+            selector
+                .search_field_for_test()
+                .expect("environment page is searchable")
+        });
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(
+            lines.contains("Which environment should run this conversation?"),
+            "{lines}"
+        );
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::FocusSearchAndInsert('b'), ctx);
+        });
+        assert!(search.read(&app, |search, _| search.is_focused()));
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(lines.contains("Beta"), "{lines}");
+        assert!(!lines.contains("Alpha"), "{lines}");
+        assert!(dispatch(
+            &mut app,
+            fixture.window_id,
+            &[fixture.view.id(), handoff.id(), selector.id(), search.id()],
+            "backspace",
+        ));
+        assert_eq!(search.read(&app, |search, ctx| search.text(ctx)), "");
+        assert!(search.read(&app, |search, _| search.is_focused()));
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(lines.contains("Alpha"), "{lines}");
+        assert!(lines.contains("Beta"), "{lines}");
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::FocusSearchAndInsert('b'), ctx);
+        });
+        selector.update(&mut app, |selector, ctx| {
+            selector.handle_action(&TuiOptionSelectorAction::SelectItem(0), ctx);
+        });
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(
+            lines.contains("Which model should run this conversation?"),
+            "{lines}"
+        );
+        assert!(lines.contains("2 of 2"), "{lines}");
+        assert!(app.read(|ctx| selector.is_focused(ctx)));
+
         assert!(dispatch(
             &mut app,
             fixture.window_id,
             &[fixture.view.id(), handoff.id(), selector.id()],
-            "down",
+            "left",
         ));
-        selector.update(&mut app, |selector, ctx| {
-            selector.handle_action(&TuiOptionSelectorAction::ConfirmSelected, ctx);
-        });
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(
+            lines.contains("Which environment should run this conversation?"),
+            "{lines}"
+        );
+        assert!(lines.contains("1 of 2"), "{lines}");
+
+        assert!(dispatch(
+            &mut app,
+            fixture.window_id,
+            &[fixture.view.id(), handoff.id(), selector.id()],
+            "escape",
+        ));
         let lines = render_session(&mut app, &fixture).join("\n");
         assert!(lines.contains("Environment: Beta"), "{lines}");
+        assert!(lines.contains("Ctrl + E to edit"), "{lines}");
     });
 }
 
@@ -303,7 +432,7 @@ fn incompatible_model_blocks_confirmation_until_a_compatible_model_is_selected()
             &[fixture.view.id(), handoff.id()],
             "enter",
         ));
-        assert!(handoff.read(&app, |block, _| block.is_configuring_for_test()));
+        assert!(handoff.read(&app, |block, _| block.is_accepting_for_test()));
         let lines = render_session(&mut app, &fixture).join("\n");
         assert!(lines.contains("cannot run in Oz cloud"), "{lines}");
     });
@@ -429,7 +558,7 @@ fn missing_token_after_eager_cancellation_restores_only_trimmed_argument() {
 }
 
 #[test]
-fn committed_ctrl_c_is_consumed_and_created_actions_follow_source_shape() {
+fn committed_ctrl_c_is_consumed_and_created_banner_persists_in_the_transcript() {
     let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
     let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(true);
     App::test((), |mut app| async move {
@@ -454,20 +583,7 @@ fn committed_ctrl_c_is_consumed_and_created_actions_follow_source_shape() {
         });
 
         handoff.update(&mut app, |block, ctx| {
-            block.set_created_for_test(
-                "https://app.warp.dev/agent/test-run".to_owned(),
-                false,
-                ctx,
-            );
-        });
-        let fresh_lines = render_session(&mut app, &fixture).join("\n");
-        assert!(
-            fresh_lines.contains("Enter open cloud run"),
-            "{fresh_lines}"
-        );
-        assert!(!fresh_lines.contains("continue locally"), "{fresh_lines}");
-        handoff.update(&mut app, |block, ctx| {
-            block.handle_action(&TuiHandoffBlockAction::ContinueLocally, ctx);
+            block.set_created_for_test("https://app.warp.dev/agent/test-run".to_owned(), true, ctx);
         });
         fixture.view.read(&app, |view, ctx| {
             assert!(
@@ -477,12 +593,11 @@ fn committed_ctrl_c_is_consumed_and_created_actions_follow_source_shape() {
                     .is_some()
             );
         });
-
-        handoff.update(&mut app, |block, ctx| {
-            block.set_created_for_test("https://app.warp.dev/agent/test-run".to_owned(), true, ctx);
-        });
-        let fork_lines = render_session(&mut app, &fixture).join("\n");
-        assert!(fork_lines.contains("C continue locally"), "{fork_lines}");
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(lines.contains("Cloud run created."), "{lines}");
+        assert!(lines.contains("Enter open cloud run"), "{lines}");
+        assert!(lines.contains("C continue locally"), "{lines}");
+        assert!(lines.contains("N new conversation"), "{lines}");
         assert!(dispatch(
             &mut app,
             fixture.window_id,
@@ -498,29 +613,75 @@ fn committed_ctrl_c_is_consumed_and_created_actions_follow_source_shape() {
             );
         });
         assert_eq!(input_text(&app, &fixture), "");
-
-        let next = submit_handoff(&mut app, &fixture, "/handoff another run");
-        next.update(&mut app, |block, ctx| {
-            block.set_created_for_test(
-                "https://app.warp.dev/agent/another-run".to_owned(),
-                false,
+        handoff.read(&app, |block, ctx| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let mut element = block.render(ctx);
+            let size = element.layout(
+                TuiConstraint::loose(TuiSize::new(100, u16::MAX)),
+                &mut layout_ctx,
                 ctx,
             );
+            assert_eq!(size.width, 100);
         });
-        assert!(dispatch(
-            &mut app,
-            fixture.window_id,
-            &[fixture.view.id(), next.id()],
-            "n",
-        ));
-        fixture.view.read(&app, |view, ctx| {
+        fixture.view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("continue locally", ctx);
+            });
+        });
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(
+            lines.contains("Conversation forked to cloud; continuing locally"),
+            "{lines}"
+        );
+        let banner_row = lines
+            .lines()
+            .position(|line| line.contains("Conversation forked to cloud; continuing locally"))
+            .expect("persistent handoff banner renders");
+        assert!(
+            lines
+                .lines()
+                .nth(banner_row.saturating_sub(1))
+                .is_some_and(|line| line.trim().is_empty()),
+            "the persistent handoff banner has a blank row above it:\n{lines}"
+        );
+        assert!(
+            lines
+                .lines()
+                .nth(banner_row + 1)
+                .is_some_and(|line| line.contains("https://app.warp.dev/agent/test-run")),
+            "the cloud-run link renders on the row below the banner copy:\n{lines}"
+        );
+        assert!(
+            lines.contains("https://app.warp.dev/agent/test-run"),
+            "{lines}"
+        );
+        assert!(lines.contains("continue locally"), "{lines}");
+        fixture.view.read(&app, |view, _| {
             assert!(
-                view.blocking_interaction_model
-                    .as_ref(ctx)
-                    .handoff_for_test()
+                view.terminal_model
+                    .lock()
+                    .block_list()
+                    .rich_content_row_range(handoff.id())
+                    .is_some()
+            );
+        });
+        fixture.view.update(&mut app, |view, ctx| {
+            assert!(view.start_new_conversation(None, ctx));
+        });
+        fixture.view.read(&app, |view, _| {
+            assert!(
+                view.terminal_model
+                    .lock()
+                    .block_list()
+                    .rich_content_row_range(handoff.id())
                     .is_none()
             );
         });
+        let lines = render_session(&mut app, &fixture).join("\n");
+        assert!(!lines.contains("Conversation forked to cloud"), "{lines}");
     });
 }
 

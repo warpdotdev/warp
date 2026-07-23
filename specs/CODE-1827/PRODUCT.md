@@ -88,6 +88,7 @@ Figma: none provided. The existing TUI orchestration card is the structural and 
    - The hidden local input’s cursor and editing state are not mutated.
 
 19. The card follows the TUI orchestration card’s visual hierarchy:
+   - One blank row above the card.
    - A tinted title row.
    - A tinted body containing configuration or status.
    - A separate key-hint row.
@@ -111,12 +112,17 @@ Figma: none provided. The existing TUI orchestration card is the structural and 
 
 26. Environment discovery does not delay showing the card or prevent the user from interacting with it.
 
-27. `E` opens the environment selector. Within the selector:
-   - Arrow keys navigate.
-   - Enter applies the selected environment and returns to the card.
-   - Escape returns to the card without applying the currently highlighted change.
+27. The configuration summary uses the same interaction model as the TUI orchestration card:
+   - Enter confirms the handoff.
+   - Ctrl-E opens configuration editing.
+   - Ctrl-C cancels handoff.
 
-28. `M` opens the model selector. It provides the same searchable model-selection behavior as the existing TUI model selector.
+28. Configuration editing contains two searchable selector pages in order: environment, then model.
+   - Up and Down navigate within a page, including its search field.
+   - Enter applies the selected value and advances to the next page or returns to the summary after the last page.
+   - Left and Right apply the current selection and navigate between pages. If there is no confirmable selection, they still navigate without changing the current value.
+   - Tab advances without applying the current selection.
+   - Escape returns to the summary without applying the current page’s highlighted change.
 
 29. The model initially matches the local conversation’s model when that model can run in Oz cloud.
 
@@ -135,7 +141,7 @@ Figma: none provided. The existing TUI orchestration card is the structural and 
 33. In the no-environment state:
    - Enter opens `https://docs.warp.dev/agent-platform/cloud-agents/environments`.
    - `R` refreshes cloud environments.
-   - Escape or Ctrl-C cancels handoff.
+   - Ctrl-C cancels handoff.
 
 34. The card automatically observes environment changes. When an environment becomes available, the same card transitions to normal configuration without losing the prompt, images, or captured source state.
 
@@ -150,11 +156,11 @@ Figma: none provided. The existing TUI orchestration card is the structural and 
 
 37. If pre-confirmation handoff is cancelled or handoff later fails fatally, the prompt argument and images return to local input.
 
-38. After successful handoff, the prompt and images are considered consumed. Choosing **Continue locally** reopens a clean local input.
+38. After successful handoff, the prompt and images are considered consumed. Choosing **Continue locally** reopens clean local input; choosing **Start new conversation** opens a clean new conversation.
 
 ### Pre-confirmation cancellation
 
-39. Before confirmation, Escape or Ctrl-C cancels the handoff card.
+39. Before confirmation, Ctrl-C cancels from either the summary or an editing page. Escape from an editing page returns to the summary.
 
 40. Cancelling before confirmation:
    - Creates no server conversation fork.
@@ -205,24 +211,24 @@ Figma: none provided. The existing TUI orchestration card is the structural and 
 
 53. Handoff is considered created when Warp receives a cloud run identifier.
 
-54. The card then becomes a static completed card. It does not continue tracking queued, setup, running, completed, cancelled, or failed cloud-task state.
+54. The blocking card becomes a static created card. It does not continue tracking queued, setup, running, completed, cancelled, or failed cloud-task state.
 
-55. For a forked conversation, the completed card provides:
+55. For a forked conversation, the created card provides:
    - Enter: open the cloud run.
    - `C`: continue locally.
    - `N`: start a new conversation.
 
-56. For a fresh cloud launch with no source conversation, the completed card omits **Continue locally** and provides only:
+56. For a fresh cloud launch with no source conversation, the created card omits **Continue locally** and provides only:
    - Enter: open the cloud run.
    - `N`: start a new conversation.
 
 57. Opening the cloud run launches its Oz URL in the system browser.
 
-58. Opening the cloud run does not dismiss the card, replace the TUI transcript, switch to a cloud-run view, or unblock local input.
+58. Opening the cloud run does not dismiss the created card, replace the TUI transcript, switch to a cloud-run view, or unblock local input.
 
-59. **Continue locally** only removes the card and reopens the existing local input. It does not insert or submit `Continue`.
+59. **Continue locally** moves the created card into the canonical transcript block list as a compact linked banner at the handoff location, then reopens clean local input. The banner has the same blank row above it as surrounding transcript blocks, states `Conversation forked to cloud; continuing locally`, and renders the cloud-run link on the next row. It remains while the user continues locally and follows normal transcript scrolling and clearing behavior.
 
-60. **Start new conversation** removes the card and performs the TUI’s existing new-conversation behavior.
+60. **Start new conversation** removes the created card and performs the TUI’s existing new-conversation behavior without installing the compact transcript banner.
 
 ### Failures and state changes
 
