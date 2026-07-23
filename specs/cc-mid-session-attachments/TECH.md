@@ -43,15 +43,17 @@ Each follow-up triggers a new execution, and `fetch_and_download_attachments` ru
 
 **a. File picker on follow-up input UI**
 
-Add a file-attach button to the follow-up prompt composer (the input that appears after a CC session ends). Note: the initial-run path at `input.rs:4438–4471` uses inline base64 (`AttachmentInput`) sent with `SpawnAgentRequest`, which is a different mechanism from the presigned-upload path needed here. A new file-picker attachment type scoped to the follow-up input will be required rather than a straight copy.
+The file picker already exists. `PendingAttachment::File(PendingFile)` is a live type in `context_model.rs`, `attach_files()` opens the OS file dialog, and `collect_cloud_launch_attachments` at `input.rs:4441` already reads `pending_files()` for the initial cloud run. The follow-up input uses the same `ai_context_model`, so no new UI component is needed — the attachment button is already wired up; the gap is only in the submission path.
 
 **b. Upload before send**
 
 When the user sends a follow-up with a file:
-1. In the `NewCloudVm` branch at `input.rs:4118`, collect the pending file attachment (new attachment type, distinct from the image context path)
-2. Call `prepare_attachments_for_upload` — writes attachment metadata to task definition, returns presigned GCS URL
+1. In the `NewCloudVm` branch at `input.rs:4118`, collect `self.ai_context_model.as_ref(ctx).pending_files()` (same source as the initial-run path)
+2. Call `prepare_attachments_for_upload` — writes attachment metadata to task definition, returns presigned GCS URL. Unlike the initial-run path (which base64-encodes inline), use the presigned-upload path so the file lands in GCS via the task definition
 3. `PUT` file bytes to GCS via an async `ctx.spawn`; block the send button and show a progress indicator while in flight
 4. On upload completion, emit `Event::SubmitCloudFollowup { prompt }` normally
+
+Also remove the explicit warn-and-drop at [`input.rs:13928`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/input.rs#L13928) in the queued-prompt cloud follow-up path, which currently logs a warning and discards queued attachments rather than uploading them.
 
 The file is in the task definition before the follow-up is submitted. The new execution's `fetch_and_download_attachments` picks it up automatically. Race-free: GCS PUT completes before submit; new execution starts after submit with seconds of container-startup delay.
 
@@ -111,5 +113,5 @@ Currently the CC branch calls `submit_text_to_cli_agent_pty(request.prompt.clone
 ## Parallelization
 
 Two PRs, can be developed in parallel since they touch different code paths:
-- **PR 1** — Follow-up: new file-picker attachment type + async upload-before-submit in `NewCloudVm` branch (`input.rs`)
+- **PR 1** — Follow-up: async upload-before-submit in `NewCloudVm` branch + fix queued-prompt drop at `input.rs:13928` (file picker UI already exists)
 - **PR 2** — Live session: CC attachment download + PTY injection (`terminal_view_adaptor.rs`)
