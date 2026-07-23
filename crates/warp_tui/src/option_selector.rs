@@ -680,6 +680,7 @@ impl TuiOptionSelector {
         ctx.emit(TuiOptionSelectorEvent::CustomTextCleared);
         ctx.notify();
     }
+
     /// Clears focused search text, returning whether it consumed Back.
     fn clear_focused_search(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         if !matches!(self.focus_zone(ctx), SelectorFocusZone::Search)
@@ -1102,16 +1103,19 @@ impl TuiOptionSelector {
         builder: &TuiUiBuilder,
     ) -> Box<dyn TuiElement> {
         let is_selected = selection_marker == Some(true);
+
         let selected_style = if self.question_style {
             builder.question_option_selected_style()
         } else {
             builder.option_selector_selected_style()
         };
+
         let label_style = if is_highlighted || is_selected {
             selected_style
         } else {
             style
         };
+
         let detail_style = if is_highlighted {
             selected_style
         } else if selection_marker.is_some() {
@@ -1119,6 +1123,7 @@ impl TuiOptionSelector {
         } else {
             style
         };
+
         let digit_prefix = match digit {
             Some(digit) => format!("({digit}) "),
             None => "    ".to_string(),
