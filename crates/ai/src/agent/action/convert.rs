@@ -534,6 +534,9 @@ impl From<api::message::tool_call::StopRecording> for AIAgentActionType {
     fn from(value: api::message::tool_call::StopRecording) -> Self {
         AIAgentActionType::StopRecording {
             recording_id: value.recording_id,
+            // Normalize the wire's `discard` polarity to the internal
+            // `should_persist`; unset `discard` defaults to persist.
+            should_persist: !value.discard,
         }
     }
 }

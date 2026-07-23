@@ -96,16 +96,18 @@ async fn finalize_recording(
     uploader: FileArtifactUploader,
     server_conversation_token: Option<crate::ai::agent::api::ServerConversationToken>,
 ) -> StopRecordingResult {
-    // Both early exits discard the recording without uploading. They share the
-    // same mechanism — dropping the whole `ActiveRecording` struct, which
-    // kill-on-drops ffmpeg and removes the partial capture — but return
-    // different results to distinguish a user-initiated cancellation from a
-    // genuine finalization error. The cancellation check intentionally comes
-    // first so its `Cancelled` contract holds even when no action group was
-    // committed.
+    // A no-upload finalization discards the recording without publishing: it
+    // drops the whole `ActiveRecording` (kill-on-drops ffmpeg, removes the
+    // partial capture). The reason distinguishes an agent-requested discard
+    // (`Discarded`) from a conversation cancellation (`Cancelled`), which the
+    // agent turn treats differently. This check comes first so it holds even
+    // when no action group was committed.
     if !should_upload {
         drop(recording);
-        return StopRecordingResult::Cancelled;
+        return match reason {
+            FinalizeReason::StoppedByAgent => StopRecordingResult::Discarded,
+            _ => StopRecordingResult::Cancelled,
+        };
     }
     if recording.actions.is_empty() {
         drop(recording);
@@ -275,12 +277,13 @@ fn start_or_join_finalization<T: Entity>(
 pub(crate) fn finalize_recording_by_id<T: Entity>(
     recording_id: &str,
     reason: FinalizeReason,
+    should_persist: bool,
     ctx: &mut ModelContext<T>,
 ) -> Result<RecordingFinalization, StopRecordingControllerError> {
     let claim = RecordingController::handle(ctx).update(ctx, |controller, _| {
         controller.claim_finalization_by_id(recording_id)
     });
-    start_or_join_finalization(claim, reason, true, ctx).ok_or_else(|| {
+    start_or_join_finalization(claim, reason, should_persist, ctx).ok_or_else(|| {
         StopRecordingControllerError::RecordingNotFound {
             recording_id: recording_id.to_string(),
         }
