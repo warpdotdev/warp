@@ -172,6 +172,7 @@ impl TuiCompletionMenuModel {
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.display.clone(),
+                    prefix: None,
                     description: row.description.clone(),
                     state_suffix: None,
                     is_selectable: true,

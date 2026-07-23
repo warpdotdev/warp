@@ -102,7 +102,7 @@ impl InlineHistoryMenuDataSource {
             include_commands,
             include_prompts,
         };
-        let suggestions = history.up_arrow_suggestions_for_terminal_view(
+        let suggestions = history.up_arrow_suggestions_for_terminal_surface(
             self.terminal_view_id,
             session_id,
             config,
@@ -277,7 +277,7 @@ impl SyncDataSource for InlineHistoryMenuDataSource {
 
         let command_entries = if include_commands {
             history
-                .up_arrow_suggestions_for_terminal_view(
+                .up_arrow_suggestions_for_terminal_surface(
                     self.terminal_view_id,
                     session_id,
                     UpArrowHistoryConfig {

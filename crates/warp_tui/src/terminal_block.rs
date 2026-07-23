@@ -18,7 +18,7 @@ use warpui_core::elements::tui::{
 
 use crate::terminal_use::user_controls_running_command;
 use crate::tui_builder::TuiUiBuilder;
-const SHELL_COMMAND_PREFIX: &str = "!";
+pub(crate) const SHELL_COMMAND_PREFIX: &str = "!";
 const SHELL_COMMAND_PREFIX_WIDTH: u16 = 2;
 
 /// Selects which rows of a terminal block an element paints.
@@ -146,9 +146,12 @@ impl TuiElement for TerminalBlockElement {
         let rows = match &self.rows {
             TerminalBlockRows::Visible { rows, .. } => {
                 let builder = TuiUiBuilder::from_app(app);
+                let row_style = builder.shell_command_row_style();
                 self.command_style = Some(TerminalCommandStyle {
-                    background: builder.shell_command_background(),
-                    prefix: builder.shell_command_prefix_style(),
+                    background: row_style
+                        .bg
+                        .expect("shell command row style has a background"),
+                    prefix: row_style,
                 });
                 rows.clone()
             }

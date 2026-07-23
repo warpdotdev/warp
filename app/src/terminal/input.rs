@@ -11832,7 +11832,7 @@ impl Input {
         let input_config = self.ai_input_model.as_ref(ctx).input_config();
         let config = UpArrowHistoryConfig::for_input_config(&input_config);
 
-        History::as_ref(ctx).up_arrow_suggestions_for_terminal_view(
+        History::as_ref(ctx).up_arrow_suggestions_for_terminal_surface(
             self.terminal_view_id,
             self.active_block_session_id(),
             config,

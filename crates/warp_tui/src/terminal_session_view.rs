@@ -35,7 +35,7 @@ use warp::tui_export::{
     SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
     StaticCommand, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
     TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
+    TuiUpArrowHistoryItemKind, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
     export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event,
     prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
@@ -95,7 +95,9 @@ use crate::orchestration_tab_bar::{
     render_orchestration_tab_footer,
 };
 use crate::platform::reveal_path_in_file_manager;
-use crate::prompt_history_menu::{TuiPromptHistoryMenuEvent, TuiPromptHistoryMenuModel};
+use crate::prompt_and_command_history_menu::{
+    TuiPromptAndCommandHistoryMenuEvent, TuiPromptAndCommandHistoryMenuModel,
+};
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
@@ -1448,16 +1450,18 @@ impl TuiTerminalSessionView {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
         });
-        let prompt_history_menu = ctx.add_model(|ctx| {
-            TuiPromptHistoryMenuModel::new(
+        let prompt_and_command_history_menu = ctx.add_model(|ctx| {
+            TuiPromptAndCommandHistoryMenuModel::new(
                 input_editor_model.clone(),
+                ai_input_model.clone(),
                 suggestions_mode.clone(),
+                active_session.clone(),
                 terminal_surface_id,
                 ctx,
             )
         });
-        ctx.subscribe_to_model(&prompt_history_menu, |_, _, event, ctx| {
-            let TuiPromptHistoryMenuEvent::Updated = event;
+        ctx.subscribe_to_model(&prompt_and_command_history_menu, |_, _, event, ctx| {
+            let TuiPromptAndCommandHistoryMenuEvent::Updated = event;
             ctx.notify();
         });
         let completion_menu =
@@ -1512,7 +1516,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
-            TuiInlineMenu::new(prompt_history_menu.clone()),
+            TuiInlineMenu::new(prompt_and_command_history_menu.clone()),
             TuiInlineMenu::new(completion_menu.clone()),
         ];
         let inline_menus_for_input = inline_menus.clone();
@@ -1615,8 +1619,8 @@ impl TuiTerminalSessionView {
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
             }
-            TuiInputViewEvent::AcceptedPromptHistory(text) => {
-                view.handle_accepted_prompt_history(text.clone(), ctx);
+            TuiInputViewEvent::AcceptedPromptAndCommandHistory { text, kind } => {
+                view.handle_accepted_prompt_and_command_history(text.clone(), kind.clone(), ctx);
             }
             TuiInputViewEvent::RequestShellCompletion => {
                 view.request_shell_completion(ctx);
@@ -3563,12 +3567,18 @@ impl TuiTerminalSessionView {
         ctx.notify();
     }
 
-    /// Fills the accepted prompt-history prompt into the input and submits it
-    /// immediately, matching the GUI's accept-a-prompt-from-history behavior.
-    /// The menu has already closed itself.
-    fn handle_accepted_prompt_history(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+    fn handle_accepted_prompt_and_command_history(
+        &mut self,
+        text: String,
+        kind: TuiUpArrowHistoryItemKind,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.input_view.update(ctx, |input, ctx| {
             input.set_text(&text, ctx);
+            match kind {
+                TuiUpArrowHistoryItemKind::Prompt => input.exit_shell_mode(ctx),
+                TuiUpArrowHistoryItemKind::Command { .. } => input.enter_shell_mode(ctx),
+            }
         });
         self.handle_submitted(text, ctx);
     }
