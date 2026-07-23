@@ -612,9 +612,6 @@ pub enum FeatureFlag {
     /// Enables real-time communication updates for ambient agent tasks.
     AmbientAgentsRTC,
 
-    // Enables a side panel conversation list view for AgentView mode.
-    AgentViewConversationListView,
-
     /// When enabled, the server will use message replacement + retroactive subtasks for
     /// summarization.
     SummarizationViaMessageReplacement,

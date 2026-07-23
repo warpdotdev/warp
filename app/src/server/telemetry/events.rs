@@ -5190,9 +5190,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ConversationListViewOpened
             | Self::ConversationListItemOpened
             | Self::ConversationListItemDeleted
-            | Self::ConversationListLinkCopied => {
-                EnablementState::Flag(FeatureFlag::AgentViewConversationListView)
-            }
+            | Self::ConversationListLinkCopied => EnablementState::Always,
             Self::AgentViewEntered
             | Self::AgentViewExited
             | Self::InlineConversationMenuOpened
