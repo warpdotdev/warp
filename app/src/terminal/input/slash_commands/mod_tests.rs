@@ -68,6 +68,7 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
         (&commands::MCP, SlashCommandKind::Mcp),
         (&commands::EXIT, SlashCommandKind::Exit),
         (&commands::LOGOUT, SlashCommandKind::Logout),
+        (&commands::VERSION, SlashCommandKind::Version),
         (&commands::VIEW_LOGS, SlashCommandKind::ViewLogs),
     ] {
         assert_eq!(
@@ -116,6 +117,21 @@ fn logout_command_executes_immediately_and_takes_no_argument() {
         SlashCommandSelectionBehavior::Execute
     );
     assert_eq!(commands::LOGOUT.availability, Availability::ALWAYS);
+}
+
+#[test]
+fn version_command_executes_immediately_and_takes_no_argument() {
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
+
+    assert_eq!(commands::VERSION.kind, SlashCommandKind::Version);
+    assert!(commands::VERSION.argument.is_none());
+    assert!(!slash_command_is_submitted_as_prompt(&commands::VERSION));
+    assert_eq!(
+        slash_command_selection_behavior(&commands::VERSION),
+        SlashCommandSelectionBehavior::Execute
+    );
+    assert_eq!(commands::VERSION.availability, Availability::ALWAYS);
+    assert!(commands::VERSION.supports_surface(settings::SettingsMode::Tui));
 }
 
 #[test]

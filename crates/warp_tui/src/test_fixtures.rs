@@ -18,6 +18,7 @@ use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewHandle, Wind
 use crate::conversation_selection::TuiConversationSelection;
 use crate::resume::TuiExitSummaryHandle;
 use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::zero_state_animation::ZeroStateAnimationConfig;
 
 struct TestTerminalManager(Arc<FairMutex<TerminalModel>>);
 
@@ -134,6 +135,9 @@ pub(crate) fn add_test_terminal_session(
     ModelHandle<Box<dyn TerminalManagerTrait>>,
 ) {
     app.update(|ctx| {
+        if !ctx.has_singleton_model::<ZeroStateAnimationConfig>() {
+            ctx.add_singleton_model(|_| ZeroStateAnimationConfig::default());
+        }
         let surface_init = TerminalSurfaceInit::new_for_test(ctx);
         let terminal_model = surface_init.model.clone();
         let view = ctx.add_typed_action_tui_view(window_id, |ctx| {

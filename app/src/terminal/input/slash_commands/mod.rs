@@ -1258,7 +1258,8 @@ impl Input {
             | SlashCommandKind::ViewLogs
             | SlashCommandKind::NaturalLanguageDetection
             | SlashCommandKind::Exit
-            | SlashCommandKind::Logout => {
+            | SlashCommandKind::Logout
+            | SlashCommandKind::Version => {
                 debug_assert!(
                     false,
                     "Attempted to execute TUI-only slash command in the GUI: {}",

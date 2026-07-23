@@ -7,9 +7,8 @@
 //! the first accepted submission produces a block and returns whenever the
 //! transcript empties out again.
 
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
@@ -27,7 +26,10 @@ use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
-use crate::zero_state_animation::{StarfieldState, ZeroStateAnimationElement};
+use crate::zero_state_animation::{
+    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent,
+    ZeroStateAnimationElement,
+};
 
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
@@ -37,23 +39,17 @@ const MAX_CHANGELOG_BULLETS: usize = 3;
 /// (changelog, MCP status, project context).
 const LEFT_COLUMN_COLS: u16 = 48;
 
-/// Maximum width of the starfield animation panel.  On wide terminals the
-/// animation stays at this width and excess space becomes blank background.
-const MAX_ANIMATION_COLS: u16 = 100;
-
 // ---------------------------------------------------------------------------
 // TuiZeroStateView
 // ---------------------------------------------------------------------------
 
 /// The zero-state view: displayed when the transcript is empty.
 ///
-/// Owns the starfield animation state so it persists across view re-renders
-/// (e.g. when MCP connects or a changelog loads).  The animation element
-/// receives an `Rc<RefCell<StarfieldState>>` clone on each render, keeping
-/// the star positions continuous through paint-only animation repaints.
+/// Owns the animation clock so the logo's rotation remains continuous across
+/// view re-renders (e.g. when MCP connects or a changelog loads).
 pub(crate) struct TuiZeroStateView {
-    starfield: Rc<RefCell<StarfieldState>>,
     clock: AnimationClock,
+    animation_config: Arc<ZeroStateAnimationConfig>,
     active_session: ModelHandle<ActiveSession>,
 }
 
@@ -94,10 +90,22 @@ impl TuiZeroStateView {
             };
             ctx.notify();
         });
+        let animation_config = ZeroStateAnimationConfig::handle(ctx);
+        let animation_config_snapshot = Arc::new(animation_config.as_ref(ctx).clone());
+        ctx.subscribe_to_model(
+            &animation_config,
+            |view, animation_config, event, ctx| match event {
+                ZeroStateAnimationConfigEvent::Updated => {
+                    view.animation_config = Arc::new(animation_config.as_ref(ctx).clone());
+                    ctx.notify();
+                }
+                ZeroStateAnimationConfigEvent::LoadFailed(_) => {}
+            },
+        );
 
         Self {
-            starfield: Rc::new(RefCell::new(StarfieldState::new())),
             clock: AnimationClock::starting_at(Duration::ZERO),
+            animation_config: animation_config_snapshot,
             active_session,
         }
     }
@@ -125,15 +133,16 @@ impl TuiView for TuiZeroStateView {
                 .with_min_cols(LEFT_COLUMN_COLS)
                 .with_max_cols(LEFT_COLUMN_COLS)
                 .finish();
-        let animation = TuiConstrainedBox::new(
-            ZeroStateAnimationElement::new(
-                Rc::clone(&self.starfield),
-                self.clock,
-                builder.accent_color(),
-            )
-            .finish(),
+        let animation = ZeroStateAnimationElement::new(
+            self.clock,
+            self.animation_config.clone(),
+            WarpLogoStyles {
+                front: builder.accent_text_style(),
+                back: builder.primary_text_style(),
+                side: builder.dim_text_style(),
+                background: builder.muted_text_style(),
+            },
         )
-        .with_max_cols(MAX_ANIMATION_COLS)
         .finish();
         TuiFlex::row()
             .child(text_column)
