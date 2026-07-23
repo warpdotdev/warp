@@ -2903,11 +2903,12 @@ struct AttributedStringBuilder {
     current_style: StyleAndFont,
     current_style_start_char_index: usize,
     style_runs: Vec<(Range<usize>, StyleAndFont)>,
-    // A byte-offset-indexed map from each UTF-8 byte position in `line` to a cell (column) index.
-    // Each character fills *all* of its UTF-8 bytes with the same cell column so that
-    // `paint_line` can use `glyph.index` — which is a byte offset, not a char index — to
-    // look up the correct cell. Without this, multi-byte characters (Thai, CJK, emoji, …) are
-    // drawn at the wrong grid column.
+    // A character-indexed map from each character position in `line` to a cell (column) index.
+    // Each character (base consonant or combining mark) contributes exactly one entry so that
+    // `paint_line` can use `glyph.index` — which BOTH layout backends emit as a character index
+    // (CoreText via `char_offset + char_index`, cosmic-text via `StrIndexMap::char_index`) — to
+    // look up the correct cell. A per-byte map would put every multi-byte character (Thai, CJK,
+    // emoji, …) in the wrong grid column.
     character_index_to_cell_map: Vec<usize>,
     // Tracks the number of *chars* appended (as opposed to bytes) so that style-run ranges stay
     // char-indexed, matching what `layout_line` expects.
@@ -2991,14 +2992,13 @@ impl AttributedStringBuilder {
     /// This will update the mapping of cell indexes so that the character can be connected with
     /// its expected grid position later.
     fn append_character(&mut self, chr: char, column: usize) {
-        let start_byte = self.line.len();
         self.line.push(chr);
-        // `glyph.index` in `paint_line` is a UTF-8 byte offset, so we fill every byte of this
-        // character's UTF-8 encoding with the same cell column. This ensures multi-byte characters
-        // (Thai, CJK, emoji, …) are drawn at the correct grid column.
-        for _ in start_byte..self.line.len() {
-            self.character_index_to_cell_map.push(column);
-        }
+        // `glyph.index` in `paint_line` is a *character* index: both layout backends emit it that
+        // way — CoreText as `char_offset + char_index` (mac/text_layout.rs) and cosmic-text after
+        // `StrIndexMap::char_index` converts its byte offset (winit/fonts/text_layout.rs). So we
+        // push exactly one cell column per character. A multi-byte character (Thai, CJK, emoji, …)
+        // occupies a single map entry and is therefore drawn at the correct grid column.
+        self.character_index_to_cell_map.push(column);
         self.char_count += 1;
     }
 

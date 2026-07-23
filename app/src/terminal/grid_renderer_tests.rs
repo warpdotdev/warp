@@ -209,12 +209,14 @@ fn test_calculate_background_bounds() {
     assert_multi_row_selection_bounds(50, 140, 59, 20); // 10 lines
 }
 
-/// Verifies that `AttributedStringBuilder::character_index_to_cell_map` is **byte-indexed**, not
-/// char-indexed. `paint_line` looks up cells via `glyph.index`, which cosmic_text emits as a UTF-8
-/// byte offset. For ASCII text both indexings happen to coincide, but multi-byte scripts (Thai,
-/// CJK, emoji, …) would have their glyphs drawn at the wrong column otherwise.
+/// Verifies that `AttributedStringBuilder::character_index_to_cell_map` is **char-indexed**, not
+/// byte-indexed. `paint_line` looks up cells via `glyph.index`, which BOTH layout backends emit as
+/// a *character* index — CoreText as `char_offset + char_index`, and cosmic-text after
+/// `StrIndexMap::char_index` converts its raw byte offset. A byte-indexed map lines up with ASCII
+/// by coincidence, but for multi-byte scripts (Thai, CJK, emoji, …) a char-index `glyph.index`
+/// would land mid-codepoint and draw the glyph at the wrong column (or read out of bounds).
 #[test]
-fn test_attributed_string_builder_byte_indexed_cell_map() {
+fn test_attributed_string_builder_char_indexed_cell_map() {
     let dummy_family = FamilyId(0);
     let mut builder = AttributedStringBuilder::new(dummy_family, dummy_family, 10);
 
@@ -240,31 +242,31 @@ fn test_attributed_string_builder_byte_indexed_cell_map() {
     );
     assert_eq!(
         data.character_index_to_cell_map.len(),
-        18,
-        "the cell map must have one entry per byte (NOT per char) — otherwise paint_line, which \
-         indexes with glyph.index (a UTF-8 byte offset), would read out-of-bounds or hit the \
-         wrong cell for any non-ASCII codepoint"
+        6,
+        "the cell map must have one entry per CHARACTER (NOT per byte) — paint_line indexes it with \
+         glyph.index, which both layout backends emit as a character index; a per-byte map would \
+         put every non-ASCII glyph in the wrong cell"
     );
 
-    // Every byte of each codepoint must point to its grid column.
+    // One entry per character, each pointing at its grid column.
     let expected = [
-        0, 0, 0, // ส @ col 0
-        1, 1, 1, // ว @ col 1
-        1, 1, 1, // ั @ col 1 (combining mark stays in same cell as base)
-        2, 2, 2, // ส @ col 2
-        3, 3, 3, // ด @ col 3
-        3, 3, 3, // ี @ col 3 (combining mark stays in same cell as base)
+        0, // ส @ col 0
+        1, // ว @ col 1
+        1, // ั @ col 1 (combining mark stays in same cell as base)
+        2, // ส @ col 2
+        3, // ด @ col 3
+        3, // ี @ col 3 (combining mark stays in same cell as base)
     ];
     assert_eq!(
         data.character_index_to_cell_map, expected,
-        "each byte of a multi-byte codepoint must map to the same cell column"
+        "each character (base or combining mark) maps to exactly one cell column"
     );
 }
 
-/// ASCII regression check — a build that wrongly switched to char-indexing would still pass for
-/// pure-ASCII input, so we explicitly assert the byte map for ASCII looks the same as before.
+/// ASCII regression check — a build that wrongly switched back to byte-indexing would still pass
+/// for pure-ASCII input (byte index == char index there), so we assert the char map for ASCII.
 #[test]
-fn test_attributed_string_builder_byte_indexed_cell_map_ascii() {
+fn test_attributed_string_builder_char_indexed_cell_map_ascii() {
     let dummy_family = FamilyId(0);
     let mut builder = AttributedStringBuilder::new(dummy_family, dummy_family, 10);
 
