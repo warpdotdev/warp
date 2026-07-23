@@ -777,8 +777,8 @@ unsafe fn set_nonblocking(fd: c_int) -> io::Result<()> {
     use self::utils::cvt;
     use libc::{F_GETFL, F_SETFL, O_NONBLOCK, fcntl};
 
-    let flags = cvt(fcntl(fd, F_GETFL, 0))?;
-    cvt(fcntl(fd, F_SETFL, flags | O_NONBLOCK))?;
+    let flags = cvt(unsafe { fcntl(fd, F_GETFL, 0) })?;
+    cvt(unsafe { fcntl(fd, F_SETFL, flags | O_NONBLOCK) })?;
     Ok(())
 }
 
