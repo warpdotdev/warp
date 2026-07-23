@@ -27,7 +27,8 @@ use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 use crate::zero_state_animation::{
-    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement,
+    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent,
+    ZeroStateAnimationElement,
 };
 
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
@@ -37,10 +38,6 @@ const MAX_CHANGELOG_BULLETS: usize = 3;
 /// animation boundary from shifting as content loads asynchronously at startup
 /// (changelog, MCP status, project context).
 const LEFT_COLUMN_COLS: u16 = 48;
-
-/// Maximum width of the logo animation panel. On wide terminals the
-/// animation stays at this width and excess space becomes blank background.
-const MAX_ANIMATION_COLS: u16 = 100;
 
 // ---------------------------------------------------------------------------
 // TuiZeroStateView
@@ -93,10 +90,22 @@ impl TuiZeroStateView {
             };
             ctx.notify();
         });
+        let animation_config = ZeroStateAnimationConfig::handle(ctx);
+        let animation_config_snapshot = Arc::new(animation_config.as_ref(ctx).clone());
+        ctx.subscribe_to_model(
+            &animation_config,
+            |view, animation_config, event, ctx| match event {
+                ZeroStateAnimationConfigEvent::Updated => {
+                    view.animation_config = Arc::new(animation_config.as_ref(ctx).clone());
+                    ctx.notify();
+                }
+                ZeroStateAnimationConfigEvent::LoadFailed(_) => {}
+            },
+        );
 
         Self {
             clock: AnimationClock::starting_at(Duration::ZERO),
-            animation_config: Arc::new(ZeroStateAnimationConfig::as_ref(ctx).clone()),
+            animation_config: animation_config_snapshot,
             active_session,
         }
     }
@@ -124,20 +133,16 @@ impl TuiView for TuiZeroStateView {
                 .with_min_cols(LEFT_COLUMN_COLS)
                 .with_max_cols(LEFT_COLUMN_COLS)
                 .finish();
-        let animation = TuiConstrainedBox::new(
-            ZeroStateAnimationElement::new(
-                self.clock,
-                self.animation_config.clone(),
-                WarpLogoStyles {
-                    front: builder.accent_text_style(),
-                    back: builder.primary_text_style(),
-                    side: builder.dim_text_style(),
-                    background: builder.muted_text_style(),
-                },
-            )
-            .finish(),
+        let animation = ZeroStateAnimationElement::new(
+            self.clock,
+            self.animation_config.clone(),
+            WarpLogoStyles {
+                front: builder.accent_text_style(),
+                back: builder.primary_text_style(),
+                side: builder.dim_text_style(),
+                background: builder.muted_text_style(),
+            },
         )
-        .with_max_cols(MAX_ANIMATION_COLS)
         .finish();
         TuiFlex::row()
             .child(text_column)

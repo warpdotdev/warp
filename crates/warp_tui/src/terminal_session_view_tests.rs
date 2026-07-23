@@ -2,8 +2,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use instant::Instant;
+use tempfile::TempDir;
 use warp::appearance::Appearance;
-use warp::settings::{AISettings, TuiUsageDisplayMode};
+use warp::settings::{AISettings, TuiUsageDisplayMode, TuiZeroStateObject};
 use warp::terminal::model::ansi::{Handler, InputBufferValue};
 use warp::tui_export::{
     AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin,
@@ -58,6 +59,9 @@ use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_sessio
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
+use crate::zero_state_animation::{
+    ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
+};
 
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
@@ -116,6 +120,79 @@ fn inline_menu_padding_preserves_result_capacity() {
     });
 }
 
+#[test]
+fn zero_state_reload_failure_renders_as_an_error_footer_hint() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        app.update(|ctx| {
+            ZeroStateAnimationConfig::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(ZeroStateAnimationConfigEvent::LoadFailed(
+                    ZeroStateAnimationLoadFailure::Reload,
+                ));
+            });
+        });
+
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, tone)| (text.to_owned(), tone))
+            }),
+            Some((
+                super::ZERO_STATE_ASCII_RELOAD_FAILED_HINT.to_owned(),
+                super::TransientHintTone::Error
+            ))
+        );
+
+        app.read(|ctx| {
+            let footer = view.as_ref(ctx).render_footer(ctx).finish();
+            let buffer = render_element(footer, ctx, 120);
+            assert_eq!(
+                buffer.to_lines(),
+                vec![super::ZERO_STATE_ASCII_RELOAD_FAILED_HINT.to_owned()]
+            );
+            assert_eq!(
+                buffer[(0, 0)].fg,
+                TuiUiBuilder::from_app(ctx)
+                    .error_text_style()
+                    .fg
+                    .expect("error text style should have a foreground")
+            );
+        });
+    });
+}
+
+#[test]
+fn zero_state_initial_load_failure_shows_an_error_footer_hint() {
+    App::test((), |mut app| async move {
+        let temp_dir = TempDir::new().unwrap();
+        let config = ZeroStateAnimationConfig::load(
+            &TuiZeroStateObject::AsciiFile {
+                path: "missing.txt".into(),
+            },
+            5.0,
+            0.18,
+            temp_dir.path(),
+        );
+        app.add_singleton_model(move |_| config);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, tone)| (text.to_owned(), tone))
+            }),
+            Some((
+                super::ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT.to_owned(),
+                super::TransientHintTone::Error
+            ))
+        );
+    });
+}
 fn mouse_moved(x: u16, y: u16) -> TuiEvent {
     TuiEvent::MouseMoved {
         position: TuiPoint::new(x, y),
@@ -1077,7 +1154,7 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
                 .updated
                 .extend(view.as_ref(ctx).child_view_ids(ctx));
             presenter.invalidate(&invalidation, ctx, fixture.window_id);
-            presenter.present(ctx, &view, TuiRect::new(0, 0, 120, 40))
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 200, 40))
         });
         let lines = frame.buffer.to_lines();
         let title_row = lines
@@ -1087,6 +1164,14 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
         assert!(
             title_row < 28,
             "zero-state title should render in the transcript area:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines
+                .iter()
+                .take(28)
+                .any(|line| line.chars().skip(148).any(|character| character != ' ')),
+            "animation content should use columns beyond the former 48 + 100 column cap:\n{}",
             lines.join("\n")
         );
     });

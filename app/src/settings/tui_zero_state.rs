@@ -141,7 +141,7 @@ define_settings_group!(TuiZeroStateSettings, settings: [
         private: false,
         toml_path: "appearance.zero_state.object",
         max_table_depth: 0,
-        description: "The object rotated in the TUI zero state. Use built_in or an ascii_file path relative to the TUI settings directory.",
+        description: "The object rotated in the Warp Agent CLI zero state. Use built_in or an ascii_file path relative to the Warp Agent CLI settings directory. Changing this setting reloads the object; editing the linked file requires a restart.",
     },
     rotation_period_seconds: TuiZeroStateRotationPeriodSecondsSetting {
         type: TuiZeroStateRotationPeriodSeconds,
@@ -151,7 +151,7 @@ define_settings_group!(TuiZeroStateSettings, settings: [
         surface: settings::SettingSurfaces::TUI,
         private: false,
         toml_path: "appearance.zero_state.rotation_period_seconds",
-        description: "Seconds per TUI zero-state object rotation, from 1 through 60.",
+        description: "Seconds per Warp Agent CLI zero-state object rotation, from 1 through 60.",
     },
     extrusion_depth: TuiZeroStateExtrusionDepthSetting {
         type: TuiZeroStateExtrusionDepth,
@@ -161,7 +161,7 @@ define_settings_group!(TuiZeroStateSettings, settings: [
         surface: settings::SettingSurfaces::TUI,
         private: false,
         toml_path: "appearance.zero_state.extrusion_depth",
-        description: "Normalized half-depth of the extruded TUI zero-state object, from 0.02 through 0.5.",
+        description: "Normalized half-depth of the extruded Warp Agent CLI zero-state object, from 0.02 through 0.5.",
     },
 ]);
 

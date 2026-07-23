@@ -116,6 +116,8 @@ fn zero_state_schema_entries_are_tui_only() {
 
     assert_eq!(zero_state_entries.len(), 3);
     for entry in zero_state_entries {
+        assert!(entry.description.contains("Warp Agent CLI"));
+        assert!(!entry.description.contains("TUI"));
         let surfaces: SettingSurfaces = (entry.surfaces_fn)();
         assert!(surfaces.includes(SettingsMode::Tui));
         assert!(!surfaces.includes(SettingsMode::Gui));

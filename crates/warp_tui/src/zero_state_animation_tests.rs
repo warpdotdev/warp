@@ -3,19 +3,26 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tempfile::TempDir;
-use warp::settings::TuiZeroStateObject;
+use warp::settings::{
+    TuiZeroStateExtrusionDepthSetting, TuiZeroStateObject, TuiZeroStateObjectSetting,
+    TuiZeroStateRotationPeriodSeconds, TuiZeroStateRotationPeriodSecondsSetting,
+    TuiZeroStateSettings,
+};
+use warp_core::settings::Setting as _;
+use warpui::SingletonEntity as _;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{TuiBufferExt, TuiElement, TuiRect, TuiSize, TuiStyle};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{AddWindowOptions, App, AppContext, Entity, TuiView, TypedActionView};
 
 use super::config::{
-    AsciiArtError, AsciiArtMask, ZeroStateAnimationConfig, ZeroStateShape, resolve_ascii_art_path,
+    AsciiArtError, AsciiArtMask, ReloadObjectOutcome, ZeroStateAnimationConfig,
+    ZeroStateAnimationLoadFailure, ZeroStateShape, resolve_ascii_art_path,
 };
 use super::{
     BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoSurface, WarpLogoStyles,
     ZeroStateAnimationElement, fitted_logo_size, logo_frame_at, object_frame_at,
-    warp_logo_contains,
+    star_count_for_size, warp_logo_contains,
 };
 
 const PANEL_SIZE: TuiSize = TuiSize::new(52, 20);
@@ -29,10 +36,21 @@ fn custom_config(
     extrusion_depth: f64,
 ) -> ZeroStateAnimationConfig {
     ZeroStateAnimationConfig {
+        active_object: TuiZeroStateObject::BuiltIn,
         shape: Arc::new(ZeroStateShape::Ascii(AsciiArtMask::parse(art).unwrap())),
         rotation_period: Duration::from_secs_f64(rotation_period_secs),
         extrusion_depth,
+        load_failure: None,
     }
+}
+#[test]
+fn starfield_density_scales_with_the_full_panel_area() {
+    assert_eq!(star_count_for_size(TuiSize::new(18, 7)), 18);
+    assert_eq!(star_count_for_size(PANEL_SIZE), 36);
+    assert_eq!(star_count_for_size(TuiSize::new(104, 20)), 72);
+    assert_eq!(star_count_for_size(TuiSize::new(1_000, 200)), 6_923);
+    assert_eq!(star_count_for_size(TuiSize::new(2_000, 200)), 8_192);
+    assert_eq!(star_count_for_size(TuiSize::new(u16::MAX, u16::MAX)), 8_192);
 }
 
 fn logo_cells(frame: &super::LogoFrame) -> Vec<(usize, usize, LogoCell)> {
@@ -185,12 +203,13 @@ fn one_revolution_returns_to_the_initial_frame() {
 fn logo_scales_down_while_preserving_cell_aspect() {
     assert_eq!(
         fitted_logo_size(TuiSize::new(100, 40), BUILT_IN_LOGO_CELL_ASPECT_RATIO),
-        Some((42, 17))
+        Some((43, 17))
     );
     assert_eq!(
         fitted_logo_size(TuiSize::new(30, 12), BUILT_IN_LOGO_CELL_ASPECT_RATIO),
         Some((25, 10))
     );
+    assert_eq!(fitted_logo_size(TuiSize::new(100, 40), 4.0), Some((68, 17)));
 }
 
 #[test]
@@ -274,6 +293,7 @@ fn startup_loader_reads_relative_ascii_art_and_retains_motion_settings() {
 
     assert_eq!(config.rotation_period, Duration::from_secs_f64(3.5));
     assert_eq!(config.extrusion_depth, 0.3);
+    assert_eq!(config.load_failure(), None);
     let ZeroStateShape::Ascii(mask) = config.shape.as_ref() else {
         panic!("valid custom art should produce an ASCII shape");
     };
@@ -297,7 +317,140 @@ fn startup_loader_falls_back_for_missing_or_invalid_art_only() {
         assert!(matches!(config.shape.as_ref(), ZeroStateShape::BuiltInWarp));
         assert_eq!(config.rotation_period, Duration::from_secs(7));
         assert_eq!(config.extrusion_depth, 0.4);
+        assert_eq!(
+            config.load_failure(),
+            Some(ZeroStateAnimationLoadFailure::InitialLoad)
+        );
     }
+}
+
+#[test]
+fn object_path_change_reloads_shape_without_changing_motion_settings() {
+    let temp_dir = TempDir::new().unwrap();
+    write_art(temp_dir.path(), "diamond.txt", DIAMOND_ART);
+    write_art(temp_dir.path(), "rocket.txt", ROCKET_ART);
+    let diamond = TuiZeroStateObject::AsciiFile {
+        path: PathBuf::from("diamond.txt"),
+    };
+    let rocket = TuiZeroStateObject::AsciiFile {
+        path: PathBuf::from("rocket.txt"),
+    };
+    let mut config = ZeroStateAnimationConfig::load(&diamond, 3.5, 0.3, temp_dir.path());
+    let initial = object_frame_at(Duration::ZERO, PANEL_SIZE, &config).unwrap();
+
+    assert_eq!(
+        config.reload_object(&rocket, temp_dir.path()),
+        ReloadObjectOutcome::Reloaded
+    );
+    assert_eq!(config.load_failure(), None);
+    assert_eq!(config.rotation_period, Duration::from_secs_f64(3.5));
+    assert_eq!(config.extrusion_depth, 0.3);
+    let ZeroStateShape::Ascii(mask) = config.shape.as_ref() else {
+        panic!("valid replacement art should produce an ASCII shape");
+    };
+    assert_eq!(mask.size(), (5, 6));
+    let reloaded = object_frame_at(Duration::ZERO, PANEL_SIZE, &config).unwrap();
+    assert_ne!(logo_cells(&initial), logo_cells(&reloaded));
+}
+
+#[test]
+fn linked_file_content_change_is_ignored_when_object_path_is_unchanged() {
+    let temp_dir = TempDir::new().unwrap();
+    write_art(temp_dir.path(), "active.txt", DIAMOND_ART);
+    let object = TuiZeroStateObject::AsciiFile {
+        path: PathBuf::from("active.txt"),
+    };
+    let mut config = ZeroStateAnimationConfig::load(&object, 4.0, 0.18, temp_dir.path());
+
+    write_art(temp_dir.path(), "active.txt", ROCKET_ART);
+
+    assert_eq!(
+        config.reload_object(&object, temp_dir.path()),
+        ReloadObjectOutcome::Unchanged
+    );
+    let ZeroStateShape::Ascii(mask) = config.shape.as_ref() else {
+        panic!("unchanged path should retain the loaded ASCII shape");
+    };
+    assert_eq!(mask.size(), (5, 5));
+}
+
+#[test]
+fn invalid_object_path_change_keeps_last_valid_shape() {
+    let temp_dir = TempDir::new().unwrap();
+    write_art(temp_dir.path(), "diamond.txt", DIAMOND_ART);
+    let diamond = TuiZeroStateObject::AsciiFile {
+        path: PathBuf::from("diamond.txt"),
+    };
+    let missing = TuiZeroStateObject::AsciiFile {
+        path: PathBuf::from("missing.txt"),
+    };
+    let mut config = ZeroStateAnimationConfig::load(&diamond, 4.0, 0.18, temp_dir.path());
+
+    assert_eq!(
+        config.reload_object(&missing, temp_dir.path()),
+        ReloadObjectOutcome::Failed
+    );
+    assert_eq!(
+        config.load_failure(),
+        Some(ZeroStateAnimationLoadFailure::Reload)
+    );
+    let ZeroStateShape::Ascii(mask) = config.shape.as_ref() else {
+        panic!("invalid replacement path should retain the previous ASCII shape");
+    };
+    assert_eq!(mask.size(), (5, 5));
+}
+
+#[test]
+fn settings_model_reloads_only_object_changes() {
+    let temp_dir = TempDir::new().unwrap();
+    let diamond_path = write_art(temp_dir.path(), "diamond.txt", DIAMOND_ART);
+    let rocket_path = write_art(temp_dir.path(), "rocket.txt", ROCKET_ART);
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| TuiZeroStateSettings {
+                object: TuiZeroStateObjectSetting::new(Some(TuiZeroStateObject::AsciiFile {
+                    path: diamond_path,
+                })),
+                rotation_period_seconds: TuiZeroStateRotationPeriodSecondsSetting::new(None),
+                extrusion_depth: TuiZeroStateExtrusionDepthSetting::new(None),
+            });
+            ZeroStateAnimationConfig::register(ctx);
+        });
+
+        let initial_period = app.read(|ctx| ZeroStateAnimationConfig::as_ref(ctx).rotation_period);
+        app.update(|ctx| {
+            TuiZeroStateSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .object
+                    .load_value(
+                        TuiZeroStateObject::AsciiFile { path: rocket_path },
+                        true,
+                        ctx,
+                    )
+                    .unwrap();
+                settings
+                    .rotation_period_seconds
+                    .load_value(
+                        serde_json::from_value::<TuiZeroStateRotationPeriodSeconds>(
+                            serde_json::json!(12.0),
+                        )
+                        .unwrap(),
+                        true,
+                        ctx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        app.read(|ctx| {
+            let config = ZeroStateAnimationConfig::as_ref(ctx);
+            assert_eq!(config.rotation_period, initial_period);
+            let ZeroStateShape::Ascii(mask) = config.shape.as_ref() else {
+                panic!("object setting event should reload the replacement ASCII shape");
+            };
+            assert_eq!(mask.size(), (5, 6));
+        });
+    });
 }
 
 #[test]
@@ -363,6 +516,19 @@ fn configured_depth_changes_edge_on_width() {
 fn custom_shapes_preserve_their_authored_cell_aspect() {
     assert_eq!(fitted_logo_size(PANEL_SIZE, 1.0), Some((17, 17)));
     assert_eq!(fitted_logo_size(PANEL_SIZE, 9.0 / 5.0), Some((31, 17)));
+}
+
+#[test]
+fn extreme_ascii_aspect_ratios_clamp_to_a_visible_minimum() {
+    let wide = custom_config(&"#".repeat(128), 4.0, 0.18);
+    let tall = custom_config(&"#\n".repeat(64), 4.0, 0.18);
+
+    assert_eq!(fitted_logo_size(PANEL_SIZE, 128.0), Some((50, 5)));
+    assert_eq!(fitted_logo_size(PANEL_SIZE, 1.0 / 64.0), Some((5, 17)));
+    for config in [wide, tall] {
+        let frame = object_frame_at(Duration::ZERO, PANEL_SIZE, &config).unwrap();
+        assert!(!logo_cells(&frame).is_empty());
+    }
 }
 
 #[test]

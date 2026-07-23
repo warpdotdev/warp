@@ -19,15 +19,16 @@ use warpui_core::elements::tui::{
 #[path = "zero_state_animation_config.rs"]
 mod config;
 
-pub(crate) use config::ZeroStateAnimationConfig;
 use config::ZeroStateShape;
+pub(crate) use config::{
+    ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
+};
 
 /// A terminal does not need a 30 fps repaint for this deliberately slow motion.
 const REPAINT_INTERVAL: Duration = Duration::from_millis(66);
 
 const MIN_ANIMATION_COLS: u16 = 18;
 const MIN_ANIMATION_ROWS: u16 = 7;
-const MAX_LOGO_COLS: u16 = 42;
 const MAX_LOGO_ROWS: u16 = 17;
 const MIN_OBJECT_COLS: u16 = 5;
 const MIN_OBJECT_ROWS: u16 = 5;
@@ -39,7 +40,10 @@ const SIDE_STITCH_MODULUS: usize = 29;
 const STARFIELD_REFERENCE_AREA: usize = 52 * 20;
 const STARFIELD_REFERENCE_COUNT: usize = 36;
 const STARFIELD_MIN_COUNT: usize = 18;
-const STARFIELD_MAX_COUNT: usize = 48;
+/// Bounds per-frame work for synthetic or otherwise impractical terminal sizes.
+/// Ordinary terminal dimensions remain below this budget and retain full
+/// area-proportional star density.
+const STARFIELD_CANDIDATE_BUDGET: usize = 8_192;
 const STAR_TRAVEL_SECS: f64 = 7.0;
 const MAX_ASCII_ART_BYTES: u64 = 64 * 1024;
 const MAX_ASCII_ART_COLS: usize = 128;
@@ -360,8 +364,7 @@ fn object_frame_at(
 fn draw_background_stars(frame: &mut LogoFrame, elapsed: Duration) {
     let width = usize::from(frame.size.width);
     let height = usize::from(frame.size.height);
-    let star_count = (width * height * STARFIELD_REFERENCE_COUNT / STARFIELD_REFERENCE_AREA)
-        .clamp(STARFIELD_MIN_COUNT, STARFIELD_MAX_COUNT);
+    let star_count = star_count_for_size(frame.size);
     let center_x = (f64::from(frame.size.width) - 1.0) / 2.0;
     let center_y = (f64::from(frame.size.height) - 1.0) / 2.0;
     let elapsed = elapsed.as_secs_f64();
@@ -402,6 +405,13 @@ fn draw_background_stars(frame: &mut LogoFrame, elapsed: Duration) {
     }
 }
 
+fn star_count_for_size(size: TuiSize) -> usize {
+    let area = u64::from(size.width) * u64::from(size.height);
+    let scaled_count = area * STARFIELD_REFERENCE_COUNT as u64 / STARFIELD_REFERENCE_AREA as u64;
+    usize::try_from(scaled_count)
+        .expect("u16 terminal dimensions produce a star count that fits usize")
+        .clamp(STARFIELD_MIN_COUNT, STARFIELD_CANDIDATE_BUDGET)
+}
 fn unit_random(seed: u64) -> f64 {
     let mut value = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -416,14 +426,25 @@ fn fitted_logo_size(size: TuiSize, cell_aspect_ratio: f64) -> Option<(u16, u16)>
 
     let available_cols = size.width.saturating_sub(2);
     let available_rows = size.height.saturating_sub(2);
-    let mut rows = available_rows.min(MAX_LOGO_ROWS);
-    let mut cols = ((f64::from(rows) * cell_aspect_ratio).round() as u16)
-        .min(available_cols)
-        .min(MAX_LOGO_COLS);
-    rows = rows.min((f64::from(cols) / cell_aspect_ratio).round() as u16);
-    cols = ((f64::from(rows) * cell_aspect_ratio).round() as u16).min(cols);
+    let max_rows = available_rows.min(MAX_LOGO_ROWS);
+    let natural_cols = (f64::from(max_rows) * cell_aspect_ratio).round() as u16;
+    if natural_cols <= available_cols {
+        return Some((natural_cols.max(MIN_OBJECT_COLS), max_rows));
+    }
 
-    (cols >= MIN_OBJECT_COLS && rows >= MIN_OBJECT_ROWS).then_some((cols, rows))
+    let cols = available_cols;
+    let fitted_rows = (f64::from(cols) / cell_aspect_ratio).round() as u16;
+    if fitted_rows < MIN_OBJECT_ROWS {
+        // Preserve visibility when an extreme horizontal aspect ratio would
+        // otherwise round the height to zero.
+        return Some((cols, MIN_OBJECT_ROWS));
+    }
+
+    let rows = fitted_rows.min(max_rows);
+    let cols = ((f64::from(rows) * cell_aspect_ratio).round() as u16)
+        .min(cols)
+        .max(MIN_OBJECT_COLS);
+    Some((cols, rows))
 }
 
 fn sample_coordinate(index: usize, sample_count: usize) -> f64 {

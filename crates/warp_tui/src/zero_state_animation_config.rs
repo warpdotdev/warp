@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use warp::settings::{TuiZeroStateObject, TuiZeroStateSettings};
+use warp::settings::{TuiZeroStateObject, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 use warp_core::safe_warn;
 use warp_core::settings::Setting;
 use warpui::SingletonEntity;
@@ -171,31 +171,55 @@ impl From<std::io::Error> for AsciiArtError {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ZeroStateAnimationConfig {
+    pub(super) active_object: TuiZeroStateObject,
     pub(super) shape: Arc<ZeroStateShape>,
     pub(super) rotation_period: Duration,
     pub(super) extrusion_depth: f64,
+    pub(super) load_failure: Option<ZeroStateAnimationLoadFailure>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ZeroStateAnimationLoadFailure {
+    InitialLoad,
+    Reload,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ZeroStateAnimationConfigEvent {
+    Updated,
+    LoadFailed(ZeroStateAnimationLoadFailure),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ReloadObjectOutcome {
+    Unchanged,
+    Reloaded,
+    Failed,
 }
 
 impl Default for ZeroStateAnimationConfig {
     fn default() -> Self {
         Self {
+            active_object: TuiZeroStateObject::BuiltIn,
             shape: Arc::new(ZeroStateShape::BuiltInWarp),
             rotation_period: Duration::from_secs_f64(
                 warp::settings::DEFAULT_TUI_ZERO_STATE_ROTATION_PERIOD_SECONDS,
             ),
             extrusion_depth: warp::settings::DEFAULT_TUI_ZERO_STATE_EXTRUSION_DEPTH,
+            load_failure: None,
         }
     }
 }
 
 impl Entity for ZeroStateAnimationConfig {
-    type Event = ();
+    type Event = ZeroStateAnimationConfigEvent;
 }
 
 impl SingletonEntity for ZeroStateAnimationConfig {}
 
 impl ZeroStateAnimationConfig {
     pub(crate) fn register(ctx: &mut AppContext) {
+        let config_dir = warp_core::paths::tui_config_local_dir();
         let (object, rotation_period, extrusion_depth) = {
             let settings = TuiZeroStateSettings::as_ref(ctx);
             (
@@ -204,46 +228,101 @@ impl ZeroStateAnimationConfig {
                 settings.extrusion_depth.value().get(),
             )
         };
-        let config = Self::load(
-            &object,
-            rotation_period,
-            extrusion_depth,
-            &warp_core::paths::tui_config_local_dir(),
+        let config = Self::load(&object, rotation_period, extrusion_depth, &config_dir);
+        let config = ctx.add_singleton_model(move |_| config);
+        ctx.subscribe_to_model(
+            &TuiZeroStateSettings::handle(ctx),
+            move |settings, event, ctx| {
+                let TuiZeroStateSettingsChangedEvent::TuiZeroStateObjectSetting { .. } = event
+                else {
+                    return;
+                };
+                let object = settings.as_ref(ctx).object.value().clone();
+                config.update(ctx, |config, ctx| {
+                    match config.reload_object(&object, &config_dir) {
+                        ReloadObjectOutcome::Unchanged => {}
+                        ReloadObjectOutcome::Reloaded => {
+                            ctx.emit(ZeroStateAnimationConfigEvent::Updated);
+                        }
+                        ReloadObjectOutcome::Failed => {
+                            ctx.emit(ZeroStateAnimationConfigEvent::LoadFailed(
+                                ZeroStateAnimationLoadFailure::Reload,
+                            ));
+                        }
+                    }
+                });
+            },
         );
-        ctx.add_singleton_model(move |_| config);
     }
 
-    pub(super) fn load(
+    pub(crate) fn load(
         object: &TuiZeroStateObject,
         rotation_period_seconds: f64,
         extrusion_depth: f64,
         config_dir: &Path,
     ) -> Self {
-        let shape = match object {
-            TuiZeroStateObject::BuiltIn => ZeroStateShape::BuiltInWarp,
-            TuiZeroStateObject::AsciiFile { path } => {
-                let path = resolve_ascii_art_path(path, config_dir);
-                match load_ascii_art(&path) {
-                    Ok(mask) => ZeroStateShape::Ascii(mask),
-                    Err(error) => {
-                        safe_warn!(
-                            safe: (
-                                "Could not load custom TUI zero-state ASCII art; using the built-in Warp logo"
-                            ),
-                            full: (
-                                "Could not load custom TUI zero-state ASCII art; using the built-in Warp logo: path={} error={error}",
-                                path.display()
-                            )
-                        );
-                        ZeroStateShape::BuiltInWarp
-                    }
-                }
+        let (active_object, shape, load_failure) = match load_object_shape(object, config_dir) {
+            Ok(shape) => (object.clone(), shape, None),
+            Err((path, error)) => {
+                safe_warn!(
+                    safe: (
+                        "Could not load custom Warp Agent CLI zero-state ASCII art; using the built-in Warp logo"
+                    ),
+                    full: (
+                        "Could not load custom Warp Agent CLI zero-state ASCII art; using the built-in Warp logo: path={} error={error}",
+                        path.display()
+                    )
+                );
+                (
+                    TuiZeroStateObject::BuiltIn,
+                    ZeroStateShape::BuiltInWarp,
+                    Some(ZeroStateAnimationLoadFailure::InitialLoad),
+                )
             }
         };
         Self {
+            active_object,
             shape: Arc::new(shape),
             rotation_period: Duration::from_secs_f64(rotation_period_seconds),
             extrusion_depth,
+            load_failure,
+        }
+    }
+
+    pub(crate) fn load_failure(&self) -> Option<ZeroStateAnimationLoadFailure> {
+        self.load_failure
+    }
+
+    pub(super) fn reload_object(
+        &mut self,
+        object: &TuiZeroStateObject,
+        config_dir: &Path,
+    ) -> ReloadObjectOutcome {
+        if &self.active_object == object {
+            self.load_failure = None;
+            return ReloadObjectOutcome::Unchanged;
+        }
+
+        match load_object_shape(object, config_dir) {
+            Ok(shape) => {
+                self.active_object = object.clone();
+                self.shape = Arc::new(shape);
+                self.load_failure = None;
+                ReloadObjectOutcome::Reloaded
+            }
+            Err((path, error)) => {
+                safe_warn!(
+                    safe: (
+                        "Could not reload custom Warp Agent CLI zero-state ASCII art; keeping the current object"
+                    ),
+                    full: (
+                        "Could not reload custom Warp Agent CLI zero-state ASCII art; keeping the current object: path={} error={error}",
+                        path.display()
+                    )
+                );
+                self.load_failure = Some(ZeroStateAnimationLoadFailure::Reload);
+                ReloadObjectOutcome::Failed
+            }
         }
     }
 }
@@ -256,6 +335,20 @@ pub(super) fn resolve_ascii_art_path(path: &Path, config_dir: &Path) -> PathBuf 
     }
 }
 
+fn load_object_shape(
+    object: &TuiZeroStateObject,
+    config_dir: &Path,
+) -> Result<ZeroStateShape, (PathBuf, AsciiArtError)> {
+    match object {
+        TuiZeroStateObject::BuiltIn => Ok(ZeroStateShape::BuiltInWarp),
+        TuiZeroStateObject::AsciiFile { path } => {
+            let path = resolve_ascii_art_path(path, config_dir);
+            load_ascii_art(&path)
+                .map(ZeroStateShape::Ascii)
+                .map_err(|error| (path, error))
+        }
+    }
+}
 fn load_ascii_art(path: &Path) -> Result<AsciiArtMask, AsciiArtError> {
     let mut file = File::open(path)?;
     let metadata = file.metadata()?;
