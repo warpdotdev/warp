@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
     AIConversationId, BannerState, BlocklistAIHistoryModel, IsSharedSessionCreator,
-    LocalTtyTerminalManager, ServerConversationToken, TerminalManagerTrait, TerminalSurfaceResult,
+    LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken, TerminalManagerTrait,
+    TerminalSurfaceResult,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -160,6 +161,7 @@ impl TuiSessions {
         // The manager uses this internal model for unsupported-shell state; the
         // TUI does not render a separate banner surface.
         let banner = ctx.add_model(|_| BannerState::default());
+        let model_event_sender = PersistenceWriter::as_ref(ctx).sender();
         let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
             startup_directory,
             HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
@@ -167,7 +169,7 @@ impl TuiSessions {
             None,
             banner.clone(),
             Vector2F::new(120., 24.),
-            None,
+            model_event_sender,
             None,
             TRANSCRIPT_BLOCK_SPACING,
             ctx,

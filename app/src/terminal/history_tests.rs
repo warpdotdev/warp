@@ -898,6 +898,97 @@ fn append_command_with_rich_history_data() {
 }
 
 #[test]
+fn tui_history_restores_persisted_commands_missing_from_histfile() {
+    App::test((), |mut app| async move {
+        let session_info = SessionInfo::new_for_test().with_id(0);
+        let shell_host = ShellHost::from_session_info(&session_info);
+        let session = Arc::new(Session::new(
+            session_info,
+            Arc::new(TestCommandExecutor::default()),
+        ));
+        let persisted_command = PersistedCommand {
+            id: 1,
+            command: "ls".to_owned(),
+            exit_code: Some(ExitCode::from(0)),
+            start_ts: Some(Local::now()),
+            completed_ts: Some(Local::now()),
+            pwd: Some("/tmp".to_owned()),
+            shell_host: Some(shell_host),
+            session_id: None,
+            git_branch: None,
+            workflow_id: None,
+            workflow_command: None,
+            is_agent_executed: false,
+        };
+        let mut history_handle = app.add_model(|_| History::new_for_tui(vec![persisted_command]));
+
+        initialize_history_for_testing(
+            &mut history_handle,
+            session.clone(),
+            async { vec!["pwd".to_owned()] },
+            Vec::new(),
+            &mut app,
+        )
+        .await;
+
+        history_handle.read(&app, |history, _| {
+            let commands = history.commands(session.id()).unwrap_or_default();
+            assert_eq!(
+                commands
+                    .iter()
+                    .map(|entry| entry.command.as_str())
+                    .collect_vec(),
+                vec!["pwd", "ls"]
+            );
+            assert_eq!(commands[1].pwd.as_deref(), Some("/tmp"));
+        });
+    });
+}
+
+#[test]
+fn gui_history_does_not_restore_persisted_commands_missing_from_histfile() {
+    App::test((), |mut app| async move {
+        let session_info = SessionInfo::new_for_test().with_id(0);
+        let shell_host = ShellHost::from_session_info(&session_info);
+        let session = Arc::new(Session::new(
+            session_info,
+            Arc::new(TestCommandExecutor::default()),
+        ));
+        let persisted_command = PersistedCommand {
+            id: 1,
+            command: "ls".to_owned(),
+            exit_code: Some(ExitCode::from(0)),
+            start_ts: Some(Local::now()),
+            completed_ts: Some(Local::now()),
+            pwd: Some("/tmp".to_owned()),
+            shell_host: Some(shell_host),
+            session_id: None,
+            git_branch: None,
+            workflow_id: None,
+            workflow_command: None,
+            is_agent_executed: false,
+        };
+        let mut history_handle = app.add_model(|_| History::new(vec![persisted_command]));
+
+        initialize_history_for_testing(
+            &mut history_handle,
+            session.clone(),
+            async { vec!["pwd".to_owned()] },
+            Vec::new(),
+            &mut app,
+        )
+        .await;
+
+        history_handle.read(&app, |history, _| {
+            assert_eq!(
+                history.commands(session.id()).unwrap_or_default(),
+                vec![&HistoryEntry::command_only("pwd")]
+            );
+        });
+    });
+}
+
+#[test]
 fn append_restored_command_doesnt_overwrite_rich_history() {
     App::test((), |mut app| async move {
         let session = Arc::new(Session::new(
