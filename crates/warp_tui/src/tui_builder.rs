@@ -219,15 +219,17 @@ impl TuiUiBuilder {
         cell_color(self.base_background().blend(&accent.with_opacity(10)))
     }
 
+    /// Pale-green accent shared by shell command markers and shell-mode labels.
+    pub(crate) fn shell_command_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().bright.green,
+        )))
+    }
+
     /// Bold pale-green `!` marker for a shell command row, over the same
-    /// [`Self::shell_command_background`] the rest of the row uses. Mirrors the
-    /// shell-mode `!` affordance the input shows before submission, which is
-    /// stripped from the command sent to the PTY.
+    /// [`Self::shell_command_background`] the rest of the row uses.
     pub(crate) fn shell_command_prefix_style(&self) -> TuiStyle {
-        TuiStyle::default()
-            .fg(cell_color(ThemeFill::from(
-                self.warp_theme.terminal_colors().bright.green,
-            )))
+        self.shell_command_accent_style()
             .bg(self.shell_command_background())
             .add_modifier(Modifier::BOLD)
     }

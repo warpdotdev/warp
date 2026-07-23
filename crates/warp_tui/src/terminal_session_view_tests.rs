@@ -1327,7 +1327,7 @@ fn footer_does_not_render_credit_actions() {
 }
 
 #[test]
-fn footer_renders_bash_sections_without_model_or_usage() {
+fn footer_renders_shell_mode_sections_without_model_or_usage() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
@@ -1359,13 +1359,21 @@ fn footer_renders_bash_sections_without_model_or_usage() {
                 &builder,
             )
             .finish();
-            let lines = render_element(row, ctx, 120).to_lines();
+            let buffer = render_element(row, ctx, 120);
+            assert_eq!(
+                buffer[(0, 0)].fg,
+                builder
+                    .shell_command_accent_style()
+                    .fg
+                    .expect("shell command accent has a foreground")
+            );
+            let lines = buffer.to_lines();
             let line = lines.join("\n");
 
             assert_eq!(
                 lines,
                 vec![format!("{SHELL_MODE_HINT} /home/user/warp ↬ main • +3 -1")],
-                "bash footer leads with the shell-mode indicator and hides model/usage"
+                "shell footer leads with the shell-mode indicator and hides model/usage"
             );
             assert!(
                 line.starts_with(SHELL_MODE_HINT),
@@ -1373,11 +1381,11 @@ fn footer_renders_bash_sections_without_model_or_usage() {
             );
             assert!(
                 !line.contains("TestModel"),
-                "model segment is hidden in bash mode"
+                "model segment is hidden in shell mode"
             );
             assert!(
                 !line.contains("2.5 credits"),
-                "usage segment is hidden in bash mode"
+                "usage segment is hidden in shell mode"
             );
         });
     });

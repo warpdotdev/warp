@@ -2187,6 +2187,13 @@ fn autodetected_unlocked_shell_uses_shell_mode_ui() {
             assert!(view.as_ref(ctx).is_shell_mode(ctx));
             let (buffer, _, _) = render_view(&view, ctx);
             assert!(buffer.to_lines()[0].starts_with("! "));
+            assert_eq!(
+                buffer[(0, 0)].fg,
+                TuiUiBuilder::from_app(ctx)
+                    .shell_command_accent_style()
+                    .fg
+                    .expect("shell command accent has a foreground")
+            );
         });
     });
 }

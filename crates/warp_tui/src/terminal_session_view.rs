@@ -178,7 +178,7 @@ const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model."
 /// Footer label shown while the input is in `!` shell mode. The how-to-exit
 /// guidance lives in the input's placeholder ghost text, so the footer only
 /// names the mode.
-const SHELL_MODE_HINT: &str = "shell mode";
+const SHELL_MODE_HINT: &str = "Shell mode";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
 const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
@@ -212,7 +212,7 @@ fn cost_command_unavailable_hint(
 /// Resolved segments for the footer's left-aligned sectioned status row.
 /// [`TuiTerminalSessionView::render_footer`] builds this from view state and
 /// delegates to [`render_status_footer_row`]; keeping the row layout separate
-/// makes the left alignment, section order, and bash-mode omissions directly
+/// makes the left alignment, section order, and shell-mode omissions directly
 /// render-to-lines testable without view-state plumbing.
 struct FooterSegments {
     /// Whether the input is in `!` shell mode: the shell-mode indicator leads
@@ -237,7 +237,7 @@ struct FooterSegments {
 ///
 /// Agent mode orders the sections `[model] [cwd ↬ branch] • [usage] •
 /// [+N -M]`; shell mode leads with the shell-mode indicator and hides the
-/// model and usage segments, yielding `[shell mode] [cwd ↬ branch] •
+/// model and usage segments, yielding `[Shell mode] [cwd ↬ branch] •
 /// [+N -M]`. A plain space separates the model from cwd/branch; a ` • `
 /// separator precedes usage and diff. Absent metadata never leaves a stray
 /// separator. Every child truncates to a single row, so the row lays out one
@@ -247,13 +247,13 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
     let mut row = TuiFlex::row();
     let mut has_segment = false;
 
-    // First segment: the shell-mode indicator (shell mode) or the clickable
+    // First segment: the shell-mode indicator (Shell mode) or the clickable
     // model label (agent mode). Shell mode hides the model segment so the
     // indicator leads.
     if segments.shell_mode {
         row = row.child(
             TuiText::new(SHELL_MODE_HINT)
-                .with_style(builder.shell_mode_accent_style())
+                .with_style(builder.shell_command_accent_style())
                 .truncate()
                 .finish(),
         );

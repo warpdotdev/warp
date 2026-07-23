@@ -453,7 +453,7 @@ impl TuiView for TuiInputView {
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(ctx);
         let (prefix, prefix_style) = if self.is_shell_mode(ctx) {
-            ("!", builder.shell_mode_accent_style())
+            ("!", builder.shell_command_accent_style())
         } else {
             (">", builder.accent_text_style())
         };
