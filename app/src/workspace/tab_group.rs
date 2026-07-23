@@ -1,5 +1,7 @@
 //! Tab group data model. Gated at runtime by `FeatureFlag::GroupedTabs`.
 
+use std::path::PathBuf;
+
 use uuid::Uuid;
 use warpui::elements::DraggableState;
 
@@ -32,6 +34,8 @@ pub struct TabGroup {
     pub draggable_state: DraggableState,
     /// True when this whole group is pinned to the front of the tab list.
     pub pinned: bool,
+    /// The directory this group is bound to, if it's a "Project Folder".
+    pub working_directory: Option<PathBuf>,
 }
 
 impl TabGroup {
@@ -44,6 +48,7 @@ impl TabGroup {
             collapsed: false,
             draggable_state: Default::default(),
             pinned: false,
+            working_directory: None,
         }
     }
 }
