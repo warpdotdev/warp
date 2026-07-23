@@ -32,6 +32,10 @@ pub enum BundledSkillActivation {
     RequiresMcp(McpIntegration),
     /// Active only when a specific file exists on disk.
     RequiresFile(PathBuf),
+    /// Active only when running as the interactive desktop app — i.e. NOT in an
+    /// autonomous cloud-agent or CLI run, where there is no user present to drive
+    /// an interactive skill.
+    RequiresInteractiveApp,
 }
 
 impl BundledSkillActivation {
@@ -44,6 +48,7 @@ impl BundledSkillActivation {
                 TemplatableMCPServerManager::as_ref(ctx).is_mcp_server_running(*integration)
             }
             Self::RequiresFile(path) => path.exists(),
+            Self::RequiresInteractiveApp => !AppExecutionMode::as_ref(ctx).is_autonomous(),
         }
     }
 }
@@ -297,7 +302,8 @@ impl BundledSkill {
                     BundledSkillActivation::Always
                     | BundledSkillActivation::TuiOnly
                     | BundledSkillActivation::RequiresFeature(_)
-                    | BundledSkillActivation::RequiresFile(_) => icon_for_bundled_skill(&id),
+                    | BundledSkillActivation::RequiresFile(_)
+                    | BundledSkillActivation::RequiresInteractiveApp => icon_for_bundled_skill(&id),
                 };
                 (
                     id,
@@ -560,6 +566,11 @@ pub(crate) fn activation_for_bundled_skill(
         }
         "tui-migrate-setup" => BundledSkillActivation::TuiOnly,
         "warpctrl" => BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
+        // `pr-comments` renders an interactive review UI (via `insert_code_review_comments`)
+        // and then waits for the user. In autonomous cloud-agent / CLI runs there is no
+        // review UI or user to wait for, and its slow, network-bound fetch commands trigger
+        // a cancel-retry loop, so it should not be surfaced or invoked there.
+        "pr-comments" => BundledSkillActivation::RequiresInteractiveApp,
         _ => BundledSkillActivation::Always,
     }
 }

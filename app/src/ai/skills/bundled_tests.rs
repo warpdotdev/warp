@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -78,4 +80,20 @@ fn local_and_remote_catalogs_are_isolated() {
         remote_content(&bundled_skills, &second_host_id),
         Some("second")
     );
+}
+
+#[test]
+fn pr_comments_is_gated_to_the_interactive_app() {
+    let resources_dir = Path::new("/bundled");
+    // `pr-comments` is interactive-only, so it is gated to the desktop app and
+    // hidden in autonomous cloud-agent / CLI runs.
+    assert!(matches!(
+        activation_for_bundled_skill("pr-comments", resources_dir),
+        BundledSkillActivation::RequiresInteractiveApp
+    ));
+    // Skills without a special activation stay always-on.
+    assert!(matches!(
+        activation_for_bundled_skill("some-other-skill", resources_dir),
+        BundledSkillActivation::Always
+    ));
 }
