@@ -1,16 +1,23 @@
-//! Starfield animation for the TUI zero state.
+//! ASCII art portrait animation for the TUI zero state.
 //!
-//! 220 stars radiate outward from the terminal centre, streaking as they
-//! accelerate toward the screen edge — a "warp speed" effect driven by an
-//! analytically-computed spring-based speed ramp.
+//! The right-hand panel of the zero state renders an ASCII art portrait of
+//! Kevin Yang, mapped through a 10-level luminance ramp (`" .:-=+*#@█"`) and
+//! animated with three layered effects at ~30 fps:
 //!
-//! Animation state ([`StarfieldState`]) is owned by [`super::TuiZeroStateView`]
-//! and shared with [`ZeroStateAnimationElement`] via an `Rc<RefCell<…>>`, so
-//! the animation continues uninterrupted across view re-renders (e.g. when MCP
-//! connects or a changelog loads).
+//!   (a) **Scanline shimmer** — a bright horizontal band sweeping top → bottom,
+//!       repeating every two seconds.
+//!   (b) **Glyph flicker** — roughly 4 % of portrait cells swap to an adjacent
+//!       ramp character per frame.
+//!   (c) **Accent highlight** — roughly 1.5 % of bright cells briefly take the
+//!       terminal accent colour.
+//!
+//! The portrait is derived analytically from the panel dimensions on every
+//! render, so it reflows automatically on resize without any per-frame state.
+//!
+//! [`ZeroStateAnimationElement`] is owned by [`super::TuiZeroStateView`]
+//! and re-created on each render pass from the shared [`AnimationClock`],
+//! keeping layout stateless while the clock ensures a continuous animation.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::time::Duration;
 
 use warpui_core::AppContext;
@@ -24,196 +31,154 @@ use warpui_core::elements::tui::{
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Target repaint cadence (~30 fps — smooth and low-CPU for a background FX).
+/// Target repaint cadence (~30 fps).
 const REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
-/// Simulation step rate: advance stars this many times per elapsed second.
-const SIM_FPS: f64 = 60.0;
+/// Minimum panel dimensions for the animation to render.
+pub(crate) const MIN_ANIMATION_COLS: u16 = 20;
+pub(crate) const MIN_ANIMATION_ROWS: u16 = 10;
 
-/// Number of stars in the field.
-pub(crate) const NUM_STARS: usize = 220;
-
-/// ASCII glyph ramp: dim near centre, bright near the edge.
-const STAR_GLYPHS: &[u8] = b".:-=+*#@";
-
-/// Warp factor the spring starts at.
-pub(crate) const WARP_INITIAL: f64 = 0.15;
-
-/// Warp factor the spring converges to.
-pub(crate) const WARP_TARGET: f64 = 0.85;
-
-/// Minimum width / height for the animation to render.
-const MIN_ANIMATION_COLS: u16 = 4;
-const MIN_ANIMATION_ROWS: u16 = 2;
+/// 10-level luminance ramp: index 0 = darkest (space), index 9 = brightest (█).
+const RAMP: &[&str] = &[" ", ".", ":", "-", "=", "+", "*", "#", "@", "█"];
 
 // ---------------------------------------------------------------------------
-// Warp spring (analytical solution)
-// ---------------------------------------------------------------------------
-// Underdamped spring with ζ = 0.8, ω = 1.0:
-//   ωd = ω · √(1 − ζ²) = √0.36 = 0.6
-//
-//   warp(t) = target + e^(−ζωt) · [ Δ·cos(ωd·t) + (ζω·Δ/ωd)·sin(ωd·t) ]
-// where Δ = initial − target = 0.15 − 0.85 = −0.7
-
-const SPRING_ZETA: f64 = 0.8;
-const SPRING_OMEGA: f64 = 1.0;
-const SPRING_OMEGA_D: f64 = 0.6;
-const SPRING_DELTA: f64 = WARP_INITIAL - WARP_TARGET; // −0.7
-
-pub(crate) fn warp_at(t: f64) -> f64 {
-    let envelope = (-SPRING_ZETA * SPRING_OMEGA * t).exp();
-    let cos_term = SPRING_DELTA * (SPRING_OMEGA_D * t).cos();
-    let sin_term =
-        (SPRING_ZETA * SPRING_OMEGA * SPRING_DELTA / SPRING_OMEGA_D) * (SPRING_OMEGA_D * t).sin();
-    (WARP_TARGET + envelope * (cos_term + sin_term)).clamp(WARP_INITIAL - 0.01, WARP_TARGET + 0.1)
-}
-
-// ---------------------------------------------------------------------------
-// Minimal deterministic PRNG (xorshift64)
+// Portrait geometry
 // ---------------------------------------------------------------------------
 
-pub(crate) fn xorshift64(s: &mut u64) -> u64 {
-    *s ^= *s << 13;
-    *s ^= *s >> 7;
-    *s ^= *s << 17;
-    *s
-}
-
-pub(crate) fn xorshift_f64(s: &mut u64) -> f64 {
-    (xorshift64(s) >> 11) as f64 / ((1u64 << 53) as f64)
-}
-
-// ---------------------------------------------------------------------------
-// Star
-// ---------------------------------------------------------------------------
-
-pub(crate) struct Star {
-    pub(crate) angle: f64, // radians, direction from centre
-    pub(crate) r: f64,     // current radius from centre
-    pub(crate) r_prev: f64,
-    pub(crate) speed: f64, // per-star speed multiplier in [0.5, 1.5]
-    glow: bool,            // lavender highlight
-}
-
-fn new_star(rng: &mut u64, max_r: f64) -> Star {
-    let angle = xorshift_f64(rng) * std::f64::consts::TAU;
-    let r = xorshift_f64(rng) * max_r * 0.15;
-    Star {
-        angle,
-        r,
-        r_prev: r,
-        speed: 0.5 + xorshift_f64(rng) * 1.0,
-        glow: xorshift_f64(rng) < 0.35,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// StarfieldState — owned by TuiZeroStateView, shared with the element
-// ---------------------------------------------------------------------------
-
-pub(crate) struct StarfieldState {
-    pub(crate) stars: Vec<Star>,
-    rng: u64,
-    sim_secs: f64,
-    max_r: f64,
-}
-
-impl StarfieldState {
-    pub(crate) fn new() -> Self {
-        let mut rng: u64 = 0xDEAD_BEEF_CAFE_1234;
-        // Typical 80×24 maxR for initial placement; updated on first render.
-        let init_max_r = 62.5_f64;
-        let stars = (0..NUM_STARS)
-            .map(|_| new_star(&mut rng, init_max_r))
-            .collect();
-        Self {
-            stars,
-            rng,
-            sim_secs: 0.0,
-            max_r: init_max_r,
+/// Returns the base luminance index (0–9) for the portrait at normalised panel
+/// coordinates.
+///
+/// - `nr` is the row normalised to `[-1.0, 1.0]` (−1 = top, +1 = bottom).
+/// - `nc` is the column normalised to `[-1.0, 1.0]` (−1 = left, +1 = right).
+/// - `row` and `col` are the raw integer grid coordinates, used for per-cell
+///   texture noise.
+///
+/// # Portrait anatomy (luminance values)
+///
+/// | Region            | Chars  | Luminance |
+/// |-------------------|--------|-----------|
+/// | Ivy background    | `.:- ` | 0–3       |
+/// | Suit jacket       | ` .`   | 0–1       |
+/// | Tie               | `-=`   | 3–4       |
+/// | Neck / collar     | `=+.:` | 1–5       |
+/// | Face skin         | `+*`   | 5–6       |
+/// | Glasses frame     | `#`    | 7         |
+/// | Glasses lens      | `-=`   | 3–4       |
+/// | Hair              | `#@`   | 7–8       |
+pub(crate) fn portrait_luminance(nr: f64, nc: f64, row: i32, col: i32) -> u8 {
+    // ---- Suit region (lower portion of portrait) ----
+    // This early return clips the bottom of the face oval so the suit starts
+    // at roughly the collar line.
+    if nr > 0.55 {
+        if nc.abs() < 0.10 {
+            // Tie: a narrow vertical stripe in the centre of the suit.
+            let n = noise2(row, col);
+            return 3 + n; // '-' or '='
         }
+        // Suit jacket (very dark).
+        return noise2(row, col); // ' ' or '.'
     }
 
-    /// Advances simulation by one 1/60s step.
-    fn advance_one_step(&mut self, warp: f64) {
-        // Normalize base velocity to panel size so crossing time is consistent
-        // across all terminal widths (~4.5s at reference max_r=43).
-        let a = 0.12 * (self.max_r / 43.0).clamp(0.5, 3.0);
-        for star in &mut self.stars {
-            star.r_prev = star.r;
-            star.r += (a + star.r * 0.012) * star.speed * warp;
-            // ~2% chance per step to toggle glow.
-            if xorshift_f64(&mut self.rng) < 0.02 {
-                star.glow = !star.glow;
+    // ---- Face oval ----
+    // Semi-axes: nc 0.45 (horizontal), nr 0.80 (vertical).
+    // The large vertical extent compensates for terminal cells being ~2× taller
+    // than wide, so the oval reads as a natural portrait shape on screen.
+    let fc = nc / 0.45;
+    let fr = nr / 0.80;
+    let face_dist_sq = fc * fc + fr * fr;
+
+    if face_dist_sq < 1.0 {
+        let n = noise2(row, col);
+
+        // Collar / upper lapel (bottom of face oval, above suit boundary).
+        if nr > 0.42 && nc.abs() < 0.22 {
+            return (1 + n).min(2); // '.' or ':'
+        }
+        // Neck (narrow vertical band just above the collar).
+        if nr > 0.30 && nc.abs() < 0.14 {
+            return 4 + n; // '=' or '+'
+        }
+        // Glasses band: a horizontal swath forming distinct character bands.
+        // nr ∈ [−0.32, −0.06] covers both frames and the nose bridge.
+        if nr >= -0.32 && nr <= -0.06 {
+            // Two lens ovals — left eye nc ≈ −0.18, right eye nc ≈ +0.18.
+            let left_lc = (nc + 0.18) / 0.14;
+            let right_lc = (nc - 0.18) / 0.14;
+            let lens_rc = (nr + 0.185) / 0.10;
+            let left_dist = left_lc * left_lc + lens_rc * lens_rc;
+            let right_dist = right_lc * right_lc + lens_rc * lens_rc;
+            if left_dist < 1.0 || right_dist < 1.0 {
+                // Lens interior: distinctly darker than surrounding skin.
+                return 3 + n; // '-' or '='
             }
-            if star.r >= self.max_r {
-                *star = new_star(&mut self.rng, self.max_r);
-            }
+            // Frame and nose bridge: bright '#' forming the distinctive bands.
+            return 7;
         }
+        // Subtle mouth shadow.
+        if nr > 0.18 && nr < 0.32 && nc.abs() < 0.24 {
+            return 4 + n; // '=' or '+'
+        }
+        // General face skin.
+        return 5 + n; // '+' or '*'
     }
 
-    /// Simulates up to `target_secs` in 1/60s increments.
-    pub(crate) fn simulate_to(&mut self, target_secs: f64) {
-        let step = 1.0 / SIM_FPS;
-        // Cap at 2 seconds worth of steps to avoid stalls after long pauses.
-        let max_steps = (SIM_FPS * 2.0) as usize;
-        let mut steps = 0;
-        while self.sim_secs + step <= target_secs && steps < max_steps {
-            let warp = warp_at(self.sim_secs);
-            self.advance_one_step(warp);
-            self.sim_secs += step;
-            steps += 1;
-        }
-        self.sim_secs = target_secs;
+    // ---- Hair ----
+    // The region just outside the face oval in the upper half of the portrait.
+    if face_dist_sq < 1.45 && nr < 0.20 {
+        return 7 + noise2(row, col); // '#' or '@'
     }
 
-    /// Updates the panel geometry and adjusts the star count to match the new size.
-    pub(crate) fn set_dimensions(&mut self, max_r: f64, num_stars: usize) {
-        self.max_r = max_r;
-        while self.stars.len() < num_stars {
-            self.stars.push(new_star(&mut self.rng, self.max_r));
-        }
-        self.stars.truncate(num_stars);
-    }
+    // ---- Background ivy texture ----
+    ivy_luminance(row, col)
 }
 
-/// Returns the number of stars appropriate for the panel's max_r, keeping
-/// density consistent across terminal sizes (reference: 220 stars at max_r=43).
-pub(crate) fn star_count_for_max_r(max_r: f64) -> usize {
-    ((220.0_f64 * (max_r / 43.0).powf(1.5)).round() as usize).clamp(50, 500)
+/// Deterministic 1-bit per-cell texture noise: returns 0 or 1.
+#[inline]
+pub(crate) fn noise2(row: i32, col: i32) -> u8 {
+    ((row.wrapping_mul(7).wrapping_add(col.wrapping_mul(13))) as u64 & 1) as u8
+}
+
+/// Repeating `:.-` ivy-texture luminance (returns 1–3).
+pub(crate) fn ivy_luminance(row: i32, col: i32) -> u8 {
+    const PATTERN: [u8; 4] = [2, 1, 3, 1]; // ':', '.', '-', '.'
+    let idx = (row.wrapping_add(col.wrapping_mul(3))).unsigned_abs() % 4;
+    PATTERN[idx as usize]
 }
 
 // ---------------------------------------------------------------------------
-// TuiElement
+// Per-frame cell hash (drives animation effects)
 // ---------------------------------------------------------------------------
 
-/// Per-render geometry cache — avoids threading 5 scalars through every call.
-struct GridGeometry {
-    cx: f64,
-    cy: f64,
-    max_r: f64,
-    cols: usize,
-    rows: usize,
+/// Fast deterministic hash of row, column, and frame index.
+///
+/// Used by all three animation effects to select which cells to modify each
+/// frame without storing per-cell state.
+pub(crate) fn cell_hash(row: u64, col: u64, frame: u64) -> u64 {
+    let mut h = row ^ col.wrapping_shl(16) ^ frame.wrapping_shl(32);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h
 }
 
+// ---------------------------------------------------------------------------
+// ZeroStateAnimationElement
+// ---------------------------------------------------------------------------
+
+/// Renders the Kevin Yang ASCII art portrait with scanline shimmer, glyph
+/// flicker, and accent highlight animation effects.
 pub struct ZeroStateAnimationElement {
-    state: Rc<RefCell<StarfieldState>>,
     clock: AnimationClock,
-    glow_color: Color,
+    accent_color: Color,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
 
 impl ZeroStateAnimationElement {
-    pub(crate) fn new(
-        state: Rc<RefCell<StarfieldState>>,
-        clock: AnimationClock,
-        glow_color: Color,
-    ) -> Self {
+    pub(crate) fn new(clock: AnimationClock, accent_color: Color) -> Self {
         Self {
-            state,
             clock,
-            glow_color,
+            accent_color,
             size: None,
             origin: None,
         }
@@ -254,26 +219,59 @@ impl TuiElement for ZeroStateAnimationElement {
         let rows = usize::from(size.height);
         let elapsed = self.clock.elapsed().as_secs_f64();
 
-        let cx = cols as f64 / 2.0;
-        let cy = rows as f64 / 2.0;
-        // Aspect correction: terminal cells ~2× taller than wide.
-        let max_r = cx.hypot(cy * 2.0);
+        // (a) Scanline position: sweeps top → bottom every 2 seconds.
+        let scanline_row = ((elapsed * 0.5).fract() * rows as f64) as usize;
 
-        let mut sf = self.state.borrow_mut();
-        let num_stars = star_count_for_max_r(max_r);
-        sf.set_dimensions(max_r, num_stars);
-        sf.simulate_to(elapsed);
+        // Frame index for per-frame RNG (~30 fps).
+        let frame = (elapsed * 30.0) as u64;
 
-        let geo = GridGeometry {
-            cx,
-            cy,
-            max_r,
-            cols,
-            rows,
-        };
-        let glow_color = self.glow_color;
-        for star in &sf.stars {
-            draw_star_streak(surface, origin, star, &geo, glow_color);
+        let accent_color = self.accent_color;
+
+        for row in 0..rows {
+            for col in 0..cols {
+                // Normalise grid coordinates to [−1, 1] with (0, 0) at centre.
+                let half_rows = rows as f64 * 0.5;
+                let half_cols = cols as f64 * 0.5;
+                let nr = (row as f64 + 0.5 - half_rows) / half_rows;
+                let nc = (col as f64 + 0.5 - half_cols) / half_cols;
+
+                let base_lum = portrait_luminance(nr, nc, row as i32, col as i32);
+
+                // (a) Scanline shimmer: boost luminance within ±1 row of the
+                //     current scanline position.
+                let shimmer = match row.abs_diff(scanline_row) {
+                    0 => 2u8,
+                    1 => 1,
+                    _ => 0,
+                };
+                let mut lum = base_lum.saturating_add(shimmer).min(9);
+
+                // (b) Glyph flicker: ~4 % of cells shift ±1 ramp level.
+                let h = cell_hash(row as u64, col as u64, frame);
+                if h % 25 == 0 {
+                    if h & (1 << 16) != 0 {
+                        lum = lum.saturating_sub(1);
+                    } else {
+                        lum = (lum + 1).min(9);
+                    }
+                }
+
+                // (c) Accent highlight: ~1.5 % of bright cells get accent colour.
+                let use_accent = lum >= 6 && h % 67 == 1;
+
+                let glyph = RAMP[usize::from(lum)];
+                let style = if use_accent {
+                    TuiStyle::default().fg(accent_color)
+                } else {
+                    TuiStyle::default()
+                };
+
+                if let Some(cell) =
+                    surface.cell_mut(origin.offset(col as i32, row as i32))
+                {
+                    cell.set_symbol(glyph).set_style(style);
+                }
+            }
         }
 
         ctx.repaint_after(REPAINT_INTERVAL);
@@ -285,50 +283,6 @@ impl TuiElement for ZeroStateAnimationElement {
 
     fn origin(&self) -> Option<TuiScreenPoint> {
         self.origin
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Star streak renderer
-// ---------------------------------------------------------------------------
-
-fn draw_star_streak(
-    surface: &mut TuiPaintSurface<'_>,
-    origin: TuiScreenPosition,
-    star: &Star,
-    geo: &GridGeometry,
-    glow_color: Color,
-) {
-    if star.r <= 0.0 || geo.max_r <= 0.0 {
-        return;
-    }
-    let (dir_x, dir_y) = (star.angle.cos(), star.angle.sin());
-    let length = star.r - star.r_prev;
-    let steps = (length as usize).max(1);
-
-    let color = if star.glow {
-        glow_color
-    } else {
-        Color::Rgb(255, 255, 255)
-    };
-    let style = TuiStyle::default().fg(color);
-
-    for st in 0..=steps {
-        let rr = star.r_prev + length * st as f64 / steps as f64;
-        // Y halved for aspect correction.
-        let px = (geo.cx + dir_x * rr).round() as i32;
-        let py = (geo.cy + dir_y * rr / 2.0).round() as i32;
-        if px < 0 || py < 0 || px as usize >= geo.cols || py as usize >= geo.rows {
-            continue;
-        }
-        let gi = ((rr / geo.max_r).powf(0.65) * (STAR_GLYPHS.len() - 1) as f64) as usize;
-        let gi = gi.min(STAR_GLYPHS.len() - 1);
-        let glyph = STAR_GLYPHS[gi];
-        let buf = [glyph];
-        let s = std::str::from_utf8(&buf).unwrap_or(".");
-        if let Some(c) = surface.cell_mut(origin.offset(px, py)) {
-            c.set_symbol(s).set_style(style);
-        }
     }
 }
 
