@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, ComputerUsePermission,
-    RunAgentsPermission, WriteToPtyPermission,
+    WriteToPtyPermission,
 };
 use crate::ai::llms::LLMId;
 use crate::server::ids::ServerId;
@@ -357,43 +357,6 @@ impl From<FileAskUserQuestionPermission> for AskUserQuestionPermission {
     }
 }
 
-// Domain-only `Unknown` values fail closed to `never_allow`.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[schemars(
-    description = "File-safe representation of child-agent launch permissions.",
-    rename_all = "snake_case"
-)]
-enum FileRunAgentsPermission {
-    #[schemars(description = "Child agents may not be launched.")]
-    NeverAllow,
-    #[schemars(description = "Child agents may be launched without approval.")]
-    AlwaysAllow,
-    #[schemars(description = "Child-agent launches require approval.")]
-    #[default]
-    AlwaysAsk,
-}
-
-impl From<RunAgentsPermission> for FileRunAgentsPermission {
-    fn from(value: RunAgentsPermission) -> Self {
-        match value {
-            RunAgentsPermission::NeverAllow | RunAgentsPermission::Unknown => Self::NeverAllow,
-            RunAgentsPermission::AlwaysAllow => Self::AlwaysAllow,
-            RunAgentsPermission::AlwaysAsk => Self::AlwaysAsk,
-        }
-    }
-}
-
-impl From<FileRunAgentsPermission> for RunAgentsPermission {
-    fn from(value: FileRunAgentsPermission) -> Self {
-        match value {
-            FileRunAgentsPermission::NeverAllow => Self::NeverAllow,
-            FileRunAgentsPermission::AlwaysAllow => Self::AlwaysAllow,
-            FileRunAgentsPermission::AlwaysAsk => Self::AlwaysAsk,
-        }
-    }
-}
-
 // Domain-only `Unknown` values fail closed to `never`.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -452,8 +415,6 @@ struct ExecutionProfileFile {
     mcp_permissions: FileActionPermission,
     #[schemars(description = "Permission to ask the user questions.")]
     ask_user_question: FileAskUserQuestionPermission,
-    #[schemars(description = "Permission to launch child agents.")]
-    run_agents: FileRunAgentsPermission,
     #[schemars(description = "Command patterns that must always require approval.")]
     command_denylist: Vec<String>,
     #[schemars(description = "Command patterns that may execute without approval.")]
@@ -498,7 +459,6 @@ impl From<&AIExecutionProfile> for ExecutionProfileFile {
             write_to_pty: profile.write_to_pty.into(),
             mcp_permissions: profile.mcp_permissions.into(),
             ask_user_question: profile.ask_user_question.into(),
-            run_agents: profile.run_agents.into(),
             command_denylist: profile
                 .command_denylist
                 .iter()
@@ -565,7 +525,6 @@ impl TryFrom<ExecutionProfileFile> for AIExecutionProfile {
             write_to_pty: file.write_to_pty.into(),
             mcp_permissions: file.mcp_permissions.into(),
             ask_user_question: file.ask_user_question.into(),
-            run_agents: file.run_agents.into(),
             command_denylist: parse_commands(file.command_denylist)?,
             command_allowlist: parse_commands(file.command_allowlist)?,
             directory_allowlist: file.directory_allowlist,

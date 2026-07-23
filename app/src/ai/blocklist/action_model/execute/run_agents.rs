@@ -16,7 +16,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -25,7 +25,7 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentInput,
     StartAgentExecutionMode,
 };
-use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::document::plan_publication::{
     prepare_plan_publications, wait_for_plan_publications,
 };
@@ -63,7 +63,6 @@ pub struct RunAgentsExecutor {
     pending: HashMap<AIAgentActionId, PendingRunAgents>,
     launched_agents: HashMap<AIConversationId, HashMap<String, ExistingLaunchedAgent>>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
-    terminal_view_id: EntityId,
 }
 
 /// Lifecycle events for in-flight dispatches.
@@ -82,15 +81,11 @@ impl Entity for RunAgentsExecutor {
 }
 
 impl RunAgentsExecutor {
-    pub fn new(
-        start_agent_executor: ModelHandle<StartAgentExecutor>,
-        terminal_view_id: EntityId,
-    ) -> Self {
+    pub fn new(start_agent_executor: ModelHandle<StartAgentExecutor>) -> Self {
         Self {
             pending: HashMap::new(),
             launched_agents: HashMap::new(),
             start_agent_executor,
-            terminal_view_id,
         }
     }
 
@@ -386,7 +381,6 @@ impl RunAgentsExecutor {
         if let Some(reason) = prepare_request_for_execution(
             &mut request,
             parent_conversation_id,
-            self.terminal_view_id,
             &self.launched_agents,
             ctx,
         ) {
@@ -428,9 +422,7 @@ impl RunAgentsExecutor {
             return true;
         }
         approved_orchestration_config_can_autoexecute(request, input.conversation_id, ctx)
-            || BlocklistAIPermissions::as_ref(ctx)
-                .get_run_agents_setting(ctx, Some(self.terminal_view_id))
-                .is_always_allow()
+            || is_local_warp_harness(request)
     }
 
     pub(super) fn preprocess_action(
@@ -449,6 +441,17 @@ mod tests;
 enum ChildSlot {
     Failed(String),
     Pending(async_channel::Receiver<StartAgentOutcome>),
+}
+
+/// Returns `true` when every child will run locally using the Warp (Oz) harness.
+///
+/// Local Oz executions are always auto-approved: they carry no cloud cost and
+/// do not route through a third-party service. Cloud spawning or a third-party
+/// harness (Claude Code, Codex, Gemini, etc.) requires explicit user approval.
+fn is_local_warp_harness(request: &RunAgentsRequest) -> bool {
+    matches!(request.execution_mode, RunAgentsExecutionMode::Local)
+        && (request.harness_type.is_empty()
+            || request.harness_type.eq_ignore_ascii_case("oz"))
 }
 
 fn approved_orchestration_config_can_autoexecute(
@@ -484,7 +487,6 @@ fn resolve_request_from_approved_config(
 fn prepare_request_for_execution(
     request: &mut RunAgentsRequest,
     parent_conversation_id: AIConversationId,
-    terminal_view_id: EntityId,
     launched_agents: &HashMap<AIConversationId, HashMap<String, ExistingLaunchedAgent>>,
     ctx: &ModelContext<RunAgentsExecutor>,
 ) -> Option<String> {
@@ -502,15 +504,6 @@ fn prepare_request_for_execution(
 
     if status.is_some_and(|status| status.is_disapproved()) {
         return Some("Orchestration config was disapproved".to_string());
-    }
-
-    if BlocklistAIPermissions::as_ref(ctx)
-        .get_run_agents_setting(ctx, Some(terminal_view_id))
-        .is_never_allow()
-    {
-        return Some(
-            "Running child agents is disabled by the active execution profile.".to_string(),
-        );
     }
 
     if !can_execute_with_auth_secret(request, ctx) {
