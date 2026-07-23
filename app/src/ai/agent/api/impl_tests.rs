@@ -27,6 +27,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         coding_model: model.clone(),
         cli_agent_model: model.clone(),
         computer_use_model: model,
+        subagent_model: None,
         is_memory_enabled: false,
         warp_drive_context_enabled: false,
         context_window_limit: None,

@@ -282,6 +282,13 @@ pub fn render_models_section(
         &view.full_terminal_use_model_dropdown,
     ));
 
+    column = column.with_child(render_filterable_dropdown_row(
+        appearance,
+        "Subagent model",
+        "The model used by subagents that the agent launches to work on delegated tasks. When not set, subagents use the base model.",
+        &view.subagent_model_dropdown,
+    ));
+
     if FeatureFlag::LocalComputerUse.is_enabled() {
         column.add_child(render_filterable_dropdown_row(
             appearance,

@@ -1064,6 +1064,22 @@ impl LLMPreferences {
             .unwrap_or_else(|| DEFAULT.get_or_init(default_computer_use_llms))
     }
 
+    /// Returns the `LLMInfo` for the subagent model override on the active
+    /// profile. `None` means subagents use the base model.
+    pub fn get_active_subagent_model<'a>(
+        &'a self,
+        app: &'a AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> Option<&'a LLMInfo> {
+        let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
+
+        profile
+            .data()
+            .subagent_model
+            .clone()
+            .and_then(|id| self.model_info_for_id(&self.models_by_feature.agent_mode, &id, app))
+    }
+
     /// Returns metadata about an LLM, if the client knows about it.
     /// Falls back to the user's custom-endpoint LLMs when the id isn't a server-known model
     /// id (e.g. when it's a `config_key` UUID).

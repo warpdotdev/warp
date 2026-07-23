@@ -207,6 +207,7 @@ impl BlocklistAIPermissions {
             coding_model: profile_data.coding_model.clone(),
             cli_agent_model: profile_data.cli_agent_model.clone(),
             computer_use_model: profile_data.computer_use_model.clone(),
+            subagent_model: profile_data.subagent_model.clone(),
             context_window_limit: profile_data.context_window_limit,
             autosync_plans_to_warp_drive: profile_data.autosync_plans_to_warp_drive,
             web_search_enabled: profile_data.web_search_enabled,

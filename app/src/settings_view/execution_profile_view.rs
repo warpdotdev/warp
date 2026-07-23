@@ -137,6 +137,14 @@ impl View for ExecutionProfileView {
                     .clone()
             });
 
+        // Subagents fall back to the base model when no override is set.
+        let subagent_model = profile
+            .subagent_model
+            .as_ref()
+            .and_then(|id| llm_preferences.get_llm_info(id))
+            .map(|info| info.display_name.clone())
+            .unwrap_or_else(|| base_model.clone());
+
         Container::new(
             Flex::column()
                 .with_child(
@@ -182,6 +190,15 @@ impl View for ExecutionProfileView {
                             Icon::Terminal,
                             "Full terminal use:",
                             cli_agent_model,
+                            appearance,
+                            is_any_ai_enabled,
+                        ),
+                    ));
+                    model_flex.add_child(with_standard_vertical_margin(
+                        render_model_line_with_icon(
+                            Icon::Workflow,
+                            "Subagents:",
+                            subagent_model,
                             appearance,
                             is_any_ai_enabled,
                         ),

@@ -170,6 +170,9 @@ pub enum ExecutionProfileEditorViewAction {
     SetComputerUseModel {
         id: LLMId,
     },
+    SetSubagentModel {
+        id: LLMId,
+    },
 
     SetApplyCodeDiffs {
         permission: ActionPermission,
@@ -249,6 +252,7 @@ pub struct ExecutionProfileEditorView {
     full_terminal_use_model_dropdown:
         ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
     computer_use_model_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
+    subagent_model_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
     apply_code_diffs_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     read_files_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     execute_commands_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
@@ -572,6 +576,11 @@ impl ExecutionProfileEditorView {
             dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
             dropdown
         });
+        let subagent_model_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
+            dropdown
+        });
         let command_allowlist_editor = ctx.add_typed_action_view(|ctx| {
             let mut input =
                 SubmittableTextInput::new(ctx).validate_on_edit(|s| Regex::new(s).is_ok());
@@ -655,6 +664,7 @@ impl ExecutionProfileEditorView {
             coding_model_dropdown,
             full_terminal_use_model_dropdown,
             computer_use_model_dropdown,
+            subagent_model_dropdown,
             apply_code_diffs_dropdown,
             read_files_dropdown,
             execute_commands_dropdown,
@@ -781,6 +791,21 @@ impl ExecutionProfileEditorView {
                         |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
                         |prefs, app| prefs.get_default_computer_use_model(app).id.clone(),
+                        &me.upgrade_footer_mouse_state,
+                        ctx,
+                    );
+                    Self::refresh_filterable_model_dropdown(
+                        &me.subagent_model_dropdown,
+                        current_permissions.subagent_model.clone(),
+                        |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+                        |id| ExecutionProfileEditorViewAction::SetSubagentModel { id },
+                        {
+                            let profile_base_model = current_permissions.base_model.clone();
+                            move |prefs, app| {
+                                profile_base_model
+                                    .unwrap_or_else(|| prefs.get_default_base_model(app).id.clone())
+                            }
+                        },
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -960,6 +985,21 @@ impl ExecutionProfileEditorView {
             |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
             |prefs, app| prefs.get_default_computer_use_model(app).id.clone(),
+            &self.upgrade_footer_mouse_state,
+            ctx,
+        );
+        Self::refresh_filterable_model_dropdown(
+            &self.subagent_model_dropdown,
+            current_permissions.subagent_model.clone(),
+            |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+            |id| ExecutionProfileEditorViewAction::SetSubagentModel { id },
+            {
+                let profile_base_model = current_permissions.base_model.clone();
+                move |prefs, app| {
+                    profile_base_model
+                        .unwrap_or_else(|| prefs.get_default_base_model(app).id.clone())
+                }
+            },
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -1621,6 +1661,12 @@ impl TypedActionView for ExecutionProfileEditorView {
             ExecutionProfileEditorViewAction::SetComputerUseModel { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
                     profiles_model.set_computer_use_model(&self.profile_id, Some(id.clone()), ctx);
+                });
+                ctx.notify();
+            }
+            ExecutionProfileEditorViewAction::SetSubagentModel { id } => {
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
+                    profiles_model.set_subagent_model(&self.profile_id, Some(id.clone()), ctx);
                 });
                 ctx.notify();
             }
