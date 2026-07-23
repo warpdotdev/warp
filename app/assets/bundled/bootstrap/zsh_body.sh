@@ -697,16 +697,15 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     setopt localoptions extendedglob
     local match mbegin mend
     REPLY=${1:-}
-    REPLY=${REPLY//(#b)(%%|%<->\{|%(-|)(<->|)G)/${${match[1]:#%(-|)(<->|)G}/(#s)%<->\{(#e)/%\{}}}
+    REPLY=${REPLY//(#b)(%%|%<->\{|%(-|)(<->|)G)/${${match[1]:#%(-|)(<->|)G}/(#s)%<->\{(#e)/%\{}}
   }
 
-  # Called live via PROMPT_SUBST on every prompt render. Evaluates _WARP_RAW_PROMPT using shell-only
-  # expansion (${(e)...}), which expands subshells like $(git_prompt_info) but does NOT process %
-  # prompt sequences. The result is then stripped of %n{...%} and %G glitch-width constructs so that
-  # zsh's countprompt() sees zero columns for the prompt, keeping its cursor-column model in sync
-  # with the physical cursor (which stays at 0 because Warp routes prompt bytes to a separate grid).
-  # Using PROMPT_SUBST means async prompt updates that call zle reset-prompt automatically
-  # re-evaluate and re-strip without waiting for the next precmd.
+  # Called live via PROMPT_SUBST on every prompt render. Uses ${(e)...} to recursively evaluate
+  # _WARP_RAW_PROMPT — expanding any embedded subshells like $(git_prompt_info) so their output
+  # (which may contain %n{...%} glitch constructs) is visible before stripping. The stripped output
+  # is returned for use inside %{...%} so that zsh's countprompt() sees zero glitch columns, keeping
+  # its cursor-column model in sync with the physical cursor. Async prompt updates (zle reset-prompt)
+  # re-invoke this automatically.
   function _warp_stripped_prompt() {
     [[ -z "${_WARP_RAW_PROMPT:-}" ]] && return
     local REPLY
