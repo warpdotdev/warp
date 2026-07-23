@@ -73,6 +73,7 @@ mod tui_generic_tool_call_view;
 mod tui_markdown;
 mod tui_permission_prompt;
 mod tui_plan_view;
+mod tui_review_comments;
 mod tui_shell_command_view;
 mod usage;
 mod voice_input;
