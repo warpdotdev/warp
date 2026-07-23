@@ -999,6 +999,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
+    FeatureFlag::AccountFirstOnboarding,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

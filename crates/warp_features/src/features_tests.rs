@@ -20,10 +20,10 @@ fn local_child_harnesses_are_local_only_by_default() {
 }
 
 #[test]
-fn account_first_onboarding_is_disabled_for_all_rollout_channels() {
+fn account_first_onboarding_is_dogfood_only() {
     assert!(!LOCAL_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
     assert!(!DEBUG_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
-    assert!(!DOGFOOD_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
+    assert!(DOGFOOD_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
     assert!(!PREVIEW_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
     assert!(!RELEASE_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
 }
