@@ -1446,6 +1446,50 @@ fn test_multiline_preexec_reconciliation_preserves_prompt_demarcation() {
 }
 
 #[test]
+fn test_dangling_start_prompt_marker_is_cleared_at_command_start() {
+    let mut block = TestBlockBuilder::new().build();
+
+    block.prompt_marker(ansi::PromptMarker::StartPrompt {
+        kind: ansi::PromptKind::Initial,
+    });
+    assert_eq!(
+        block.receiving_chars_for_prompt(),
+        Some(ansi::PromptKind::Initial)
+    );
+
+    // The user submits a command: prompt capture must be force-closed.
+    block.start();
+    assert_eq!(block.receiving_chars_for_prompt(), None);
+
+    // The command echo lands in the prompt-and-command grid.
+    for c in "echo hello".chars() {
+        block.input(c);
+    }
+
+    block.preexec(PreexecValue {
+        command: "echo hello".to_owned(),
+        session_id: None,
+    });
+
+    // The command output lands in the output grid.
+    for c in "hello".chars() {
+        block.input(c);
+    }
+
+    assert_eq!(block.command_to_string(), "echo hello");
+    assert_eq!(
+        block.output_grid.to_string(
+            false,
+            None,
+            RespectObfuscatedSecrets::Yes,
+            false,
+            RespectDisplayedOutput::Yes
+        ),
+        "hello"
+    );
+}
+
+#[test]
 fn test_multiline_preexec_preserves_legitimate_repeated_command_prefix() {
     let reported_command = "aasdf\nasdf";
     let prompt_and_command_grid = mock_blockgrid("aasdf\r\nasdf");

@@ -2970,6 +2970,16 @@ impl Block {
         record_trace_event!("command_execution:block:prexec");
 
         self.ensure_started_for_preexec();
+
+        if let Some(kind) = self.header_grid.receiving_chars_for_prompt.take() {
+            log::warn!(
+                "Prompt capture was still active at preexec; force-ending it so command \
+                 output is not routed into the prompt grid. An OSC 133;A start-prompt \
+                 marker was likely never followed by a matching OSC 133;B end-marker. \
+                 kind={kind:?}"
+            );
+        }
+
         self.header_grid.preexec(data.clone());
 
         let is_for_in_band_command = command_executor::is_in_band_command(data.command.as_str());
