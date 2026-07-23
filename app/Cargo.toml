@@ -629,7 +629,6 @@ default = [
     "conversation_artifacts",
     "agent_view",
     "agent_view_block_context",
-    "agent_view_conversation_list_view",
     "inline_slash_commands",
     "inline_history_menu",
     "inline_model_selector",
@@ -982,7 +981,6 @@ cloud_mode = []
 cloud_mode_from_local_session = []
 cloud_mode_image_context = []
 force_classic_completions = []
-agent_view_conversation_list_view = ["agent_view"]
 inline_history_menu = ["agent_view"]
 inline_repo_menu = ["agent_view"]
 summarization_via_message_replacement = []

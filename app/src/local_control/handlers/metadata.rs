@@ -342,8 +342,7 @@ pub(crate) fn surface_unavailable_reason(
         }
         SurfaceDestination::GlobalSearch => None,
         SurfaceDestination::ConversationList
-            if !FeatureFlag::AgentViewConversationListView.is_enabled()
-                || !AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+            if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
                 || !*AISettings::as_ref(ctx).show_conversation_history.value() =>
         {
             Some("agent conversation history is unavailable or disabled")

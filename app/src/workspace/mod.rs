@@ -786,7 +786,6 @@ pub fn init(app: &mut AppContext) {
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
         .with_context_predicate(id!("Workspace") & id!(flags::SHOW_CONVERSATION_HISTORY))
-        .with_enabled(|| FeatureFlag::AgentViewConversationListView.is_enabled())
         .with_custom_action(CustomAction::ToggleConversationListView),
         EditableBinding::new(
             LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
@@ -847,7 +846,6 @@ pub fn init(app: &mut AppContext) {
             ),
             WorkspaceAction::ToggleConversationListView,
         )
-        .with_enabled(|| FeatureFlag::AgentViewConversationListView.is_enabled())
         .with_context_predicate(id!("Workspace") & id!(flags::SHOW_CONVERSATION_HISTORY))
         .with_mac_key_binding("cmd-shift-A")
         .with_linux_or_windows_key_binding("ctrl-shift-A")

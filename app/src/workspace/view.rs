@@ -12702,10 +12702,7 @@ impl Workspace {
 
         // If the previous tab's left panel was open, maintain that state with the new tab
         // (unless we're restoring the tab from a persisted snapshot).
-        if FeatureFlag::AgentViewConversationListView.is_enabled()
-            && !is_restoration
-            && left_panel_was_open
-        {
+        if !is_restoration && left_panel_was_open {
             self.active_tab_pane_group().update(ctx, |pg, ctx| {
                 pg.set_left_panel_open(true, ctx);
             });
@@ -23684,8 +23681,7 @@ impl Workspace {
         if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_project_explorer.value() {
             views.push(ToolPanelView::ProjectExplorer);
         }
-        if FeatureFlag::AgentViewConversationListView.is_enabled()
-            && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+        if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
             && *AISettings::as_ref(ctx).show_conversation_history
         {
             views.push(ToolPanelView::ConversationListView);
@@ -26018,20 +26014,16 @@ impl TypedActionView for Workspace {
                 }
             }
             ToggleConversationListView => {
-                if FeatureFlag::AgentViewConversationListView.is_enabled() {
-                    let is_showing = self.left_panel_view.as_ref(ctx).active_view()
-                        == ToolPanelView::ConversationListView;
-                    self.toggle_left_panel_view(
-                        &LeftPanelAction::ConversationListView,
-                        is_showing,
-                        ctx,
-                    );
-                }
+                let is_showing = self.left_panel_view.as_ref(ctx).active_view()
+                    == ToolPanelView::ConversationListView;
+                self.toggle_left_panel_view(
+                    &LeftPanelAction::ConversationListView,
+                    is_showing,
+                    ctx,
+                );
             }
             OpenConversationListView => {
-                if FeatureFlag::AgentViewConversationListView.is_enabled() {
-                    self.open_left_panel_view(&LeftPanelAction::ConversationListView, ctx);
-                }
+                self.open_left_panel_view(&LeftPanelAction::ConversationListView, ctx);
             }
             ShowRewindConfirmationDialog {
                 ai_block_view_id,

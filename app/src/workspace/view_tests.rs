@@ -2600,9 +2600,6 @@ fn find_non_following_tab_index(workspace: &Workspace, ctx: &AppContext) -> usiz
 
 #[test]
 fn test_left_panel_window_scoped_reconciles_between_terminal_tabs_when_enabled() {
-    let _conversation_list_guard =
-        FeatureFlag::AgentViewConversationListView.override_enabled(false);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -2661,8 +2658,6 @@ fn test_left_panel_window_scoped_reconciles_between_terminal_tabs_when_enabled()
 
 #[test]
 fn test_left_panel_window_scoped_non_following_tab_does_not_reconcile_but_updates_window_state() {
-    let _conversation_list_guard =
-        FeatureFlag::AgentViewConversationListView.override_enabled(false);
     let _get_started_guard = FeatureFlag::GetStartedTab.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -2739,9 +2734,6 @@ fn test_left_panel_window_scoped_non_following_tab_does_not_reconcile_but_update
 
 #[test]
 fn test_left_panel_window_scoped_disabled_keeps_per_tab_state() {
-    let _conversation_list_guard =
-        FeatureFlag::AgentViewConversationListView.override_enabled(false);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 

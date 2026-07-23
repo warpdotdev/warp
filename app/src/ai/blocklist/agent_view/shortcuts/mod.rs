@@ -167,9 +167,8 @@ pub fn render_agent_shortcuts_view(
         ));
     }
 
-    if FeatureFlag::AgentViewConversationListView.is_enabled()
-        && let Some(keystroke) =
-            keybinding_name_to_keystroke(TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, app)
+    if let Some(keystroke) =
+        keybinding_name_to_keystroke(TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, app)
     {
         shortcuts.push(render_shortcut(
             ShortcutProps {
