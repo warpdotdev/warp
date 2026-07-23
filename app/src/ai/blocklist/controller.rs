@@ -3333,7 +3333,9 @@ impl BlocklistAIController {
                         LlmProvider::Openai => Some("OpenAI"),
                         LlmProvider::Xai => Some("xAI"),
                         LlmProvider::Openrouter => Some("OpenRouter"),
-                        LlmProvider::AwsBedrock | LlmProvider::Unknown => None,
+                    LlmProvider::AwsBedrock
+                        | LlmProvider::GeminiEnterprise
+                        | LlmProvider::Unknown => None,
                     });
                     RenderableAIError::InvalidApiKey {
                         provider: provider.unwrap_or("Unknown").to_string(),

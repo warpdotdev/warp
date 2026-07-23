@@ -684,7 +684,7 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
                 Some(fetch_conversation_result.try_into()?)
             }
             AIAgentActionResultType::StartAgent(start_agent_result) => {
-                Some(start_agent_result.into())
+                Some(start_agent_result.try_into()?)
             }
             AIAgentActionResultType::SendMessageToAgent(send_message_result) => {
                 Some(send_message_result.into())

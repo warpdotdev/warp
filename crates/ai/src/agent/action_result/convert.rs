@@ -1187,68 +1187,14 @@ impl TryFrom<FetchConversationResult> for api::request::input::tool_call_result:
     }
 }
 
-impl From<StartAgentResult> for api::request::input::tool_call_result::Result {
-    fn from(result: StartAgentResult) -> Self {
-        match result {
-            StartAgentResult::Success {
-                agent_id,
-                version: StartAgentVersion::V1,
-            } => api::request::input::tool_call_result::Result::StartAgent(api::StartAgentResult {
-                result: Some(api::start_agent_result::Result::Success(
-                    api::start_agent_result::Success { agent_id },
-                )),
-            }),
-            StartAgentResult::Error {
-                error,
-                version: StartAgentVersion::V1,
-            } => api::request::input::tool_call_result::Result::StartAgent(api::StartAgentResult {
-                result: Some(api::start_agent_result::Result::Error(
-                    api::start_agent_result::Error { error },
-                )),
-            }),
-            StartAgentResult::Cancelled {
-                version: StartAgentVersion::V1,
-            } => api::request::input::tool_call_result::Result::StartAgent(api::StartAgentResult {
-                result: Some(api::start_agent_result::Result::Error(
-                    api::start_agent_result::Error {
-                        error: "Cancelled by user".to_string(),
-                    },
-                )),
-            }),
-            // The remaining arms translate the v2 result schema back into the shared client
-            // StartAgentResult so downstream UI/rendering code can stay version-agnostic.
-            StartAgentResult::Success {
-                agent_id,
-                version: StartAgentVersion::V2,
-            } => api::request::input::tool_call_result::Result::StartAgentV2(
-                api::StartAgentV2Result {
-                    result: Some(api::start_agent_v2_result::Result::Success(
-                        api::start_agent_v2_result::Success { agent_id },
-                    )),
-                },
-            ),
-            StartAgentResult::Error {
-                error,
-                version: StartAgentVersion::V2,
-            } => api::request::input::tool_call_result::Result::StartAgentV2(
-                api::StartAgentV2Result {
-                    result: Some(api::start_agent_v2_result::Result::Error(
-                        api::start_agent_v2_result::Error { error },
-                    )),
-                },
-            ),
-            StartAgentResult::Cancelled {
-                version: StartAgentVersion::V2,
-            } => api::request::input::tool_call_result::Result::StartAgentV2(
-                api::StartAgentV2Result {
-                    result: Some(api::start_agent_v2_result::Result::Error(
-                        api::start_agent_v2_result::Error {
-                            error: "Cancelled by user".to_string(),
-                        },
-                    )),
-                },
-            ),
-        }
+impl TryFrom<StartAgentResult> for api::request::input::tool_call_result::Result {
+    type Error = ConvertToAPITypeError;
+
+    fn try_from(_result: StartAgentResult) -> Result<Self, Self::Error> {
+        // StartAgent and StartAgentV2 have been removed from the proto (PR #344).
+        // The server no longer emits these tool calls, so the client should never
+        // need to send these results back. Silently ignore them.
+        Err(ConvertToAPITypeError::Ignore)
     }
 }
 
@@ -1391,7 +1337,11 @@ impl From<RunAgentsAgentOutcome> for api::run_agents_result::AgentOutcome {
         api::run_agents_result::AgentOutcome {
             name: outcome.name,
             result: Some(result),
-            resolved_model_id: outcome.resolved_model_id,
+            // Map our resolved_model_id to the proto's model_id field.
+            model_id: outcome.resolved_model_id,
+            // harness and execution_mode are not tracked per-agent on the client side.
+            harness: None,
+            execution_mode: None,
         }
     }
 }

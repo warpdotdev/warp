@@ -1502,58 +1502,7 @@ pub(crate) fn convert_tool_call_result_to_input(
             create_cancelled_result_for_tool_call(task_id, &tool_call_id, tool_call_map, context)
         }
         Some(ToolCallResultType::Subagent(_)) => None,
-        Some(ToolCallResultType::StartAgent(result)) => {
-            let start_agent_result = match &result.result {
-                Some(api::start_agent_result::Result::Success(success)) => {
-                    StartAgentResult::Success {
-                        agent_id: success.agent_id.clone(),
-                        version: StartAgentVersion::V1,
-                    }
-                }
-                Some(api::start_agent_result::Result::Error(error)) => StartAgentResult::Error {
-                    error: error.error.clone(),
-                    version: StartAgentVersion::V1,
-                },
-                None => StartAgentResult::Cancelled {
-                    version: StartAgentVersion::V1,
-                },
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::StartAgent(start_agent_result),
-                },
-                context,
-            })
-        }
-        Some(ToolCallResultType::StartAgentV2(result)) => {
-            let start_agent_result = match &result.result {
-                Some(api::start_agent_v2_result::Result::Success(success)) => {
-                    StartAgentResult::Success {
-                        agent_id: success.agent_id.clone(),
-                        version: StartAgentVersion::V2,
-                    }
-                }
-                Some(api::start_agent_v2_result::Result::Error(error)) => StartAgentResult::Error {
-                    error: error.error.clone(),
-                    version: StartAgentVersion::V2,
-                },
-                None => StartAgentResult::Cancelled {
-                    version: StartAgentVersion::V2,
-                },
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::StartAgent(start_agent_result),
-                },
-                context,
-            })
-        }
+        // StartAgent and StartAgentV2 were removed from the proto in PR #344.
         Some(ToolCallResultType::AskUserQuestion(result)) => {
             let ask_result = match &result.result {
                 Some(warp_multi_agent_api::ask_user_question_result::Result::Success(success)) => {
@@ -1638,7 +1587,8 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .iter()
                         .map(|outcome| RunAgentsAgentOutcome {
                             name: outcome.name.clone(),
-                            resolved_model_id: outcome.resolved_model_id.clone(),
+                            // Proto field is model_id (renamed from resolved_model_id).
+                            resolved_model_id: outcome.model_id.clone(),
                             kind: match &outcome.result {
                                 Some(api::run_agents_result::agent_outcome::Result::Launched(
                                     launched_agent,
@@ -1891,16 +1841,7 @@ fn create_cancelled_result_for_tool_call(
             return None;
         }
         ToolType::Subagent(_) => return None,
-        ToolType::StartAgent(_) => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                version: StartAgentVersion::V1,
-            })
-        }
-        ToolType::StartAgentV2(_) => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                version: StartAgentVersion::V2,
-            })
-        }
+        // StartAgent and StartAgentV2 were removed from the proto in PR #344.
         ToolType::AskUserQuestion(_) => {
             AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
         }

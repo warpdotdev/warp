@@ -105,6 +105,7 @@ pub async fn generate_multi_agent_output(
                 && computer_use::background_supported(),
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,
+            supports_orchestration_runners: false,
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,
