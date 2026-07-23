@@ -163,7 +163,7 @@ fn use_computer_tool_call(summary: &str) -> api::message::tool_call::Tool {
 fn stop_recording_tool_call(recording_id: &str) -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StopRecording(api::message::tool_call::StopRecording {
         recording_id: recording_id.to_string(),
-        should_persist_value: None,
+        discard: false,
     })
 }
 

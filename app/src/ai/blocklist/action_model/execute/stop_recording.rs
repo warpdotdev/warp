@@ -62,15 +62,16 @@ impl StopRecordingExecutor {
             else {
                 return ActionExecution::<()>::InvalidAction.into();
             };
-            // Explicit stop remains retry-safe while the conversation is
+            // A persisting stop remains retry-safe while the conversation is
             // syncing: do not claim the handle until it can be associated with
-            // the conversation. Automatic terminal paths may instead use the
-            // ambient run association so they can upload before teardown.
+            // the conversation for upload. A discard needs no upload
+            // association or server token, so it proceeds regardless of sync
+            // state.
             let conversation_is_synced = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&conversation_id)
                 .and_then(|conversation| conversation.server_conversation_token())
                 .is_some();
-            if !conversation_is_synced {
+            if *should_persist && !conversation_is_synced {
                 return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
                     StopRecordingResult::Error(
                         StopRecordingControllerError::ConversationNotSynced.to_string(),

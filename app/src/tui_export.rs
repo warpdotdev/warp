@@ -30,8 +30,8 @@ pub use crate::ai::agent::{
     FileGlobV2Result, GrepResult, ImageContext, MessageId, ReceivedMessageDisplay,
     RenderableAIError, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
-    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UserQueryMode,
+    StartAgentExecutionMode, StopRecordingResult, SuggestNewConversationResult, SummarizationType,
+    TodoOperation, UserQueryMode,
 };
 pub use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,

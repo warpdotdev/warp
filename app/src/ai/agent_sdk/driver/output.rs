@@ -411,8 +411,15 @@ pub mod text {
                     AIAgentActionType::StartRecording { .. } => {
                         writeln!(w, "Starting recording")?;
                     }
-                    AIAgentActionType::StopRecording { recording_id, .. } => {
-                        writeln!(w, "Stopping recording {recording_id}")?;
+                    AIAgentActionType::StopRecording {
+                        recording_id,
+                        should_persist,
+                    } => {
+                        if *should_persist {
+                            writeln!(w, "Stopping recording {recording_id}")?;
+                        } else {
+                            writeln!(w, "Stopping recording {recording_id} and discarding result")?;
+                        }
                     }
                     AIAgentActionType::ReadSkill(request) => {
                         writeln!(w, "Reading skill: {}", request.skill)?;
