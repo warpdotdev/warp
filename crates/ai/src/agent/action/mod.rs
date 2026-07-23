@@ -18,10 +18,10 @@ use crate::agent::action_result::{
     InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
     ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
     RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
-    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, StartRecordingResult,
-    StopRecordingResult, SuggestNewConversationResult, SuggestPromptResult,
-    TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
-    WaitForEventsResult, WriteToLongRunningShellCommandResult,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult,
+    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
+    UploadArtifactResult, UseComputerResult, WaitForEventsResult,
+    WriteToLongRunningShellCommandResult,
 };
 use crate::agent::{AIAgentCitation, FileLocations};
 use crate::diff_validation::ParsedDiff;
@@ -169,16 +169,6 @@ pub enum AIAgentActionType {
     FetchConversation {
         conversation_id: String,
     },
-    // TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 action support once
-    // old preview orchestration history no longer needs parse/display/result compatibility.
-    // Linear issue: QUALITY-788.
-    StartAgent {
-        version: StartAgentVersion,
-        name: String,
-        prompt: String,
-        execution_mode: StartAgentExecutionMode,
-        lifecycle_subscription: Option<Vec<LifecycleEventType>>,
-    },
 
     SendMessageToAgent {
         addresses: Vec<String>,
@@ -303,38 +293,6 @@ pub enum StartAgentExecutionMode {
     },
 }
 
-impl StartAgentExecutionMode {
-    /// Constructs a local execution mode using the legacy v1 default harness.
-    pub fn local_with_defaults() -> Self {
-        Self::Local {
-            harness_type: None,
-            model_id: None,
-        }
-    }
-    /// Constructs a local execution mode for a specific third-party harness.
-    pub fn local_harness(harness_type: String) -> Self {
-        Self::Local {
-            harness_type: Some(harness_type),
-            model_id: None,
-        }
-    }
-    /// Constructs a remote execution mode using the legacy v1 defaults for
-    /// fields that were added later in StartAgentV2.
-    pub fn remote_with_defaults(environment_id: String) -> Self {
-        Self::Remote {
-            environment_id,
-            skill_references: Vec::new(),
-            model_id: String::new(),
-            computer_use_enabled: false,
-            worker_host: String::new(),
-            harness_type: String::new(),
-            title: String::new(),
-            auth_secret_name: None,
-            runner_id: String::new(),
-            agent_identity_uid: None,
-        }
-    }
-}
 impl AIAgentActionType {
     pub fn is_request_command_output(&self) -> bool {
         matches!(self, Self::RequestCommandOutput { .. })
@@ -430,11 +388,6 @@ impl AIAgentActionType {
             Self::FetchConversation { .. } => {
                 AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled)
             }
-            Self::StartAgent { version, .. } => {
-                AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                    version: *version,
-                })
-            }
             Self::SendMessageToAgent { .. } => {
                 AIAgentActionResultType::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             }
@@ -489,7 +442,6 @@ impl AIAgentActionType {
             Self::StopRecording { .. } => "Stop recording".to_string(),
             Self::ReadSkill(_) => "Read skill".to_string(),
             Self::FetchConversation { .. } => "Fetch conversation".to_string(),
-            Self::StartAgent { name, .. } => format!("Start agent: {name}"),
             Self::SendMessageToAgent { subject, .. } => format!("Send message: {subject}"),
             Self::TransferShellCommandControlToUser { .. } => {
                 "Transfer shell command control to user".to_string()
@@ -660,9 +612,6 @@ impl Display for AIAgentActionType {
             }
             AIAgentActionType::FetchConversation { conversation_id } => {
                 write!(f, "FetchConversation: {conversation_id}")
-            }
-            AIAgentActionType::StartAgent { name, .. } => {
-                write!(f, "StartAgent: {name}")
             }
             AIAgentActionType::SendMessageToAgent {
                 addresses, subject, ..
