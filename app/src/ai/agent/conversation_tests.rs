@@ -1092,7 +1092,8 @@ fn fork_artifacts_adds_file_artifacts_to_conversation() {
         Some(Artifact::File {
             artifact_uid: "artifact-file-1".to_string(),
             filepath: "outputs/report.txt".to_string(),
-            filename: "report.txt".to_string(),
+            filename: Some("report.txt".to_string()),
+            title: None,
             mime_type: "text/plain".to_string(),
             description: Some("Daily summary".to_string()),
             size_bytes: Some(42),

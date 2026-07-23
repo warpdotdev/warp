@@ -38,7 +38,7 @@ use crate::ai::ambient_agents::{
     AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
     AmbientAgentTaskState,
 };
-use crate::ai::artifacts::Artifact;
+use crate::ai::artifacts::{Artifact, merge_artifacts};
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
@@ -1649,7 +1649,8 @@ impl AgentConversationsModel {
                     // If the conversation is associated with a task, update the saved task
                     // with live artifacts.
                     if let Some(task) = self.tasks.get_mut(&task_id) {
-                        task.artifacts = conversation.artifacts().to_vec();
+                        task.artifacts =
+                            merge_artifacts(task.artifacts.clone(), conversation.artifacts().to_vec());
                         ctx.emit(AgentConversationsModelEvent::TasksUpdated);
                     }
                 }

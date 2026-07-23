@@ -169,7 +169,6 @@ use crate::editor::InteractionState;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
 use crate::server::ids::SyncId;
-use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{
     AgentModeRewindEntrypoint, AutonomySettingToggleSource, InteractionSource, TelemetryEvent,
 };
@@ -6922,32 +6921,10 @@ impl TypedActionView for AIBlock {
                 ctx.open_url(url);
             }
             AIBlockAction::OpenRecordingArtifact { artifact_uid } => {
-                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
-                let artifact_uid = artifact_uid.clone();
-                let artifact_uid_for_error = artifact_uid.clone();
-                ctx.spawn(
-                    async move { ai_client.get_artifact_download(&artifact_uid).await },
-                    move |_, result, ctx| match result {
-                        Ok(artifact) => {
-                            ctx.open_url(artifact.download_url());
-                        }
-                        Err(error) => {
-                            log::warn!(
-                                "Failed to prepare recording artifact {artifact_uid_for_error}: {error:#}"
-                            );
-                            let window_id = ctx.window_id();
-                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                                toast_stack.add_ephemeral_toast(
-                                    DismissibleToast::error(
-                                        "Failed to open recording.".to_string(),
-                                    ),
-                                    window_id,
-                                    ctx,
-                                );
-                            });
-                        }
-                    },
-                );
+                let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&self.client_ids.conversation_id)
+                    .and_then(|conversation| conversation.task_id());
+                crate::ai::artifacts::open_recording_artifact(artifact_uid, task_id, ctx);
             }
             AIBlockAction::ViewScreenshot { action_id } => {
                 // Collect all UseComputer action IDs across the entire conversation
