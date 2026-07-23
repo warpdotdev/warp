@@ -56,8 +56,8 @@ where
         };
 
         if let Some(errors) = response.errors.as_ref() {
-            warp_core::safe_error!(
-                safe: ("graphql response for {:?} had errors", operation_name),
+            warp_core::safe_warn!(
+                safe: ("graphql response had errors"),
                 full: ("graphql response for {:?} had errors {:?}", operation_name, errors)
             );
             // The "User not in context: Not found" response indicates that warp-server
