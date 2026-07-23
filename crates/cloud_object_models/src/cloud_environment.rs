@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{JsonModel, JsonSerializer};
 
 /// Source-control provider hosting an environment's repositories.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CodeForge {
     #[default]
     #[serde(rename = "GITHUB")]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,7 @@ use super::AgentDriverError;
 use super::cache_setup;
 use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, CodeForge, SourceRepo};
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
@@ -59,13 +59,42 @@ pub fn prepare_environment(
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
+    additional_source_repos: Vec<SourceRepo>,
+    setup_events: SetupClientEventReporter,
+    ctx: &mut ModelContext<TerminalDriver>,
+) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
+    prepare_environment_with_repos(
+        Some(environment),
+        working_dir,
+        is_sandbox,
+        harness,
+        additional_source_repos,
+        setup_events,
+        ctx,
+    )
+}
+
+pub(super) fn prepare_environment_with_repos(
+    environment: Option<AmbientAgentEnvironment>,
+    working_dir: PathBuf,
+    is_sandbox: bool,
+    harness: Harness,
+    additional_source_repos: Vec<SourceRepo>,
     setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
     async move {
-        let source_repos = environment.effective_repos();
-        let setup_commands = environment.setup_commands;
+        let source_repos = merge_repos_deduped(
+            environment
+                .as_ref()
+                .map(AmbientAgentEnvironment::effective_repos)
+                .unwrap_or_default(),
+            additional_source_repos,
+        );
+        let setup_commands = environment
+            .map(|environment| environment.setup_commands)
+            .unwrap_or_default();
 
         // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
         // have their own methods for navigating a codebase.
@@ -99,6 +128,45 @@ pub fn prepare_environment(
 
         result
     }
+}
+
+/// Merge environment repositories with task-level repositories, preserving
+/// environment order and de-duplicating by forge plus case-insensitive owner
+/// and repository names.
+pub(super) fn merge_repos_deduped(
+    environment_repos: Vec<SourceRepo>,
+    additional_repos: Vec<SourceRepo>,
+) -> Vec<SourceRepo> {
+    let mut seen = HashSet::new();
+    let mut merged = Vec::with_capacity(environment_repos.len() + additional_repos.len());
+
+    for repo in environment_repos.into_iter().chain(additional_repos) {
+        let forge = repo.code_forge.unwrap_or_default();
+        let key = (forge, repo.owner.to_lowercase(), repo.repo.to_lowercase());
+        if seen.insert(key) {
+            merged.push(repo);
+        }
+    }
+
+    let mut names = HashMap::<&str, (&str, CodeForge)>::new();
+    for repo in &merged {
+        if let Some((owner, forge)) = names.insert(
+            &repo.repo,
+            (&repo.owner, repo.code_forge.unwrap_or_default()),
+        ) && (owner != repo.owner || forge != repo.code_forge.unwrap_or_default())
+        {
+            log::warn!(
+                "Source repositories share clone directory name {:?}: {owner}/{repo_name} and {new_owner}/{new_repo}",
+                repo.repo,
+                owner = owner,
+                repo_name = repo.repo,
+                new_owner = repo.owner,
+                new_repo = repo.repo,
+            );
+        }
+    }
+
+    merged
 }
 
 #[allow(clippy::too_many_arguments)]

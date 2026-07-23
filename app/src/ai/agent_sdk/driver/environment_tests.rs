@@ -1,6 +1,6 @@
 use cloud_object_models::CodeForge;
 
-use super::{build_parallel_clone_command, single_repo_name};
+use super::{build_parallel_clone_command, merge_repos_deduped, single_repo_name};
 use crate::ai::cloud_environments::SourceRepo;
 use crate::terminal::shell::ShellType;
 
@@ -13,6 +13,50 @@ fn single_repo_name_returns_repo_when_exactly_one_repo() {
     )];
     let selected_repo = single_repo_name(&repos);
     assert_eq!(selected_repo, Some("warp-internal".to_string()));
+}
+
+fn repo(forge: CodeForge, owner: &str, name: &str) -> SourceRepo {
+    SourceRepo::new(forge, owner.to_string(), name.to_string())
+}
+
+#[test]
+fn merge_repos_dedupes_case_insensitively_and_preserves_environment_order() {
+    let environment = vec![repo(CodeForge::GitHub, "WarpDotDev", "Warp")];
+    let additional = vec![
+        repo(CodeForge::GitHub, "warpdotdev", "warp"),
+        repo(CodeForge::GitHub, "warpdotdev", "warp-server"),
+    ];
+
+    assert_eq!(
+        merge_repos_deduped(environment, additional),
+        vec![
+            repo(CodeForge::GitHub, "WarpDotDev", "Warp"),
+            repo(CodeForge::GitHub, "warpdotdev", "warp-server"),
+        ]
+    );
+}
+
+#[test]
+fn merge_repos_keeps_distinct_forges_and_owners() {
+    let merged = merge_repos_deduped(
+        vec![repo(CodeForge::GitHub, "a", "widget")],
+        vec![
+            repo(CodeForge::GitHub, "b", "widget"),
+            repo(CodeForge::GitLab, "a", "widget"),
+        ],
+    );
+
+    assert_eq!(merged.len(), 3);
+}
+
+#[test]
+fn merge_repos_supports_additional_only_and_empty_inputs() {
+    let additional = vec![repo(CodeForge::GitHub, "warpdotdev", "warp")];
+    assert_eq!(
+        merge_repos_deduped(Vec::new(), additional.clone()),
+        additional
+    );
+    assert!(merge_repos_deduped(Vec::new(), Vec::new()).is_empty());
 }
 
 #[test]

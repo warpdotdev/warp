@@ -7,6 +7,7 @@ use cloud_objects::ids::GenericStringObjectId;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use warp_cli::agent::Harness;
 
+use crate::cloud_environment::SourceRepo;
 use crate::{JsonModel, JsonSerializer};
 
 /// Runtime configuration snapshot for agent execution.
@@ -58,6 +59,10 @@ pub struct AgentConfigSnapshot {
     /// Authentication secrets for third-party harnesses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_auth_secrets: Option<HarnessAuthSecretsConfig>,
+    /// Extra repositories the worker should clone in addition to the environment's repos.
+    /// This is server-populated for per-task sources such as a GitHub webhook's origin repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_source_repos: Option<Vec<SourceRepo>>,
 }
 
 /// Configuration for a third-party execution harness.
@@ -106,6 +111,53 @@ impl HarnessConfig {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cloud_environment::CodeForge;
+
+    #[test]
+    fn additional_source_repos_round_trip_and_is_optional() {
+        let snapshot = AgentConfigSnapshot {
+            additional_source_repos: Some(vec![SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "warp".to_string(),
+            )]),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            json["additional_source_repos"][0],
+            serde_json::json!({
+                "code_forge": "GITHUB",
+                "owner": "warpdotdev",
+                "repo": "warp"
+            })
+        );
+
+        let decoded: AgentConfigSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, snapshot);
+
+        let legacy: AgentConfigSnapshot = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(legacy.additional_source_repos.is_none());
+        assert!(legacy.is_empty());
+    }
+
+    #[test]
+    fn additional_source_repos_make_snapshot_non_empty() {
+        let snapshot = AgentConfigSnapshot {
+            additional_source_repos: Some(vec![SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "warp".to_string(),
+            )]),
+            ..Default::default()
+        };
+        assert!(!snapshot.is_empty());
+    }
+}
+
 fn serialize_harness<S: Serializer>(harness: &Harness, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(harness.config_name())
 }
@@ -144,6 +196,7 @@ impl AgentConfigSnapshot {
             computer_use_enabled,
             harness,
             harness_auth_secrets,
+            additional_source_repos,
         } = self;
 
         name.is_none()
@@ -158,6 +211,7 @@ impl AgentConfigSnapshot {
             && computer_use_enabled.is_none()
             && harness.is_none()
             && harness_auth_secrets.is_none()
+            && additional_source_repos.is_none()
     }
 }
 

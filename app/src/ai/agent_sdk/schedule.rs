@@ -126,6 +126,7 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                     // TODO(REMOTE-1134): Support harness flag for scheduled agents.
                     harness: None,
                     harness_auth_secrets: None,
+                    additional_source_repos: None,
                 },
             );
 

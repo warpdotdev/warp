@@ -296,6 +296,7 @@ impl TerminalView {
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
+                            Vec::new(),
                             setup_events,
                             ctx,
                         )
