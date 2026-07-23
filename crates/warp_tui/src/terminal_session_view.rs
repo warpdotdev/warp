@@ -12,29 +12,28 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentExchangeId,
-    AIAgentPtyWriteMode, AIConversation, AIConversationId, AcceptSlashCommandOrSavedPrompt,
-    ActiveSession, ActiveSessionEvent, AgentConversationEntryId, AgentConversationListEntryState,
-    AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin, BlockId,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
-    CLISubagentEvent, CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel,
-    ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
-    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
-    ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
-    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent, ParsedSlashCommandInput,
-    PersistenceWriter, PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
-    ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
-    SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
-    StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason,
-    WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model, build_slash_command_mixer,
-    detect_possible_git_repo, export_conversation_markdown, log_out_tui,
-    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
-    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    AIAgentActionId, AIAgentContext, AIAgentExchangeId, AIAgentPtyWriteMode, AIConversation,
+    AIConversationId, AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent,
+    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
+    AgentInteractionMetadata, AgentViewEntryOrigin, BlockId, BlocklistAIActionModel,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CLISubagentEvent,
+    CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
+    CloudConversationData, CommandExecutionSource, ConversationFileExport, ConversationSelection,
+    ConversationSelectionHandle, ConversationUsageTotals, ExecuteCommandEvent,
+    GetRelevantFilesController, GitRepoModels, GitRepoStatusModel, GitStatusMetadata, LLMId,
+    LLMPreferences, LLMPreferencesEvent, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent,
+    ParsedSlashCommandInput, PersistenceWriter, PtyIntent, PtyIntentEvent,
+    RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
+    ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
+    SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
+    StaticCommand, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
+    TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
+    TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
+    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
+    export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event,
+    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::features::FeatureFlag;
@@ -56,12 +55,12 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
-use crate::agent_block::TuiBlockingChild;
 use crate::alt_screen_view::AltScreenElement;
 use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
     TuiAttachmentPasteDisposition,
 };
+use crate::blocking_interaction::{TuiBlockingInteractionModel, TuiBlockingInteractionPlacement};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
@@ -424,6 +423,7 @@ pub(crate) struct TuiTerminalSessionView {
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
+    blocking_interaction_model: ModelHandle<TuiBlockingInteractionModel>,
     ai_controller: ModelHandle<BlocklistAIController>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     cli_subagent_views: HashMap<BlockId, ViewHandle<TuiCLISubagentView>>,
@@ -472,10 +472,6 @@ pub(crate) struct TuiTerminalSessionView {
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
-    /// The view id of the blocker currently holding focus, tracked only to
-    /// detect blocker transitions in [`Self::sync_blocker_focus`]. Input
-    /// visibility itself is derived at render time, never stored.
-    active_blocker_view_id: Option<EntityId>,
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
     orchestration_tabs_focused: bool,
     zero_state_view: ViewHandle<TuiZeroStateView>,
@@ -632,24 +628,13 @@ impl TuiTerminalSessionView {
         self.focus_current_owner_if_active(ctx);
     }
 
-    fn focus_blocking_child(blocker: TuiBlockingChild, ctx: &mut ViewContext<Self>) {
-        match blocker {
-            TuiBlockingChild::AskQuestion(view) => {
-                view.update(ctx, |view, ctx| view.focus(ctx));
-            }
-            TuiBlockingChild::Permission(view) => {
-                view.update(ctx, |view, ctx| view.focus(ctx));
-            }
-            TuiBlockingChild::Orchestration(view) => ctx.focus(&view),
-        }
-    }
-
     fn focus_current_owner(&mut self, ctx: &mut ViewContext<Self>) {
+        let blocking_interaction = self.blocking_interaction_model.as_ref(ctx).active();
         match self.input_target() {
-            TuiInputTarget::Disabled => {
-                if let Some(blocker) = self.active_blocking_child(ctx) {
+            TuiInputTarget::Disabled | TuiInputTarget::AgentEditor => {
+                if let Some(interaction) = blocking_interaction {
                     self.orchestration_tabs_focused = false;
-                    Self::focus_blocking_child(blocker, ctx);
+                    interaction.focus(ctx);
                 } else if self.orchestration_tabs_focused {
                     ctx.focus_self();
                 } else {
@@ -659,16 +644,6 @@ impl TuiTerminalSessionView {
             TuiInputTarget::Pty => {
                 self.orchestration_tabs_focused = false;
                 ctx.focus_self();
-            }
-            TuiInputTarget::AgentEditor => {
-                if let Some(blocker) = self.active_blocking_child(ctx) {
-                    self.orchestration_tabs_focused = false;
-                    Self::focus_blocking_child(blocker, ctx);
-                } else if self.orchestration_tabs_focused {
-                    ctx.focus_self();
-                } else {
-                    ctx.focus(&self.input_view);
-                }
             }
         }
     }
@@ -951,6 +926,8 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
+        let blocking_interaction_model =
+            ctx.add_model(|ctx| TuiBlockingInteractionModel::new(action_model.clone(), ctx));
         let start_agent_executor = action_model.as_ref(ctx).start_agent_executor(ctx);
         ctx.subscribe_to_model(&start_agent_executor, |view, _, event, ctx| match event {
             StartAgentExecutorEvent::CreateAgent(request) => {
@@ -996,15 +973,14 @@ impl TuiTerminalSessionView {
                 terminal_surface_id,
                 model.clone(),
                 action_model.clone(),
+                blocking_interaction_model.clone(),
                 &model_events,
                 ctx,
             )
         });
-        // Input visibility and focus derive from the front-of-queue blocker;
-        // re-derive on every action-queue transition (queued, blocked,
-        // finished). No suppression flag is stored.
-        ctx.subscribe_to_model(&action_model, |view, _, _, ctx| {
-            view.sync_blocker_focus(ctx);
+        ctx.subscribe_to_model(&blocking_interaction_model, |view, _, _, ctx| {
+            view.focus_current_owner_if_active(ctx);
+            ctx.notify();
         });
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
@@ -1192,9 +1168,6 @@ impl TuiTerminalSessionView {
                     view.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
                 }
             },
-            TuiTranscriptViewEvent::BlockingStateChanged => {
-                view.sync_blocker_focus(ctx);
-            }
             TuiTranscriptViewEvent::PermissionReplacementGuidanceSubmitted {
                 conversation_id,
                 text,
@@ -1238,20 +1211,6 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::MoveFocusUp => {
                 view.focus_orchestration_tabs(ctx);
-            }
-        });
-        ctx.subscribe_to_model(&action_model, |view, action_model, event, ctx| {
-            let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event else {
-                return;
-            };
-            let finished_asking_question = action_model
-                .as_ref(ctx)
-                .get_action_result(action_id)
-                .is_some_and(|result| {
-                    matches!(&result.result, AIAgentActionResultType::AskUserQuestion(_))
-                });
-            if finished_asking_question {
-                ctx.focus(&view.input_view);
             }
         });
         ctx.subscribe_to_view(&orchestration_tab_bar, |view, _, event, ctx| match event {
@@ -1443,6 +1402,7 @@ impl TuiTerminalSessionView {
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
+            blocking_interaction_model,
             ai_controller,
             cli_subagent_controller,
             cli_subagent_views: HashMap::new(),
@@ -1468,7 +1428,6 @@ impl TuiTerminalSessionView {
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
             exit_summary,
-            active_blocker_view_id: None,
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
             zero_state_view,
@@ -1639,10 +1598,6 @@ impl TuiTerminalSessionView {
     fn render_orchestration_tab_footer(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
         render_orchestration_tab_footer(builder)
     }
-    /// The active front-of-queue blocking interaction, if any.
-    fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
-        self.transcript.as_ref(ctx).active_blocking_child(ctx)
-    }
 
     /// Activates this session after the registry has made it authoritative.
     pub(crate) fn activate(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1656,21 +1611,6 @@ impl TuiTerminalSessionView {
         TuiSessions::as_ref(ctx)
             .focused_session_id()
             .is_some_and(|id| id.surface_id() == self.terminal_surface_id)
-    }
-
-    /// Reconciles focus with the derived blocker: a newly active blocker is
-    /// focused (handing off directly between consecutive blockers with no
-    /// intermediate editable input), and focus returns to the input when the
-    /// last blocker resolves. Nothing here writes to the input model, so its
-    /// draft/cursor/selection are untouched.
-    fn sync_blocker_focus(&mut self, ctx: &mut ViewContext<Self>) {
-        let blocker = self.active_blocking_child(ctx);
-        let blocker_view_id = blocker.as_ref().map(TuiBlockingChild::id);
-        if blocker_view_id != self.active_blocker_view_id {
-            self.active_blocker_view_id = blocker_view_id;
-            self.focus_current_owner_if_active(ctx);
-        }
-        ctx.notify();
     }
 
     /// Restores an Oz conversation into the TUI's sole conversation surface.
@@ -3199,14 +3139,25 @@ impl TuiView for TuiTerminalSessionView {
         "TuiTerminalSessionView"
     }
 
-    fn child_view_ids(&self, _ctx: &AppContext) -> Vec<EntityId> {
-        vec![
+    fn child_view_ids(&self, ctx: &AppContext) -> Vec<EntityId> {
+        let mut view_ids = vec![
             self.transcript.id(),
             self.input_view.id(),
             self.orchestration_tab_bar.id(),
             self.attachment_bar.id(),
             self.zero_state_view.id(),
-        ]
+        ];
+        if let Some(interaction) =
+            self.blocking_interaction_model
+                .as_ref(ctx)
+                .active()
+                .filter(|interaction| {
+                    interaction.placement() == TuiBlockingInteractionPlacement::InputArea
+                })
+        {
+            view_ids.push(interaction.view_id());
+        }
+        view_ids
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
@@ -3306,7 +3257,8 @@ impl TuiView for TuiTerminalSessionView {
         // fresh each pass — no stored suppression flag — and the hidden
         // input model is never written to, so its draft/cursor/selection/
         // scroll survive untouched.
-        let blocker_active = self.active_blocking_child(ctx).is_some();
+        let blocking_interaction = self.blocking_interaction_model.as_ref(ctx).active();
+        let blocker_active = blocking_interaction.is_some();
         if !blocker_active && matches!(input_target, TuiInputTarget::Disabled) {
             content = content.child(
                 TuiContainer::new(
@@ -3401,6 +3353,11 @@ impl TuiView for TuiTerminalSessionView {
                 .with_padding_top(1)
                 .finish(),
             );
+        }
+        if let Some(interaction) = blocking_interaction.as_ref().filter(|interaction| {
+            interaction.placement() == TuiBlockingInteractionPlacement::InputArea
+        }) {
+            content = content.child(interaction.render());
         }
         if !blocker_active
             && (input_target.agent_editor_owns_input()

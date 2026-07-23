@@ -15,6 +15,7 @@ use warpui::{AddSingletonModel, App, EntityId, ModelHandle};
 use warpui_core::elements::tui::{TuiElement, TuiText};
 use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewHandle, WindowId};
 
+use crate::blocking_interaction::TuiBlockingInteractionModel;
 use crate::conversation_selection::TuiConversationSelection;
 use crate::resume::TuiExitSummaryHandle;
 use crate::terminal_session_view::TuiTerminalSessionView;
@@ -88,9 +89,26 @@ pub(crate) fn add_test_action_model(app: &mut App) -> ModelHandle<BlocklistAIAct
     add_test_action_model_and_events(app).0
 }
 
+pub(crate) fn add_test_blocking_interaction_model(
+    app: &mut App,
+    action_model: ModelHandle<BlocklistAIActionModel>,
+) -> ModelHandle<TuiBlockingInteractionModel> {
+    app.add_model(|ctx| TuiBlockingInteractionModel::new(action_model, ctx))
+}
+
 /// Builds the action model and terminal-event dispatcher injected into TUI agent blocks.
 pub(crate) fn add_test_action_model_and_events(
     app: &mut App,
+) -> (
+    ModelHandle<BlocklistAIActionModel>,
+    ModelHandle<ModelEventDispatcher>,
+) {
+    add_test_action_model_and_events_for_surface(app, EntityId::new())
+}
+
+pub(crate) fn add_test_action_model_and_events_for_surface(
+    app: &mut App,
+    terminal_surface_id: EntityId,
 ) -> (
     ModelHandle<BlocklistAIActionModel>,
     ModelHandle<ModelEventDispatcher>,
@@ -111,7 +129,6 @@ pub(crate) fn add_test_action_model_and_events(
     // `GetRelevantFilesController::new` subscribes to the `CodebaseIndexManager`
     // singleton, which these tests don't register; `default` skips it.
     let get_relevant_files = app.add_model(|_| GetRelevantFilesController::default());
-    let terminal_surface_id = EntityId::new();
     let action_model = app.add_model(|ctx| {
         BlocklistAIActionModel::new(
             terminal_model,

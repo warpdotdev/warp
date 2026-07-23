@@ -42,7 +42,7 @@ fn transcript_view_renders_terminal_blocks_from_canonical_order() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(
+                    TuiTranscriptView::new_for_test(
                         EntityId::new(),
                         model_for_view,
                         action_model,
@@ -82,7 +82,7 @@ fn agent_block_lookup_uses_canonical_transcript_order() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(
+                    TuiTranscriptView::new_for_test(
                         EntityId::new(),
                         model_for_view,
                         action_model,
@@ -137,7 +137,7 @@ fn transcript_clear_event_removes_only_named_conversations() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(
+                    TuiTranscriptView::new_for_test(
                         terminal_surface_id,
                         model_for_view,
                         action_model,
@@ -246,7 +246,7 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(
+                    TuiTranscriptView::new_for_test(
                         EntityId::new(),
                         model_for_view,
                         action_model,
@@ -320,7 +320,7 @@ fn todo_and_conversation_status_events_dirty_affected_agent_blocks() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(
+                    TuiTranscriptView::new_for_test(
                         terminal_surface_id,
                         model_for_view,
                         action_model,
@@ -447,7 +447,7 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(
+                    TuiTranscriptView::new_for_test(
                         EntityId::new(),
                         model_for_view,
                         action_model,
@@ -500,7 +500,7 @@ fn presenter_draw_resolves_agent_blocks_from_cached_elements() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(
+                    TuiTranscriptView::new_for_test(
                         EntityId::new(),
                         model_for_view,
                         action_model,
@@ -556,7 +556,7 @@ fn dragging_inside_markdown_highlights_transcript_text() {
                     ..Default::default()
                 },
                 |ctx| {
-                    TuiTranscriptView::new(
+                    TuiTranscriptView::new_for_test(
                         EntityId::new(),
                         model_for_view,
                         action_model,
@@ -733,6 +733,7 @@ fn insert_test_agent_block(
 ) -> EntityId {
     transcript.update(app, |view, ctx| {
         let action_model = view.action_model.clone();
+        let blocking_interaction_model = view.blocking_interaction_model.clone();
         let model_events = view.model_events.clone();
         let terminal_model = view.model.clone();
         let agent_block = ctx.add_typed_action_tui_view(|ctx| {
@@ -744,6 +745,7 @@ fn insert_test_agent_block(
                     status: AIBlockOutputStatus::Pending,
                 }),
                 action_model,
+                blocking_interaction_model,
                 &model_events,
                 terminal_model,
                 ctx,
@@ -921,6 +923,7 @@ fn append_test_agent_block_with_inputs(
     ctx: &mut ViewContext<TuiTranscriptView>,
 ) -> EntityId {
     let action_model = view.action_model.clone();
+    let blocking_interaction_model = view.blocking_interaction_model.clone();
     let model_events = view.model_events.clone();
     let terminal_model = view.model.clone();
     let agent_block = ctx.add_tui_view(|ctx| {
@@ -929,6 +932,7 @@ fn append_test_agent_block_with_inputs(
             exchange_id,
             Rc::new(FakeAgentBlockModel { inputs, status }),
             action_model,
+            blocking_interaction_model,
             &model_events,
             terminal_model,
             ctx,

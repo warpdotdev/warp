@@ -35,6 +35,7 @@ use crate::server::sync_queue::SyncQueue;
 use crate::settings::manager::SettingsManager;
 use crate::settings::{AISettings, PrivacySettings, init_and_register_user_preferences};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::user_config::WarpConfig;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -147,6 +148,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.update(crate::settings::SelectionSettings::register);
     app.update(crate::settings::ScrollSettings::register);
     app.update(crate::settings::EmacsBindingsSettings::register);
+    SafeModeSettings::register(app);
     app.update(crate::terminal::general_settings::GeneralSettings::register);
 
     app.add_singleton_model(|_| repo_metadata::repositories::DetectedRepositories::default());

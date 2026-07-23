@@ -303,7 +303,12 @@ impl TuiAttachmentModel {
         true
     }
 
-    fn start_processing(&mut self, file_name: String, count: usize, ctx: &mut ModelContext<Self>) {
+    pub(super) fn start_processing(
+        &mut self,
+        file_name: String,
+        count: usize,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.processing_file_name = Some(file_name);
         self.processing_count = count;
         ctx.emit(TuiAttachmentModelEvent::Updated);

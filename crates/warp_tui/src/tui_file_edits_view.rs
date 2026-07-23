@@ -549,14 +549,8 @@ impl Entity for TuiFileEditsView {
     type Event = TuiFileEditsViewEvent;
 }
 impl TuiFileEditsView {
-    pub(super) fn active_permission_prompt(
-        &self,
-        app: &AppContext,
-    ) -> Option<ViewHandle<TuiPermissionPrompt>> {
-        self.permission_prompt
-            .as_ref(app)
-            .is_active(app)
-            .then(|| self.permission_prompt.clone())
+    pub(super) fn permission_prompt(&self) -> ViewHandle<TuiPermissionPrompt> {
+        self.permission_prompt.clone()
     }
 
     fn accept(&self, ctx: &mut ViewContext<Self>) {

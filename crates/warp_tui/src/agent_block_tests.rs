@@ -42,7 +42,9 @@ use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
 };
 use crate::agent_message::agent_message_section_id;
-use crate::test_fixtures::{TestHostView, add_test_action_model_and_events};
+use crate::test_fixtures::{
+    TestHostView, add_test_action_model_and_events, add_test_blocking_interaction_model,
+};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_plan_view::TuiPlanViewAction;
 use crate::tui_shell_command_view::TuiShellCommandViewAction;
@@ -829,8 +831,7 @@ fn shell_command_disclosure_invalidates_agent_block_layout() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
-                TuiAIBlockEvent::BlockingStateChanged
-                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+                TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
             });
         });
 
@@ -923,8 +924,7 @@ fn plan_collapse_invalidates_agent_block_layout() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
-                TuiAIBlockEvent::BlockingStateChanged
-                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+                TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
             });
         });
 
@@ -1346,8 +1346,7 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
                 TuiAIBlockEvent::LayoutInvalidated => {
                     invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
                 }
-                TuiAIBlockEvent::BlockingStateChanged
-                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+                TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
             });
         });
 
@@ -2049,6 +2048,7 @@ struct FakeAgentBlockModel {
 /// window and backed by a real action model.
 fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<TuiAIBlock> {
     let (action_model, model_events) = add_test_action_model_and_events(app);
+    let blocking_interaction_model = add_test_blocking_interaction_model(app, action_model.clone());
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
@@ -2064,6 +2064,7 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
                 AIAgentExchangeId::new(),
                 Rc::new(model),
                 action_model,
+                blocking_interaction_model,
                 &model_events,
                 terminal_model,
                 ctx,

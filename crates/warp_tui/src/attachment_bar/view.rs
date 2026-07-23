@@ -187,6 +187,24 @@ impl TuiAttachmentBar {
         self.model
             .update(ctx, |model, ctx| model.remove_selected(ctx));
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_processing_attachment_for_test(
+        &mut self,
+        file_name: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model
+            .update(ctx, |model, ctx| model.start_processing(file_name, 1, ctx));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot_for_test(
+        &self,
+        ctx: &AppContext,
+    ) -> super::model::TuiAttachmentSnapshot {
+        self.model.as_ref(ctx).snapshot(ctx)
+    }
 }
 
 fn render_attachment_snapshot(
