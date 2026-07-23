@@ -1309,6 +1309,35 @@ impl AIExecutionProfilesModel {
         }
     }
 
+    pub fn set_subagent_model(
+        &mut self,
+        profile_id: &ExecutionProfileId,
+        model_id: Option<LLMId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.edit_profile_internal(
+            profile_id,
+            |profile| {
+                if profile.subagent_model != model_id {
+                    profile.subagent_model = model_id.clone();
+                    return true;
+                }
+                false
+            },
+            ctx,
+        );
+
+        if let Some(model_id) = &model_id {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::AIExecutionProfileModelSelected {
+                    model_type: "subagent".to_string(),
+                    model_value: model_id.to_string(),
+                },
+                ctx
+            );
+        }
+    }
+
     pub fn set_context_window_limit(
         &mut self,
         profile_id: &ExecutionProfileId,

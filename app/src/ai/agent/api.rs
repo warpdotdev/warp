@@ -105,6 +105,8 @@ pub struct RequestParams {
     pub coding_model: LLMId,
     pub cli_agent_model: LLMId,
     pub computer_use_model: LLMId,
+    /// Model override for subagents. `None` means subagents use the base model.
+    pub subagent_model: Option<LLMId>,
     pub is_memory_enabled: bool,
     pub warp_drive_context_enabled: bool,
     pub context_window_limit: Option<u32>,
@@ -173,6 +175,7 @@ impl RequestParams {
             coding_model: LLMId::from("test-model"),
             cli_agent_model: LLMId::from("test-model"),
             computer_use_model: LLMId::from("test-model"),
+            subagent_model: None,
             is_memory_enabled: false,
             warp_drive_context_enabled: false,
             context_window_limit: None,
@@ -366,6 +369,9 @@ impl RequestParams {
             coding_model: request_input.coding_model_id.clone(),
             cli_agent_model: request_input.cli_agent_model_id.clone(),
             computer_use_model: request_input.computer_use_model_id.clone(),
+            subagent_model: LLMPreferences::as_ref(app)
+                .get_active_subagent_model(app, terminal_view_id)
+                .map(|info| info.id.clone()),
             is_memory_enabled,
             warp_drive_context_enabled,
             mcp_context,

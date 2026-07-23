@@ -381,6 +381,9 @@ pub struct AIExecutionProfile {
     pub coding_model: Option<LLMId>,
     pub cli_agent_model: Option<LLMId>,
     pub computer_use_model: Option<LLMId>,
+    /// Model override for subagents spawned by the agent. `None` means
+    /// subagents use the base model.
+    pub subagent_model: Option<LLMId>,
 
     pub context_window_limit: Option<u32>,
 
@@ -413,6 +416,7 @@ impl Default for AIExecutionProfile {
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
+            subagent_model: None,
             context_window_limit: None,
             autosync_plans_to_warp_drive: true,
             web_search_enabled: true,
@@ -452,6 +456,7 @@ impl AIExecutionProfile {
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
+            subagent_model: None,
             context_window_limit: None,
             autosync_plans_to_warp_drive: false,
             web_search_enabled: true,
@@ -508,6 +513,7 @@ impl AIExecutionProfile {
             coding_model: None,
             cli_agent_model: None,
             computer_use_model: None,
+            subagent_model: None,
             context_window_limit: None,
             autosync_plans_to_warp_drive: FeatureFlag::SyncAmbientPlans.is_enabled(),
             web_search_enabled: true,

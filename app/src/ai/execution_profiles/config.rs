@@ -474,6 +474,10 @@ struct ExecutionProfileFile {
     cli_agent_model: Option<String>,
     #[schemars(description = "Optional computer-use model override.")]
     computer_use_model: Option<String>,
+    #[schemars(
+        description = "Optional subagent-model override; unset means subagents use the base model."
+    )]
+    subagent_model: Option<String>,
     #[schemars(description = "Optional maximum context window in tokens.")]
     context_window_limit: Option<u32>,
     #[schemars(description = "Whether plans are automatically synced to Warp Drive.")]
@@ -525,6 +529,7 @@ impl From<&AIExecutionProfile> for ExecutionProfileFile {
             coding_model: profile.coding_model.clone().map(Into::into),
             cli_agent_model: profile.cli_agent_model.clone().map(Into::into),
             computer_use_model: profile.computer_use_model.clone().map(Into::into),
+            subagent_model: profile.subagent_model.clone().map(Into::into),
             context_window_limit: profile.context_window_limit,
             autosync_plans_to_warp_drive: profile.autosync_plans_to_warp_drive,
             web_search_enabled: profile.web_search_enabled,
@@ -576,6 +581,7 @@ impl TryFrom<ExecutionProfileFile> for AIExecutionProfile {
             coding_model: file.coding_model.map(LLMId::from),
             cli_agent_model: file.cli_agent_model.map(LLMId::from),
             computer_use_model: file.computer_use_model.map(LLMId::from),
+            subagent_model: file.subagent_model.map(LLMId::from),
             context_window_limit: file.context_window_limit,
             autosync_plans_to_warp_drive: file.autosync_plans_to_warp_drive,
             web_search_enabled: file.web_search_enabled,

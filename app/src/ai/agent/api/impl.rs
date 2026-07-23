@@ -68,6 +68,7 @@ pub async fn generate_multi_agent_output(
                 base: params.model.into(),
                 cli_agent: params.cli_agent_model.into(),
                 computer_use_agent: params.computer_use_model.into(),
+                subagent: params.subagent_model.map(Into::into).unwrap_or_default(),
                 base_model_context_window_limit: params.context_window_limit.unwrap_or(0),
                 ..Default::default()
             }),
