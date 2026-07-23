@@ -127,6 +127,14 @@ const HERMES_PURPLE: ColorU = ColorU {
     a: 255,
 };
 
+/// Plank brand color (warm wood brown #8B5A2B)
+const PLANK_COLOR: ColorU = ColorU {
+    r: 139,
+    g: 90,
+    b: 43,
+    a: 255,
+};
+
 /// Mistral brand orange (#FA520F)
 const MISTRAL_ORANGE: ColorU = ColorU {
     r: 250,
@@ -153,6 +161,7 @@ pub enum CLIAgent {
     Hermes,
     Vibe,
     Antigravity,
+    Plank,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
     Unknown,
 }
@@ -176,6 +185,7 @@ impl CLIAgent {
             CLIAgent::Hermes => "hermes",
             CLIAgent::Vibe => "vibe",
             CLIAgent::Antigravity => "agy",
+            CLIAgent::Plank => "plank",
             CLIAgent::Unknown => "",
         }
     }
@@ -225,6 +235,7 @@ impl CLIAgent {
             CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
             CLIAgent::Antigravity => "Antigravity",
+            CLIAgent::Plank => "Plank",
             CLIAgent::Unknown => "CLI Agent",
         }
     }
@@ -250,6 +261,9 @@ impl CLIAgent {
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
+            // Plank is recognized but ships without a brand asset; the brand
+            // color still drives the toolbar tile.
+            CLIAgent::Plank => None,
             CLIAgent::Unknown => None,
         }
     }
@@ -282,6 +296,7 @@ impl CLIAgent {
             CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
             CLIAgent::Antigravity => &[],
+            CLIAgent::Plank => &[],
             CLIAgent::Unknown => &[],
         }
     }
@@ -326,6 +341,7 @@ impl CLIAgent {
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
             CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
+            CLIAgent::Plank => Some(PLANK_COLOR),
             CLIAgent::Unknown => None,
         }
     }
@@ -619,6 +635,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
             CLIAgent::Antigravity => CLIAgentType::Antigravity,
+            CLIAgent::Plank => CLIAgentType::Plank,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }
     }
