@@ -132,6 +132,7 @@ pub use crate::code_review::git_repo_model::{
 };
 pub use crate::completer::SessionContext;
 pub use crate::persistence::PersistenceWriter;
+pub use crate::prefix::longest_common_prefix;
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
 };

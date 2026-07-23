@@ -15,6 +15,7 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::{AppContext, ModelHandle};
 
+use crate::completion_menu::TuiCompletionAcceptance;
 use crate::conversation_menu::TuiConversationMenuModel;
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::mcp_menu::TuiMcpMenuModel;
@@ -274,6 +275,8 @@ pub(crate) enum TuiInlineMenuAccepted {
     Mcp(TuiMcpAction),
     /// The text of a prompt accepted from the up-arrow prompt-history menu.
     PromptHistory(String),
+    /// A shell completion and the exact input span it replaces.
+    Completion(TuiCompletionAcceptance),
 }
 
 /// Type-erased operations shared by TUI inline-menu model handles.
