@@ -60,7 +60,7 @@ pub enum ArtifactButtonsRowEvent {
     OpenRecording { artifact_uid: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactButtonAction {
     OpenPlan { notebook_uid: NotebookId },
     CopyBranch { branch: String },
@@ -198,15 +198,7 @@ fn collect_buttons(
                     filepath,
                 );
                 let theme = theme.clone();
-                let action = if is_recording_mime_type(mime_type) {
-                    ArtifactButtonAction::OpenRecording {
-                        artifact_uid: artifact_uid.clone(),
-                    }
-                } else {
-                    ArtifactButtonAction::DownloadFile {
-                        artifact_uid: artifact_uid.clone(),
-                    }
-                };
+                let action = file_artifact_action(artifact_uid, mime_type);
                 buttons.push(
                     ctx.add_typed_action_view(move |_| {
                         make_file_button(button_text, action, theme)
@@ -229,6 +221,17 @@ fn collect_buttons(
     buttons
 }
 
+pub(crate) fn file_artifact_action(artifact_uid: &str, mime_type: &str) -> ArtifactButtonAction {
+    if is_recording_mime_type(mime_type) {
+        ArtifactButtonAction::OpenRecording {
+            artifact_uid: artifact_uid.to_string(),
+        }
+    } else {
+        ArtifactButtonAction::DownloadFile {
+            artifact_uid: artifact_uid.to_string(),
+        }
+    }
+}
 fn make_plan_button(
     title: String,
     notebook_uid: NotebookId,

@@ -1012,7 +1012,11 @@ impl AgentManagementView {
                             view.update(ctx, |v, ctx| v.update_artifacts(&card.artifacts, ctx));
                         } else {
                             existing.artifact_buttons_view =
-                                Some(self.create_artifact_buttons_view(&card.artifacts, ctx));
+                                Some(self.create_artifact_buttons_view(
+                                    card.item_id,
+                                    &card.artifacts,
+                                    ctx,
+                                ));
                         }
                     } else {
                         existing.artifact_buttons_view = None;
@@ -1026,7 +1030,7 @@ impl AgentManagementView {
                 }
                 _ => {
                     let artifact_buttons_view = if should_show_artifacts(&card.artifacts) {
-                        Some(self.create_artifact_buttons_view(&card.artifacts, ctx))
+                        Some(self.create_artifact_buttons_view(card.item_id, &card.artifacts, ctx))
                     } else {
                         None
                     };
@@ -1184,17 +1188,20 @@ impl AgentManagementView {
 
     fn create_artifact_buttons_view(
         &self,
+        item_id: ManagementCardItemId,
         artifacts: &[Artifact],
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<ArtifactButtonsRow> {
         let view = ctx.add_typed_action_view(|ctx| ArtifactButtonsRow::new(artifacts, ctx));
-        ctx.subscribe_to_view(&view, Self::handle_artifact_buttons_event);
+        ctx.subscribe_to_view(&view, move |me, _, event, ctx| {
+            me.handle_artifact_buttons_event(item_id, event, ctx);
+        });
         view
     }
 
     fn handle_artifact_buttons_event(
         &mut self,
-        _view: ViewHandle<ArtifactButtonsRow>,
+        item_id: ManagementCardItemId,
         event: &ArtifactButtonsRowEvent,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1246,6 +1253,19 @@ impl AgentManagementView {
                     ctx
                 );
                 crate::ai::artifacts::download_file_artifact(artifact_uid, ctx);
+            }
+            ArtifactButtonsRowEvent::OpenRecording { artifact_uid } => {
+                send_telemetry_from_ctx!(
+                    AgentManagementTelemetryEvent::ArtifactClicked {
+                        artifact_type: ArtifactType::File
+                    },
+                    ctx
+                );
+                let task_id = match item_id {
+                    ManagementCardItemId::AmbientRun(task_id) => Some(task_id),
+                    ManagementCardItemId::Conversation(_) => None,
+                };
+                crate::ai::artifacts::open_recording_artifact(artifact_uid, task_id, ctx);
             }
         }
     }
@@ -1376,7 +1396,8 @@ impl AgentManagementView {
             if let Some(view) = &self.items[index].artifact_buttons_view {
                 view.update(ctx, |v, ctx| v.update_artifacts(&artifacts, ctx));
             } else {
-                let new_view = self.create_artifact_buttons_view(&artifacts, ctx);
+                let new_view =
+                    self.create_artifact_buttons_view(self.items[index].item_id, &artifacts, ctx);
                 self.items[index].artifact_buttons_view = Some(new_view);
             }
         } else {

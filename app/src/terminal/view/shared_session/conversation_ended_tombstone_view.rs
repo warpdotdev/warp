@@ -257,9 +257,10 @@ impl ConversationEndedTombstoneView {
             open_in_warp_button,
         };
 
+        let artifact_task_id = task_id;
         ctx.subscribe_to_view(
             &view.artifact_buttons_view,
-            |_, _, event, ctx| match event {
+            move |_, _, event, ctx| match event {
                 ArtifactButtonsRowEvent::OpenPlan { notebook_uid } => {
                     send_telemetry_from_ctx!(
                         AgentManagementTelemetryEvent::TombstoneArtifactClicked {
@@ -303,6 +304,19 @@ impl ConversationEndedTombstoneView {
                         ctx
                     );
                     crate::ai::artifacts::download_file_artifact(artifact_uid, ctx);
+                }
+                ArtifactButtonsRowEvent::OpenRecording { artifact_uid } => {
+                    send_telemetry_from_ctx!(
+                        AgentManagementTelemetryEvent::TombstoneArtifactClicked {
+                            artifact_type: ArtifactType::File
+                        },
+                        ctx
+                    );
+                    crate::ai::artifacts::open_recording_artifact(
+                        artifact_uid,
+                        artifact_task_id,
+                        ctx,
+                    );
                 }
             },
         );

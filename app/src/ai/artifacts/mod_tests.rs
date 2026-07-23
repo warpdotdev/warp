@@ -1,6 +1,7 @@
 use anyhow::anyhow;
 use chrono::{TimeZone, Utc};
 
+use super::buttons::{ArtifactButtonAction, file_artifact_action};
 use super::*;
 #[cfg(feature = "local_fs")]
 use crate::ai::artifact_download::default_download_filename;
@@ -120,6 +121,22 @@ fn file_button_label_prefers_title_and_ignores_whitespace() {
 fn recording_mime_types_are_case_insensitive() {
     assert!(is_recording_mime_type(" VIDEO/MP4 "));
     assert!(!is_recording_mime_type("application/pdf"));
+}
+
+#[test]
+fn file_artifact_action_opens_video_recordings_and_downloads_other_files() {
+    assert_eq!(
+        file_artifact_action("recording-1", "video/mp4"),
+        ArtifactButtonAction::OpenRecording {
+            artifact_uid: "recording-1".to_string(),
+        }
+    );
+    assert_eq!(
+        file_artifact_action("document-1", "text/plain"),
+        ArtifactButtonAction::DownloadFile {
+            artifact_uid: "document-1".to_string(),
+        }
+    );
 }
 #[test]
 fn deserializes_file_without_filename_using_filepath_basename() {

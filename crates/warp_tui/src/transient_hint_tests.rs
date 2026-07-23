@@ -86,6 +86,22 @@ fn success_hint_uses_success_tone() {
 }
 
 #[test]
+fn error_hint_uses_error_tone() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| {
+                view.hint
+                    .show_error("failed".to_owned(), ctx, |view| &mut view.hint);
+            });
+            assert_eq!(
+                view.as_ref(ctx).hint.current(),
+                Some(("failed", TransientHintTone::Error))
+            );
+        });
+    });
+}
+#[test]
 fn show_supersedes_the_earlier_notice() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
