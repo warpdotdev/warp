@@ -60,9 +60,6 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         // OSC 777 events natively. Droid can be supported by user-configured
         // hooks or future integrations that emit the same events. We don't ship
         // install flows for these agents here — we just listen.
-        // Grok uses the Codex dual-path handler (OSC 777 rich + OSC 9 fallback)
-        // because native Grok in Warp already emits OSC 9 turn-complete /
-        // approval notifications, and a Warp hooks bridge can emit OSC 777.
         CLIAgent::Claude
         | CLIAgent::OpenCode
         | CLIAgent::Gemini
@@ -71,6 +68,7 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Pi
         | CLIAgent::OhMyPi => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
+        // Dual-path like Codex: OSC 777 rich plugin events + OSC 9 fallback.
         CLIAgent::Grok => Some(Box::new(GrokSessionHandler)),
         CLIAgent::Hermes
         | CLIAgent::Amp
@@ -163,14 +161,17 @@ impl CLIAgentSessionHandler for CodexSessionHandler {
     }
 }
 
-/// Grok-specific handler: OSC 777 rich plugin events plus native OSC 9 fallback.
+/// Grok-specific handler for OSC 777 rich plugin events and native OSC 9 fallback.
 ///
-/// Grok Build treats Warp as a first-class terminal and emits OSC 9 for
-/// turn-complete / approval notifications. A Warp hooks bridge can also emit
-/// structured `warp://cli-agent` OSC 777 payloads with `"agent":"grok"`.
+/// Grok emits OSC 9 for turn-complete / approval notifications. The Warp hooks
+/// plugin emits structured `warp://cli-agent` OSC 777 payloads with `"agent":"grok"`.
+/// OSC 9 events use [`CLIAgentEventSource::CodexOsc9Fallback`] (shared opaque
+/// fallback tag; only [`CLIAgentEventSource::RichPlugin`] latches rich status).
 struct GrokSessionHandler;
 
 impl GrokSessionHandler {
+    /// Parse a plain-text OSC 9 notification body into a `CLIAgentEvent`.
+    /// Returns `None` only for empty bodies.
     fn parse_osc9_text(body: &str) -> Option<CLIAgentEvent> {
         let body = body.trim();
         if body.is_empty() {
@@ -188,8 +189,6 @@ impl GrokSessionHandler {
                 query: Some(body.to_owned()),
                 ..Default::default()
             },
-            // Reuse the Codex OSC 9 source tag: same opaque fallback semantics
-            // (no rich status latch until an OSC 777 rich notification arrives).
             source: CLIAgentEventSource::CodexOsc9Fallback,
         })
     }
@@ -208,7 +207,8 @@ impl CLIAgentSessionHandler for GrokSessionHandler {
             }
             return None;
         }
-        // OSC 9 has no title. Drop OSC 9 once rich plugin events are active.
+        // OSC 9 notifications have no title. Skip OSC 9 once the rich plugin is
+        // active, otherwise we'd process both OSC 777 and OSC 9 notifications.
         if title.is_some() || plugin_already_active {
             return None;
         }

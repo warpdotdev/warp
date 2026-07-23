@@ -135,7 +135,7 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-/// Grok / xAI brand color (near-black, monochrome logomark on circular tile)
+/// Grok / SpaceXAI brand color (near-black, monochrome logomark on circular tile)
 const GROK_COLOR: ColorU = ColorU {
     r: 16,
     g: 16,

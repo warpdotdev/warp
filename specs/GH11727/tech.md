@@ -56,6 +56,11 @@ Do **not** map bare `agent` → Grok. Do **not** add `Harness::Grok` in this PR.
 Identifiers stay short (`CLIAgent::Grok`, `GrokPluginManager`) to match existing
 agent enums (`Claude`, `Gemini`); user-facing copy uses **Grok Build**.
 
+Detection uses the same first-token equality as other agents
+(`resolved_first_word == command_prefix()`), including alias expansion and
+leading env-var assignments when shell parsing is available. Absolute paths
+whose last segment is `grok` are **not** special-cased (same as Claude/Codex).
+
 ### 2. Icon asset
 
 - Add `app/assets/bundled/svg/grok.svg` — official Grok logomark paths, monochrome
@@ -69,7 +74,8 @@ agent enums (`Claude`, `Gemini`); user-facing copy uses **Grok Build**.
 - Include `CLIAgent::Grok` in `is_agent_supported`.
 - Handler: **Codex-style** dual path — parse OSC 777 `warp://cli-agent` when
   present; otherwise treat OSC 9 body as opaque `Stop` until rich notifications
-  latch.
+  latch. OSC 9 events reuse `CLIAgentEventSource::CodexOsc9Fallback` (shared
+  opaque fallback tag; only `RichPlugin` latches rich status).
 - On command detection of Grok, call
   `register_cli_agent_listener_without_session_start_event(CLIAgent::Grok)`
   alongside Codex so OSC 9 works without SessionStart.
@@ -84,7 +90,7 @@ agent enums (`Claude`, `Gemini`); user-facing copy uses **Grok Build**.
 
 - Add `plugin_manager/grok.rs` with **one-click auto-install** (file write, not a
   marketplace CLI). User-facing copy matches Claude/Codex (**Enable … notifications**,
-  **Warp plugin installed/updated**), not “bridge”:
+  **Warp plugin installed/updated**):
   - `can_auto_install() -> true`
   - `install` / `update` write under `$GROK_HOME/hooks` (or `~/.grok/hooks`):
     - `warp-plugin.json` (SessionStart / UserPromptSubmit / Stop / StopFailure)
@@ -93,8 +99,7 @@ agent enums (`Claude`, `Gemini`); user-facing copy uses **Grok Build**.
   - Naming: Claude/Codex use marketplace plugin id `warp@…-warp` (separate repos
     `claude-code-warp` / `codex-warp` — not checked into this monorepo). Grok has
     no hosted package yet, so the same conceptual **warp** plugin is written as
-    `warp-plugin.*` hooks files. Install also removes legacy `warp-cli-agent*` /
-    `*bridge*` filenames if present.
+    `warp-plugin.*` hooks files.
   - `is_installed` / `needs_update` read those files; honors `$GROK_HOME`.
   - Manual instructions remain for sandboxed / remote sessions that force
     instruction mode.
@@ -114,11 +119,12 @@ agent enums (`Claude`, `Gemini`); user-facing copy uses **Grok Build**.
 
 ### 7. Tests
 
-- `cli_agent_tests`: detect `grok`, path basename, alias, leading env; **not**
-  bare `agent`.
-- Listener tests: Grok supported; OSC 9 / OSC 777 paths as applicable.
-- Plugin manager tests: install instructions non-empty; `can_auto_install` false.
-- Extend agent icon tests if needed for Grok session chrome.
+- `cli_agent_tests`: detect `grok`, args; **not** bare `agent`; identity helpers
+  (display name, icon, bash, skills prefix).
+- Listener tests: Grok supported; OSC 9 / OSC 777 paths; drop OSC 9 after rich.
+- Plugin manager tests: install instructions non-empty; `can_auto_install` true;
+  install under `$GROK_HOME`; `needs_update` when missing/old version; env tests
+  use `#[serial_test::serial]`.
 
 ## Data flow
 
@@ -142,22 +148,26 @@ User runs `grok`
 | 7 Skills `/` | Manual slash menu filter |
 | 8 No `agent` collision | Unit test |
 | 9 OSC 9 without plugin | Manual unfocus turn complete |
-| 10 OSC 777 rich | Unit parse body with `"agent":"grok"`; optional manual bridge |
-| 11 Plugin chip | Unit install instructions; manual chip UI |
+| 10 OSC 777 rich | Unit parse body with `"agent":"grok"`; manual after install + restart |
+| 11 Plugin chip | Unit install under `$GROK_HOME`; manual chip UI |
 | 12 Telemetry | Compile-time enum + From mapping |
-| 13 Serialization | Existing serde name helpers + smoke test |
+| 13 Serialization | Existing serde name helpers (variant `Grok`) |
 
 Presubmit: `./script/format` and clippy per CONTRIBUTING / AGENTS.md.  
 Manual proof required on the PR (screenshots + short recording).
 
 ## Risks
 
-- Official SVG fetch may need manual drop-in of brand files.
+- Official SVG must stay monochrome `#FF0000` for the icon red-channel mask.
 - Submit strategy may need BracketedPaste if DelayedEnter flakes on Grok.
-- Plugin bridge is documentation-first; auto-install hooks is a follow-up.
+- Hooks plugin uses lightweight JSON field extraction in bash; prompts with
+  complex quoting may omit optional fields until python3 builds the body.
 
 ## Follow-ups (not this PR)
 
-- Auto-install hooks into `$GROK_HOME/hooks`.
+- Hosted `warpdotdev/grok-warp` (or similar) marketplace package +
+  `grok plugin install …`.
+- Optional rename of `CLIAgentEventSource::CodexOsc9Fallback` to an agent-neutral
+  name shared by Codex and Grok.
 - `Harness::Grok` for cloud/orchestration.
 - ACP client for Warp Agent Mode.

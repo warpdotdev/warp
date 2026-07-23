@@ -1,7 +1,6 @@
 use super::{
-    GrokPluginManager, HOOK_JSON_FILE, LEGACY_HOOK_JSON_FILE, LEGACY_PLUGIN_SCRIPT_REL,
-    LEGACY_VERSION_FILE, PLUGIN_SCRIPT_REL, VERSION_FILE, check_installed, install_plugin_files,
-    installed_version,
+    GrokPluginManager, HOOK_JSON_FILE, PLUGIN_SCRIPT_REL, VERSION_FILE, check_installed,
+    install_plugin_files, installed_version,
 };
 use crate::terminal::cli_agent_sessions::plugin_manager::CliAgentPluginManager;
 
@@ -43,9 +42,10 @@ fn minimum_plugin_version_is_semver() {
 }
 
 #[test]
+#[serial_test::serial]
 fn install_writes_plugin_files_under_grok_home() {
     let dir = tempfile::tempdir().unwrap();
-    // SAFETY: test-only env override; cleaned up before return.
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var("GROK_HOME", dir.path()) };
 
     install_plugin_files().expect("install should succeed");
@@ -60,7 +60,6 @@ fn install_writes_plugin_files_under_grok_home() {
     let json = std::fs::read_to_string(hooks.join(HOOK_JSON_FILE)).unwrap();
     assert!(json.contains("warp-plugin.sh"));
     assert!(json.contains("SessionStart"));
-    assert!(!json.contains("bridge"));
 
     #[cfg(unix)]
     {
@@ -72,33 +71,15 @@ fn install_writes_plugin_files_under_grok_home() {
         assert_ne!(mode & 0o111, 0, "plugin script should be executable");
     }
 
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("GROK_HOME") };
 }
 
 #[test]
-fn install_removes_legacy_bridge_filenames() {
-    let dir = tempfile::tempdir().unwrap();
-    unsafe { std::env::set_var("GROK_HOME", dir.path()) };
-
-    let hooks = dir.path().join("hooks");
-    std::fs::create_dir_all(hooks.join("bin")).unwrap();
-    std::fs::write(hooks.join(LEGACY_HOOK_JSON_FILE), "{}").unwrap();
-    std::fs::write(hooks.join(LEGACY_PLUGIN_SCRIPT_REL), "#!/bin/sh\n").unwrap();
-    std::fs::write(hooks.join(LEGACY_VERSION_FILE), "1.0.0\n").unwrap();
-
-    install_plugin_files().unwrap();
-
-    assert!(!hooks.join(LEGACY_HOOK_JSON_FILE).exists());
-    assert!(!hooks.join(LEGACY_PLUGIN_SCRIPT_REL).exists());
-    assert!(!hooks.join(LEGACY_VERSION_FILE).exists());
-    assert!(check_installed(&hooks));
-
-    unsafe { std::env::remove_var("GROK_HOME") };
-}
-
-#[test]
+#[serial_test::serial]
 fn needs_update_when_version_file_missing_but_hooks_present() {
     let dir = tempfile::tempdir().unwrap();
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var("GROK_HOME", dir.path()) };
 
     install_plugin_files().unwrap();
@@ -107,12 +88,15 @@ fn needs_update_when_version_file_missing_but_hooks_present() {
     assert!(GrokPluginManager.is_installed());
     assert!(GrokPluginManager.needs_update());
 
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("GROK_HOME") };
 }
 
 #[test]
+#[serial_test::serial]
 fn needs_update_when_version_is_old() {
     let dir = tempfile::tempdir().unwrap();
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var("GROK_HOME", dir.path()) };
 
     install_plugin_files().unwrap();
@@ -121,16 +105,20 @@ fn needs_update_when_version_is_old() {
     assert!(GrokPluginManager.is_installed());
     assert!(GrokPluginManager.needs_update());
 
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("GROK_HOME") };
 }
 
 #[test]
+#[serial_test::serial]
 fn is_installed_false_when_missing() {
     let dir = tempfile::tempdir().unwrap();
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::set_var("GROK_HOME", dir.path()) };
 
     assert!(!GrokPluginManager.is_installed());
     assert!(!GrokPluginManager.needs_update());
 
+    // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("GROK_HOME") };
 }

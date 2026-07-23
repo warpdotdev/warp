@@ -21,11 +21,6 @@ const HOOK_JSON_FILE: &str = "warp-plugin.json";
 const PLUGIN_SCRIPT_REL: &str = "bin/warp-plugin.sh";
 const VERSION_FILE: &str = "warp-plugin.version";
 
-/// Legacy names from the earlier "bridge" install; removed on upgrade/install.
-const LEGACY_HOOK_JSON_FILE: &str = "warp-cli-agent.json";
-const LEGACY_PLUGIN_SCRIPT_REL: &str = "bin/warp-cli-agent-bridge.sh";
-const LEGACY_VERSION_FILE: &str = "warp-cli-agent.version";
-
 /// Hook config loaded by Grok Build from `$GROK_HOME/hooks/*.json`.
 const HOOK_JSON: &str = r#"{
   "hooks": {
@@ -196,7 +191,10 @@ fn install_plugin_files() -> Result<(), PluginInstallError> {
         }
     })?;
 
-    log.push_str(&format!("Installing Warp plugin into {}\n", hooks_dir.display()));
+    log.push_str(&format!(
+        "Installing Warp plugin into {}\n",
+        hooks_dir.display()
+    ));
 
     let bin_dir = hooks_dir.join("bin");
     fs::create_dir_all(&bin_dir).map_err(|err| {
@@ -263,23 +261,6 @@ fn install_plugin_files() -> Result<(), PluginInstallError> {
         "wrote {} ({MINIMUM_PLUGIN_VERSION})\n",
         version_path.display()
     ));
-
-    // Drop legacy "bridge" filenames so restarts do not double-fire old hooks.
-    for legacy in [
-        LEGACY_HOOK_JSON_FILE,
-        LEGACY_PLUGIN_SCRIPT_REL,
-        LEGACY_VERSION_FILE,
-    ] {
-        let path = hooks_dir.join(legacy);
-        match fs::remove_file(&path) {
-            Ok(()) => log.push_str(&format!("removed legacy {}\n", path.display())),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => log.push_str(&format!(
-                "warning: could not remove legacy {}: {err}\n",
-                path.display()
-            )),
-        }
-    }
 
     Ok(())
 }

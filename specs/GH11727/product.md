@@ -4,7 +4,7 @@ Issue: https://github.com/warpdotdev/warp/issues/11727
 
 ## Summary
 
-Add Grok Build (xAI’s `grok` binary) as a first-class third-party CLI coding
+Add Grok Build (SpaceXAI’s `grok` binary) as a first-class third-party CLI coding
 agent in Warp, at parity with Claude Code, Codex, and OpenCode. Users who run
 `grok` in a Warp pane get native agent identity (brand icon and color), the CLI
 agent toolbar, rich input, image attach, skills/bash mode support, and
@@ -14,14 +14,16 @@ notification/session status wiring.
 
 **In scope**
 
-- Native detection of the `grok` command (including aliases and path basenames).
+- Native detection of the `grok` command (including aliases that expand to
+  `grok` as the first token, and leading env-var assignments when shell
+  parsing is available — same rules as other `CLIAgent` prefixes).
 - Brand icon and color in the CLI agent footer, vertical tabs, and other agent
   chrome that already uses `CLIAgent` identity.
 - Full CLI agent toolbar / rich input / image paste paths used by other agents.
 - Session listener support, including OSC 9 fallback (Grok Build already notifies
   Warp via OSC 9) and OSC 777 rich plugin events when the Warp plugin is installed.
-- Install/update for the Warp notification plugin (hooks under `~/.grok/hooks` or
-  equivalent), with one-click install matching Claude/Codex.
+- One-click install/update for the Warp notification plugin (hooks under
+  `~/.grok/hooks` or `$GROK_HOME/hooks`), matching Claude/Codex product language.
 - Unit tests for detection, listener support, and plugin manager wiring.
 - Telemetry: a distinct `CLIAgentType` for Grok Build.
 
@@ -32,13 +34,16 @@ notification/session status wiring.
 - Treating the install alias `agent` as Grok Build (that basename is Cursor CLI).
 - Changing Grok Build itself or shipping a Grok binary inside Warp.
 - Docs site / marketing pages outside this repository (may follow separately).
+- Hosted marketplace package (`grok plugin install …`); file-based hooks install
+  is the interim until Warp publishes one.
 
 ## Branding
 
-- Use the official **Grok logomark** (not xAI corporate mark, not wordmark, not
+- Use the official **Grok logomark** (not corporate mark, not wordmark, not
   full lockup) for circular agent avatars, per
-  [xAI brand guidelines](https://x.ai/legal/brand-guidelines) and
-  https://data.x.ai/logos/xAI_Grok_Assets.zip.
+  [Grok / SpaceXAI brand guidelines](https://x.ai/legal/brand-guidelines) and
+  https://data.x.ai/logos/xAI_Grok_Assets.zip (assets still published under
+  these URLs).
 - Ship **one monochrome SVG** at `app/assets/bundled/svg/grok.svg` with
   `fill="#FF0000"` (Warp’s icon red-channel mask). Warp tints it at paint time
   for light/dark UI — dual light/dark asset files are not needed (same as Claude
@@ -99,8 +104,3 @@ notification/session status wiring.
 
 13. Shared-session serialization round-trips the Grok agent name so viewers can
     restore identity.
-
-## Open questions
-
-- Whether to auto-install hooks into `$GROK_HOME/hooks` in a follow-up (Claude
-  auto-install style) after the manual OpenCode-style chip ships.
