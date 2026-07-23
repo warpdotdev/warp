@@ -111,3 +111,177 @@ fn imported_original_text_strips_only_one_marker_for_markdown_list() {
     let content = LineDiffContent::from_content("+- list");
     assert_eq!(content.imported_original_text(), "- list");
 }
+
+#[test]
+fn test_api_review_comment_line_range_deleted_file() {
+    use std::path::PathBuf;
+
+    use chrono::Local;
+
+    use super::*;
+
+    // Simulated comment on a removed line in a deleted file (line_range is empty 0..0)
+    let comment = AttachedReviewComment {
+        id: CommentId::new(),
+        content: "Test".to_string(),
+        target: AttachedReviewCommentTarget::Line {
+            absolute_file_path: LocalOrRemotePath::Local(PathBuf::from("/repo/file.txt")),
+            content: LineDiffContent {
+                content: "-deleted line".to_string(),
+                lines_added: LineCount::from(0),
+                lines_removed: LineCount::from(1),
+            },
+            line: EditorLineLocation::Removed {
+                line_number: LineCount::from(0),
+                line_range: LineCount::from(0)..LineCount::from(0),
+                index: 0,
+            },
+        },
+        last_update_time: Local::now(),
+        base: None,
+        head: None,
+        outdated: false,
+        origin: CommentOrigin::Native,
+    };
+
+    let api_comment = api::ReviewComment::from(comment);
+    let target = api_comment.comment_target.unwrap();
+    if let api::review_comment::CommentTarget::CommentedLine(hunk) = target {
+        let range = hunk.line_range.unwrap();
+        // For a deleted file, start and end must both be 0 (0-length range)
+        assert_eq!(range.start, 0);
+        assert_eq!(range.end, 0);
+    } else {
+        panic!("Expected CommentedLine target");
+    }
+}
+
+#[test]
+fn test_api_review_comment_line_range_normal_file() {
+    use std::path::PathBuf;
+
+    use chrono::Local;
+
+    use super::*;
+
+    // Simulated comment on a removed line in a normal file (hunk has line range 5..10)
+    let comment = AttachedReviewComment {
+        id: CommentId::new(),
+        content: "Test".to_string(),
+        target: AttachedReviewCommentTarget::Line {
+            absolute_file_path: LocalOrRemotePath::Local(PathBuf::from("/repo/file.txt")),
+            content: LineDiffContent {
+                content: "-deleted line".to_string(),
+                lines_added: LineCount::from(0),
+                lines_removed: LineCount::from(1),
+            },
+            line: EditorLineLocation::Removed {
+                line_number: LineCount::from(5),
+                line_range: LineCount::from(5)..LineCount::from(10),
+                index: 0,
+            },
+        },
+        last_update_time: Local::now(),
+        base: None,
+        head: None,
+        outdated: false,
+        origin: CommentOrigin::Native,
+    };
+
+    let api_comment = api::ReviewComment::from(comment);
+    let target = api_comment.comment_target.unwrap();
+    if let api::review_comment::CommentTarget::CommentedLine(hunk) = target {
+        let range = hunk.line_range.unwrap();
+        // For normal files, we ensure a minimum span of 1 line
+        assert_eq!(range.start, 5);
+        assert_eq!(range.end, 6);
+    } else {
+        panic!("Expected CommentedLine target");
+    }
+}
+
+#[test]
+fn test_api_review_comment_line_range_multiline() {
+    use std::path::PathBuf;
+
+    use chrono::Local;
+
+    use super::*;
+
+    // Simulated comment on a multi-line hunk (lines_added: 3)
+    let comment = AttachedReviewComment {
+        id: CommentId::new(),
+        content: "Test".to_string(),
+        target: AttachedReviewCommentTarget::Line {
+            absolute_file_path: LocalOrRemotePath::Local(PathBuf::from("/repo/file.txt")),
+            content: LineDiffContent {
+                content: "+added line 1\n+added line 2\n+added line 3".to_string(),
+                lines_added: LineCount::from(3),
+                lines_removed: LineCount::from(0),
+            },
+            line: EditorLineLocation::Current {
+                line_number: LineCount::from(10),
+                line_range: LineCount::from(10)..LineCount::from(13),
+            },
+        },
+        last_update_time: Local::now(),
+        base: None,
+        head: None,
+        outdated: false,
+        origin: CommentOrigin::Native,
+    };
+
+    let api_comment = api::ReviewComment::from(comment);
+    let target = api_comment.comment_target.unwrap();
+    if let api::review_comment::CommentTarget::CommentedLine(hunk) = target {
+        let range = hunk.line_range.unwrap();
+        assert_eq!(range.start, 10);
+        assert_eq!(range.end, 13);
+    } else {
+        panic!("Expected CommentedLine target");
+    }
+}
+
+#[test]
+fn test_api_review_comment_line_range_pure_deletion() {
+    use std::path::PathBuf;
+
+    use chrono::Local;
+
+    use super::*;
+
+    // Simulated comment on a pure deletion (line_range is empty 5..5, but line_number is 5)
+    let comment = AttachedReviewComment {
+        id: CommentId::new(),
+        content: "Test".to_string(),
+        target: AttachedReviewCommentTarget::Line {
+            absolute_file_path: LocalOrRemotePath::Local(PathBuf::from("/repo/file.txt")),
+            content: LineDiffContent {
+                content: "-deleted line".to_string(),
+                lines_added: LineCount::from(0),
+                lines_removed: LineCount::from(1),
+            },
+            line: EditorLineLocation::Removed {
+                line_number: LineCount::from(5),
+                line_range: LineCount::from(5)..LineCount::from(5),
+                index: 0,
+            },
+        },
+        last_update_time: Local::now(),
+        base: None,
+        head: None,
+        outdated: false,
+        origin: CommentOrigin::Native,
+    };
+
+    let api_comment = api::ReviewComment::from(comment);
+    let target = api_comment.comment_target.unwrap();
+    if let api::review_comment::CommentTarget::CommentedLine(hunk) = target {
+        let range = hunk.line_range.unwrap();
+        // Since it's a normal file (line_number != 0), we ensure a minimum span of 1 line
+        assert_eq!(range.start, 5);
+        assert_eq!(range.end, 6);
+    } else {
+        panic!("Expected CommentedLine target");
+    }
+}
