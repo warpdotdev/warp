@@ -22,7 +22,7 @@ use cosmic_text::{
     Align, Attrs, AttrsList, BidiParagraphs, LayoutGlyph, LayoutLine, ShapeLine, Shaping, Wrap,
 };
 use dashmap::mapref::entry::Entry;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use fontdb::Source;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -53,7 +53,7 @@ lazy_static! {
     static ref BIT7_CHECKED_FONTS: DashMap<(PathBuf, u32), bool> = DashMap::new();
 
     /// Paths whose every face has been scanned by the background scanner.
-    static ref SCANNED_PATHS: DashSet<PathBuf> = DashSet::new();
+    static ref SCANNED_PATHS: dashmap::DashSet<PathBuf> = dashmap::DashSet::new();
 
     /// Paths that the background scanner found corrupted, pending removal from fontdb.
     static ref PENDING_CORRUPTED_FONTS: std::sync::Mutex<Vec<PathBuf>> =
