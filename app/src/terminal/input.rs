@@ -1049,9 +1049,16 @@ pub enum Event {
     /// `attachments` carries any pending image/file attachments that must be uploaded to
     /// GCS via `prepare_attachments_for_upload` before the follow-up text is dispatched. The
     /// next remote execution picks the uploaded files up via `fetch_and_download_attachments`.
+    ///
+    /// `queued_query_retry` is `Some` when the follow-up originated from a fired queued-prompt
+    /// row (so the row has already been removed by `drain_queued_prompts`). It carries the
+    /// `(conversation_id, insert_index, query)` needed to restore the row on upload failure,
+    /// mirroring the shared-session viewer path. When `None`, the follow-up is an immediate
+    /// (post-session) submission whose attachments came from the context model.
     SubmitCloudFollowup {
         prompt: String,
         attachments: Vec<PendingAttachment>,
+        queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
     },
     /// A viewer in a shared session is requesting to cancel the active agent conversation.
     CancelSharedSessionConversation {
@@ -4137,6 +4144,7 @@ impl Input {
                     ctx.emit(Event::SubmitCloudFollowup {
                         prompt,
                         attachments,
+                        queued_query_retry: None,
                     });
                 } else {
                     // Cloud-to-cloud follow-up is unavailable; block rather than run locally.
@@ -13947,13 +13955,22 @@ impl Input {
             // Carry the fired row's attachments onto the follow-up so the view can upload them
             // to GCS before dispatching the text. The row is peeked (not yet removed) here, so its
             // attachments are still readable; `drain_queued_prompts` removes the row after this
-            // returns. On upload failure the view restores them to the context model for retry.
+            // returns. Capture the row's retry metadata so the upload-failure path can restore it
+            // (mirroring the shared-session viewer path below) — without this a failed upload
+            // would lose the queued prompt entirely.
             let attachments = QueuedQueryModel::as_ref(ctx)
                 .attachments_for(conversation_id, query_id)
                 .to_vec();
+            let queued_query_retry = QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .iter()
+                .enumerate()
+                .find(|(_, query)| query.id() == query_id)
+                .map(|(index, query)| (conversation_id, index, query.clone()));
             ctx.emit(Event::SubmitCloudFollowup {
                 prompt,
                 attachments,
+                queued_query_retry,
             });
             return;
         }
@@ -14707,21 +14724,34 @@ impl Input {
 
     /// Submit a cloud follow-up, uploading any staged `attachments` to GCS first.
     ///
-    /// With no attachments (or the image-context flag off) the follow-up text is submitted
-    /// immediately — the existing text-only path. With attachments, the input is frozen for the
-    /// duration of the upload (`prepare_attachments_for_upload` + PUT to the presigned GCS URLs)
-    /// and the follow-up is dispatched only after the files are uploaded, so the next remote
-    /// execution's `fetch_and_download_attachments` picks them up. On upload failure the
-    /// attachments are restored to the context model and the input is unfrozen so the user can
-    /// retry. `submit_cloud_followup` itself is unchanged — the upload is a client-side pre-step.
+    /// Two entry paths converge here:
+    /// - **Immediate** (`queued_query_retry == None`): the user typed a follow-up and hit send.
+    ///   The editor buffer holds the submitted prompt, so it is frozen (`{prompt} ◌`) for the
+    ///   upload duration and cleared on success. On failure the attachments are restored to the
+    ///   context model and the input unfrozen for retry.
+    /// - **Queued** (`queued_query_retry == Some(..)`): a queued-prompt row fired while the user
+    ///   may be typing something unrelated. Per `submit_queued_prompt_for_active_pane`'s
+    ///   contract the editor buffer is NOT touched — no freeze, no clear — because it holds the
+    ///   user's in-progress typing, not the queued prompt. On failure the fired row is restored
+    ///   (via `restore_fired_row`) so the queued prompt is retryable, not lost.
+    ///
+    /// In both paths the follow-up is dispatched only after every file uploads successfully; a
+    /// partial upload (or a `prepare` failure) is treated as a failure — the follow-up is not
+    /// submitted, because `prepare_attachments_for_upload` pre-registers metadata for every
+    /// requested file and a missing PUT would leave dangling task metadata the next execution
+    /// would try to fetch. `submit_cloud_followup` itself is unchanged — the upload is a
+    /// client-side pre-step; the next execution's `fetch_and_download_attachments` picks the
+    /// uploaded files up.
     pub(crate) fn submit_cloud_followup_with_attachments(
         &mut self,
         ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
         task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
         prompt: String,
         attachments: Vec<PendingAttachment>,
+        queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let is_queued = queued_query_retry.is_some();
         let has_uploads =
             !attachments.is_empty() && FeatureFlag::CloudModeImageContext.is_enabled();
 
@@ -14730,21 +14760,31 @@ impl Input {
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.submit_cloud_followup(prompt, ctx);
             });
-            self.reset_after_cloud_followup_submission(ctx);
-            self.set_input_mode_agent(true, ctx);
+            if !is_queued {
+                // Immediate path: the buffer held the submitted prompt; clear it and reset.
+                self.reset_after_cloud_followup_submission(ctx);
+                self.set_input_mode_agent(true, ctx);
+            }
+            // Queued path: leave the editor alone (buffer holds unrelated in-progress typing).
             return;
         }
 
-        // Freeze the input so the user can't re-submit while the upload is in flight. The
-        // ephemeral `{prompt} ◌` overlay preserves the real buffer underneath, which
-        // `unfreeze_cloud_followup_input` restores on failure.
-        self.freeze_input_in_loading_state_with_text(&prompt, ctx);
+        // Immediate path only: freeze the input so the user can't re-submit while the upload is
+        // in flight. The ephemeral `{prompt} ◌` overlay preserves the real buffer underneath,
+        // which `unfreeze_cloud_followup_input` restores on failure. The queued path must NOT
+        // freeze — the buffer holds the user's in-progress typing, not the queued prompt, and
+        // freezing it would hide that text during the upload (and clearing on success would
+        // clobber it). Mirrors the viewer path's empty-buffer guard at the call site.
+        if !is_queued {
+            self.freeze_input_in_loading_state_with_text(&prompt, ctx);
+        }
 
         self.upload_files_then_submit_cloud_followup(
             task_id,
             ambient_agent_view_model,
             prompt,
             &attachments,
+            queued_query_retry,
             ctx,
         );
     }
@@ -14823,6 +14863,12 @@ impl Input {
     /// attachment-aware API) instead of emitting `SendAgentPrompt`: once
     /// `prepare_attachments_for_upload` registers the attachment metadata on the task, the next
     /// execution picks the files up automatically.
+    ///
+    /// `queued_query_retry` selects the failure-restore behavior: `Some(..)` restores the fired
+    /// queued row (queued path), `None` restores attachments to the context model + unfreezes the
+    /// editor (immediate path). The follow-up is dispatched only when *every* file uploads; a
+    /// `prepare` failure or a partial PUT set is treated as a failure so no dangling pre-registered
+    /// metadata is left for the next execution to fetch against.
     #[allow(clippy::too_many_arguments)]
     fn upload_files_then_submit_cloud_followup(
         &mut self,
@@ -14830,6 +14876,7 @@ impl Input {
         ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
         prompt: String,
         attachments: &[PendingAttachment],
+        queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
         ctx: &mut ViewContext<Self>,
     ) {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -14855,14 +14902,23 @@ impl Input {
         }
 
         let attachments_for_retry = attachments.to_vec();
+        let is_queued = queued_query_retry.is_some();
 
         if files_to_upload.is_empty() {
-            // Nothing uploadable — restore the attachments so the user can drop the oversized
-            // ones and retry, and bail without dispatching the follow-up.
-            self.ai_context_model.update(ctx, |context_model, ctx| {
-                context_model.append_pending_attachments(attachments_for_retry, ctx);
-            });
-            self.unfreeze_cloud_followup_input(ctx);
+            // Nothing uploadable — restore so the user can drop the oversized ones and retry,
+            // and bail without dispatching the follow-up.
+            if is_queued {
+                if let Some((conversation_id, insert_index, query)) = queued_query_retry {
+                    QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.restore_fired_row(conversation_id, insert_index, query, ctx);
+                    });
+                }
+            } else {
+                self.ai_context_model.update(ctx, |context_model, ctx| {
+                    context_model.append_pending_attachments(attachments_for_retry, ctx);
+                });
+                self.unfreeze_cloud_followup_input(ctx);
+            }
             return;
         }
 
@@ -14887,7 +14943,7 @@ impl Input {
                             e.context("Failed to prepare attachment uploads for follow-up"),
                             extra: { "task_id" => %task_id }
                         );
-                        return None;
+                        return Err(());
                     }
                 };
 
@@ -14920,65 +14976,75 @@ impl Input {
                     }
                 }
 
-                if uploaded < total {
+                // Only dispatch the follow-up when every file uploaded. `prepare` already
+                // pre-registered metadata for each requested file, so a partial set would leave
+                // dangling entries the next execution would try to fetch against — fail the
+                // whole submit and let the restore path make the prompt retryable instead.
+                if uploaded == total {
+                    Ok(())
+                } else {
                     log::warn!(
-                        "Only {uploaded}/{total} follow-up attachments uploaded successfully"
+                        "Only {uploaded}/{total} follow-up attachments uploaded successfully; not submitting"
                     );
+                    Err(())
                 }
-
-                Some(uploaded)
             },
-            move |input, maybe_uploaded, ctx| {
-                let uploaded = match maybe_uploaded {
-                    None => {
-                        // Prepare failed (e.g. attachment limit exceeded). Restore the
-                        // attachments so the user can retry, unfreeze the input, and toast.
+            move |input, result, ctx| match result {
+                Err(()) => {
+                    // Prepare failed OR partial upload — don't submit the follow-up.
+                    if is_queued {
+                        // Restore the fired queued row (it carries its own attachments) so the
+                        // user can retry from the queue panel.
+                        if let Some((conversation_id, insert_index, query)) = queued_query_retry {
+                            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                                model.restore_fired_row(conversation_id, insert_index, query, ctx);
+                            });
+                        }
+                    } else {
+                        // Immediate path: restore attachments to the context model and unfreeze
+                        // the editor (the ephemeral overlay hid the prompt, which is still in
+                        // the real buffer underneath) so the user can retry.
                         input.ai_context_model.update(ctx, |context_model, ctx| {
                             context_model.append_pending_attachments(attachments_for_retry, ctx);
                         });
                         input.unfreeze_cloud_followup_input(ctx);
-                        let window_id = ctx.window_id();
-                        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                            toast_stack.add_ephemeral_toast(
-                                DismissibleToast::error(
-                                    "Couldn't upload the attached file. Try again.".to_string(),
-                                ),
-                                window_id,
-                                ctx,
-                            );
-                        });
-                        return;
                     }
-                    Some(uploaded) => uploaded,
-                };
-
-                // Upload completed (possibly partial — the successful files are in GCS with
-                // metadata registered on the task). Dispatch the follow-up text and clear the
-                // staged attachments.
-                if uploaded < total {
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::default(
-                                "Some files couldn't be uploaded; the follow-up was sent with the rest."
-                                    .to_string(),
+                            DismissibleToast::error(
+                                "Couldn't upload the attached file. Try again.".to_string(),
                             ),
                             window_id,
                             ctx,
                         );
                     });
                 }
-                input.ai_context_model.update(ctx, |context_model, ctx| {
-                    context_model.clear_pending_attachments(ctx);
-                });
-                input.editor.update(ctx, |editor, ctx| {
-                    editor.exit_ephemeral_loading_state(ctx);
-                });
-                ambient_agent_view_model.update(ctx, |model, ctx| {
-                    model.submit_cloud_followup(prompt, ctx);
-                });
-                input.reset_after_cloud_followup_submission(ctx);
-                input.set_input_mode_agent(true, ctx);
+                Ok(()) => {
+                    // Every file uploaded — dispatch the follow-up.
+                    if is_queued {
+                        // Queued path: don't touch the editor (buffer holds unrelated typing).
+                        // The row's attachments lived on the row (now removed); no context-model
+                        // cleanup is needed.
+                        ambient_agent_view_model.update(ctx, |model, ctx| {
+                            model.submit_cloud_followup(prompt, ctx);
+                        });
+                    } else {
+                        // Immediate path: clear staged attachments, exit the ephemeral freeze,
+                        // dispatch, then reset the buffer (it held the submitted prompt).
+                        input.ai_context_model.update(ctx, |context_model, ctx| {
+                            context_model.clear_pending_attachments(ctx);
+                        });
+                        input.editor.update(ctx, |editor, ctx| {
+                            editor.exit_ephemeral_loading_state(ctx);
+                        });
+                        ambient_agent_view_model.update(ctx, |model, ctx| {
+                            model.submit_cloud_followup(prompt, ctx);
+                        });
+                        input.reset_after_cloud_followup_submission(ctx);
+                        input.set_input_mode_agent(true, ctx);
+                    }
+                }
             },
         );
     }

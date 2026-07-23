@@ -21142,6 +21142,7 @@ impl TerminalView {
         &mut self,
         prompt: String,
         attachments: Vec<PendingAttachment>,
+        queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if !FeatureFlag::HandoffCloudCloud.is_enabled() {
@@ -21187,8 +21188,8 @@ impl TerminalView {
 
         // Upload any staged attachments to GCS before dispatching the text follow-up. When
         // there are none, `submit_cloud_followup_with_attachments` submits immediately (the
-        // original text-only path). The upload freezes the input and restores the attachments
-        // on failure so the user can retry.
+        // original text-only path). The upload freezes the input (immediate path only) and
+        // restores the attachments / queued row on failure so the user can retry.
         let followup_task_id = task_id;
         self.input.update(ctx, |input, ctx| {
             input.submit_cloud_followup_with_attachments(
@@ -21196,6 +21197,7 @@ impl TerminalView {
                 followup_task_id,
                 prompt,
                 attachments,
+                queued_query_retry,
                 ctx,
             );
         });
@@ -21266,11 +21268,13 @@ impl TerminalView {
             InputEvent::SubmitCloudFollowup {
                 prompt,
                 attachments,
+                queued_query_retry,
             } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled()
                     && self.try_submit_pending_cloud_followup(
                         prompt.clone(),
                         attachments.clone(),
+                        queued_query_retry.clone(),
                         ctx,
                     )
                 {

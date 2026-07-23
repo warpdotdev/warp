@@ -1993,11 +1993,17 @@ fn test_try_submit_pending_cloud_followup_allows_repeat_submission_for_owned_tas
             });
 
             view.enable_cloud_followup_input(task_id, ctx);
-            assert!(view.try_submit_pending_cloud_followup("follow up".to_string(), vec![], ctx));
+            assert!(view.try_submit_pending_cloud_followup(
+                "follow up".to_string(),
+                vec![],
+                None,
+                ctx
+            ));
             assert_eq!(view.pending_cloud_followup_task_id, Some(task_id));
             assert!(view.try_submit_pending_cloud_followup(
                 "second follow up".to_string(),
                 vec![],
+                None,
                 ctx
             ));
             assert_eq!(view.pending_cloud_followup_task_id, Some(task_id));
@@ -2042,13 +2048,96 @@ fn test_try_submit_pending_cloud_followup_rejects_task_source_that_blocks_follow
             });
 
             view.enable_cloud_followup_input(task_id, ctx);
-            assert!(!view.try_submit_pending_cloud_followup("follow up".to_string(), vec![], ctx));
+            assert!(!view.try_submit_pending_cloud_followup(
+                "follow up".to_string(),
+                vec![],
+                None,
+                ctx
+            ));
             assert_eq!(view.pending_cloud_followup_task_id, None);
             assert_eq!(
                 ambient_agent_view_model
                     .as_ref(ctx)
                     .pending_followup_prompt(),
                 None
+            );
+        });
+    });
+}
+
+#[test]
+fn test_try_submit_pending_cloud_followup_queued_path_preserves_in_progress_typing() {
+    // Regression: a queued cloud follow-up must NOT freeze or clear the editor buffer, because
+    // the buffer holds the user's in-progress typing (not the queued prompt). Mirrors the
+    // shared-session viewer path's empty-buffer guard. The follow-up is still dispatched.
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        use crate::ai::blocklist::{QueuedQuery, QueuedQueryOrigin};
+
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let task = create_cloud_mode_task_for_user(TEST_USER_UID);
+        let task_id = task.task_id;
+
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+
+        let terminal_view_id = terminal.id();
+        let conversation_id = BlocklistAIHistoryModel::handle(&app)
+            .update(&mut app, |model, ctx| {
+                model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+            });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    task_id.to_string(),
+                )));
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::executor());
+
+            let ambient_agent_view_model = view
+                .ambient_agent_view_model()
+                .expect("cloud mode terminal should have ambient model")
+                .clone();
+            ambient_agent_view_model.update(ctx, |model, ctx| {
+                model.enter_viewing_existing_session(task_id, ctx);
+            });
+
+            view.enable_cloud_followup_input(task_id, ctx);
+
+            // Simulate the user typing something unrelated while a queued follow-up fires.
+            view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content("i am typing something else", ctx);
+            });
+
+            let queued_query = QueuedQuery::new(
+                "queued followup".to_string(),
+                QueuedQueryOrigin::AutoQueueToggle,
+            );
+            assert!(view.try_submit_pending_cloud_followup(
+                "queued followup".to_string(),
+                vec![],
+                Some((conversation_id, 0, queued_query)),
+                ctx
+            ));
+
+            // The queued follow-up was dispatched...
+            assert_eq!(
+                ambient_agent_view_model
+                    .as_ref(ctx)
+                    .pending_followup_prompt(),
+                Some("queued followup")
+            );
+            // ...but the editor buffer was NOT clobbered (the user's in-progress typing survives).
+            assert_eq!(
+                view.input().as_ref(ctx).buffer_text(ctx),
+                "i am typing something else",
+                "queued cloud follow-up must not clear the editor buffer"
             );
         });
     });
