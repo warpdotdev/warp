@@ -170,6 +170,7 @@ use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
 use crate::server::ids::SyncId;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::ArtifactDownloadResponse;
 use crate::server::telemetry::{
     AgentModeRewindEntrypoint, AutonomySettingToggleSource, InteractionSource, TelemetryEvent,
 };
@@ -1103,6 +1104,11 @@ struct EmbeddedCodeEditorView {
     length: usize,
 }
 
+fn open_recording_artifact_url(artifact: &ArtifactDownloadResponse) -> &str {
+    artifact
+        .view_url()
+        .unwrap_or_else(|| artifact.download_url())
+}
 impl AIBlock {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -6929,7 +6935,7 @@ impl TypedActionView for AIBlock {
                     async move { ai_client.get_artifact_download(&artifact_uid).await },
                     move |_, result, ctx| match result {
                         Ok(artifact) => {
-                            ctx.open_url(artifact.download_url());
+                            ctx.open_url(open_recording_artifact_url(&artifact));
                         }
                         Err(error) => {
                             log::warn!(

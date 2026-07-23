@@ -35,6 +35,7 @@ fn skips_lightbox_update_for_non_screenshot_artifact() {
             },
             data: FileArtifactResponseData {
                 download_url: "https://storage.example.com/report.txt".to_string(),
+                view_url: None,
                 expires_at: Utc.with_ymd_and_hms(2024, 1, 15, 11, 30, 0).unwrap(),
                 content_type: "text/plain".to_string(),
                 filepath: "outputs/report.txt".to_string(),
@@ -116,6 +117,7 @@ fn default_download_filename_prefers_server_filename() {
             },
             data: FileArtifactResponseData {
                 download_url: "https://storage.example.com/report.txt".to_string(),
+                view_url: None,
                 expires_at: Utc.with_ymd_and_hms(2024, 1, 15, 11, 30, 0).unwrap(),
                 content_type: "text/plain".to_string(),
                 filepath: "outputs/report.txt".to_string(),
@@ -139,6 +141,7 @@ fn default_download_filename_falls_back_to_artifact_uid_with_extension() {
             },
             data: FileArtifactResponseData {
                 download_url: "https://storage.example.com/report.txt".to_string(),
+                view_url: None,
                 expires_at: Utc.with_ymd_and_hms(2024, 1, 15, 11, 30, 0).unwrap(),
                 content_type: "text/plain".to_string(),
                 filepath: "outputs/report.txt".to_string(),
