@@ -135,7 +135,7 @@ async fn finalize_recording(
     // file, when produced, is a sibling of the mp4.
     let mut upload_path = local_path.clone();
     let mut overlay_path: Option<std::path::PathBuf> = None;
-    match computer_use::burn_in_action_log(
+    match computer_use::post_process_recording(
         &local_path,
         &actions,
         (output.width, output.height),
