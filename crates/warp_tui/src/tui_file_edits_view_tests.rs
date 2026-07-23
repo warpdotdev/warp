@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use ai::diff_validation::{DiffDelta, DiffType};
+use ai::agent::action::FileEdit;
+use ai::diff_validation::{DiffDelta, DiffType, ParsedDiff};
 use futures::channel::oneshot;
 use warp::appearance::Appearance;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -11,7 +12,7 @@ use warpui::App;
 
 use super::{
     SectionKey, SectionStates, ToolCallDisplayState, deltas_for, file_edit_header_label,
-    verb_and_name,
+    restored_file_diffs, verb_and_name,
 };
 
 fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
@@ -19,6 +20,20 @@ fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
         replacement_line_range: range,
         insertion: insertion.to_owned(),
     }
+}
+
+#[test]
+fn restored_file_edits_rehydrate_non_zero_diff_stats() {
+    let file_edits = vec![FileEdit::Edit(ParsedDiff::StrReplaceEdit {
+        file: Some("src/lib.rs".to_owned()),
+        search: Some("1|old\\n".to_owned()),
+        replace: Some("1|new\\n".to_owned()),
+    })];
+
+    let diffs = restored_file_diffs(file_edits);
+
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(diffs[0].line_stats(), (1, 1));
 }
 
 #[test]

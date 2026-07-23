@@ -15,13 +15,14 @@
 //! rows. Multi-file edits nest the per-file sections, indented, under one
 //! collapsible summary header (`✓ Edited 3 files +a −r ▾`); single-file edits
 //! render the file section alone. Blocked edits use the in-progress `Editing`
-//! verb while awaiting approval. When the storage was never seeded (failed or
-//! cancelled actions, or actions that resolved before this view existed), the
-//! view falls back to a one-line label from the action's recorded result.
+//! verb while awaiting approval. Failed and cancelled actions fall back to a
+//! one-line label from the action's recorded result; restored successful
+//! actions are hydrated from their original `FileEdit` request.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
+use ai::agent::action::FileEdit;
 use ai::agent::action_result::{AIAgentActionResultType, RequestFileEditsResult};
 use ai::diff_validation::{DiffDelta, DiffType};
 use itertools::Itertools;
@@ -29,6 +30,7 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AIActionStatus, AIAgentActionId, AIConversationId, BlocklistAIActionEvent,
     BlocklistAIActionModel, CancellationReason, DiffSessionType, FileDiff,
+    convert_file_edits_to_file_diffs,
 };
 use warp_editor::content::buffer::InitialBufferState;
 use warpui_core::elements::MouseStateHandle;
@@ -69,6 +71,16 @@ pub(super) struct TuiFileEditsView {
     /// Shared per-section UI state (collapse + header hover) for the summary
     /// header and each file.
     section_states: SectionStates,
+}
+
+/// Reconstructs the display-only diffs used by a restored action.
+///
+/// The persisted action result is authoritative for completion state, but
+/// legacy results do not carry line counts. The original `FileEdit` request
+/// still has enough information for the shared GUI conversion to synthesize
+/// the diff ranges that drive TUI headers and bodies.
+fn restored_file_diffs(file_edits: Vec<FileEdit>) -> Vec<FileDiff> {
+    convert_file_edits_to_file_diffs(file_edits, &None, &None)
 }
 /// Events emitted to the owning agent block.
 pub(super) enum TuiFileEditsViewEvent {
@@ -178,10 +190,18 @@ impl TuiFileEditsView {
     pub(super) fn new(
         action_id: AIAgentActionId,
         conversation_id: AIConversationId,
+        file_edits: Vec<FileEdit>,
         action_model: &ModelHandle<BlocklistAIActionModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let storage = ctx.add_model(|_| TuiDiffStorage::new(Vec::new(), DiffSessionType::Local));
+        let is_restored = action_model
+            .as_ref(ctx)
+            .get_action_result(&action_id)
+            .is_some();
+        let initial_diffs = is_restored
+            .then(|| restored_file_diffs(file_edits))
+            .unwrap_or_default();
+        let storage = ctx.add_model(|_| TuiDiffStorage::new(initial_diffs, DiffSessionType::Local));
 
         ctx.subscribe_to_model(&storage, |me, _, event, ctx| match event {
             TuiDiffStorageEvent::CandidateDiffsSet => me.rebuild_sections(ctx),
@@ -198,14 +218,14 @@ impl TuiFileEditsView {
             }
         });
 
-        // An already-resolved action (e.g. on a restored transcript) renders
-        // from its recorded result; registering a storage for it would leave
-        // a stale entry in the executor.
-        if action_model
-            .as_ref(ctx)
-            .get_action_result(&action_id)
-            .is_none()
-        {
+        // An already-resolved action (e.g. on a restored transcript) must
+        // rehydrate the same lossy FileDiff representation used by the GUI.
+        // Legacy persisted ApplyFileDiffs results contain updated file metadata
+        // but no line counts, so rendering only the recorded result produces
+        // the incorrect +0/-0 fallback.
+        if !is_restored {
+            // Live actions stay executor-backed; registering a storage here
+            // lets preprocessing seed the authoritative resolved diffs.
             let executor = action_model.as_ref(ctx).request_file_edits_executor(ctx);
             executor.update(ctx, |executor, _| {
                 let handle = TuiDiffStorageHandle::new(storage.clone());
@@ -233,7 +253,7 @@ impl TuiFileEditsView {
             TuiPermissionPromptEvent::LayoutChanged => view.invalidate_layout(ctx),
         });
 
-        Self {
+        let mut view = Self {
             storage,
             action_id,
             action_model: action_model.clone(),
@@ -241,7 +261,11 @@ impl TuiFileEditsView {
             permission_prompt,
             sections: Vec::new(),
             section_states: SectionStates::default(),
+        };
+        if is_restored {
+            view.rebuild_sections(ctx);
         }
+        view
     }
 
     /// Rebuilds one [`FileSection`] per stored diff. Called when the executor
