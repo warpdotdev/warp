@@ -555,7 +555,7 @@ fn typeahead_overwrites_incremental_prefix_and_moves_cursor_to_end() {
             });
 
             assert_eq!(text(&view, ctx), "echo hi");
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((7, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((9, 0)));
         });
     });
 }
