@@ -75,7 +75,7 @@ function resolveLoader() {
     "target",
     "wasm32-unknown-unknown",
   );
-  for (const profile of ["debug", "release"]) {
+  for (const profile of ["debug", "release", "release-wasm"]) {
     const candidate = join(base, profile, "node", "warp_node_proto.js");
     try {
       readFileSync(candidate); // exists?
@@ -118,6 +118,40 @@ function makeHost() {
         res.headers.forEach((v, k) => {
           headerObj[k] = v;
         });
+
+        // 403 capture instrumentation (REMOTE-2264): log full failed-response
+        // detail for any non-2xx response so the edge-gate behavior is
+        // visible in the harness output.
+        if (res.status < 200 || res.status >= 300) {
+          const chunks = [];
+          const reader = res.body?.getReader?.();
+          if (reader) {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+            }
+          }
+          const bodyBytes = chunks.length > 0 ? Buffer.concat(chunks.map(c => Buffer.from(c))) : Buffer.alloc(0);
+          const bodyText = bodyBytes.toString("utf8");
+          stderr(`host-fetch: non-2xx response from ${url}`);
+          stderr(`host-fetch:   status: ${res.status} ${res.statusText}`);
+          stderr(`host-fetch:   headers: ${JSON.stringify(headerObj)}`);
+          stderr(`host-fetch:   body (${bodyBytes.length} bytes): ${redact(bodyText.slice(0, 4096))}`);
+          // Return a synthetic response with the already-consumed body as a
+          // done reader so the wasm caller still gets the status/headers.
+          return {
+            status: res.status,
+            statusText: res.statusText,
+            headers: headerObj,
+            body: {
+              read() {
+                return Promise.resolve({ done: true, value: undefined });
+              },
+            },
+          };
+        }
+
         const reader = res.body?.getReader?.();
         const body = {
           read() {
@@ -151,10 +185,26 @@ async function main() {
   }
 
   const loaderPath = resolveLoader();
+
+  // Peak RSS sampler (REMOTE-2264): poll process.memoryUsage().rss every
+  // 10ms during the run and report the peak at the end.
+  let peakRss = process.memoryUsage().rss;
+  let peakHeap = process.memoryUsage().heapUsed;
+  let peakExternal = process.memoryUsage().external;
+  let peakArrayBuffers = process.memoryUsage().arrayBuffers;
+  const rssTimer = setInterval(() => {
+    const mem = process.memoryUsage();
+    if (mem.rss > peakRss) peakRss = mem.rss;
+    if (mem.heapUsed > peakHeap) peakHeap = mem.heapUsed;
+    if (mem.external > peakExternal) peakExternal = mem.external;
+    if (mem.arrayBuffers > peakArrayBuffers) peakArrayBuffers = mem.arrayBuffers;
+  }, 10);
+
   const mod = await import(loaderPath);
   const runMultiAgent = mod.run_multi_agent;
   if (typeof runMultiAgent !== "function") {
     stderr(`error: loader ${loaderPath} did not export run_multi_agent`);
+    clearInterval(rssTimer);
     process.exit(2);
   }
 
@@ -171,16 +221,21 @@ async function main() {
   try {
     resultStr = await runMultiAgent(config, makeHost());
   } catch (err) {
+    clearInterval(rssTimer);
     stderr(`harness: run_multi_agent threw: ${redact(String(err?.stack ?? err))}`);
+    reportMemory(peakRss, peakHeap, peakExternal, peakArrayBuffers);
     process.exit(1);
   }
   const elapsed = performance.now() - t0;
+
+  clearInterval(rssTimer);
 
   let result;
   try {
     result = JSON.parse(resultStr);
   } catch {
     stderr(`harness: result was not JSON: ${redact(String(resultStr))}`);
+    reportMemory(peakRss, peakHeap, peakExternal, peakArrayBuffers);
     process.exit(1);
   }
 
@@ -189,8 +244,14 @@ async function main() {
   if (result.timings_ms) {
     stderr(`harness: wall clock ${elapsed.toFixed(1)}ms (wasm total ${result.timings_ms.total_ms?.toFixed(1) ?? "?"}ms, node ${process.version})`);
   }
+  reportMemory(peakRss, peakHeap, peakExternal, peakArrayBuffers);
 
   process.exit(result.ok ? 0 : 1);
+}
+
+function reportMemory(peakRss, peakHeap, peakExternal, peakArrayBuffers) {
+  const fmt = (b) => `${(b / 1048576).toFixed(1)} MB (${b} bytes)`;
+  stderr(`harness: peak memory — rss: ${fmt(peakRss)}, heap: ${fmt(peakHeap)}, external: ${fmt(peakExternal)}, arrayBuffers: ${fmt(peakArrayBuffers)}`);
 }
 
 main().catch((err) => {

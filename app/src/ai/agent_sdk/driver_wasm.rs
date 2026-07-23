@@ -28,7 +28,11 @@ use warp_cli::agent::{Harness, OutputFormat};
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::orchestration_event_streamer::{
+    register_agent_event_consumer, unregister_agent_event_consumer,
+};
 use crate::server::server_api::ServerApiProvider;
 
 /// Options for initializing the agent driver.
@@ -227,15 +231,15 @@ impl AgentDriver {
     }
 
     /// Run the agent task. On wasm, this drives the MAA request via
-    /// `generate_multi_agent_output` and performs conversation-consumer
-    /// registration for session sharing.
+    /// `generate_multi_agent_output` and performs real conversation-consumer
+    /// registration/unregistration for session sharing using `ctx.spawn` with
+    /// a `ModelContext` callback (not the bare `Foreground::spawn`).
     pub fn run(
         &mut self,
         task: Task,
         ctx: &mut ModelContext<Self>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AgentDriverError>>>> {
         let (tx, rx) = futures::channel::oneshot::channel();
-        let foreground = ctx.spawner();
         let server_api = ServerApiProvider::as_ref(ctx).get();
         let base_client = server_api.base_client();
 
@@ -251,7 +255,14 @@ impl AgentDriver {
             }
         };
 
-        let task_id = self.task_id;
+        // Use ctx.spawn (ModelContext::spawn) instead of Foreground::spawn.
+        // The callback receives (&mut AgentDriver, S::Output, &mut ModelContext<AgentDriver>),
+        // giving us access to the ModelContext needed for
+        // register_agent_event_consumer / unregister_agent_event_consumer.
+        //
+        // The future returns the conversation ID (if received from StreamInit)
+        // so the callback can perform the real session-sharing register/unregister.
+        let model_id = ctx.model_id();
 
         ctx.spawn(
             async move {
@@ -260,9 +271,6 @@ impl AgentDriver {
 
                 info!("Sending MAA request for prompt: {}", prompt_str);
 
-                // Register the conversation consumer for session sharing.
-                // On wasm, the conversation ID is assigned by the server in the
-                // StreamInit event. We register the consumer after receiving it.
                 let mut registered_conversation_id: Option<String> = None;
 
                 match warp_multi_agent_client::generate_multi_agent_output(
@@ -282,35 +290,17 @@ impl AgentDriver {
                                     {
                                         info!(
                                             "MAA StreamInit: conversation_id={}, request_id={}, run_id={}",
-                                            init.conversation_id, init.request_id, init.run_id
+                                            init.conversation_id,
+                                            init.request_id,
+                                            init.run_id
                                         );
-                                        // Register the conversation consumer for
-                                        // session sharing. This is the key
-                                        // session-sharing boundary that the
-                                        // full AgentDriver exercises.
-                                        {
-                                            registered_conversation_id =
-                                                Some(init.conversation_id.clone());
-                                            // Note: register_agent_event_consumer
-                                            // requires a ModelContext, which we
-                                            // don't have inside this spawned
-                                            // task. The registration would need
-                                            // to be done via a foreground spawn
-                                            // callback. For this prototype, we
-                                            // log that the conversation was
-                                            // initiated and the session-sharing
-                                            // boundary was reached.
-                                            info!(
-                                                "Session-sharing boundary reached: conversation registered"
-                                            );
-                                        }
+                                        registered_conversation_id =
+                                            Some(init.conversation_id.clone());
                                     }
                                     debug!("MAA response event: {:?}", response_event.r#type);
                                 }
                                 Err(err) => {
-                                    // Instrument the 403 capture: log the full
-                                    // error detail (status, headers, body) for
-                                    // the prototype investigation (REMOTE-2264).
+                                    // 403 capture instrumentation (REMOTE-2264).
                                     if let warp_multi_agent_client::Error::EventSource(es_err) = &err
                                         && let reqwest_eventsource::Error::InvalidStatusCode(status, response) =
                                             es_err.as_ref()
@@ -321,9 +311,6 @@ impl AgentDriver {
                                             response.headers()
                                         );
                                         error!("MAA 403 capture — response url: {}", response.url());
-                                        // The response body can't be read synchronously
-                                        // here; it would need an async spawn. The
-                                        // headers + status + url are logged above.
                                     }
                                     error!("MAA stream error: {:?}", err);
                                     break;
@@ -331,26 +318,45 @@ impl AgentDriver {
                             }
                         }
                         info!("MAA stream completed");
-
-                        // Unregister the conversation consumer (session sharing teardown).
-                        if let Some(_conv_id) = registered_conversation_id {
-                            info!("Session-sharing teardown: unregistering conversation consumer");
-                        }
-
-                        let _ = tx.send(Ok(()));
                     }
                     Err(err) => {
                         error!("MAA request failed: {}", err);
                         let _ = tx.send(Err(AgentDriverError::InvalidRuntimeState));
+                        return registered_conversation_id;
                     }
                 }
 
-                // Update task status if we have a task ID.
-                if let Some(_task_id) = task_id {
-                    info!("Task status update would happen here on native");
+                let _ = tx.send(Ok(()));
+                registered_conversation_id
+            },
+            // Callback: receives (&mut AgentDriver, Option<String>, &mut ModelContext<AgentDriver>).
+            // The Option<String> is the conversation ID returned by the spawned future.
+            // Here we perform the real session-sharing register/unregister calls
+            // that require a ModelContext.
+            move |driver, conv_id_opt, ctx| {
+                if let Some(conv_id_str) = conv_id_opt {
+                    info!(
+                        "Session-sharing: registering conversation consumer for {}",
+                        conv_id_str
+                    );
+                    // AIConversationId implements TryFrom<String> (not FromStr).
+                    if let Ok(conv_id) = AIConversationId::try_from(conv_id_str) {
+                        register_agent_event_consumer(conv_id, model_id, ctx);
+                        // Store on the driver so we can unregister later.
+                        driver.run_conversation_id = Some(conv_id);
+                    }
+                }
+
+                // Unregister the conversation consumer (session sharing teardown).
+                // In the native driver this happens in a separate cleanup step;
+                // here we do it immediately since the stream is already complete.
+                if let Some(conv_id) = driver.run_conversation_id.take() {
+                    info!(
+                        "Session-sharing: unregistering conversation consumer"
+                    );
+                    unregister_agent_event_consumer(conv_id, model_id, ctx);
                 }
             },
-            |_, _, _| {},
         );
 
         Box::pin(async move {
@@ -359,8 +365,6 @@ impl AgentDriver {
         })
     }
 }
-
-/// Build a minimal MAA Request for the wasm AgentDriver path.
 fn build_wasm_maa_request(
     prompt: &str,
     model: Option<&crate::ai::llms::LLMId>,

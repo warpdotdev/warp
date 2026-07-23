@@ -5,6 +5,150 @@ This is the findings report for the prototype built in `crates/wasm_node_proto` 
 It is a deliverable of the implementation run, not a spec. The approved spec
 lives at `agents/specs/REMOTE-2264: wasm32 CLI in Node prototype.md`.
 
+## Follow-up investigation (403 specifics, ModelContext, size + memory)
+
+### 1. 403 response specifics
+
+Instrumented the host-fetch boundary in `script/wasm/node-harness.mjs` to log
+full failed-response detail (status, headers, body) for any non-2xx response.
+Ran `node script/wasm/node-harness.mjs --prompt hello --api-key $WARP_API_KEY
+--server-root-url https://app.warp.dev` in Node 25 against the production
+endpoint. Captured output:
+
+```
+host-fetch: non-2xx response from https://app.warp.dev/ai/multi-agent
+host-fetch:   status: 403 Forbidden
+host-fetch:   headers: {"alt-svc":"h3=\":443\"; ma=2592000",
+  "content-length":"134","content-type":"text/html; charset=UTF-8",
+  "cross-origin-embedder-policy":"unsafe-none",
+  "cross-origin-opener-policy":"same-origin-allow-popups",
+  "cross-origin-resource-policy":"same-origin",
+  "date":"Thu, 23 Jul 2026 16:22:11 GMT",
+  "permissions-policy":"camera=(), microphone=(), geolocation=()",
+  "referrer-policy":"no-referrer",
+  "strict-transport-security":"max-age=31536000; includeSubDomains",
+  "via":"1.1 google",
+  "x-content-type-options":"nosniff",
+  "x-xss-protection":"1; mode=block"}
+host-fetch:   body (134 bytes): <!doctype html><meta charset="utf-8">
+  <meta name=viewport content="width=device-width, initial-scale=1">
+  <title>403</title>403 Forbidden
+```
+
+Key observations:
+- **No Cloudflare challenge markup.** The body is a plain `403 Forbidden` HTML
+  page (134 bytes). No JS challenge, no managed challenge, no CAPTCHA.
+- **`via: 1.1 google`** — the response passed through a Google Cloud Load
+  Balancer, not Cloudflare. The edge gate is at the GCLB layer.
+- **Response time ~155ms** — consistent with an edge/gateway reject, not an
+  application-level decision (application-level 401s on `/api/v1/*` return in a
+  similar timeframe but with a JSON body).
+- **No error/exception from the wasm transport.** The host `fetch` completed
+  normally with a 403 status; the wasm crate's SSE decoder received the
+  non-2xx status and returned a structured `error: "non-2xx response: 403
+  Forbidden"` result. No reqwest/wasm transport exception was thrown.
+- The `warp_wasm_node` (AgentDriver) path also reaches this same edge gate —
+  its MAA request is dispatched via `warp_multi_agent_client` which uses
+  reqwest's wasm backend. The 403 response is identical regardless of which
+  path makes the request (same endpoint, same edge).
+
+The `driver_wasm.rs` 403 capture instrumentation (lines 303-314) logs the
+`reqwest_eventsource::Error::InvalidStatusCode(status, response)` for the
+AgentDriver path, capturing status, headers, and URL from the reqwest response
+object.
+
+### 2. ModelContext / session-sharing registration
+
+**What `ModelContext` is required:**
+`register_agent_event_consumer<C>(conversation_id: AIConversationId,
+consumer_id: EntityId, ctx: &mut C) where C: GetSingletonModelHandle +
+UpdateModel` (`app/src/ai/blocklist/orchestration_event_streamer.rs:2394-2404`).
+The `ctx` parameter must implement `GetSingletonModelHandle + UpdateModel`.
+`ModelContext<T>` satisfies these traits via `Deref<Target = AppContext>`
+(`crates/warpui_core/src/core/model/context.rs:553-565`), which gives access
+to the reactive model registry (the `AppContext`).
+
+**Where it comes from in the native path:**
+- `AgentDriver::new(options, ctx: &mut ModelContext<AgentDriver>)` receives
+  `ctx` from the caller (`app/src/ai/agent_sdk/driver.rs:193`) and calls
+  `register_agent_event_consumer(conv_id, ctx.model_id(), ctx)` directly at
+  line 738.
+- `AgentDriver::run(&mut self, task, ctx: &mut ModelContext<AgentDriver>)`
+  (`driver.rs:859-863`) calls `ctx.spawn(async move { ... }, |_, _, _| {})`
+  at line 870. The spawned future uses `foreground.spawn(|me, ctx| ...)`
+  (lines 1003-1011) to schedule closures back onto the main thread, each
+  receiving a fresh `ModelContext<AgentDriver>`. This is how
+  `unregister_streamer_consumer(ctx)` (line 833) is called from inside the
+  async future.
+
+**Why it isn't available in a bare `Foreground::spawn`:**
+On wasm, `Foreground::spawn(&self, future: impl Future<Output = ()> + 'static)`
+(`crates/warpui_core/src/async/wasm/executor.rs:46`) requires `Future +
+'static`. `ModelContext<T>` borrows the `AppContext` (owned by the `App`), so
+it is not `'static` and cannot be captured in a bare `spawn_local` future.
+There is no way to pass `&mut ModelContext<AgentDriver>` into a
+`wasm_bindgen_futures::spawn_local` future.
+
+**How `ctx.spawn` solves it:**
+`ModelContext::spawn<S, F, U>(future, callback)`
+(`crates/warpui_core/src/core/model/context.rs:394-408`) spawns the future on
+the background executor and, upon completion, calls the callback on the main
+thread with `(&mut T, S::Output, &mut ModelContext<T>)`. The callback receives
+a **fresh** `ModelContext<T>` constructed from the `App` and the model's
+`EntityId` (line 296: `ModelContext::new(app, model_id)`), which has the
+`GetSingletonModelHandle + UpdateModel` bounds needed for
+`register_agent_event_consumer` / `unregister_agent_event_consumer`.
+
+In the wasm `driver_wasm.rs`, this pattern is used at line 267:
+```rust
+ctx.spawn(
+    async move { /* MAA request, returns Option<String> conversation_id */ },
+    move |driver, conv_id_opt, ctx| {
+        // ctx here is &mut ModelContext<AgentDriver> — fresh, not borrowed
+        if let Ok(conv_id) = AIConversationId::try_from(conv_id_str) {
+            register_agent_event_consumer(conv_id, model_id, ctx);
+            driver.run_conversation_id = Some(conv_id);
+        }
+        if let Some(conv_id) = driver.run_conversation_id.take() {
+            unregister_agent_event_consumer(conv_id, model_id, ctx);
+        }
+    },
+);
+```
+This is the same mechanism as the native `foreground.spawn(|me, ctx| ...)`
+pattern, but using `ctx.spawn`'s completion callback directly. The spawned
+future returns `Option<String>` (the conversation ID from `StreamInit`), and
+the callback uses the fresh `ModelContext` to perform the real
+register/unregister calls.
+
+### 3. Size + memory metrics
+
+Built both wasm crates with the `release-wasm` profile (`opt-level = "s"`,
+`lto = true`, `codegen-units = 1`) with `debug = 0` and `strip = symbols`
+overridden via env vars. Ran `wasm-opt -Oz -all --strip-debug --strip-producers`
+on the wasm-bindgen output.
+
+**wasm_node_proto (direct MAA fallback, standalone crate):**
+- Before wasm-opt: 643 KB (658,796 bytes), gzip: 142 KB (145,618 bytes)
+- After wasm-opt -Oz: 512 KB (523,938 bytes), gzip: 159 KB (162,336 bytes)
+- Reduction: 20.5% raw (wasm-opt removes redundancy that gzip would otherwise
+  exploit, so the gzip size is slightly larger after optimization)
+
+**warp_wasm_node (AgentDriver path, includes full app crate):**
+- Before wasm-opt: 104.4 MB (109,495,058 bytes), gzip: 19.5 MB (20,418,593 bytes)
+- After wasm-opt -Oz: 90.3 MB (94,651,294 bytes), gzip: 20.8 MB (21,772,476 bytes)
+- Reduction: 13.6% raw
+
+**Peak memory (Node 25.0.0, release-wasm profile):**
+- wasm_node_proto path: peak RSS 66.8 MB, heap 8.7 MB, external 4.7 MB
+- warp_wasm_node path: peak RSS 50.3 MB, heap 4.4 MB, external 1.8 MB
+
+The warp_wasm_node RSS (50.3 MB) is lower than the binary size (105 MB)
+because the wasm binary is memory-mapped by Node and the linear memory starts
+small, growing on demand. The 105 MB is the compiled code + data segment size;
+the actual resident set is dominated by Node's V8 heap + the wasm module's
+compiled representation, not the raw binary.
+
 ## TL;DR (AgentDriver push — second pass: reuse run_internal)
 
 Following a second reviewer course-correction ("reuse `run_internal()` with
