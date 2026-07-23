@@ -383,24 +383,6 @@ impl AiAccessSlide {
             layout::FOREGROUND_LAYOUT_DEFAULT,
         )
     }
-
-    /// Full-width bar pinned below the slide's two-column layout. Shown after
-    /// the user picks Subscription and clicks "Next", so they can fall back to
-    /// copying the upgrade URL (or pasting the returned auth token) if the
-    /// browser didn't launch automatically.
-    fn render_auth_prompt_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
-        render_upgrade_auth_prompt_bar(
-            appearance,
-            self.copy_url_mouse_state.clone(),
-            self.paste_token_mouse_state.clone(),
-            Box::new(|ctx| {
-                ctx.dispatch_typed_action(AiAccessSlideAction::CopyUpgradeUrlClicked);
-            }),
-            Box::new(|ctx| {
-                ctx.dispatch_typed_action(AiAccessSlideAction::PasteAuthTokenFromClipboardClicked);
-            }),
-        )
-    }
 }
 
 impl Entity for AiAccessSlide {
@@ -432,13 +414,23 @@ impl View for AiAccessSlide {
             return slide;
         }
 
+        // Full-width bar pinned below the slide's two-column layout. It gives
+        // users a manual fallback when the upgrade browser does not launch.
+        let auth_prompt_bar = render_upgrade_auth_prompt_bar(
+            appearance,
+            self.copy_url_mouse_state.clone(),
+            self.paste_token_mouse_state.clone(),
+            Box::new(|ctx| {
+                ctx.dispatch_typed_action(AiAccessSlideAction::CopyUpgradeUrlClicked);
+            }),
+            Box::new(|ctx| {
+                ctx.dispatch_typed_action(AiAccessSlideAction::PasteAuthTokenFromClipboardClicked);
+            }),
+        );
+
         let mut stack = Stack::new();
         stack.add_child(slide);
-        stack.add_child(
-            Align::new(self.render_auth_prompt_bar(appearance))
-                .bottom_center()
-                .finish(),
-        );
+        stack.add_child(Align::new(auth_prompt_bar).bottom_center().finish());
         stack.finish()
     }
 }

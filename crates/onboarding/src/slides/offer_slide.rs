@@ -428,20 +428,6 @@ impl OfferSlide {
         )
     }
 
-    fn render_auth_prompt_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
-        render_upgrade_auth_prompt_bar(
-            appearance,
-            self.copy_url_mouse_state.clone(),
-            self.paste_token_mouse_state.clone(),
-            Box::new(|ctx| {
-                ctx.dispatch_typed_action(OfferSlideAction::CopyUpgradeUrl);
-            }),
-            Box::new(|ctx| {
-                ctx.dispatch_typed_action(OfferSlideAction::PasteAuthTokenFromClipboard);
-            }),
-        )
-    }
-
     fn send_action(&self, variant: OfferVariant, action: &str, ctx: &mut ViewContext<Self>) {
         send_telemetry_from_ctx!(
             OnboardingEvent::OnboardingAction {
@@ -517,13 +503,21 @@ impl View for OfferSlide {
             return slide;
         }
 
+        let auth_prompt_bar = render_upgrade_auth_prompt_bar(
+            appearance,
+            self.copy_url_mouse_state.clone(),
+            self.paste_token_mouse_state.clone(),
+            Box::new(|ctx| {
+                ctx.dispatch_typed_action(OfferSlideAction::CopyUpgradeUrl);
+            }),
+            Box::new(|ctx| {
+                ctx.dispatch_typed_action(OfferSlideAction::PasteAuthTokenFromClipboard);
+            }),
+        );
+
         Stack::new()
             .with_child(slide)
-            .with_child(
-                Align::new(self.render_auth_prompt_bar(appearance))
-                    .bottom_center()
-                    .finish(),
-            )
+            .with_child(Align::new(auth_prompt_bar).bottom_center().finish())
             .finish()
     }
 }
