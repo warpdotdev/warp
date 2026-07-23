@@ -74,18 +74,9 @@ const AUTH_SECRET_CREATE_NEW_LABEL: &str = "New API key…";
 /// Keeping this predicate here ensures the picker creation and rendering paths
 /// use the same gate.
 pub fn runner_controls_enabled(ctx: &AppContext) -> bool {
-    runner_controls_enabled_for_state(
-        FeatureFlag::CloudAgentRunners.is_enabled(),
-        ServerExperiments::as_ref(ctx)
-            .is_experiment_enabled(&ServerExperiment::MacosRunnersExperiment),
-    )
-}
-
-fn runner_controls_enabled_for_state(
-    cloud_agent_runners_enabled: bool,
-    macos_runners_experiment_enabled: bool,
-) -> bool {
-    cloud_agent_runners_enabled && macos_runners_experiment_enabled
+    FeatureFlag::CloudAgentRunners.is_enabled()
+        && ServerExperiments::as_ref(ctx)
+            .is_experiment_enabled(&ServerExperiment::MacosRunnersExperiment)
 }
 
 // ── Action trait ────────────────────────────────────────────────────
