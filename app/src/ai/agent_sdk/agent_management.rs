@@ -145,6 +145,7 @@ impl AgentManagementRunner {
                 skills: args.skills,
                 base_model: args.base_model,
                 environment_id: args.environment,
+                idle_timeout_minutes: args.idle_timeout_minutes,
             };
             if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
                 let response = ai_client.create_agent_raw(request).await?;
@@ -222,6 +223,11 @@ impl AgentManagementRunner {
                     Some(String::new())
                 } else {
                     args.environment
+                },
+                idle_timeout_minutes: if args.remove_idle_timeout {
+                    Some(None)
+                } else {
+                    args.idle_timeout_minutes.map(Some)
                 },
             };
             if request_is_empty(&request) {
@@ -305,6 +311,7 @@ fn request_is_empty(request: &UpdateAgentRequest) -> bool {
         && request.skills.is_none()
         && request.base_model.is_none()
         && request.environment_id.is_none()
+        && request.idle_timeout_minutes.is_none()
 }
 
 fn ensure_json_sort_is_not_requested(
@@ -370,6 +377,7 @@ impl TableFormat for AgentResponse {
             Cell::new("Skills"),
             Cell::new("Base model"),
             Cell::new("Environment"),
+            Cell::new("Idle timeout"),
         ]
     }
 
@@ -385,6 +393,7 @@ impl TableFormat for AgentResponse {
             Cell::new(display_list(self.skills.iter().map(String::as_str))),
             Cell::new(display_optional(self.base_model.as_deref())),
             Cell::new(display_optional(self.environment_id.as_deref())),
+            Cell::new(display_optional_minutes(self.idle_timeout_minutes)),
         ]
     }
 }
@@ -490,6 +499,12 @@ fn display_optional(value: Option<&str>) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("-")
         .to_string()
+}
+
+fn display_optional_minutes(value: Option<i32>) -> String {
+    value
+        .map(|minutes| minutes.to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn display_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {

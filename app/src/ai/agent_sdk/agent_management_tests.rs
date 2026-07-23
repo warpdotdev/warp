@@ -1,4 +1,5 @@
 use chrono::{TimeZone as _, Utc};
+use clap::{Args as _, Command};
 
 use super::*;
 
@@ -25,6 +26,7 @@ fn agent_with_available(
         skills: vec![],
         base_model: None,
         environment_id: None,
+        idle_timeout_minutes: None,
     }
 }
 
@@ -47,9 +49,95 @@ fn table_format_does_not_include_available_column() {
             "Skills",
             "Base model",
             "Environment",
+            "Idle timeout",
         ]
     );
     assert_eq!(row.len(), header.len());
+}
+
+#[test]
+fn idle_timeout_shown_in_agent_row() {
+    let mut agent = agent("1", "agent", 1);
+    agent.idle_timeout_minutes = Some(30);
+
+    let row = agent
+        .row()
+        .into_iter()
+        .map(|cell| cell.content().to_string())
+        .collect::<Vec<_>>();
+
+    assert!(row.contains(&"30".to_string()));
+}
+
+#[test]
+fn idle_timeout_set_serializes() {
+    let create = CreateAgentRequest {
+        name: "agent".to_string(),
+        description: None,
+        secrets: vec![],
+        skills: vec![],
+        base_model: None,
+        environment_id: None,
+        idle_timeout_minutes: Some(15),
+    };
+    let create_json = serde_json::to_value(create).expect("create serializes");
+    assert_eq!(create_json["idle_timeout_minutes"], serde_json::json!(15));
+
+    let update = UpdateAgentRequest {
+        idle_timeout_minutes: Some(Some(15)),
+        ..Default::default()
+    };
+    let update_json = serde_json::to_value(update).expect("update serializes");
+    assert_eq!(
+        update_json,
+        serde_json::json!({ "idle_timeout_minutes": 15 })
+    );
+}
+
+#[test]
+fn idle_timeout_clear_serializes_null() {
+    let request = UpdateAgentRequest {
+        idle_timeout_minutes: Some(None),
+        ..Default::default()
+    };
+
+    let json = serde_json::to_value(request).expect("request serializes");
+
+    assert_eq!(json, serde_json::json!({ "idle_timeout_minutes": null }));
+}
+
+#[test]
+fn idle_timeout_absent_omitted() {
+    let json = serde_json::to_value(UpdateAgentRequest::default()).expect("request serializes");
+
+    assert_eq!(json, serde_json::json!({}));
+}
+
+#[test]
+fn idle_timeout_only_update_is_not_empty() {
+    assert!(!request_is_empty(&UpdateAgentRequest {
+        idle_timeout_minutes: Some(Some(10)),
+        ..Default::default()
+    }));
+    assert!(!request_is_empty(&UpdateAgentRequest {
+        idle_timeout_minutes: Some(None),
+        ..Default::default()
+    }));
+}
+
+#[test]
+fn idle_timeout_flags_mutually_exclusive() {
+    let command = AgentUpdateArgs::augment_args(Command::new("update"));
+
+    let result = command.try_get_matches_from([
+        "update",
+        "agent-uid",
+        "--idle-timeout-minutes",
+        "10",
+        "--remove-idle-timeout",
+    ]);
+
+    assert!(result.is_err());
 }
 
 #[test]
