@@ -278,7 +278,7 @@ fn local_harness_children_fail_cleanly() {
                 model_id: None,
             },
         );
-        assert_error_containing(outcome, "aren't supported in the Warp TUI yet");
+        assert_error_containing(outcome, "aren't supported in Warp Agent CLI yet");
         assert_failed_launch_cleaned_up(&app, &fixture, parent_conversation_id, 1);
     });
 }
@@ -599,7 +599,7 @@ fn failed_launch_cleanup_preserves_other_sessions() {
                 model_id: None,
             },
         );
-        assert_error_containing(outcome, "aren't supported in the Warp TUI yet");
+        assert_error_containing(outcome, "aren't supported in Warp Agent CLI yet");
         assert_failed_launch_cleaned_up(&app, &fixture, parent_conversation_id, 2);
     });
 }

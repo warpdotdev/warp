@@ -1,4 +1,6 @@
-use warpui_core::keymap::Context;
+use std::collections::HashSet;
+
+use warpui_core::keymap::{Context, Trigger};
 use warpui_core::{App, TuiView};
 
 use super::{ATTACHMENTS_AVAILABLE_FLAG, TUI_BINDING_GROUP, is_tui_owned};
@@ -84,17 +86,39 @@ fn attachment_bindings_are_scoped_to_available_and_focused_contexts() {
                     .all(|binding| !binding.in_context(&plain_input))
             );
 
-            let paste_image = ctx
+            let paste_bindings = ctx
                 .editable_bindings()
-                .find(|binding| binding.name == PASTE_IMAGE_BINDING_NAME)
-                .expect("clipboard image binding");
+                .filter(|binding| binding.name == PASTE_IMAGE_BINDING_NAME)
+                .collect::<Vec<_>>();
+            assert!(!paste_bindings.is_empty());
             let mut composer_context = plain_input.clone();
             composer_context
                 .set
                 .insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
-            assert!(paste_image.in_context(&composer_context));
-            assert!(!paste_image.in_context(&plain_input));
-            assert!(!paste_image.in_context(&bar_context));
+            assert!(
+                paste_bindings
+                    .iter()
+                    .all(|binding| binding.in_context(&composer_context))
+            );
+            assert!(
+                paste_bindings
+                    .iter()
+                    .all(|binding| !binding.in_context(&plain_input))
+            );
+            assert!(
+                paste_bindings
+                    .iter()
+                    .all(|binding| !binding.in_context(&bar_context))
+            );
+            let paste_triggers = paste_bindings
+                .iter()
+                .filter_map(|binding| match binding.trigger {
+                    Trigger::Keystrokes(keys) => keys.first().map(|key| key.normalized()),
+                    Trigger::Empty | Trigger::Standard(_) | Trigger::Custom(_) => None,
+                })
+                .collect::<HashSet<_>>();
+            assert!(paste_triggers.contains("ctrl-v"));
+            assert!(paste_triggers.contains("ctrl-shift-V"));
         });
     });
 }

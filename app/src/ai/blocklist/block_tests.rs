@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
-use ai::agent::action_result::StartAgentVersion;
 use ai::skills::SkillReference;
 use settings::Setting;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -95,35 +94,6 @@ fn orchestration_send_message_starts_collapsed() {
         state.expansion_state,
         CollapsibleExpansionState::Collapsed
     ));
-}
-
-#[test]
-fn orchestration_start_agent_prompt_stays_expanded_for_all_message_modes() {
-    for display_mode in [
-        OrchestrationMessageDisplayMode::ShowAndCollapse,
-        OrchestrationMessageDisplayMode::AlwaysCollapse,
-        OrchestrationMessageDisplayMode::AlwaysShow,
-    ] {
-        let state = default_collapsible_state_for_orchestration_action(
-            &AIAgentActionType::StartAgent {
-                version: StartAgentVersion::V1,
-                name: "child-agent".to_string(),
-                prompt: "Investigate".to_string(),
-                execution_mode: StartAgentExecutionMode::local_harness("claude-code".to_string()),
-                lifecycle_subscription: None,
-            },
-            display_mode,
-        )
-        .expect("start-agent actions should get a collapsible state");
-
-        assert!(matches!(
-            state.expansion_state,
-            CollapsibleExpansionState::Expanded {
-                is_finished: false,
-                scroll_pinned_to_bottom: true
-            }
-        ));
-    }
 }
 
 #[test]
@@ -383,6 +353,7 @@ fn agent_cfg() -> RunAgentsAgentRunConfig {
         prompt: "do X".to_string(),
         title: "Child".to_string(),
         agent_identity_uid: String::new(),
+        model_id: String::new(),
     }
 }
 

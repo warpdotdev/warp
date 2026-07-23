@@ -20,6 +20,7 @@ use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, Singl
 use crate::inline_menu::{
     MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
     TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
+    single_line_menu_title,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
@@ -223,7 +224,7 @@ impl TuiPromptHistoryMenuModel {
                 .rows()
                 .iter()
                 .map(|row| TuiInlineMenuRow {
-                    title: prompt_history_title(&row.text),
+                    title: single_line_menu_title(&row.text),
                     description: None,
                     state_suffix: None,
                     is_selectable: true,
@@ -331,15 +332,6 @@ impl TuiPromptHistoryMenuModel {
                 .update(ctx, |buffer, _| buffer.reset_undo_stack());
         });
     }
-}
-
-/// Returns a single-line menu title while leaving the full prompt available for
-/// preview and acceptance.
-fn prompt_history_title(text: &str) -> String {
-    let Some((first_line, _)) = text.split_once('\n') else {
-        return text.to_owned();
-    };
-    format!("{}...", first_line.strip_suffix('\r').unwrap_or(first_line))
 }
 
 /// Preserves selection by prompt text, falling back to the nearest previous

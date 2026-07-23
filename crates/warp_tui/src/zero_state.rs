@@ -1,5 +1,5 @@
 //! The pre-first-interaction "zero state" filling the transcript area: the
-//! Warp Agent title and version, a "What's new" changelog section, and the
+//! Warp Agent CLI title and version, a "What's new" changelog section, and the
 //! session's project context (rules and skills discovered).
 //!
 //! The session view owns visibility: the zero state fills the transcript
@@ -32,8 +32,14 @@ use crate::zero_state_animation::{StarfieldState, ZeroStateAnimationElement};
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
 
-/// Width cap on the text column so bullets wrap like the mock.
-const LEFT_COLUMN_MAX_COLS: u16 = 48;
+/// Fixed width for the text column.  Using a pinned min=max prevents the
+/// animation boundary from shifting as content loads asynchronously at startup
+/// (changelog, MCP status, project context).
+const LEFT_COLUMN_COLS: u16 = 48;
+
+/// Maximum width of the starfield animation panel.  On wide terminals the
+/// animation stays at this width and excess space becomes blank background.
+const MAX_ANIMATION_COLS: u16 = 100;
 
 // ---------------------------------------------------------------------------
 // TuiZeroStateView
@@ -116,13 +122,18 @@ impl TuiView for TuiZeroStateView {
         });
         let text_column =
             TuiConstrainedBox::new(render_left_column(cwd.as_deref(), &builder, ctx).finish())
-                .with_max_cols(LEFT_COLUMN_MAX_COLS)
+                .with_min_cols(LEFT_COLUMN_COLS)
+                .with_max_cols(LEFT_COLUMN_COLS)
                 .finish();
-        let animation = ZeroStateAnimationElement::new(
-            Rc::clone(&self.starfield),
-            self.clock,
-            builder.accent_color(),
+        let animation = TuiConstrainedBox::new(
+            ZeroStateAnimationElement::new(
+                Rc::clone(&self.starfield),
+                self.clock,
+                builder.accent_color(),
+            )
+            .finish(),
         )
+        .with_max_cols(MAX_ANIMATION_COLS)
         .finish();
         TuiFlex::row()
             .child(text_column)
@@ -139,7 +150,7 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
 
     let mut column = TuiFlex::column()
         .child(
-            TuiText::new("Warp Agent")
+            TuiText::new("Warp Agent CLI")
                 .with_style(title_style)
                 .truncate()
                 .finish(),

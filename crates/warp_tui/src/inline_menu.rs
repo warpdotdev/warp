@@ -35,12 +35,16 @@ const SLASH_COMMAND_COLUMN_CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnCo
     gap_columns: 1,
 };
 
+pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
+const MIN_REAL_ROWS_WITH_SCROLL_INDICATORS: usize = 3;
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TuiInlineMenuRowStyle {
     Default,
     InlineMenuItem,
 }
+
 pub(crate) fn active_inline_menu(
     inline_menus: &[TuiInlineMenu],
     mode: TuiInputSuggestionsMode,
@@ -93,8 +97,6 @@ impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
     }
 }
 
-pub(crate) const MAX_INLINE_MENU_ROWS: u16 = 10;
-
 /// A presentation-only row in a TUI inline menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TuiInlineMenuRow {
@@ -103,6 +105,13 @@ pub(crate) struct TuiInlineMenuRow {
     pub(crate) state_suffix: Option<String>,
     pub(crate) is_selectable: bool,
     pub(crate) style: TuiInlineMenuRowStyle,
+}
+/// Returns a single-line menu title while leaving the source text unchanged.
+pub(crate) fn single_line_menu_title(text: &str) -> String {
+    let Some((first_line, _)) = text.split_once('\n') else {
+        return text.to_owned();
+    };
+    format!("{}...", first_line.strip_suffix('\r').unwrap_or(first_line))
 }
 
 /// A presentation-only tab in a TUI inline-menu header.
@@ -245,18 +254,14 @@ impl<Row> TuiInlineMenuListState<Row> {
     }
 
     fn keep_selected_visible(&mut self, max_visible_rows: usize) {
-        if let Some(selected_index) = self.selection.selected_index() {
-            keep_selected_visible(
-                self.rows.len(),
-                selected_index,
-                max_visible_rows,
-                &mut self.scroll_offset,
-            );
-        } else {
-            self.scroll_offset = self
-                .scroll_offset
-                .min(self.rows.len().saturating_sub(max_visible_rows));
-        }
+        self.scroll_offset = inline_menu_viewport(
+            self.rows.len(),
+            self.selection.selected_index(),
+            self.scroll_offset,
+            max_visible_rows,
+        )
+        .rows
+        .start;
     }
 }
 
@@ -559,11 +564,12 @@ pub(crate) fn render_inline_menu(
     snapshot: &TuiInlineMenuSnapshot,
     builder: &TuiUiBuilder,
 ) -> Box<dyn TuiElement> {
-    Box::new(TuiInlineMenuElement {
+    TuiInlineMenuElement {
         snapshot: snapshot.clone(),
         builder: builder.clone(),
         content: None,
-    })
+    }
+    .finish()
 }
 
 struct TuiInlineMenuElement {
@@ -712,23 +718,23 @@ fn build_inline_menu(
         }
     } else {
         let visible_rows = visible_result_capacity(snapshot, allocated_height);
-        let mut scroll_offset = snapshot.scroll_offset;
-        if let Some(selected_index) = snapshot.selected_index {
-            keep_selected_visible(
-                snapshot.rows.len(),
-                selected_index,
-                visible_rows,
-                &mut scroll_offset,
-            );
-        } else {
-            scroll_offset = scroll_offset.min(snapshot.rows.len().saturating_sub(visible_rows));
+        let viewport = inline_menu_viewport(
+            snapshot.rows.len(),
+            snapshot.selected_index,
+            snapshot.scroll_offset,
+            visible_rows,
+        );
+
+        if viewport.has_more_above {
+            column = column.child(menu_scroll_indicator_row("↑", builder));
         }
+
         for (index, row) in snapshot
             .rows
             .iter()
             .enumerate()
-            .skip(scroll_offset)
-            .take(visible_rows)
+            .skip(viewport.rows.start)
+            .take(viewport.rows.len())
         {
             column = column.child(menu_result_row(
                 row,
@@ -736,6 +742,10 @@ fn build_inline_menu(
                 slash_command_columns,
                 builder,
             ));
+        }
+
+        if viewport.has_more_below {
+            column = column.child(menu_scroll_indicator_row("↓", builder));
         }
     }
 
@@ -749,8 +759,103 @@ fn menu_header_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
         .finish()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TuiInlineMenuViewport {
+    rows: Range<usize>,
+    has_more_above: bool,
+    has_more_below: bool,
+}
+
+fn inline_menu_viewport(
+    rows_len: usize,
+    selected_index: Option<usize>,
+    scroll_offset: usize,
+    visible_rows: usize,
+) -> TuiInlineMenuViewport {
+    if rows_len == 0 || visible_rows == 0 {
+        return TuiInlineMenuViewport {
+            rows: 0..0,
+            has_more_above: false,
+            has_more_below: false,
+        };
+    }
+    if rows_len <= visible_rows {
+        return TuiInlineMenuViewport {
+            rows: 0..rows_len,
+            has_more_above: false,
+            has_more_below: false,
+        };
+    }
+    if visible_rows <= MIN_REAL_ROWS_WITH_SCROLL_INDICATORS {
+        return inline_menu_viewport_without_indicators(
+            rows_len,
+            selected_index,
+            scroll_offset,
+            visible_rows,
+        );
+    }
+
+    let bottom_start = rows_len.saturating_sub(visible_rows - 1);
+    let mut start = scroll_offset.min(bottom_start);
+    let mut end = inline_menu_viewport_end(rows_len, start, visible_rows);
+    if let Some(selected_index) = selected_index.filter(|index| *index < rows_len) {
+        if selected_index < start {
+            start = selected_index;
+        } else if selected_index >= end {
+            start = (selected_index + 1 - (visible_rows - 2)).min(bottom_start);
+        }
+        end = inline_menu_viewport_end(rows_len, start, visible_rows);
+    }
+
+    let viewport = TuiInlineMenuViewport {
+        rows: start..end,
+        has_more_above: start > 0,
+        has_more_below: end < rows_len,
+    };
+    if viewport.rows.len() < MIN_REAL_ROWS_WITH_SCROLL_INDICATORS {
+        return inline_menu_viewport_without_indicators(
+            rows_len,
+            selected_index,
+            scroll_offset,
+            visible_rows,
+        );
+    }
+    viewport
+}
+
+fn inline_menu_viewport_without_indicators(
+    rows_len: usize,
+    selected_index: Option<usize>,
+    scroll_offset: usize,
+    visible_rows: usize,
+) -> TuiInlineMenuViewport {
+    let mut start = scroll_offset.min(rows_len.saturating_sub(visible_rows));
+    if let Some(selected_index) = selected_index.filter(|index| *index < rows_len) {
+        if selected_index < start {
+            start = selected_index;
+        } else if selected_index >= start + visible_rows {
+            start = selected_index + 1 - visible_rows;
+        }
+    }
+    TuiInlineMenuViewport {
+        rows: start..(start + visible_rows).min(rows_len),
+        has_more_above: false,
+        has_more_below: false,
+    }
+}
+
+fn inline_menu_viewport_end(rows_len: usize, start: usize, visible_rows: usize) -> usize {
+    let upper_indicator_rows = usize::from(start > 0);
+    let rows_without_lower_indicator = visible_rows - upper_indicator_rows;
+    let reaches_end = start.saturating_add(rows_without_lower_indicator) >= rows_len;
+    let lower_indicator_rows = usize::from(!reaches_end);
+    start
+        .saturating_add(visible_rows - upper_indicator_rows - lower_indicator_rows)
+        .min(rows_len)
+}
+
 /// Clamps stale scroll offsets and moves the viewport only as far as needed to
-/// keep the selected row within a window of `visible_rows`.
+/// keep the selected row within a window of `visible_rows` result rows.
 pub(crate) fn keep_selected_visible(
     rows_len: usize,
     selected_index: usize,
@@ -783,6 +888,12 @@ fn menu_status_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
     .finish()
 }
 
+fn menu_scroll_indicator_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+    TuiText::new(label)
+        .with_style(builder.dim_text_style())
+        .finish()
+}
+
 fn menu_result_row(
     row: &TuiInlineMenuRow,
     is_selected: bool,
@@ -811,10 +922,11 @@ fn menu_result_row(
     } else {
         slash_command_columns.available_columns
     };
+    let single_line_title = single_line_menu_title(&row.title);
     let title = match row.style {
-        TuiInlineMenuRowStyle::Default => row.title.clone(),
+        TuiInlineMenuRowStyle::Default => single_line_title,
         TuiInlineMenuRowStyle::InlineMenuItem => format_tui_first_column(
-            &row.title,
+            &single_line_title,
             slash_command_columns.with_second_visible(show_description),
         ),
     };

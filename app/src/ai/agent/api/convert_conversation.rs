@@ -11,8 +11,7 @@ use std::time::{Duration, SystemTime};
 use ai::agent::action_result::{
     AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
     RecordingStarted, RecordingStopped, RequestComputerUseResult, SendMessageToAgentResult,
-    StartAgentResult, StartAgentVersion, StartRecordingResult, StopRecordingResult,
-    UseComputerResult,
+    StartRecordingResult, StopRecordingResult, UseComputerResult,
 };
 use ai::skills::{ParsedSkill, SkillPathOrigin};
 use chrono::{DateTime, Local, TimeZone};
@@ -1500,58 +1499,6 @@ pub(crate) fn convert_tool_call_result_to_input(
             create_cancelled_result_for_tool_call(task_id, &tool_call_id, tool_call_map, context)
         }
         Some(ToolCallResultType::Subagent(_)) => None,
-        Some(ToolCallResultType::StartAgent(result)) => {
-            let start_agent_result = match &result.result {
-                Some(api::start_agent_result::Result::Success(success)) => {
-                    StartAgentResult::Success {
-                        agent_id: success.agent_id.clone(),
-                        version: StartAgentVersion::V1,
-                    }
-                }
-                Some(api::start_agent_result::Result::Error(error)) => StartAgentResult::Error {
-                    error: error.error.clone(),
-                    version: StartAgentVersion::V1,
-                },
-                None => StartAgentResult::Cancelled {
-                    version: StartAgentVersion::V1,
-                },
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::StartAgent(start_agent_result),
-                },
-                context,
-            })
-        }
-        Some(ToolCallResultType::StartAgentV2(result)) => {
-            let start_agent_result = match &result.result {
-                Some(api::start_agent_v2_result::Result::Success(success)) => {
-                    StartAgentResult::Success {
-                        agent_id: success.agent_id.clone(),
-                        version: StartAgentVersion::V2,
-                    }
-                }
-                Some(api::start_agent_v2_result::Result::Error(error)) => StartAgentResult::Error {
-                    error: error.error.clone(),
-                    version: StartAgentVersion::V2,
-                },
-                None => StartAgentResult::Cancelled {
-                    version: StartAgentVersion::V2,
-                },
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::StartAgent(start_agent_result),
-                },
-                context,
-            })
-        }
         Some(ToolCallResultType::AskUserQuestion(result)) => {
             let ask_result = match &result.result {
                 Some(warp_multi_agent_api::ask_user_question_result::Result::Success(success)) => {
@@ -1620,6 +1567,7 @@ pub(crate) fn convert_tool_call_result_to_input(
             };
             let run_agents_result = match &result.outcome {
                 Some(api::run_agents_result::Outcome::Launched(launched)) => {
+                    #[allow(deprecated)]
                     let execution_mode = match &launched.resolved_execution_mode {
                         Some(api::run_agents_result::launched::ResolvedExecutionMode::Remote(
                             remote,
@@ -1637,6 +1585,8 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .iter()
                         .map(|outcome| RunAgentsAgentOutcome {
                             name: outcome.name.clone(),
+                            // Proto field is model_id (renamed from resolved_model_id).
+                            resolved_model_id: outcome.model_id.clone(),
                             kind: match &outcome.result {
                                 Some(api::run_agents_result::agent_outcome::Result::Launched(
                                     launched_agent,
@@ -1654,13 +1604,17 @@ pub(crate) fn convert_tool_call_result_to_input(
                             },
                         })
                         .collect();
+                    #[allow(deprecated)]
+                    let model_id = launched.resolved_model_id.clone();
+                    #[allow(deprecated)]
+                    let harness_type =
+                        crate::ai::agent::api::convert_from::convert_run_agents_harness(
+                            launched.resolved_harness.as_ref(),
+                        )
+                        .unwrap_or_default();
                     RunAgentsResult::Launched {
-                        model_id: launched.resolved_model_id.clone(),
-                        harness_type:
-                            crate::ai::agent::api::convert_from::convert_run_agents_harness(
-                                launched.resolved_harness.as_ref(),
-                            )
-                            .unwrap_or_default(),
+                        model_id,
+                        harness_type,
                         execution_mode,
                         agents,
                     }
@@ -1889,16 +1843,6 @@ fn create_cancelled_result_for_tool_call(
             return None;
         }
         ToolType::Subagent(_) => return None,
-        ToolType::StartAgent(_) => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                version: StartAgentVersion::V1,
-            })
-        }
-        ToolType::StartAgentV2(_) => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                version: StartAgentVersion::V2,
-            })
-        }
         ToolType::AskUserQuestion(_) => {
             AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
         }

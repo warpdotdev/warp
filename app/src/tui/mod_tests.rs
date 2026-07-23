@@ -3,7 +3,33 @@ use std::rc::Rc;
 
 use warpui::{App, SingletonEntity};
 
-use super::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase, set_logged_out_phase, set_login_phase};
+use super::{
+    TuiLoginEvent, TuiLoginModel, TuiLoginPhase, set_logged_out_phase, set_login_phase,
+    tui_verification_url,
+};
+
+#[test]
+fn tags_tui_verification_url_without_losing_existing_query_parameters() {
+    let url = tui_verification_url(
+        "https://app.warp.dev/device?user_code=ABCD-EFGH&existing=value#fragment",
+    );
+    let url = url::Url::parse(&url).unwrap();
+
+    assert_eq!(url.fragment(), Some("fragment"));
+    assert_eq!(
+        url.query_pairs().collect::<Vec<_>>(),
+        vec![
+            ("user_code".into(), "ABCD-EFGH".into()),
+            ("existing".into(), "value".into()),
+            ("source".into(), "warp-agent-cli".into()),
+        ]
+    );
+}
+
+#[test]
+fn leaves_invalid_verification_url_unchanged() {
+    assert_eq!(tui_verification_url("not a URL"), "not a URL".to_owned());
+}
 
 #[test]
 fn emits_logged_in_event_when_login_completes() {

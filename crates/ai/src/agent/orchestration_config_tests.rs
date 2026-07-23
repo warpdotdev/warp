@@ -39,6 +39,7 @@ fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
             prompt: String::new(),
             title: String::new(),
             agent_identity_uid: String::new(),
+            model_id: String::new(),
         }],
         plan_id: String::new(),
         harness_auth_secret_name: None,

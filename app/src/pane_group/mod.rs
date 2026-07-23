@@ -1716,7 +1716,7 @@ impl PaneGroup {
                     let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
 
                     if let Some(profile_id) =
-                        profiles_model.get_profile_id_by_sync_id(active_profile_sync_id)
+                        profiles_model.get_profile_id_by_sync_id(active_profile_sync_id, ctx)
                     {
                         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
                             profiles_model.set_active_profile(

@@ -1187,71 +1187,6 @@ impl TryFrom<FetchConversationResult> for api::request::input::tool_call_result:
     }
 }
 
-impl From<StartAgentResult> for api::request::input::tool_call_result::Result {
-    fn from(result: StartAgentResult) -> Self {
-        match result {
-            StartAgentResult::Success {
-                agent_id,
-                version: StartAgentVersion::V1,
-            } => api::request::input::tool_call_result::Result::StartAgent(api::StartAgentResult {
-                result: Some(api::start_agent_result::Result::Success(
-                    api::start_agent_result::Success { agent_id },
-                )),
-            }),
-            StartAgentResult::Error {
-                error,
-                version: StartAgentVersion::V1,
-            } => api::request::input::tool_call_result::Result::StartAgent(api::StartAgentResult {
-                result: Some(api::start_agent_result::Result::Error(
-                    api::start_agent_result::Error { error },
-                )),
-            }),
-            StartAgentResult::Cancelled {
-                version: StartAgentVersion::V1,
-            } => api::request::input::tool_call_result::Result::StartAgent(api::StartAgentResult {
-                result: Some(api::start_agent_result::Result::Error(
-                    api::start_agent_result::Error {
-                        error: "Cancelled by user".to_string(),
-                    },
-                )),
-            }),
-            // The remaining arms translate the v2 result schema back into the shared client
-            // StartAgentResult so downstream UI/rendering code can stay version-agnostic.
-            StartAgentResult::Success {
-                agent_id,
-                version: StartAgentVersion::V2,
-            } => api::request::input::tool_call_result::Result::StartAgentV2(
-                api::StartAgentV2Result {
-                    result: Some(api::start_agent_v2_result::Result::Success(
-                        api::start_agent_v2_result::Success { agent_id },
-                    )),
-                },
-            ),
-            StartAgentResult::Error {
-                error,
-                version: StartAgentVersion::V2,
-            } => api::request::input::tool_call_result::Result::StartAgentV2(
-                api::StartAgentV2Result {
-                    result: Some(api::start_agent_v2_result::Result::Error(
-                        api::start_agent_v2_result::Error { error },
-                    )),
-                },
-            ),
-            StartAgentResult::Cancelled {
-                version: StartAgentVersion::V2,
-            } => api::request::input::tool_call_result::Result::StartAgentV2(
-                api::StartAgentV2Result {
-                    result: Some(api::start_agent_v2_result::Result::Error(
-                        api::start_agent_v2_result::Error {
-                            error: "Cancelled by user".to_string(),
-                        },
-                    )),
-                },
-            ),
-        }
-    }
-}
-
 impl From<SendMessageToAgentResult> for api::request::input::tool_call_result::Result {
     fn from(result: SendMessageToAgentResult) -> Self {
         api::request::input::tool_call_result::Result::SendMessageToAgent(
@@ -1348,33 +1283,6 @@ impl From<AskUserQuestionResult> for api::request::input::tool_call_result::Resu
     }
 }
 
-impl From<RunAgentsLaunchedExecutionMode>
-    for api::run_agents_result::launched::ResolvedExecutionMode
-{
-    fn from(mode: RunAgentsLaunchedExecutionMode) -> Self {
-        match mode {
-            RunAgentsLaunchedExecutionMode::Local => {
-                api::run_agents_result::launched::ResolvedExecutionMode::Local(
-                    api::run_agents::Local {},
-                )
-            }
-            RunAgentsLaunchedExecutionMode::Remote {
-                environment_id,
-                worker_host,
-                computer_use_enabled,
-                runner_id,
-            } => api::run_agents_result::launched::ResolvedExecutionMode::Remote(
-                api::run_agents::Remote {
-                    environment_id,
-                    worker_host,
-                    computer_use_enabled,
-                    runner_id,
-                },
-            ),
-        }
-    }
-}
-
 impl From<RunAgentsAgentOutcome> for api::run_agents_result::AgentOutcome {
     fn from(outcome: RunAgentsAgentOutcome) -> Self {
         let result = match outcome.kind {
@@ -1392,27 +1300,13 @@ impl From<RunAgentsAgentOutcome> for api::run_agents_result::AgentOutcome {
         api::run_agents_result::AgentOutcome {
             name: outcome.name,
             result: Some(result),
+            // Map our resolved_model_id to the proto's model_id field.
+            model_id: outcome.resolved_model_id,
+            // harness and execution_mode are not tracked per-agent on the client side.
+            harness: None,
+            execution_mode: None,
         }
     }
-}
-
-/// Maps a client-side harness string identifier (e.g. "oz", "claude")
-/// to the new proto `Harness` oneof. Returns `None` for empty,
-/// unrecognized, or `"unknown"` strings; callers leave
-/// `resolved_harness` unset in that case.
-pub(super) fn build_api_harness(harness_type: &str) -> Option<api::Harness> {
-    let normalized = harness_type.trim().to_ascii_lowercase().replace('_', "-");
-    let variant = match normalized.as_str() {
-        "oz" => api::harness::Variant::Oz(api::harness::Oz {}),
-        "claude" | "claude-code" => api::harness::Variant::ClaudeCode(api::harness::ClaudeCode {}),
-        "opencode" | "open-code" => api::harness::Variant::OpenCode(api::harness::OpenCode {}),
-        "gemini" => api::harness::Variant::Gemini(api::harness::Gemini {}),
-        "codex" => api::harness::Variant::Codex(api::harness::Codex {}),
-        _ => return None,
-    };
-    Some(api::Harness {
-        variant: Some(variant),
-    })
 }
 
 impl TryFrom<RunAgentsResult> for api::request::input::tool_call_result::Result {
@@ -1420,20 +1314,13 @@ impl TryFrom<RunAgentsResult> for api::request::input::tool_call_result::Result 
 
     fn try_from(result: RunAgentsResult) -> Result<Self, Self::Error> {
         match result {
-            RunAgentsResult::Launched {
-                model_id,
-                harness_type,
-                execution_mode,
-                agents,
-            } => Ok(
+            RunAgentsResult::Launched { agents, .. } => Ok(
                 api::request::input::tool_call_result::Result::RunAgentsResult(
                     api::RunAgentsResult {
                         outcome: Some(api::run_agents_result::Outcome::Launched(
                             api::run_agents_result::Launched {
-                                resolved_model_id: model_id,
-                                resolved_harness: build_api_harness(&harness_type),
-                                resolved_execution_mode: Some(execution_mode.into()),
                                 agents: agents.into_iter().map(Into::into).collect(),
+                                ..Default::default()
                             },
                         )),
                     },

@@ -203,6 +203,9 @@ fn render_failure_section(
         FailedOutputPresentation::Message(message)
         | FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid {
             fallback_message: message,
+        }
+        | FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
+            fallback_message: message,
         } => TuiText::from_spans([
             (FAILURE_WARNING_PREFIX.to_owned(), error_style),
             (message.clone(), body_style),
@@ -291,6 +294,9 @@ fn failure_text(presentation: &FailedOutputPresentation) -> String {
     match presentation {
         FailedOutputPresentation::Message(message)
         | FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid {
+            fallback_message: message,
+        }
+        | FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
             fallback_message: message,
         }
         | FailedOutputPresentation::ContextWindowExceeded { message } => message.clone(),
