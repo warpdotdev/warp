@@ -1,7 +1,7 @@
+use crate::appearance::Appearance;
 use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
 use warpui::elements::Empty;
 use warpui::{App, AppContext, Element, Entity, View};
-use crate::appearance::Appearance;
 
 use super::*;
 
@@ -1085,12 +1085,7 @@ impl SettingsWidget for StubWidget {
         self.terms
     }
 
-    fn render(
-        &self,
-        _: &Self::View,
-        _: &Appearance,
-        _: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render(&self, _: &Self::View, _: &Appearance, _: &AppContext) -> Box<dyn Element> {
         Empty::new().finish()
     }
 }
