@@ -27,22 +27,25 @@ is required.
    capture, capture-dimension clamping, and best-effort original-video fallback
    remain unchanged.
 5. A scrollbar press/scroll interaction has one documented outcome. The
-   recommended outcome is to suppress a click ripple when a click is directly
-   associated with scrolling, because a transient full-size ring is misleading
-   and visually competes with the scroll action. The action stream does not
-   identify UI elements, so a true scrollbar drag with no nearby `MouseWheel`
-   cannot be distinguished reliably and remains a normal drag annotation unless
-   the producer later supplies semantic metadata. This recommendation is the
-   single product decision for requester confirmation during approval; if the
-   requester chooses to keep the normal click ring, omit only the suppression
-   rule and its test while retaining all other invariants.
+   resolved outcome (confirmed by the requester after spec approval) is to *keep*
+   the click ring on a scrollbar press and *center* it on the cursor exactly like
+   any other click ring — do NOT suppress it. The centering fix in invariant 1
+   applies uniformly to every ring/circle animation, including the full-circle
+   drawn on a scrollbar press, so none of them render offset to the top-left. The
+   action stream does not identify UI elements, so a true scrollbar drag with no
+   nearby `MouseWheel` cannot be distinguished reliably and remains a normal drag
+   annotation; no `MouseWheel`-adjacency suppression rule is implemented, since
+   the requester chose to keep the ring. (The earlier recommended default was to
+   suppress the ring for a click tightly associated with a wheel event; that
+   recommendation is superseded by the keep-and-center decision below.)
 
 **Key design choices:** Keep the renderer in ASS/libass, change origin-centered
-circle dialogues to top-left alignment (`\an7`), persist a recording-level
-pointer session so release coordinates survive call boundaries, and classify
-one flattened recording pointer stream rather than each `ActionLogEntry`
-independently. Associate scrollbar suppression only with an adjacent/nearby
-`MouseWheel` event; do not guess a scrollbar from coordinates.
+circle dialogues to top-left alignment (`\an7`) so every ring/circle is centered
+on the cursor, persist a recording-level pointer session so release coordinates
+survive call boundaries, and classify one flattened recording pointer stream
+rather than each `ActionLogEntry` independently. Keep the scrollbar click ring
+(resolved product decision) and center it like every other ring; do not suppress
+it and do not guess a scrollbar from coordinates.
 
 ## TECH
 
@@ -143,18 +146,18 @@ The steerable investigation run is
      labels are empty. Mixed keyboard/pointer entries continue to render both
      redacted pills and pointer geometry.
 
-4. **Scrollbar/scroll association (pending product confirmation).**
-   - Recommended default: mark a click as scroll-associated when a
-     `MouseWheel` action occurs in the same call or within a small, named
-     recording-time window (for example 300 ms) and within a named capture-space
-     proximity threshold (for example 16 px) of the click point. Suppress only
-     that click's ring; do not suppress unrelated clicks elsewhere.
+4. **Scrollbar/scroll association (resolved: keep and center).**
+   - The requester confirmed the “keep” outcome: a click on a scrollbar renders
+     the normal click ring, and that ring is centered on the cursor via the same
+     `\an7` centering fix as every other click ring (invariant 1). No
+     `MouseWheel`-adjacency suppression rule is implemented, so no click ring is
+     suppressed for being near a wheel event. The implementation therefore adds
+     no scroll-association branch and no suppression test.
    - A drag with no nearby `MouseWheel` remains a drag trail because the current
-     protocol has no scrollbar-element identity. If the requester selects
-     “keep,” retain the normal ring and test its 900 ms timing/fade.
+     protocol has no scrollbar-element identity.
    - Keep `MouseWheel` itself free of pointer geometry; the existing scroll pill
-     remains unchanged. Document the selected outcome in the implementation and
-     fixture names so the behavior cannot regress silently.
+     remains unchanged. The selected outcome (keep-and-center) is recorded here
+     and in the fixture names so the behavior cannot regress silently.
 
 **Design alternatives:**
 
@@ -169,10 +172,12 @@ The steerable investigation run is
   which would couple recording lifetime to platform input state and change
   existing actor ownership; (c) infer drags from summaries/cursor positions,
   which loses button identity and is not reliable for window-target coordinates.
-- **Scrollbar behavior:** (a) recommended suppression for a click tightly
-  associated with a wheel event, avoiding a misleading flash while retaining
-  ordinary clicks; (b) keep every click ring, which is protocol-simple but
-  accepts the reported visual ambiguity; (c) classify scrollbar elements from
+- **Scrollbar behavior:** (a) suppress a click ring tightly associated with a
+  wheel event, avoiding a misleading flash while retaining ordinary clicks — the
+  earlier recommended default, now superseded; (b) selected: keep every click
+  ring (protocol-simple) and center it on the cursor via the same `\an7` fix, so
+  the scrollbar full-circle no longer renders offset to the top-left — this is
+  the requester-confirmed outcome; (c) classify scrollbar elements from
   coordinates, rejected because the client has no stable UI hit-test or element
   metadata.
 
@@ -181,10 +186,12 @@ The steerable investigation run is
 - The MAA trace's exact action grouping is unresolved because staging requires
   authentication in this environment; the implementation must support both
   same-call and split-call sequences and add fixtures for each.
-- The requester must confirm the scrollbar recommendation during spec approval.
-  Until then, the implementation should use the recommended adjacent-wheel
-  suppression rule; choosing “keep” removes only that suppression branch and
-  its assertions.
+- The requester confirmed the scrollbar outcome during spec approval: *keep*
+  the click ring on a scrollbar press and *center* it on the cursor (the same
+  `\an7` centering as any other click ring), rather than suppress it. The
+  recommended adjacent-wheel suppression rule is therefore NOT implemented; no
+  suppression branch or suppression assertions are added. This decision is
+  recorded in invariant 5 and proposed change 4 above.
 - No server or artifact API change is needed: the structured client action
   stream already carries the required pointer primitives and the client owns
   burn-in.

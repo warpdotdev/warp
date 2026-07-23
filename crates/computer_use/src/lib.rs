@@ -649,10 +649,101 @@ pub struct PointerSink {
     pub recording_target: Target,
     /// Events collected in dispatch order; drained by the caller after the batch completes.
     pub events: Arc<Mutex<Vec<PointerEvent>>>,
+    /// Recording-scoped pointer session shared with every `UseComputer` call's sink, so a
+    /// release in a later call reuses the last resolved capture-space point even when the
+    /// press happened in an earlier call. See [`PointerSession`].
+    pub session: PointerSession,
+}
+
+/// Recording-scoped pointer session state, shared between the recording
+/// controller and each `UseComputer` call's [`PointerSink`]. It persists the
+/// last resolved capture-space point and the currently pressed button across
+/// action-call boundaries, so a drag split into separate `Down`/`Move`/`Up`
+/// `UseComputer` calls still records its release at the last point (a release
+/// carries no coordinate of its own). Owned by the active recording, which
+/// hands an `Arc` clone to each call's sink; reset when a call fails or is
+/// cancelled so a later click cannot inherit an abandoned press.
+///
+/// The finalize pass classifies one flattened recording-level pointer stream
+/// (see [`overlay::build_overlay_ass`]), so reconstructing the release here is
+/// what lets a split-call drag render a single continuous trail with a release
+/// fade rather than a per-call held press plus stray moves.
+#[derive(Debug, Clone)]
+pub struct PointerSession {
+    state: Arc<Mutex<PointerSessionState>>,
+}
+
+#[derive(Debug, Default)]
+struct PointerSessionState {
+    /// The last capture-space point resolved during a press or move.
+    last_point: Option<Vector2I>,
+    /// The button currently held down, if any.
+    active_button: Option<MouseButton>,
+}
+
+impl PointerSession {
+    /// Creates a fresh, empty session for a new recording.
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(PointerSessionState::default())),
+        }
+    }
+
+    /// Records a press or move resolved at `point`. A press (`Down`) sets the
+    /// active button and last point; a move updates the last point while a
+    /// button is held. A new press while a button is already active replaces it
+    /// (the prior incomplete press is closed as a held drag by the classifier).
+    pub fn record_press_or_move(
+        &self,
+        kind: PointerEventKind,
+        button: Option<MouseButton>,
+        point: Vector2I,
+    ) {
+        if let Ok(mut state) = self.state.lock() {
+            state.last_point = Some(point);
+            if kind == PointerEventKind::Down {
+                state.active_button = button;
+            }
+        }
+    }
+
+    /// Records a release of `button`, returning the last resolved point only when
+    /// the released button matches the active press — so an unmatched release
+    /// (a different button, or a release with no prior press) is ignored and no
+    /// stale-coordinate event is emitted. Clears the active button on a matching
+    /// release; the last point is retained (harmless, and a following move
+    /// overwrites it).
+    pub fn record_release(&self, button: MouseButton) -> Option<Vector2I> {
+        self.state.lock().ok().and_then(|mut state| {
+            if state.active_button == Some(button) {
+                state.active_button = None;
+                state.last_point
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Clears the active pointer state (last point and held button). Used when a
+    /// press/move targets a surface that does not match the recording (so a
+    /// following release is not recorded at a stale in-frame coordinate), and
+    /// when a `UseComputer` call fails or is cancelled so a later call cannot
+    /// inherit an abandoned press.
+    pub fn clear(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = PointerSessionState::default();
+        }
+    }
+}
+
+impl Default for PointerSession {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// The buttons of a mouse.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum MouseButton {
     Left,
     Right,
@@ -739,5 +830,98 @@ fn get_vector2i_y(v: &Vector2I) -> i32 {
 impl From<Vector2IDef> for Vector2I {
     fn from(def: Vector2IDef) -> Self {
         Vector2I::new(def.x, def.y)
+    }
+}
+
+#[cfg(test)]
+mod pointer_session_tests {
+    use super::*;
+
+    #[test]
+    fn release_reuses_last_point_from_a_prior_press_and_move() {
+        let session = PointerSession::new();
+        // A press records the active button and last point.
+        session.record_press_or_move(
+            PointerEventKind::Down,
+            Some(MouseButton::Left),
+            Vector2I::new(10, 20),
+        );
+        // A move updates the last point while the button is held.
+        session.record_press_or_move(PointerEventKind::Move, None, Vector2I::new(30, 40));
+        // A matching release returns the last point and clears the active button.
+        assert_eq!(
+            session.record_release(MouseButton::Left),
+            Some(Vector2I::new(30, 40))
+        );
+        // A second release (button now cleared) returns None.
+        assert_eq!(session.record_release(MouseButton::Left), None);
+    }
+
+    #[test]
+    fn release_for_a_different_button_is_ignored() {
+        let session = PointerSession::new();
+        session.record_press_or_move(
+            PointerEventKind::Down,
+            Some(MouseButton::Left),
+            Vector2I::new(1, 2),
+        );
+        // A Right release does not match the active Left press.
+        assert_eq!(session.record_release(MouseButton::Right), None);
+        // The Left press is still active, so a Left release still returns the point.
+        assert_eq!(
+            session.record_release(MouseButton::Left),
+            Some(Vector2I::new(1, 2))
+        );
+    }
+
+    #[test]
+    fn release_with_no_prior_press_is_ignored() {
+        let session = PointerSession::new();
+        assert_eq!(session.record_release(MouseButton::Left), None);
+    }
+
+    #[test]
+    fn clear_resets_active_press_so_a_later_release_is_ignored() {
+        let session = PointerSession::new();
+        session.record_press_or_move(
+            PointerEventKind::Down,
+            Some(MouseButton::Left),
+            Vector2I::new(5, 6),
+        );
+        // A failed/cancelled call clears the session so a later call cannot
+        // inherit an abandoned press.
+        session.clear();
+        assert_eq!(session.record_release(MouseButton::Left), None);
+    }
+
+    #[test]
+    fn new_press_while_held_replaces_active_button() {
+        let session = PointerSession::new();
+        session.record_press_or_move(
+            PointerEventKind::Down,
+            Some(MouseButton::Left),
+            Vector2I::new(1, 1),
+        );
+        // A new press while a button is held replaces the active button; the
+        // classifier closes the prior incomplete gesture as a held drag.
+        session.record_press_or_move(
+            PointerEventKind::Down,
+            Some(MouseButton::Right),
+            Vector2I::new(2, 2),
+        );
+        assert_eq!(session.record_release(MouseButton::Left), None);
+        assert_eq!(
+            session.record_release(MouseButton::Right),
+            Some(Vector2I::new(2, 2))
+        );
+    }
+
+    #[test]
+    fn move_without_press_records_point_but_no_release_matches() {
+        let session = PointerSession::new();
+        // A move with no active press updates the last point but sets no button,
+        // so a following release does not match and is ignored.
+        session.record_press_or_move(PointerEventKind::Move, None, Vector2I::new(9, 9));
+        assert_eq!(session.record_release(MouseButton::Left), None);
     }
 }
