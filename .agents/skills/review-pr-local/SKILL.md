@@ -28,7 +28,14 @@ skill marks as overridable.
 - In WarpUI code, flag inline `MouseStateHandle::default()` usage during render or event handling. Mouse state handles should be created during construction and then cloned/referenced where needed.
 - For user-facing UI changes, mention missing validation only when it is tied to a concrete risk or when the PR changes behavior that should be verified visually.
 
-## Behavioral or UI-impacting changes require visual evidence
+## Behavioral or UI-impacting changes require visual evidence (external contributors only)
+
+This requirement applies only to pull requests from external contributors. Determine the author's trust from the `Author` line in `pr_description.txt`: a `trust=TRUSTED` author (association `MEMBER`, `OWNER`, or `COLLABORATOR`) is an organization member, while `trust=UNVERIFIED` (or any non-member association) is an external contributor.
+
+- If the PR author is an organization member (`trust=TRUSTED`), do not request visual evidence and do not block the review for missing screenshots or recordings. Skip the rest of this section.
+- If the `Author` line is absent (older runs that predate this signal), treat the author as an external contributor and apply the requirement below.
+
+For external contributors (`trust=UNVERIFIED`):
 
 - If the PR changes anything user-visible (UI components, layout, styling, copy in surfaces users see, terminal/Warp app visuals, or other behavior a user can perceive), analyze both `pr_description.txt` and any PR comments available in the workflow context for attached screenshots, GIFs, or videos demonstrating the change end to end.
   - Treat markdown image/video embeds (`![...](...)`, `<img ...>`, `<video ...>`), GitHub user-attachment links (e.g. `https://github.com/user-attachments/...`, `https://user-images.githubusercontent.com/...`), Loom links, and similar hosted media as valid evidence.
