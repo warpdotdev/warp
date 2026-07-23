@@ -1,4 +1,7 @@
-use settings_page::{MatchData, search_terms_match};
+use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
+use warpui::elements::Empty;
+use warpui::{App, AppContext, Element, Entity, View};
+use crate::appearance::Appearance;
 
 use super::*;
 
@@ -1043,62 +1046,84 @@ fn arrow_down_collapsed_umbrella_respects_search_filter() {
 }
 
 // ── Active subpage filter reapply after rebuild (APP-4922) ───────────────────
-// Regression tests for the bug where searching in Settings showed every widget
-// on the active AI/Code subpage instead of only the matching ones.
-//
-// `handle_search_editor_event` restores the active subpage by calling
-// `set_active_subpage`, which rebuilds the backing page's `PageType` via
-// `new_uncategorized`/`build_page`. A freshly built `PageType` initializes its
-// `filter` to *all* widget indices (visible by default), and the restore step
-// previously did not reapply the active search query, so the rendered subpage
-// fell back to showing every widget. The fix re-runs `update_filter` with the
-// active query after every in-search subpage rebuild.
-//
-// These tests model the `PageType::Uncategorized` filter lifecycle — the exact
-// mechanism the production code relies on — using the real `search_terms_match`
-// predicate extracted from `PageType::update_filter`. The GUI orchestration in
-// `handle_search_editor_event` itself needs a full `AppContext`/`ViewContext`
-// (not constructible in a unit test), so its visual verification is covered by
-// computer-use screenshots; these tests guard the filter-state contract.
+// Searching on an AI/Code subpage rebuilds the subpage's PageType (via
+// set_active_subpage), which resets its widget filter to every widget; the
+// active query must be reapplied so only matching widgets render. These tests
+// exercise the real PageType::Uncategorized filter lifecycle and the real
+// search_terms_match predicate. The production reapply call sites in mod.rs
+// (handle_search_editor_event/cycle_pages/SelectAndRefresh) need a full
+// ViewContext<SettingsView>, so they are verified via computer-use screenshots.
 
-/// Models a `PageType::Uncategorized` page: a list of widget search terms plus
-/// the current `filter` (indices of visible widgets), mirroring `new_uncategorized`
-/// (filter = all indices) and `update_filter` (filter = matching indices).
-struct SimSubpage {
-    terms: Vec<&'static str>,
-    filter: Vec<usize>,
+/// Minimal View so PageType<V> can be instantiated in a unit test without the
+/// full SettingsView/ViewContext the production reapply call sites require.
+struct TestSettingsView;
+
+impl Entity for TestSettingsView {
+    type Event = ();
 }
 
-impl SimSubpage {
-    /// Mirrors `PageType::new_uncategorized`: every widget index is visible.
-    fn new(terms: Vec<&'static str>) -> Self {
-        Self {
-            filter: (0..terms.len()).collect(),
-            terms,
-        }
+impl View for TestSettingsView {
+    fn ui_name() -> &'static str {
+        "TestSettingsView"
     }
 
-    /// Mirrors `PageType::update_filter`: keeps only widgets whose search terms
-    /// match the query under the real all-words, case-insensitive predicate.
-    fn update_filter(&mut self, query: &str) {
-        self.filter = self
-            .terms
-            .iter()
-            .enumerate()
-            .filter(|(_, terms)| search_terms_match(terms, query))
-            .map(|(i, _)| i)
-            .collect();
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+/// A SettingsWidget whose only test-relevant state is its search terms; render
+/// is never invoked by the filter lifecycle under test.
+struct StubWidget {
+    terms: &'static str,
+}
+
+impl SettingsWidget for StubWidget {
+    type View = TestSettingsView;
+
+    fn search_terms(&self) -> &str {
+        self.terms
     }
 
-    /// Mirrors `set_active_subpage` → `build_page` → `new_uncategorized`: a
-    /// fresh page with the default unfiltered widget list.
-    fn rebuild(&mut self) {
-        self.filter = (0..self.terms.len()).collect();
+    fn render(
+        &self,
+        _: &Self::View,
+        _: &Appearance,
+        _: &AppContext,
+    ) -> Box<dyn Element> {
+        Empty::new().finish()
     }
+}
 
-    fn visible_indices(&self) -> &Vec<usize> {
-        &self.filter
-    }
+/// A fresh Uncategorized page mirroring set_active_subpage -> build_page ->
+/// new_uncategorized: every widget index visible by default.
+fn stub_widgets_page() -> PageType<TestSettingsView> {
+    let widgets: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> = vec![
+        Box::new(StubWidget {
+            terms: "warp agent global ai toggle",
+        }),
+        Box::new(StubWidget {
+            terms: "active ai autosuggestions prompt",
+        }),
+        Box::new(StubWidget {
+            terms: "ai input model api key",
+        }),
+        Box::new(StubWidget {
+            terms: "file search fuzzy opener",
+        }),
+        Box::new(StubWidget {
+            terms: "voice input",
+        }),
+    ];
+    PageType::new_uncategorized(widgets, None)
+}
+
+/// Number of widgets the page would render under its current filter.
+fn visible_widget_count<V: View>(page: &PageType<V>) -> usize {
+    let FilteredPageType::Uncategorized { widgets, .. } = page.get_filtered() else {
+        panic!("expected Uncategorized page");
+    };
+    widgets.len()
 }
 
 #[test]
@@ -1130,87 +1155,81 @@ fn search_terms_match_direct_unit_checks() {
 }
 
 #[test]
-fn rebuild_without_reapply_resets_filter_to_all_widgets() {
-    // Searching "file search" matches exactly one widget on the subpage.
-    let mut page = SimSubpage::new(vec![
-        "warp agent global ai toggle",
-        "active ai autosuggestions prompt",
-        "ai input model api key",
-        "file search fuzzy opener",
-        "voice input",
-    ]);
-    page.update_filter("file search");
-    assert_eq!(page.visible_indices(), &vec![3]);
+fn rebuild_resets_filter_to_all_widgets() {
+    // Searching "file search" matches exactly one widget. A freshly built page
+    // (mirroring set_active_subpage -> build_page -> new_uncategorized) resets
+    // the filter to every widget, so without reapplying update_filter the
+    // subpage would show all widgets.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = stub_widgets_page();
+            let md = page.update_filter("file search", ctx);
+            assert!(md.is_truthy());
+            assert_eq!(visible_widget_count(&page), 1);
 
-    // The restore step rebuilds the active subpage's PageType but, before the
-    // fix, never reapplied `update_filter` — so the freshly rebuilt page showed
-    // every widget. This encodes the defect the fix addresses.
-    page.rebuild();
-    assert_eq!(
-        page.visible_indices(),
-        &vec![0, 1, 2, 3, 4],
-        "rebuild resets the filter to all widgets when update_filter isn't reapplied"
-    );
+            let rebuilt = stub_widgets_page();
+            assert_eq!(
+                visible_widget_count(&rebuilt),
+                5,
+                "rebuild resets the filter to all widgets when update_filter isn't reapplied"
+            );
+        });
+    });
 }
 
 #[test]
 fn rebuild_with_reapply_keeps_only_matching_widgets() {
-    let mut page = SimSubpage::new(vec![
-        "warp agent global ai toggle",
-        "active ai autosuggestions prompt",
-        "ai input model api key",
-        "file search fuzzy opener",
-        "voice input",
-    ]);
-    page.update_filter("file search");
-    assert_eq!(page.visible_indices(), &vec![3]);
+    // The fix: after a rebuild, reapply update_filter with the active query so
+    // only matching widgets render on the restored subpage.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = stub_widgets_page();
+            page.update_filter("file search", ctx);
+            assert_eq!(visible_widget_count(&page), 1);
 
-    // The fix: after `set_active_subpage` rebuilds the page, reapply
-    // `update_filter` with the active search query so only matching widgets
-    // render on the restored subpage.
-    page.rebuild();
-    page.update_filter("file search");
-    assert_eq!(
-        page.visible_indices(),
-        &vec![3],
-        "reapplying the filter after a rebuild keeps only matching widgets visible"
-    );
+            let mut rebuilt = stub_widgets_page();
+            rebuilt.update_filter("file search", ctx);
+            assert_eq!(
+                visible_widget_count(&rebuilt),
+                1,
+                "reapplying the filter after a rebuild keeps only matching widgets visible"
+            );
+        });
+    });
 }
 
 #[test]
-fn rebuild_with_reapply_handles_multi_word_and_case() {
-    let mut page = SimSubpage::new(vec![
-        "warp agent global ai toggle",
-        "active ai autosuggestions prompt",
-        "ai input model api key",
-        "file search fuzzy opener",
-        "voice input",
-    ]);
-    // Multi-word, case-insensitive, non-contiguous query.
-    page.update_filter("AI INPUT");
-    assert_eq!(page.visible_indices(), &vec![2]);
+fn reapply_handles_multi_word_and_case() {
+    // A multi-word, case-insensitive query survives the rebuild + reapply cycle.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = stub_widgets_page();
+            page.update_filter("AI INPUT", ctx);
+            assert_eq!(visible_widget_count(&page), 1);
 
-    page.rebuild();
-    page.update_filter("AI INPUT");
-    assert_eq!(page.visible_indices(), &vec![2]);
+            let mut rebuilt = stub_widgets_page();
+            rebuilt.update_filter("AI INPUT", ctx);
+            assert_eq!(visible_widget_count(&rebuilt), 1);
+        });
+    });
 }
 
 #[test]
 fn empty_query_after_reapply_shows_all_widgets() {
-    // When the search is cleared, the subpage should show all widgets again.
-    let mut page = SimSubpage::new(vec![
-        "warp agent global ai toggle",
-        "active ai autosuggestions prompt",
-        "ai input model api key",
-    ]);
-    page.update_filter("agent");
-    assert_eq!(page.visible_indices(), &vec![0]);
+    // When the search is cleared, the subpage shows all widgets again.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = stub_widgets_page();
+            page.update_filter("agent", ctx);
+            assert_eq!(visible_widget_count(&page), 1);
 
-    page.rebuild();
-    page.update_filter("");
-    assert_eq!(
-        page.visible_indices(),
-        &vec![0, 1, 2],
-        "an empty query restores every widget on the subpage"
-    );
+            let mut rebuilt = stub_widgets_page();
+            rebuilt.update_filter("", ctx);
+            assert_eq!(
+                visible_widget_count(&rebuilt),
+                5,
+                "an empty query restores every widget on the subpage"
+            );
+        });
+    });
 }

@@ -1563,9 +1563,6 @@ impl SettingsView {
                     {
                         self.ai_page_handle.update(ctx, |view, ctx| {
                             view.set_active_subpage(Some(subpage), ctx);
-                            // set_active_subpage rebuilds the PageType with
-                            // default unfiltered widget indices; reapply the
-                            // active search query so only matching widgets render.
                             view.update_filter(&search_query, ctx);
                         });
                     }
@@ -2254,13 +2251,6 @@ impl SettingsView {
     }
 
     /// Reapply the active search query to the currently-selected AI/Code subpage.
-    ///
-    /// `set_active_subpage` rebuilds the subpage's `PageType` with default
-    /// (unfiltered) widget indices, discarding any search filter previously
-    /// applied via `update_filter`. After a subpage switch that happens while a
-    /// search is active (auto-select within the search handler, arrow-key
-    /// navigation), the query must be reapplied so the rendered content shows
-    /// only matching widgets instead of every widget on the subpage.
     fn reapply_search_filter_to_active_subpage(
         &mut self,
         query: &str,
@@ -2325,9 +2315,6 @@ impl SettingsView {
         };
 
         self.set_and_refresh_current_page_internal(target_section, false, false, ctx);
-        // The navigation above rebuilt the target subpage's PageType via
-        // set_active_subpage, resetting its widget filter to default. Reapply
-        // the active search query so only matching widgets render.
         if is_search_active {
             self.reapply_search_filter_to_active_subpage(&search_query, ctx);
         }
@@ -2736,7 +2723,14 @@ impl TypedActionView for SettingsView {
     fn handle_action(&mut self, action: &SettingsAction, ctx: &mut ViewContext<Self>) {
         match action {
             SettingsAction::SelectAndRefresh(section) => {
+                let search_query = self.search_editor.as_ref(ctx).buffer_text(ctx);
+                let is_search_active = !search_query.is_empty();
+
                 self.set_and_refresh_current_page_internal(*section, false, true, ctx);
+
+                if is_search_active {
+                    self.reapply_search_filter_to_active_subpage(&search_query, ctx);
+                }
 
                 if *section == SettingsSection::MCPServers {
                     send_telemetry_from_ctx!(

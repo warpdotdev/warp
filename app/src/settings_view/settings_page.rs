@@ -1367,9 +1367,6 @@ impl From<usize> for MatchData {
 
 /// Returns true if every whitespace-delimited word in `query` appears somewhere
 /// in `terms` (case-insensitive). An empty query matches everything.
-///
-/// Extracted from `PageType::update_filter` so the subpage search-filter
-/// regression tests can exercise the real matching predicate.
 pub(super) fn search_terms_match(terms: &str, query: &str) -> bool {
     if query.is_empty() {
         return true;
