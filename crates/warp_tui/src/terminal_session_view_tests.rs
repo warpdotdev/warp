@@ -731,7 +731,7 @@ fn empty_typeahead_event_leaves_the_tui_input_unchanged() {
 }
 
 #[test]
-fn nld_slash_commands_execute_and_report_their_effects() {
+fn nld_slash_command_toggles_and_reports_its_effects() {
     App::test((), |mut app| async move {
         let _agent_mode = warp_core::features::FeatureFlag::AgentMode.override_enabled(true);
         let fixture = focus_test_fixture(&mut app);
@@ -740,13 +740,9 @@ fn nld_slash_commands_execute_and_report_their_effects() {
 
         view.update(&mut app, |view, ctx| {
             view.input_view.update(ctx, |input, ctx| {
-                input.set_text("/enable-natural-language-detection", ctx);
+                input.set_text("/natural-language-detection", ctx);
             });
-            view.execute_tui_slash_command(
-                &slash_commands::ENABLE_NATURAL_LANGUAGE_DETECTION,
-                None,
-                ctx,
-            );
+            view.execute_tui_slash_command(&slash_commands::NATURAL_LANGUAGE_DETECTION, None, ctx);
         });
 
         assert!(app.read(|ctx| {
@@ -769,13 +765,9 @@ fn nld_slash_commands_execute_and_report_their_effects() {
 
         view.update(&mut app, |view, ctx| {
             view.input_view.update(ctx, |input, ctx| {
-                input.set_text("/disable-natural-language-detection", ctx);
+                input.set_text("/natural-language-detection", ctx);
             });
-            view.execute_tui_slash_command(
-                &slash_commands::DISABLE_NATURAL_LANGUAGE_DETECTION,
-                None,
-                ctx,
-            );
+            view.execute_tui_slash_command(&slash_commands::NATURAL_LANGUAGE_DETECTION, None, ctx);
         });
         futures_lite::future::yield_now().await;
 
@@ -1327,7 +1319,7 @@ fn footer_does_not_render_credit_actions() {
 }
 
 #[test]
-fn footer_renders_bash_sections_without_model_or_usage() {
+fn footer_renders_shell_mode_sections_without_model_or_usage() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
@@ -1359,13 +1351,21 @@ fn footer_renders_bash_sections_without_model_or_usage() {
                 &builder,
             )
             .finish();
-            let lines = render_element(row, ctx, 120).to_lines();
+            let buffer = render_element(row, ctx, 120);
+            assert_eq!(
+                buffer[(0, 0)].fg,
+                builder
+                    .shell_command_accent_style()
+                    .fg
+                    .expect("shell command accent has a foreground")
+            );
+            let lines = buffer.to_lines();
             let line = lines.join("\n");
 
             assert_eq!(
                 lines,
                 vec![format!("{SHELL_MODE_HINT} /home/user/warp ↬ main • +3 -1")],
-                "bash footer leads with the shell-mode indicator and hides model/usage"
+                "shell footer leads with the shell-mode indicator and hides model/usage"
             );
             assert!(
                 line.starts_with(SHELL_MODE_HINT),
@@ -1373,11 +1373,11 @@ fn footer_renders_bash_sections_without_model_or_usage() {
             );
             assert!(
                 !line.contains("TestModel"),
-                "model segment is hidden in bash mode"
+                "model segment is hidden in shell mode"
             );
             assert!(
                 !line.contains("2.5 credits"),
-                "usage segment is hidden in bash mode"
+                "usage segment is hidden in shell mode"
             );
         });
     });

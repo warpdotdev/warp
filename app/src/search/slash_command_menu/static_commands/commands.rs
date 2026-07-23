@@ -79,20 +79,10 @@ pub const VIEW_LOGS: StaticCommand = StaticCommand {
     argument: None,
 };
 
-pub const ENABLE_NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
-    name: "/enable-natural-language-detection",
-    description: "Turn on natural language detection in the input",
-    kind: SlashCommandKind::EnableNaturalLanguageDetection,
-    supported_surfaces: SlashCommandSurfaces::TuiOnly,
-    availability: Availability::AI_ENABLED,
-    auto_enter_ai_mode: false,
-    argument: None,
-};
-
-pub const DISABLE_NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
-    name: "/disable-natural-language-detection",
-    description: "Turn off natural language detection in the input",
-    kind: SlashCommandKind::DisableNaturalLanguageDetection,
+pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
+    name: "/natural-language-detection",
+    description: "Toggle natural language detection",
+    kind: SlashCommandKind::NaturalLanguageDetection,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
@@ -837,8 +827,6 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         ADD_RULE,
         AUTO_APPROVE,
         COST,
-        DISABLE_NATURAL_LANGUAGE_DETECTION,
-        ENABLE_NATURAL_LANGUAGE_DETECTION,
         EXIT,
         FEEDBACK.clone(),
         INDEX,
@@ -854,6 +842,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
+        NATURAL_LANGUAGE_DETECTION,
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,

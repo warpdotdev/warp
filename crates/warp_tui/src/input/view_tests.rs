@@ -310,6 +310,40 @@ fn shell_mode_placeholder_hint_teaches_exit() {
     });
 }
 
+#[test]
+fn agent_mode_render_has_prompt_gutter() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            let (buffer, cursor, height) = render_view(&view, ctx);
+            assert!(buffer.to_lines()[0].starts_with("> "));
+            assert_eq!(cursor, Some((2, 0)));
+            assert_eq!(height, 1);
+
+            let prefix_style = TuiUiBuilder::from_app(ctx).accent_text_style();
+            let prefix = &buffer[(0, 0)];
+            assert_eq!(
+                prefix.fg,
+                prefix_style.fg.expect("accent style has a foreground")
+            );
+            assert_eq!(prefix.bg, warpui_core::elements::tui::Color::Reset);
+            assert_eq!(prefix.modifier, prefix_style.add_modifier);
+            assert!(
+                !prefix
+                    .modifier
+                    .contains(warpui_core::elements::tui::Modifier::BOLD)
+            );
+
+            type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
+            assert_eq!(
+                render_view(&view, ctx).2,
+                2,
+                "agent input should wrap at the gutter-narrowed width"
+            );
+        });
+    });
+}
+
 fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> TuiBuffer {
     let mut element = view.as_ref(ctx).render_element(ctx);
     let mut rendered_views = EntityIdMap::default();
@@ -335,6 +369,36 @@ fn render_input_buffer(view: &ViewHandle<TuiInputView>, ctx: &AppContext) -> Tui
     buffer
 }
 
+fn render_view(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+) -> (TuiBuffer, Option<(u16, u16)>, u16) {
+    let mut element = view.as_ref(ctx).render(ctx);
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(W, 20)),
+        &mut layout_ctx,
+        ctx,
+    );
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(
+            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+            &mut surface,
+            &mut paint_ctx,
+        );
+    }
+    let cursor = paint_ctx
+        .terminal_cursor()
+        .and_then(|point| Some((u16::try_from(point.x).ok()?, u16::try_from(point.y).ok()?)));
+    (buffer, cursor, size.height)
+}
 fn render_element_lines(
     mut element: Box<dyn TuiElement>,
     ctx: &AppContext,
@@ -1039,12 +1103,12 @@ fn type_str(view: &ViewHandle<TuiInputView>, ctx: &mut AppContext, s: &str) {
     dispatch(view, ctx, &actions);
 }
 
-/// Render the view, lay it out at width `W`, and return `(cursor, height)`.
+/// Render the editor, lay it out at width `W`, and return `(cursor, height)`.
 fn cursor_and_height(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
 ) -> (Option<(u16, u16)>, u16) {
-    let mut element = view.as_ref(ctx).render(ctx);
+    let mut element = view.as_ref(ctx).render_element(ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -2065,8 +2129,8 @@ fn wheel_outside_area_is_ignored() {
 // Mode *transitions* live on the shared `BlocklistAIInputModel` (exercised by
 // the app crate's `input_model` tests; the view tests drive it through
 // [`BlocklistAIInputModel::mock`]); these tests cover the view's `!` trigger,
-// the submit/clear split, and the shell-mode gutter geometry of the composed
-// `!`-affordance row (built directly via `TuiInputView::shell_element`).
+// the submit/clear split, and the shell-mode gutter geometry of the shared
+// input row.
 
 /// A `!` typed at the start of the buffer enters shell mode without inserting;
 /// subsequent text lands in the buffer.
@@ -2121,28 +2185,15 @@ fn autodetected_unlocked_shell_uses_shell_mode_ui() {
             });
 
             assert!(view.as_ref(ctx).is_shell_mode(ctx));
-            let mut element = view.as_ref(ctx).render(ctx);
-            let mut rendered_views = EntityIdMap::default();
-            let mut layout_ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let size = element.layout(
-                TuiConstraint::loose(TuiSize::new(W, 20)),
-                &mut layout_ctx,
-                ctx,
-            );
-            let area = TuiRect::new(0, 0, size.width, size.height);
-            let mut buffer = TuiBuffer::empty(area);
-            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-            {
-                let mut surface = TuiPaintSurface::new(&mut buffer);
-                element.render(
-                    TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
-                    &mut surface,
-                    &mut paint_ctx,
-                );
-            }
+            let (buffer, _, _) = render_view(&view, ctx);
             assert!(buffer.to_lines()[0].starts_with("! "));
+            assert_eq!(
+                buffer[(0, 0)].fg,
+                TuiUiBuilder::from_app(ctx)
+                    .shell_command_accent_style()
+                    .fg
+                    .expect("shell command accent has a foreground")
+            );
         });
     });
 }
@@ -2235,13 +2286,13 @@ fn keymap_context_flags_shell_mode() {
     });
 }
 
-/// Lays out the shell-mode composition (the `!` gutter row wrapping the
-/// editor) at width `W`, returning the boxed row element and its area.
-fn laid_out_shell_row(
+/// Lays out the shared input row at width `W`, returning the boxed element and
+/// its area.
+fn laid_out_input_row(
     view: &ViewHandle<TuiInputView>,
     ctx: &AppContext,
 ) -> (Box<dyn TuiElement>, TuiRect) {
-    let mut element = view.as_ref(ctx).shell_element(ctx);
+    let mut element = view.as_ref(ctx).render(ctx);
     let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -2275,8 +2326,8 @@ fn shell_mode_offsets_cursor_by_gutter() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
-            type_str(&view, ctx, "ab");
-            let (mut element, area) = laid_out_shell_row(&view, ctx);
+            type_str(&view, ctx, "!ab");
+            let (mut element, area) = laid_out_input_row(&view, ctx);
             let mut rendered_views = EntityIdMap::default();
             let mut buffer = TuiBuffer::empty(area);
             let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
@@ -2304,7 +2355,7 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
-            type_str(&view, ctx, "hello world");
+            type_str(&view, ctx, "!hello world");
             let action = {
                 let (mut element, area) = laid_out_shell_content_slot(&view, ctx);
                 let scene = paint_event_scene(&mut element, area);
@@ -2324,7 +2375,7 @@ fn shell_mode_offsets_mouse_mapping_by_gutter() {
             // A press on the gutter arms the `!` affordance's click, and the
             // release inside it fires the handler (which moves the cursor to
             // the buffer start); both halves are consumed.
-            let (mut row, area) = laid_out_shell_row(&view, ctx);
+            let (mut row, area) = laid_out_input_row(&view, ctx);
             let scene = paint_event_scene(row.as_mut(), area);
             let mut rendered_views = EntityIdMap::default();
             let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
@@ -2377,11 +2428,12 @@ fn shell_mode_wraps_at_gutter_narrowed_width() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
+            type_str(&view, ctx, "!");
             // W - 1 chars: fits one row at width W, wraps at width W - 2.
             type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
             let (_, area) = laid_out_element(&view, ctx);
             assert_eq!(area.height, 1);
-            let (_, area) = laid_out_shell_row(&view, ctx);
+            let (_, area) = laid_out_input_row(&view, ctx);
             assert_eq!(area.height, 2, "shell mode should wrap two columns earlier");
         });
     });
