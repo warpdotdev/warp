@@ -6,7 +6,12 @@ use warp::tui_export::{
     TuiMcpTransport,
 };
 
-use super::mcp_status_label;
+use super::{KEVIN_YANG_CREDIT, mcp_status_label};
+
+#[test]
+fn kevin_yang_credit_renders_correct_text() {
+    assert_eq!(KEVIN_YANG_CREDIT, "built bug free by kevin yang");
+}
 
 fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     TuiMcpServerSnapshot {

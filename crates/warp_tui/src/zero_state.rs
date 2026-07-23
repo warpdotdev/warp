@@ -32,6 +32,9 @@ use crate::zero_state_animation::{StarfieldState, ZeroStateAnimationElement};
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
 
+/// Subtitle shown below the version line in the zero state.
+const KEVIN_YANG_CREDIT: &str = "built bug free by kevin yang";
+
 /// Fixed width for the text column.  Using a pinned min=max prevents the
 /// animation boundary from shifting as content loads asynchronously at startup
 /// (changelog, MCP status, project context).
@@ -155,7 +158,13 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
                 .truncate()
                 .finish(),
         )
-        .child(render_version_line(builder, app));
+        .child(render_version_line(builder, app))
+        .child(
+            TuiText::new(KEVIN_YANG_CREDIT)
+                .with_style(muted)
+                .truncate()
+                .finish(),
+        );
 
     let bullets = changelog_bullets(app);
     if !bullets.is_empty() {
