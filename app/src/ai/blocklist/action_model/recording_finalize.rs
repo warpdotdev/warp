@@ -31,17 +31,20 @@ impl FinalizeReason {
         completion_status: computer_use::RecordingCompletionStatus,
     ) -> RecordingTerminationReason {
         match self {
-            // Agent explicitly stopped the recording: complete = clean stop,
-            // stopped-early = the underlying capture ended on its own before
-            // the stop call arrived (could be a limit race or a capture issue);
-            // we can't distinguish here, so use EarlyFinish rather than
-            // EncodingFailed which would overcount failures.
+            // Agent explicitly stopped the recording.
+            // Completed = clean stop (agent and ffmpeg both agree the recording ended).
+            // StoppedEarly = ffmpeg had already finalized before the agent's stop
+            //   call arrived, indicating an encoding or premature-finalization failure.
+            //   Limit races come through FinalizeReason::LimitReached (caught by
+            //   poll_active_exit -> RecordingExitKind::LimitReached) before the
+            //   agent ever issues StopRecording, so StoppedEarly here is a genuine
+            //   encoding/finalization issue.
             FinalizeReason::StoppedByAgent => match completion_status {
                 computer_use::RecordingCompletionStatus::Completed => {
                     RecordingTerminationReason::Other
                 }
                 computer_use::RecordingCompletionStatus::StoppedEarly => {
-                    RecordingTerminationReason::EarlyFinish
+                    RecordingTerminationReason::EncodingFailed
                 }
             },
             // Agent/conversation finished without issuing StopRecording.

@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime};
 
 use ai::agent::action_result::{
     AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
-    RecordingStarted, RecordingStopped, RequestComputerUseResult, SendMessageToAgentResult,
-    StartRecordingResult, StopRecordingResult, UseComputerResult,
+    RecordingStarted, RecordingStopped, RecordingTerminationReason, RequestComputerUseResult,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult, UseComputerResult,
 };
 use ai::skills::{ParsedSkill, SkillPathOrigin};
 use chrono::{DateTime, Local, TimeZone};
@@ -19,6 +19,7 @@ use persistence::model::AgentConversationData;
 use warp_core::command::ExitCode;
 use warp_multi_agent_api as api;
 use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
+use api::stop_recording_result::TerminationReason;
 
 use crate::ai::agent::api::convert_from::{
     ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
@@ -1730,16 +1731,15 @@ fn proto_duration_to_duration(duration: &prost_types::Duration) -> Duration {
     Duration::new(duration.seconds.max(0) as u64, duration.nanos.max(0) as u32)
 }
 
-fn convert_recording_termination_reason(
-    reason: i32,
-) -> ai::agent::action_result::RecordingTerminationReason {
-    use ai::agent::action_result::RecordingTerminationReason;
-    use api::stop_recording_result::TerminationReason;
-    // Split Err (unknown wire value) from Ok-but-unrecognized so newly added
-    // proto enum values cause a compile error until they are mapped here.
+fn convert_recording_termination_reason(reason: i32) -> RecordingTerminationReason {
+    // Err(_) = unknown wire value (e.g. a future proto value from a newer server).
+    // Degrade gracefully to Unspecified rather than panicking — this matches
+    // proto3 semantics for unknown enum values and supports legacy clients/servers.
     let Ok(variant) = TerminationReason::try_from(reason) else {
         return RecordingTerminationReason::Unspecified;
     };
+    // Exhaustive match: adding a new proto enum value will cause a compile error
+    // here until it is explicitly mapped to a client-side variant.
     match variant {
         TerminationReason::Unspecified => RecordingTerminationReason::Unspecified,
         TerminationReason::MaxDuration => RecordingTerminationReason::MaxDuration,
