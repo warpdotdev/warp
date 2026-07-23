@@ -370,9 +370,20 @@ where
     match std::fs::create_dir_all(path) {
         Ok(()) => return Ok(()),
         Err(error) if error.kind() != ErrorKind::PermissionDenied => {
+            tracing::warn!(
+                target: "build_cache",
+                error = ?error,
+                "failed to create cache directory"
+            );
             return Err(CacheSetupError::RootCreationFailed);
         }
-        Err(_) => {}
+        Err(error) => {
+            tracing::warn!(
+                target: "build_cache",
+                error = ?error,
+                "cache directory creation was denied; trying sudo fallback"
+            );
+        }
     }
 
     #[cfg(not(unix))]
@@ -384,22 +395,36 @@ where
     #[cfg(unix)]
     {
         if !has_command("sudo") {
+            tracing::warn!(
+                target: "build_cache",
+                "sudo is unavailable; cannot create cache directory"
+            );
             return Err(CacheSetupError::RootCreationFailed);
         }
 
         let owner = current_owner();
-        for ancestor in missing_ancestors(path) {
-            let mut mkdir = Command::new_with_process_group("sudo");
-            mkdir.args(["mkdir"]).arg(&ancestor);
-            run_command(mkdir)
-                .await
-                .map_err(|_| CacheSetupError::RootCreationFailed)?;
+        let mut mkdir = Command::new_with_process_group("sudo");
+        mkdir.args(["-n", "mkdir", "-p"]).arg(path);
+        if let Err(error) = run_command(mkdir).await {
+            tracing::warn!(
+                target: "build_cache",
+                operation = "sudo mkdir",
+                error = ?error,
+                "sudo cache directory creation failed"
+            );
+            return Err(CacheSetupError::RootCreationFailed);
+        }
 
-            let mut chown = Command::new_with_process_group("sudo");
-            chown.args(["chown", &owner]).arg(&ancestor);
-            run_command(chown)
-                .await
-                .map_err(|_| CacheSetupError::RootCreationFailed)?;
+        let mut chown = Command::new_with_process_group("sudo");
+        chown.args(["-n", "chown", &owner]).arg(path);
+        if let Err(error) = run_command(chown).await {
+            tracing::warn!(
+                target: "build_cache",
+                operation = "sudo chown",
+                error = ?error,
+                "sudo cache directory ownership update failed"
+            );
+            return Err(CacheSetupError::RootCreationFailed);
         }
         Ok(())
     }
@@ -407,20 +432,9 @@ where
 
 #[cfg(unix)]
 fn current_owner() -> String {
-    // These libc calls only read the process credentials and have no unsafe preconditions.
-    let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    let uid = nix::unistd::geteuid().as_raw();
+    let gid = nix::unistd::getegid().as_raw();
     format!("{uid}:{gid}")
-}
-
-#[cfg(unix)]
-fn missing_ancestors(path: &Path) -> Vec<PathBuf> {
-    let mut missing = path
-        .ancestors()
-        .take_while(|ancestor| !ancestor.exists())
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
-    missing.reverse();
-    missing
 }
 
 /// Default implementation of the `run_command` hook for [`setup_cache`].

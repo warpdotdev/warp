@@ -12,11 +12,12 @@ use futures::executor::block_on;
 use instant::Instant;
 use warp_errors::ErrorExt as _;
 
+#[cfg(unix)]
+use super::current_owner;
 use super::{
     CacheScope, CacheSetupError, DetectedCacheModes, RepoCacheKey, RepoIdentity,
     RepositoryCacheSource, aggregate_mode_stats, construct_plan, create_cache_dir_all,
-    create_retained_scratch_directory, current_owner, is_valid_env_name, run_command_with_timeout,
-    setup_cache,
+    create_retained_scratch_directory, is_valid_env_name, run_command_with_timeout, setup_cache,
 };
 use crate::spacectl::{Mount, MountInput, MountOutput, MountResponse};
 
@@ -69,7 +70,7 @@ fn command_args(command: &Command) -> Vec<OsString> {
 }
 #[cfg(unix)]
 #[test]
-fn permission_denied_cache_directory_uses_sudo_mkdir_and_chown() {
+fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() {
     use std::os::unix::fs::PermissionsExt as _;
 
     if !super::has_command("sudo") {
@@ -93,24 +94,20 @@ fn permission_denied_cache_directory_uses_sudo_mkdir_and_chown() {
 
     assert_eq!(result, Ok(()));
     let commands = commands.borrow();
-    assert_eq!(commands.len(), 4);
-    let parent = target.parent().unwrap().to_path_buf().into_os_string();
-    assert_eq!(commands[0], [OsString::from("mkdir"), parent.clone()]);
+    assert_eq!(commands.len(), 2);
     assert_eq!(
-        commands[1],
+        commands[0],
         [
-            OsString::from("chown"),
-            OsString::from(current_owner()),
-            parent
+            OsString::from("-n"),
+            OsString::from("mkdir"),
+            OsString::from("-p"),
+            target.clone().into_os_string()
         ]
     );
     assert_eq!(
-        commands[2],
-        [OsString::from("mkdir"), target.clone().into_os_string()]
-    );
-    assert_eq!(
-        commands[3],
+        commands[1],
         [
+            OsString::from("-n"),
             OsString::from("chown"),
             OsString::from(current_owner()),
             target.into_os_string()
