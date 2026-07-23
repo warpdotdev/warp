@@ -18,8 +18,8 @@ use crate::agent::action_result::{
     InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
     ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
     RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
-    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, StartRecordingResult,
-    StopRecordingResult, SuggestNewConversationResult, SuggestPromptResult,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult,
+    SuggestNewConversationResult, SuggestPromptResult,
     TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
     WaitForEventsResult, WriteToLongRunningShellCommandResult,
 };
@@ -168,16 +168,6 @@ pub enum AIAgentActionType {
 
     FetchConversation {
         conversation_id: String,
-    },
-    // TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 action support once
-    // old preview orchestration history no longer needs parse/display/result compatibility.
-    // Linear issue: QUALITY-788.
-    StartAgent {
-        version: StartAgentVersion,
-        name: String,
-        prompt: String,
-        execution_mode: StartAgentExecutionMode,
-        lifecycle_subscription: Option<Vec<LifecycleEventType>>,
     },
 
     SendMessageToAgent {
@@ -430,11 +420,6 @@ impl AIAgentActionType {
             Self::FetchConversation { .. } => {
                 AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled)
             }
-            Self::StartAgent { version, .. } => {
-                AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                    version: *version,
-                })
-            }
             Self::SendMessageToAgent { .. } => {
                 AIAgentActionResultType::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             }
@@ -489,7 +474,6 @@ impl AIAgentActionType {
             Self::StopRecording { .. } => "Stop recording".to_string(),
             Self::ReadSkill(_) => "Read skill".to_string(),
             Self::FetchConversation { .. } => "Fetch conversation".to_string(),
-            Self::StartAgent { name, .. } => format!("Start agent: {name}"),
             Self::SendMessageToAgent { subject, .. } => format!("Send message: {subject}"),
             Self::TransferShellCommandControlToUser { .. } => {
                 "Transfer shell command control to user".to_string()
@@ -660,9 +644,6 @@ impl Display for AIAgentActionType {
             }
             AIAgentActionType::FetchConversation { conversation_id } => {
                 write!(f, "FetchConversation: {conversation_id}")
-            }
-            AIAgentActionType::StartAgent { name, .. } => {
-                write!(f, "StartAgent: {name}")
             }
             AIAgentActionType::SendMessageToAgent {
                 addresses, subject, ..

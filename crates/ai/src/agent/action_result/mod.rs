@@ -92,8 +92,6 @@ pub enum AIAgentActionResultType {
     /// The result of fetching a conversation's tasks.
     FetchConversation(FetchConversationResult),
 
-    /// The result of starting a child agent.
-    StartAgent(StartAgentResult),
 
     /// The result of sending a message to another agent.
     SendMessageToAgent(SendMessageToAgentResult),
@@ -123,12 +121,6 @@ impl Display for ReadFilesFailedFile {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum StartAgentVersion {
-    #[default]
-    V1,
-    V2,
-}
 
 impl AIAgentActionResultType {
     /// Returns the effective command string for command-related results, if any.
@@ -185,7 +177,6 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::StartRecording(result) => result.fmt(f),
             AIAgentActionResultType::StopRecording(result) => result.fmt(f),
             AIAgentActionResultType::FetchConversation(result) => result.fmt(f),
-            AIAgentActionResultType::StartAgent(result) => result.fmt(f),
             AIAgentActionResultType::SendMessageToAgent(result) => result.fmt(f),
             AIAgentActionResultType::TransferShellCommandControlToUser(result) => result.fmt(f),
             AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
@@ -793,7 +784,6 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::StartRecording(_) => "The result of starting a recording",
             AIAgentActionResultType::StopRecording(_) => "The result of stopping a recording",
             AIAgentActionResultType::FetchConversation(_) => "The fetched conversation tasks",
-            AIAgentActionResultType::StartAgent(_) => "The result of starting a child agent",
             AIAgentActionResultType::SendMessageToAgent(_) => "The result of sending a message",
             AIAgentActionResultType::TransferShellCommandControlToUser(_) => {
                 "The result of transferring shell command control to user"
@@ -839,7 +829,6 @@ impl AIAgentActionResultType {
             | Self::OpenCodeReview
             | Self::ReadSkill(ReadSkillResult::Success { .. })
             | Self::FetchConversation(FetchConversationResult::Success { .. })
-            | Self::StartAgent(StartAgentResult::Success { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Success { .. })
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Snapshot { .. }
@@ -875,7 +864,6 @@ impl AIAgentActionResultType {
             | Self::StartRecording(StartRecordingResult::Error(_))
             | Self::StopRecording(StopRecordingResult::Error(_))
             | Self::FetchConversation(FetchConversationResult::Error(_))
-            | Self::StartAgent(StartAgentResult::Error { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Error(_))
             | Self::AskUserQuestion(AskUserQuestionResult::Error(_))
             | Self::TransferShellCommandControlToUser(
@@ -927,7 +915,6 @@ impl AIAgentActionResultType {
             )
             | Self::ReadSkill(ReadSkillResult::Cancelled)
             | Self::FetchConversation(FetchConversationResult::Cancelled)
-            | Self::StartAgent(StartAgentResult::Cancelled { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             // SkippedByAutoApprove is intentionally excluded: the agent should continue.
             | Self::AskUserQuestion(AskUserQuestionResult::Cancelled)
@@ -1327,49 +1314,6 @@ impl Display for FetchConversationResult {
     }
 }
 
-// TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 result support once
-// old preview orchestration history no longer needs parse/display/result compatibility.
-// Linear issue: QUALITY-788.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum StartAgentResult {
-    Success {
-        agent_id: String,
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-    Error {
-        error: String,
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-    Cancelled {
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-}
-
-impl StartAgentResult {
-    /// Returns which start-agent tool schema version produced this result.
-    pub fn version(&self) -> StartAgentVersion {
-        match self {
-            StartAgentResult::Success { version, .. }
-            | StartAgentResult::Error { version, .. }
-            | StartAgentResult::Cancelled { version } => *version,
-        }
-    }
-}
-
-impl Display for StartAgentResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StartAgentResult::Success { agent_id, .. } => {
-                write!(f, "Started agent with id {agent_id}")
-            }
-            StartAgentResult::Error { error, .. } => write!(f, "Start agent error: {error}"),
-            StartAgentResult::Cancelled { .. } => write!(f, "Start agent cancelled"),
-        }
-    }
-}
 
 /// The terminal outcome of an orchestrate tool call.
 ///

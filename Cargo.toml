@@ -343,7 +343,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "8b219c82aae7ce7bdcc399a95e86003fca1e121d" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "68af395355d6d0f356a0aca3118d633b2f34484b" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -566,7 +566,7 @@ tikv-jemalloc-sys = { git = "https://github.com/warpdotdev/jemallocator.git", re
 
 [patch."https://github.com/warpdotdev/warp-proto-apis.git"]
 # Uncomment for local development of warp-proto-apis
-# warp_multi_agent_api = { path = "../warp-proto-apis/apis/multi_agent/v1/gen/rust" }
+warp_multi_agent_api = { path = "../warp-proto-apis/apis/multi_agent/v1/gen/rust" }
 
 [patch."https://github.com/warpdotdev/session-sharing-protocol.git"]
 # Uncomment for local development of session-sharing-protocol
