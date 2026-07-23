@@ -669,10 +669,11 @@ impl TextLayoutSystem {
             }
         }
 
-        if let Source::File(path) = &source {
-            if BIT7_CHECKED_FONTS
-                .get(&(path.clone(), index))
-                .is_some_and(|r| !*r)
+        match &source {
+            Source::File(path)
+                if BIT7_CHECKED_FONTS
+                    .get(&(path.clone(), index))
+                    .is_some_and(|r| !*r) =>
             {
                 log::info!(
                     "bit7 glyph flag scan: skipped (cached corrupted), path={}, index={index}",
@@ -680,16 +681,18 @@ impl TextLayoutSystem {
                 );
                 bail!("Font face has corrupted glyphs (bit 7 set on simple glyph flags)");
             }
+            _ => {}
         }
 
         // Remove any faces from fontdb that the background scanner found corrupted.
         self.drain_corrupted_fonts();
 
         // Queue a background scan for paths not yet fully scanned.
-        if let Source::File(path) = &source {
-            if !SCANNED_PATHS.contains(path) {
+        match &source {
+            Source::File(path) if !SCANNED_PATHS.contains(path) => {
                 background_scan_tx().send(path.clone()).ok();
             }
+            _ => {}
         }
 
         // TODO(alokedesai): Consider using FontDB's `make_shared_font_data` here. FontDB creates a temporary memory
