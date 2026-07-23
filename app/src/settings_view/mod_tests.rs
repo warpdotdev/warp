@@ -233,10 +233,10 @@ fn subpage_from_str_parses_display_names() {
     );
 }
 
-// ── Subpage search filter simulation ────────────────────────────────────────
-// These tests simulate the per-subpage search filtering logic used in
-// handle_search_editor_event: each subpage should only be visible if its
-// own widgets' search terms match, not if a sibling subpage's terms match.
+// The subpage rebuild/restore regression coverage now drives the real PageType
+// cycle — rebuild via PageType::new_uncategorized (what set_active_subpage does),
+// reapply via update_filter, and assertions via get_filtered() — against the real
+// Code and AI widgets. See code_page_tests.rs and ai_page_tests.rs.
 
 /// Helper: given a map of subpage→MatchData, returns which subpages are visible.
 fn visible_subpages(
