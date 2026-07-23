@@ -69,6 +69,7 @@ unicode-width.workspace = true
 vec1.workspace = true
 warp = { workspace = true, features = ["image_as_context", "tui"] }
 warp_channel_config.workspace = true
+warp_completer.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
 warp_editor.workspace = true
