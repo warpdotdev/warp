@@ -2276,17 +2276,19 @@ impl AgentDriver {
         let additional_source_repos = foreground
             .spawn(|me, _| me.additional_source_repos.clone())
             .await?;
-        let environment_source_repos = environment_opt
+        let setup_commands = environment_opt
             .as_ref()
-            .map(AmbientAgentEnvironment::effective_repos)
+            .map(|environment| environment.setup_commands.clone())
             .unwrap_or_default();
         let source_repos = environment::merge_repos_deduped(
-            environment_source_repos,
-            additional_source_repos.clone(),
+            environment_opt
+                .as_ref()
+                .map(AmbientAgentEnvironment::effective_repos)
+                .unwrap_or_default(),
+            additional_source_repos,
         );
-        let has_environment = environment_opt.is_some();
 
-        if has_environment || !source_repos.is_empty() {
+        if environment_opt.is_some() || !source_repos.is_empty() {
             log::info!("Loading environment...");
             environment_skill_repos = source_repos.clone();
 
@@ -2315,17 +2317,17 @@ impl AgentDriver {
 
             let harness = task.harness.harness();
             let setup_events_for_environment = setup_events.clone();
-            let additional_source_repos_for_prepare = additional_source_repos;
+            let source_repos_for_prepare = source_repos;
             foreground
                 .spawn(move |me, ctx| {
                     let working_dir = me.working_dir.clone();
                     me.terminal_driver.update(ctx, |_, ctx| {
-                        environment::prepare_environment_with_repos(
-                            environment_opt,
+                        environment::prepare_environment(
+                            source_repos_for_prepare,
+                            setup_commands,
                             working_dir,
                             false, /* is_sandbox */
                             harness,
-                            additional_source_repos_for_prepare,
                             setup_events_for_environment,
                             ctx,
                         )

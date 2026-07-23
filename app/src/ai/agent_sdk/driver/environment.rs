@@ -22,7 +22,7 @@ use super::AgentDriverError;
 use super::cache_setup;
 use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, CodeForge, SourceRepo};
+use crate::ai::cloud_environments::{CodeForge, SourceRepo};
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
@@ -54,48 +54,17 @@ pub enum PrepareEnvironmentError {
 /// caller rather than a path-prefix inference, so non-sandbox callers that
 /// happen to pass a path like `/home/agent/...` don't silently flip into
 /// sandbox-only mode.
-pub fn prepare_environment(
-    environment: AmbientAgentEnvironment,
+pub(crate) fn prepare_environment(
+    source_repos: Vec<SourceRepo>,
+    setup_commands: Vec<String>,
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
-    additional_source_repos: Vec<SourceRepo>,
-    setup_events: SetupClientEventReporter,
-    ctx: &mut ModelContext<TerminalDriver>,
-) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
-    prepare_environment_with_repos(
-        Some(environment),
-        working_dir,
-        is_sandbox,
-        harness,
-        additional_source_repos,
-        setup_events,
-        ctx,
-    )
-}
-
-pub(super) fn prepare_environment_with_repos(
-    environment: Option<AmbientAgentEnvironment>,
-    working_dir: PathBuf,
-    is_sandbox: bool,
-    harness: Harness,
-    additional_source_repos: Vec<SourceRepo>,
     setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
     async move {
-        let source_repos = merge_repos_deduped(
-            environment
-                .as_ref()
-                .map(AmbientAgentEnvironment::effective_repos)
-                .unwrap_or_default(),
-            additional_source_repos,
-        );
-        let setup_commands = environment
-            .map(|environment| environment.setup_commands)
-            .unwrap_or_default();
-
         // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
         // have their own methods for navigating a codebase.
         let should_index_codebase = harness == Harness::Oz;

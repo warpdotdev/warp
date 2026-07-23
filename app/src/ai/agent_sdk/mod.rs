@@ -1300,18 +1300,16 @@ impl AgentDriverRunner {
         ) = match task_metadata_result {
             Ok(Some(task_metadata)) => {
                 // The task's harness is stored on the snapshot; if absent, it's the default Oz.
-                let task_harness_config = task_metadata
-                    .agent_config_snapshot
+                let agent_config_snapshot = task_metadata.agent_config_snapshot;
+                let task_harness_config = agent_config_snapshot
                     .as_ref()
                     .and_then(|c| c.harness.as_ref());
                 let task_harness = task_harness_config
                     .map(|h| h.harness_type)
                     .unwrap_or(Harness::Oz);
                 let task_harness_model_config = task_harness_config.and_then(|h| h.model_config());
-                let additional_source_repos = task_metadata
-                    .agent_config_snapshot
-                    .as_ref()
-                    .and_then(|config| config.additional_source_repos.clone())
+                let additional_source_repos = agent_config_snapshot
+                    .and_then(|config| config.additional_source_repos)
                     .unwrap_or_default();
                 (
                     task_metadata.parent_run_id,
