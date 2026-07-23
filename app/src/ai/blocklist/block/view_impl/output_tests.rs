@@ -18,8 +18,8 @@ use super::{
     stop_recording_card_text,
 };
 use crate::ai::agent::{
-    RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
-    UploadArtifactResult,
+    RecordingStarted, RecordingStopped, RecordingTerminationReason, StartRecordingResult,
+    StopRecordingResult, UploadArtifactResult,
 };
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
@@ -129,7 +129,7 @@ fn stop_recording_card_text_includes_complete_duration() {
         height_px: 720,
         size_bytes: 42,
         completion_status: computer_use::RecordingCompletionStatus::Completed,
-        termination_reason: "Stopped by agent".to_string(),
+        termination_reason: RecordingTerminationReason::Other,
     });
 
     let text = stop_recording_card_text(Some(&result));
@@ -152,7 +152,7 @@ fn stop_recording_card_text_includes_partial_duration_without_raw_reason() {
         height_px: 720,
         size_bytes: 42,
         completion_status: computer_use::RecordingCompletionStatus::StoppedEarly,
-        termination_reason: "internal raw reason".to_string(),
+        termination_reason: RecordingTerminationReason::Other,
     });
 
     let text = stop_recording_card_text(Some(&result));

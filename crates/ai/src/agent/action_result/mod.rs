@@ -1266,6 +1266,20 @@ pub enum StopRecordingResult {
     Cancelled,
 }
 
+/// The stable reason a recording ended. Mirrors the `TerminationReason` enum
+/// in `StopRecordingResult` of `warp-proto-apis`; kept in sync so the
+/// conversion to proto can use a direct integer cast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingTerminationReason {
+    Unspecified = 0,
+    MaxDuration = 1,
+    MaxSize = 2,
+    ClientCanceled = 3,
+    EncodingFailed = 4,
+    UploadFailed = 5,
+    Other = 6,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordingStopped {
     pub artifact_uid: String,
@@ -1274,7 +1288,7 @@ pub struct RecordingStopped {
     pub height_px: i32,
     pub size_bytes: i64,
     pub completion_status: computer_use::RecordingCompletionStatus,
-    pub termination_reason: String,
+    pub termination_reason: RecordingTerminationReason,
 }
 
 impl Display for StopRecordingResult {

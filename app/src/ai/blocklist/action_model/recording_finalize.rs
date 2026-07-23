@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use ai::agent::action_result::{RecordingStopped, StopRecordingResult};
+use ai::agent::action_result::{RecordingStopped, RecordingTerminationReason, StopRecordingResult};
 use futures::channel::oneshot;
 use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -29,28 +29,26 @@ impl FinalizeReason {
     fn termination_reason(
         self,
         completion_status: computer_use::RecordingCompletionStatus,
-    ) -> String {
+    ) -> RecordingTerminationReason {
         match self {
+            // Agent explicitly stopped the recording: complete = clean stop,
+            // stopped-early = underlying capture finished before the stop call.
             FinalizeReason::StoppedByAgent => match completion_status {
                 computer_use::RecordingCompletionStatus::Completed => {
-                    "Stopped by agent".to_string()
+                    RecordingTerminationReason::Other
                 }
                 computer_use::RecordingCompletionStatus::StoppedEarly => {
-                    "Recording stopped before the agent requested it".to_string()
+                    RecordingTerminationReason::EncodingFailed
                 }
             },
-            FinalizeReason::AgentFinished => {
-                "Finalized because the agent finished without stopping the recording".to_string()
-            }
-            FinalizeReason::LimitReached => {
-                "Stopped at the configured duration or size limit".to_string()
-            }
-            FinalizeReason::FfmpegExited => {
-                "Capture process exited before the recording was stopped".to_string()
-            }
-            FinalizeReason::Cancelled => {
-                "Recording was interrupted when the conversation was cancelled".to_string()
-            }
+            // Agent finished without issuing StopRecording.
+            FinalizeReason::AgentFinished => RecordingTerminationReason::Other,
+            // Hit server-configured max_duration or max_size.
+            FinalizeReason::LimitReached => RecordingTerminationReason::MaxDuration,
+            // ffmpeg exited on its own (encoding crash / pipe failure).
+            FinalizeReason::FfmpegExited => RecordingTerminationReason::EncodingFailed,
+            // Conversation was cancelled before the recording could finish.
+            FinalizeReason::Cancelled => RecordingTerminationReason::ClientCanceled,
         }
     }
 }

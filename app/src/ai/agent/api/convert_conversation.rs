@@ -1690,7 +1690,9 @@ pub(crate) fn convert_tool_call_result_to_input(
                         completion_status: convert_recording_completion_status(
                             success.completion_status,
                         ),
-                        termination_reason: success.termination_reason.clone(),
+                        termination_reason: convert_recording_termination_reason(
+                            success.termination_reason,
+                        ),
                     })
                 }
                 Some(api::stop_recording_result::Result::Error(error)) => {
@@ -1724,6 +1726,22 @@ fn proto_timestamp_to_system_time(ts: &prost_types::Timestamp) -> SystemTime {
 
 fn proto_duration_to_duration(duration: &prost_types::Duration) -> Duration {
     Duration::new(duration.seconds.max(0) as u64, duration.nanos.max(0) as u32)
+}
+
+fn convert_recording_termination_reason(
+    reason: i32,
+) -> ai::agent::action_result::RecordingTerminationReason {
+    use ai::agent::action_result::RecordingTerminationReason;
+    use api::stop_recording_result::TerminationReason;
+    match TerminationReason::try_from(reason) {
+        Ok(TerminationReason::MaxDuration) => RecordingTerminationReason::MaxDuration,
+        Ok(TerminationReason::MaxSize) => RecordingTerminationReason::MaxSize,
+        Ok(TerminationReason::ClientCanceled) => RecordingTerminationReason::ClientCanceled,
+        Ok(TerminationReason::EncodingFailed) => RecordingTerminationReason::EncodingFailed,
+        Ok(TerminationReason::UploadFailed) => RecordingTerminationReason::UploadFailed,
+        Ok(TerminationReason::Other) => RecordingTerminationReason::Other,
+        _ => RecordingTerminationReason::Unspecified,
+    }
 }
 
 fn convert_recording_completion_status(status: i32) -> computer_use::RecordingCompletionStatus {

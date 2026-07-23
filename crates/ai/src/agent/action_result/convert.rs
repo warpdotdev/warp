@@ -1478,7 +1478,7 @@ impl TryFrom<StopRecordingResult> for api::request::input::tool_call_result::Res
                                 completion_status: convert_completion_status(
                                     stopped.completion_status,
                                 ) as i32,
-                                termination_reason: stopped.termination_reason,
+                                termination_reason: stopped.termination_reason as i32,
                             },
                         )),
                     },
