@@ -181,10 +181,11 @@ impl crate::Actor for Actor {
         // window. This keeps behavior identical to the pre-existing implementation.
         let background = options.background_enabled;
         // When a recording is live, the sink collects each resolved pointer event
-        // (in capture-space pixels) for the post-stop click/drag burn-in.
-        // `last_capture` lets a release reuse the last resolved point.
+        // (in capture-space pixels) for the post-stop click/drag burn-in. The
+        // sink's recording-scoped `PointerSession` persists the last resolved
+        // point and active button across calls so a split-call drag's release is
+        // recorded at the right coordinate.
         let pointer_sink = options.pointer_sink.take();
-        let mut last_capture: Option<Vector2I> = None;
 
         // Validate every target and create the agent seat up front, so a failure cannot leave
         // the batch half-applied.
@@ -251,9 +252,8 @@ impl crate::Actor for Actor {
                         last_mouse_position = Some(*at);
                         record_down_move(
                             pointer_sink.as_ref(),
-                            &mut last_capture,
                             PointerEventKind::Down,
-                            Some(button.clone()),
+                            Some(*button),
                             target,
                             *at,
                             *at,
@@ -261,14 +261,13 @@ impl crate::Actor for Actor {
                     }
                     Action::MouseUp { button } => {
                         screen_mouse.button_up(button)?;
-                        record_up(pointer_sink.as_ref(), &last_capture, button.clone());
+                        record_up(pointer_sink.as_ref(), *button);
                     }
                     Action::MouseMove { to } => {
                         screen_mouse.move_to(*to)?;
                         last_mouse_position = Some(*to);
                         record_down_move(
                             pointer_sink.as_ref(),
-                            &mut last_capture,
                             PointerEventKind::Move,
                             None,
                             target,
@@ -319,9 +318,8 @@ impl crate::Actor for Actor {
                             last_mouse_position = Some(at);
                             record_down_move(
                                 pointer_sink.as_ref(),
-                                &mut last_capture,
                                 PointerEventKind::Down,
-                                Some(button.clone()),
+                                Some(*button),
                                 target,
                                 local,
                                 at,
@@ -329,7 +327,7 @@ impl crate::Actor for Actor {
                         }
                         Action::MouseUp { button } => {
                             agent_mouse.button_up(button)?;
-                            record_up(pointer_sink.as_ref(), &last_capture, button.clone());
+                            record_up(pointer_sink.as_ref(), *button);
                         }
                         Action::MouseMove { to } => {
                             let local = *to;
@@ -339,7 +337,6 @@ impl crate::Actor for Actor {
                             last_mouse_position = Some(to);
                             record_down_move(
                                 pointer_sink.as_ref(),
-                                &mut last_capture,
                                 PointerEventKind::Move,
                                 None,
                                 target,
@@ -455,13 +452,14 @@ fn resolve_capture_point(
     }
 }
 
-/// Records a resolved press/move into the pointer sink, tracking the last point
-/// so a later release (which carries no coordinate) can reuse it. A down or move
-/// whose surface does not match the recording clears the last point so a later
-/// release is not recorded at a stale coordinate.
+/// Records a resolved press/move into the pointer sink, updating the recording-
+/// scoped pointer session so a later release (which carries no coordinate) can
+/// reuse the last point — even when that release arrives in a later
+/// `UseComputer` call. A down or move whose surface does not match the
+/// recording clears the session so a following release is not recorded at a
+/// stale coordinate.
 fn record_down_move(
     pointer_sink: Option<&PointerSink>,
-    last: &mut Option<Vector2I>,
     kind: PointerEventKind,
     button: Option<MouseButton>,
     action_target: Target,
@@ -473,26 +471,28 @@ fn record_down_move(
     };
     match resolve_capture_point(sink.recording_target, action_target, local, root) {
         Some(point) => {
-            *last = Some(point);
+            sink.session.record_press_or_move(kind, button, point);
             push_pointer_event(sink, point, kind, button);
         }
         None => {
             // Any unmatched down or move (a surface that isn't the recorded
-            // one) invalidates the last point, so a following release is not
-            // recorded at a stale in-frame coordinate.
-            *last = None;
+            // one) invalidates the active pointer state, so a following release
+            // is not recorded at a stale in-frame coordinate.
+            sink.session.clear();
         }
     }
 }
 
-/// Records a release at the last resolved point (a release carries no coordinate
-/// of its own). Omitted when there is no last point, for example when the press
-/// was on a non-recorded surface.
-fn record_up(pointer_sink: Option<&PointerSink>, last: &Option<Vector2I>, button: MouseButton) {
+/// Records a release at the session's last resolved point (a release carries no
+/// coordinate of its own), but only when the released button matches the active
+/// press. Omitted when there is no matching active press — for example when the
+/// press was on a non-recorded surface, in a failed/cancelled call whose session
+/// was reset, or for a button that was never pressed.
+fn record_up(pointer_sink: Option<&PointerSink>, button: MouseButton) {
     let Some(sink) = pointer_sink else {
         return;
     };
-    if let Some(point) = *last {
+    if let Some(point) = sink.session.record_release(button) {
         push_pointer_event(sink, point, PointerEventKind::Up, Some(button));
     }
 }

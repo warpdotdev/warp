@@ -522,9 +522,10 @@ pub(crate) fn build_overlay_ass(
 
     // Pointer geometry is drawn in a separate pass so it is unaffected by a
     // group whose pill interval fell in a removed gap, and layered above pills.
-    for entry in &ordered {
-        append_pointer_dialogues(&mut script, entry, &segments, width, height);
-    }
+    // The whole recording's pointer events are flattened into one stream and
+    // classified once, so a drag split across `UseComputer` calls renders one
+    // continuous trail rather than a per-entry held press plus stray moves.
+    append_recording_pointer_dialogues(&mut script, &ordered, &segments, width, height);
     script
 }
 
@@ -569,11 +570,21 @@ enum PointerGesture {
     },
 }
 
-/// Groups an entry's ordered pointer events into clicks and drags. A press with
+/// Groups an ordered pointer-event stream into clicks and drags. A press with
 /// no intervening move but a release is a click; a press with at least one move
 /// is a drag; a press with neither a move nor a release renders as a held
-/// indicator (a drag with a single point and no release). This enforces the
-/// drag-vs-click exclusivity invariant: a drag never emits a click ring.
+/// indicator (a drag with a single point and no release). A release closes the
+/// gesture only when its button matches the press, so an unmatched release (a
+/// different button, or a release with no prior press) is ignored; a new press
+/// while a button is held closes the prior incomplete gesture deterministically.
+/// This enforces the drag-vs-click exclusivity invariant: a drag never emits a
+/// click ring.
+///
+/// The stream is recording-level — every committed entry's `pointer_events`
+/// concatenated and stable-sorted by offset (see [`append_recording_pointer_dialogues`])
+/// — so a drag split across multiple `UseComputer` calls (`Down` in one call,
+/// `Move`s in others, `Up` in a later call) is reconstructed into a single
+/// gesture rather than a per-entry held press plus stray moves.
 #[cfg(any(linux, test))]
 fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
     let mut gestures = Vec::new();
@@ -585,6 +596,7 @@ fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
             continue;
         }
         let down = &events[i];
+        let down_button = down.button;
         let mut points = vec![(down.offset, down.point)];
         let mut moved = false;
         let mut release = None;
@@ -597,13 +609,22 @@ fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
                     j += 1;
                 }
                 PointerEventKind::Up => {
-                    release = Some(events[j].offset);
-                    if moved {
-                        points.push((events[j].offset, events[j].point));
+                    // Only a release whose button matches the press closes the
+                    // gesture; an unmatched release is ignored (no drawable
+                    // gesture) and scanning continues for a matching one.
+                    if events[j].button == down_button {
+                        release = Some(events[j].offset);
+                        if moved {
+                            points.push((events[j].offset, events[j].point));
+                        }
+                        j += 1;
+                        break;
                     }
                     j += 1;
-                    break;
                 }
+                // A new press closes the prior incomplete gesture: it renders as
+                // a held drag (no release) and classification restarts at the
+                // new press.
                 PointerEventKind::Down => break,
             }
         }
@@ -623,17 +644,32 @@ fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
     gestures
 }
 
-/// Emits the ASS vector dialogues for one entry's pointer gestures, each remapped
-/// through the retained segments onto the compacted output timeline.
+/// Emits the ASS vector dialogues for the whole recording's pointer gestures.
+/// Every committed entry's `pointer_events` are concatenated in source order
+/// and stable-sorted by event offset into one recording-level stream, then
+/// classified once (see [`classify_pointer_gestures`]). Each gesture is remapped
+/// through the retained segments onto the compacted output timeline. Sorting is
+/// stable so equal-offset events keep their insertion (dispatch) order, which
+/// preserves a `Down` before its same-offset `Up` and a call-A event before a
+/// call-B event at the same timestamp. A drag that arrives as one `UseComputer`
+/// call and one split across `Down`/`Move`/`Up` calls therefore produce the same
+/// single trail/anchor/held indicator.
 #[cfg(any(linux, test))]
-fn append_pointer_dialogues(
+fn append_recording_pointer_dialogues(
     script: &mut String,
-    entry: &ActionLogEntry,
+    entries: &[&ActionLogEntry],
     segments: &[KeepSegment],
     width: u32,
     height: u32,
 ) {
-    for gesture in classify_pointer_gestures(&entry.pointer_events) {
+    let mut stream: Vec<PointerEvent> = Vec::new();
+    for entry in entries {
+        stream.extend_from_slice(&entry.pointer_events);
+    }
+    // `sort_by_key` is stable: equal offsets keep dispatch (insertion) order.
+    stream.sort_by_key(|event| event.offset);
+
+    for gesture in classify_pointer_gestures(&stream) {
         match gesture {
             PointerGesture::Click { offset, point } => {
                 append_click_ring(script, offset, point, segments, width, height);
@@ -648,6 +684,12 @@ fn append_pointer_dialogues(
 /// An expanding, fading orange ring centered on the click: a transparent-fill
 /// circle whose orange outline scales from the min to the max radius and fades
 /// to clear over the (cut-remapped) ring duration.
+///
+/// The circle path is centered on the ASS drawing origin (0, 0); with `\an7`
+/// (top-left alignment) libass places that drawing origin exactly at `\pos`, so
+/// the ring is centered on the captured cursor and scales symmetrically about
+/// it. `\an5` would shift the drawing origin by half the path's bounding box
+/// (about one radius), rendering the ring above-left of the click point.
 #[cfg(any(linux, test))]
 fn append_click_ring(
     script: &mut String,
@@ -668,7 +710,7 @@ fn append_click_ring(
     let path = ass_circle_path(CLICK_RING_MAX_RADIUS);
     script.push_str(&format!(
         "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
-         {{\\an5\\pos({cx},{cy})\\clip(0,0,{width},{height})\\1a&HFF&\
+         {{\\an7\\pos({cx},{cy})\\clip(0,0,{width},{height})\\1a&HFF&\
          \\3c&H{POINTER_COLOR_BGR}&\\3a&H00&\\bord{CLICK_RING_THICKNESS}\
          \\fscx{start_scale}\\fscy{start_scale}\
          \\t(0,{dur_ms},\\fscx100\\fscy100\\3a&HFF&)\\p1}}{path}{{\\p0}}\n",
@@ -730,7 +772,7 @@ fn append_drag(
         let anchor = ass_circle_path(DRAG_ANCHOR_RADIUS);
         script.push_str(&format!(
             "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
-             {{\\an5\\pos({anchor_x},{anchor_y})\\clip(0,0,{width},{height})\
+             {{\\an7\\pos({anchor_x},{anchor_y})\\clip(0,0,{width},{height})\
              \\1c&H{POINTER_COLOR_BGR}&\\1a&H87&\\bord0{fade_tag}\\p1}}{anchor}{{\\p0}}\n",
             start = format_ass_timecode(out_start),
             end = format_ass_timecode(out_end),
@@ -738,14 +780,15 @@ fn append_drag(
     }
 
     // Held indicator: a filled dot moving from the press to the release point
-    // while the button is held. Disappears at release (no fade).
+    // while the button is held. Disappears at release (no fade). `\an7` centers
+    // the dot on the moving point (see [`append_click_ring`]).
     let held_end = release.unwrap_or(vis_end);
     if let Some((out_start, out_end)) = remap_source_interval(start_off, held_end, segments) {
         let dur_ms = (out_end - out_start).as_millis();
         let held = ass_circle_path(HELD_INDICATOR_RADIUS);
         script.push_str(&format!(
             "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
-             {{\\an5\\move({anchor_x},{anchor_y},{last_x},{last_y},0,{dur_ms})\
+             {{\\an7\\move({anchor_x},{anchor_y},{last_x},{last_y},0,{dur_ms})\
              \\clip(0,0,{width},{height})\\1c&H{POINTER_COLOR_BGR}&\\1a&H4B&\\bord0\\p1}}{held}{{\\p0}}\n",
             start = format_ass_timecode(out_start),
             end = format_ass_timecode(out_end),

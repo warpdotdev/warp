@@ -23,7 +23,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use string_offset::CharOffset;
+use string_offset::{ByteOffset, CharOffset};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
@@ -34,11 +34,13 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
+use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
     ViewContext, ViewHandle,
 };
 
+use crate::completion_menu::TuiCompletionAcceptance;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::editor_interaction::{
     TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
@@ -61,6 +63,7 @@ use crate::tui_builder::TuiUiBuilder;
 /// order. Inline menus take priority; later input modes should be handled only
 /// after the menu branch.
 const INPUT_HANDLES_ESCAPE_FLAG: &str = "TuiInputHandlesEscape";
+const SHELL_COMPLETION_AVAILABLE_FLAG: &str = "TuiShellCompletionAvailable";
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,6 +99,14 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("TuiInputView") & id!(INPUT_HANDLES_ESCAPE_FLAG))
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("escape"),
+        EditableBinding::new(
+            "tui:input:complete_shell_command",
+            "Complete the shell command",
+            TuiInputAction::Complete,
+        )
+        .with_context_predicate(id!("TuiInputView") & id!(SHELL_COMPLETION_AVAILABLE_FLAG))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("tab"),
     ]);
 }
 
@@ -126,6 +137,8 @@ pub enum TuiInputViewEvent {
     /// The user accepted a prompt from the up-arrow prompt-history menu. Carries
     /// the prompt text to fill into the input and submit.
     AcceptedPromptHistory(String),
+    /// Tab requested shell completion for the current input snapshot.
+    RequestShellCompletion,
     /// Selected prompt text was copied to the host clipboard.
     ClipboardCopySucceeded,
     /// Selected prompt text could not be copied to the host clipboard.
@@ -147,11 +160,19 @@ pub enum TuiInputAction {
     Submit,
     /// Handle contextual input Escape behavior, prioritizing an open inline menu.
     HandleEscape,
+    /// Request or advance shell-command completion.
+    Complete,
     /// Apply an editing command shared with generic TUI editors.
     EditorCommand(TuiEditorCommand),
     /// Place the cursor at `offset` without starting a drag selection
     /// (the prompt gutter click).
     SetCursor { offset: CharOffset },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TuiCompletionInputSnapshot {
+    pub(crate) buffer_text: String,
+    pub(crate) cursor_byte_offset: usize,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -475,11 +496,12 @@ impl TuiView for TuiInputView {
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
-        input_keymap_context(
-            self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx),
-            self.plan_toggle_available(ctx),
-            self.keyboard_enhancement_supported,
-        )
+        input_keymap_context(InputKeymapContextConfig {
+            input_handles_escape: self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx),
+            plan_toggle_available: self.plan_toggle_available(ctx),
+            keyboard_enhancement_supported: self.keyboard_enhancement_supported,
+            shell_completion_available: self.is_shell_mode(ctx),
+        })
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
@@ -497,21 +519,28 @@ impl TuiView for TuiInputView {
     }
 }
 
-fn input_keymap_context(
+#[derive(Clone, Copy, Debug, Default)]
+struct InputKeymapContextConfig {
     input_handles_escape: bool,
     plan_toggle_available: bool,
     keyboard_enhancement_supported: bool,
-) -> keymap::Context {
+    shell_completion_available: bool,
+}
+
+fn input_keymap_context(config: InputKeymapContextConfig) -> keymap::Context {
     let mut context = keymap::Context::default();
     context.set.insert(TuiInputView::ui_name());
-    if input_handles_escape {
+    if config.input_handles_escape {
         context.set.insert(INPUT_HANDLES_ESCAPE_FLAG);
     }
-    if plan_toggle_available {
+    if config.plan_toggle_available {
         context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
     }
-    if keyboard_enhancement_supported {
+    if config.keyboard_enhancement_supported {
         context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
+    }
+    if config.shell_completion_available {
+        context.set.insert(SHELL_COMPLETION_AVAILABLE_FLAG);
     }
     context
 }
@@ -551,6 +580,12 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::HandleEscape => {
                 self.handle_escape(ctx);
                 TuiEditorInteractionOutcome::FollowCursor
+            }
+            TuiInputAction::Complete => {
+                if self.is_shell_mode(ctx) {
+                    ctx.emit(TuiInputViewEvent::RequestShellCompletion);
+                }
+                TuiEditorInteractionOutcome::PreserveViewport
             }
             TuiInputAction::EditorCommand(command) => {
                 if matches!(*command, TuiEditorCommand::SelectUp) && self.can_focus_above(ctx) {
@@ -645,6 +680,67 @@ impl TuiInputView {
             return String::new();
         }
         buffer.text().into_string()
+    }
+
+    pub(crate) fn completion_snapshot(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<TuiCompletionInputSnapshot> {
+        if !self.is_shell_mode(ctx) || !self.model.as_ref(ctx).selection_is_single_cursor(ctx) {
+            return None;
+        }
+        let buffer_text = self.plain_text(ctx);
+        let cursor_char_offset = self
+            .model
+            .as_ref(ctx)
+            .buffer_selection_model()
+            .as_ref(ctx)
+            .first_selection_head()
+            .as_usize()
+            .saturating_sub(1);
+        let cursor_byte_offset =
+            byte_offset_for_char_offset(&buffer_text, CharOffset::from(cursor_char_offset))?
+                .as_usize();
+        Some(TuiCompletionInputSnapshot {
+            buffer_text,
+            cursor_byte_offset,
+        })
+    }
+
+    pub(crate) fn apply_shell_completion(
+        &mut self,
+        acceptance: TuiCompletionAcceptance,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let buffer_text = self.plain_text(ctx);
+        let replacement_range = acceptance.replacement_range;
+        if replacement_range.start > replacement_range.end {
+            return false;
+        }
+        let Some(replacement_start) =
+            count_chars_up_to_byte(&buffer_text, ByteOffset::from(replacement_range.start))
+        else {
+            return false;
+        };
+        let Some(replacement_end) =
+            count_chars_up_to_byte(&buffer_text, ByteOffset::from(replacement_range.end))
+        else {
+            return false;
+        };
+        let selection_range = replacement_start + 1..replacement_end + 1;
+        let mut replacement = acceptance.replacement;
+        if acceptance.append_space {
+            replacement.push(' ');
+        }
+        self.model.update(ctx, |model, ctx| {
+            model.select_at(selection_range.start, false, ctx);
+            model.set_last_selection_head(selection_range.end, ctx);
+            model.end_selection(ctx);
+            model.user_insert(&replacement, ctx);
+        });
+        self.follow_cursor(ctx);
+        ctx.notify();
+        true
     }
 
     fn cursor_offset(&self, ctx: &AppContext) -> CharOffset {
@@ -780,6 +876,7 @@ impl TuiInputView {
             TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp | TuiEditorCommand::MoveDown)
                 | TuiInputAction::Submit
                 | TuiInputAction::HandleEscape
+                | TuiInputAction::Complete
         ) {
             return false;
         }
@@ -791,6 +888,13 @@ impl TuiInputView {
             // bootstrapping. Consume Enter without accepting a hidden menu item;
             // otherwise the accepted-menu event bypasses the session's normal
             // submission guard and can execute or clear the draft.
+            return true;
+        }
+        if matches!(action, TuiInputAction::Complete) {
+            if inline_menu.mode() == TuiInputSuggestionsMode::CompletionSuggestions {
+                inline_menu.select_next(ctx);
+                ctx.notify();
+            }
             return true;
         }
 
@@ -818,6 +922,9 @@ impl TuiInputView {
                         }
                         TuiInlineMenuAccepted::PromptHistory(text) => {
                             ctx.emit(TuiInputViewEvent::AcceptedPromptHistory(text));
+                        }
+                        TuiInlineMenuAccepted::Completion(acceptance) => {
+                            self.apply_shell_completion(acceptance, ctx);
                         }
                     }
                 }
