@@ -1,9 +1,9 @@
-use crate::appearance::Appearance;
 use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
 use warpui::elements::Empty;
 use warpui::{App, AppContext, Element, Entity, View};
 
 use super::*;
+use crate::appearance::Appearance;
 
 // ── SettingsSection classification ──────────────────────────────────────────
 
