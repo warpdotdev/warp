@@ -51,8 +51,8 @@ pub async fn complete(
 
     // True if and only if we called the complete function.
     let mut arg_has_spec = false;
-    if let Some(found_signature) = found_signature {
-        if let hir::Command::Classified(mut shell_command) = classified_command.command {
+    if let Some(found_signature) = found_signature
+        && let hir::Command::Classified(mut shell_command) = classified_command.command {
             suggestions = match classified_command.error {
                 Some(error) => {
                     let (results, complete_called) = suggestions_for_parse_error(
@@ -86,7 +86,6 @@ pub async fn complete(
                 }
             }
         }
-    }
 
     // If we were unsuccessful in getting completions *and* there was not
     // a completion spec we attempted, fallback to the fallback type (if any).
@@ -96,8 +95,7 @@ pub async fn complete(
             options.fallback_strategy,
             CompletionsFallbackStrategy::FilePaths
         )
-    {
-        if let Some(path_completion_context) = ctx.path_completion_context() {
+        && let Some(path_completion_context) = ctx.path_completion_context() {
             suggestions = sorted_paths_relative_to(
                 parsed_argument,
                 options.match_strategy,
@@ -105,7 +103,6 @@ pub async fn complete(
             )
             .await;
         }
-    }
 
     suggestions
 }
@@ -402,8 +399,8 @@ async fn complete_positional(
     // command.
     let mut should_suggest_subcommands = true;
 
-    if let Some(positionals) = &shell_command.args.positionals.as_ref() {
-        if !arguments.is_empty() {
+    if let Some(positionals) = &shell_command.args.positionals.as_ref()
+        && !arguments.is_empty() {
             let positional_index = positionals.len() - 1;
 
             let arg = match arguments
@@ -432,7 +429,6 @@ async fn complete_positional(
                 .await;
             }
         }
-    }
 
     // Append subcommand suggestions to all argument suggestions.
     if should_suggest_subcommands {
@@ -566,15 +562,15 @@ async fn generate_suggestions_for_argument_value(
             type_name: TemplateType::Files,
             ..
         } => {
-            let path_suggestions = match ctx.path_completion_context() {
+            
+
+            // TODO(completions-v2): Implement template filter functions.
+            match ctx.path_completion_context() {
                 Some(path_completion_context) => {
                     sorted_paths_relative_to(parsed_token, matcher, path_completion_context).await
                 }
                 None => Vec::new(),
-            };
-
-            // TODO(completions-v2): Implement template filter functions.
-            path_suggestions
+            }
         }
         ArgumentValue::Template {
             type_name: TemplateType::Folders,
@@ -583,7 +579,10 @@ async fn generate_suggestions_for_argument_value(
             let is_cd = tokens_without_last_editing
                 .first()
                 .is_some_and(|t| *t == "cd");
-            let path_suggestions = match ctx.path_completion_context() {
+            
+
+            // TODO(completions-v2): Implement template filter functions.
+            match ctx.path_completion_context() {
                 Some(path_completion_context) => {
                     if is_cd {
                         sorted_cd_directories(parsed_token, matcher, path_completion_context).await
@@ -597,10 +596,7 @@ async fn generate_suggestions_for_argument_value(
                     }
                 }
                 None => Vec::new(),
-            };
-
-            // TODO(completions-v2): Implement template filter functions.
-            path_suggestions
+            }
         }
         ArgumentValue::Generator(GeneratorFn::Custom(js_fn)) => {
             let (Some(js_ctx), Some(path_ctx)) = (ctx.js_context(), ctx.path_completion_context())

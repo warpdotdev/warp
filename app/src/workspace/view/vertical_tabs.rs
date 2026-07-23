@@ -2795,10 +2795,11 @@ fn render_grouped_tabs_header(
                 .with_color(main_text_color.into())
                 .finish();
             if group.working_directory.is_some() {
-                let folder_icon = ConstrainedBox::new(WarpIcon::Folder.to_warpui_icon(main_text_color).finish())
-                    .with_width(12.)
-                    .with_height(12.)
-                    .finish();
+                let folder_icon =
+                    ConstrainedBox::new(WarpIcon::Folder.to_warpui_icon(main_text_color).finish())
+                        .with_width(12.)
+                        .with_height(12.)
+                        .finish();
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(4.)

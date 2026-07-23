@@ -3928,7 +3928,10 @@ impl Workspace {
                                     // Pinned Tabs feature is enabled.
                                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                                         && group_snapshot.pinned,
-                                    working_directory: group_snapshot.working_directory.clone().map(std::path::PathBuf::from),
+                                    working_directory: group_snapshot
+                                        .working_directory
+                                        .clone()
+                                        .map(std::path::PathBuf::from),
                                 },
                             )
                         })
@@ -7385,7 +7388,10 @@ impl Workspace {
             return;
         }
 
-        let group_working_directory = self.tab_groups.get(&group_id).and_then(|g| g.working_directory.clone());
+        let group_working_directory = self
+            .tab_groups
+            .get(&group_id)
+            .and_then(|g| g.working_directory.clone());
 
         // Creating the tab honors the default session mode and becomes active.
         self.add_new_session_tab_with_default_mode(
@@ -7416,7 +7422,12 @@ impl Workspace {
         self.expand_tab_group(group_id, ctx);
     }
 
-    fn new_tab_in_group_with_directory(&mut self, group_id: TabGroupId, directory: std::path::PathBuf, ctx: &mut ViewContext<Self>) {
+    fn new_tab_in_group_with_directory(
+        &mut self,
+        group_id: TabGroupId,
+        directory: std::path::PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if !FeatureFlag::GroupedTabs.is_enabled() || !self.tab_groups.contains_key(&group_id) {
             return;
         }
@@ -10012,7 +10023,11 @@ impl Workspace {
             )
         };
 
-        let is_project_folder = self.tab_groups.get(&group_id).and_then(|g| g.working_directory.as_ref()).is_some();
+        let is_project_folder = self
+            .tab_groups
+            .get(&group_id)
+            .and_then(|g| g.working_directory.as_ref())
+            .is_some();
         let mut group_actions = vec![
             MenuItemFields::new("Ungroup tabs")
                 .with_on_select_action(WorkspaceAction::UngroupTabs(group_id))
@@ -10024,7 +10039,9 @@ impl Workspace {
         if is_project_folder {
             group_actions.push(
                 MenuItemFields::new("New tab in subfolder...")
-                    .with_on_select_action(WorkspaceAction::NewTabInGroupWithDirectoryPicker(group_id))
+                    .with_on_select_action(WorkspaceAction::NewTabInGroupWithDirectoryPicker(
+                        group_id,
+                    ))
                     .into_item(),
             );
         }
@@ -11635,7 +11652,10 @@ impl Workspace {
                     color: group.color,
                     collapsed: group.collapsed,
                     pinned: FeatureFlag::PinnedTabs.is_enabled() && group.pinned,
-                    working_directory: group.working_directory.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    working_directory: group
+                        .working_directory
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned()),
                 })
                 .collect()
         } else {
@@ -12530,6 +12550,7 @@ impl Workspace {
         ctx.notify();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn add_new_session_tab_with_default_mode(
         &mut self,
         new_session_source: NewSessionSource,
@@ -23984,19 +24005,21 @@ impl TypedActionView for Workspace {
                 let group_id = *group_id;
                 ctx.open_file_picker(
                     move |result, app| {
-                        if let Ok(paths) = result {
-                            if let Some(path_str) = paths.into_iter().next() {
-                                let path = std::path::PathBuf::from(path_str);
-                                app.dispatch_typed_action_deferred(
-                                    WorkspaceAction::NewTabInGroupWithDirectory(group_id, path),
-                                );
-                            }
+                        if let Ok(paths) = result
+                            && let Some(path_str) = paths.into_iter().next()
+                        {
+                            let path = std::path::PathBuf::from(path_str);
+                            app.dispatch_typed_action_deferred(
+                                WorkspaceAction::NewTabInGroupWithDirectory(group_id, path),
+                            );
                         }
                     },
                     FilePickerConfiguration::new().folders_only(),
                 );
             }
-            NewTabInGroupWithDirectory(group_id, path) => self.new_tab_in_group_with_directory(*group_id, path.clone(), ctx),
+            NewTabInGroupWithDirectory(group_id, path) => {
+                self.new_tab_in_group_with_directory(*group_id, path.clone(), ctx)
+            }
             MoveTabGroupUp(group_id) => self.move_tab_group(*group_id, TabMovement::Left, ctx),
             MoveTabGroupDown(group_id) => self.move_tab_group(*group_id, TabMovement::Right, ctx),
             CloseTabsOutsideGroup(group_id) => self.close_tabs_outside_group(*group_id, ctx),
@@ -24031,11 +24054,13 @@ impl TypedActionView for Workspace {
                 ctx.open_file_picker(
                     |result, app| {
                         log::info!("File picker callback invoked with result: {:?}", result);
-                        if let Ok(paths) = result {
-                            if let Some(path_str) = paths.into_iter().next() {
-                                let path = std::path::PathBuf::from(path_str);
-                                app.dispatch_typed_action_deferred(WorkspaceAction::AddProjectFolderConfirmed(path));
-                            }
+                        if let Ok(paths) = result
+                            && let Some(path_str) = paths.into_iter().next()
+                        {
+                            let path = std::path::PathBuf::from(path_str);
+                            app.dispatch_typed_action_deferred(
+                                WorkspaceAction::AddProjectFolderConfirmed(path),
+                            );
                         }
                     },
                     FilePickerConfiguration::new().folders_only(),
