@@ -169,12 +169,12 @@ impl TuiBlockListViewportSource {
             .filter_map(|view_id| {
                 let height = if let Some(view) = agent_blocks.get(&view_id) {
                     let view = view.as_ref(app);
-                    let height = view.desired_height(width, ctx, app).max(1);
+                    let height = view.desired_height(width, ctx, app);
                     view.record_height_measurement(width);
                     height
                 } else {
                     let view = cli_subagent_blocks.get(&view_id)?.as_ref(app);
-                    let height = view.desired_height(width, ctx, app).max(1);
+                    let height = view.desired_height(width, ctx, app);
                     view.record_height_measurement(width);
                     height
                 };
@@ -276,22 +276,25 @@ impl TuiBlockListViewportSource {
                 BlockHeightItem::RichContent(item) => {
                     if item.should_hide {
                         None
-                    } else if let Some(view) = agent_blocks.get(&item.view_id) {
-                        let height = item.last_laid_out_height.as_f64().ceil().max(1.0) as usize;
-                        Some(TuiBlockListVisibleItem {
-                            origin_y: item_top,
-                            height,
-                            kind: TuiBlockListVisibleItemKind::Agent(view.clone()),
-                        })
-                    } else if let Some(view) = cli_subagent_blocks.get(&item.view_id) {
-                        let height = item.last_laid_out_height.as_f64().ceil().max(1.0) as usize;
-                        Some(TuiBlockListVisibleItem {
-                            origin_y: item_top,
-                            height,
-                            kind: TuiBlockListVisibleItemKind::CLISubagent(view.clone()),
-                        })
                     } else {
-                        None
+                        let height = item.last_laid_out_height.as_f64().ceil().max(0.0) as usize;
+                        if height == 0 {
+                            None
+                        } else if let Some(view) = agent_blocks.get(&item.view_id) {
+                            Some(TuiBlockListVisibleItem {
+                                origin_y: item_top,
+                                height,
+                                kind: TuiBlockListVisibleItemKind::Agent(view.clone()),
+                            })
+                        } else {
+                            cli_subagent_blocks.get(&item.view_id).map(|view| {
+                                TuiBlockListVisibleItem {
+                                    origin_y: item_top,
+                                    height,
+                                    kind: TuiBlockListVisibleItemKind::CLISubagent(view.clone()),
+                                }
+                            })
+                        }
                     }
                 }
                 BlockHeightItem::Gap(_)

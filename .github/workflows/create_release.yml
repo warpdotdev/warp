@@ -515,9 +515,8 @@ jobs:
     name: Build Release (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
-    # The Warp TUI is currently dev-only. Keep this job scoped to the dev
-    # channel; it rides the existing nightly dev cut.
-    if: ${{ inputs.build_macos != false && inputs.channel == 'dev' }}
+    # The Warp TUI is available on the dev and preview channels.
+    if: ${{ inputs.build_macos != false && (inputs.channel == 'dev' || inputs.channel == 'preview') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -632,10 +631,12 @@ jobs:
     name: Build Release (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
-    # Keep Linux TUI artifacts dev-only and workflow-local until the server's
-    # download endpoint and installer accept Linux payloads.
-    if: ${{ inputs.build_linux != false && inputs.channel == 'dev' }}
+    # Keep Linux TUI artifacts workflow-local until the server's download
+    # endpoint and installer accept Linux payloads.
+    if: ${{ inputs.build_linux != false && (inputs.channel == 'dev' || inputs.channel == 'preview') }}
     timeout-minutes: 180
+    # Experimental TUI failures must not block dev release cuts.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -699,9 +700,12 @@ jobs:
           test -s "$bundle_dir/resources/THIRD_PARTY_LICENSES.txt"
           grep -q "\"warp_version\": \"${GIT_RELEASE_TAG}\"" \
             "$bundle_dir/resources/bundled/metadata/version.json"
-          tar tzf "$archive" | grep -qx "warp-tui-${CHANNEL}"
-          tar tzf "$archive" | grep -qx "resources/settings_schema.json"
-          tar tzf "$archive" | grep -qx "resources/THIRD_PARTY_LICENSES.txt"
+
+          archive_listing="${RUNNER_TEMP}/warp-tui-${CHANNEL}-linux-${{ matrix.arch }}-contents.txt"
+          tar tzf "$archive" > "$archive_listing"
+          grep -Fqx "warp-tui-${CHANNEL}" "$archive_listing"
+          grep -Fqx "resources/settings_schema.json" "$archive_listing"
+          grep -Fqx "resources/THIRD_PARTY_LICENSES.txt" "$archive_listing"
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -712,6 +716,17 @@ jobs:
         with:
           name: release-linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
+
+      - name: Report Linux TUI build failure
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::The experimental Linux TUI ${{ matrix.arch }} release artifact failed to build. This failure will not block the dev release."
+          {
+            echo "## Linux TUI ${{ matrix.arch }} release artifact failed"
+            echo
+            echo "This experimental build failure will not block the dev release. Review the failed step above for details."
+          } >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
 
   release_linux_x86:
     name: Build Release (Linux x86_64)
@@ -1795,12 +1810,12 @@ jobs:
           if [[ ${{ needs.release_macos_cli.result }} != 'success' ]]; then
             FAILED+=('MacOS CLI')
           fi
-          # The TUI job only runs on the dev channel, so only treat it as a
-          # failure there (it is intentionally skipped elsewhere).
-          if [[ ${{ needs.release_macos_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
+          # The TUI jobs only run on the dev and preview channels, so only
+          # treat them as failures there (they are intentionally skipped elsewhere).
+          if [[ ${{ needs.release_macos_tui.result }} != 'success' && ( ${{ inputs.channel }} == 'dev' || ${{ inputs.channel }} == 'preview' ) ]]; then
             FAILED+=('MacOS TUI')
           fi
-          if [[ ${{ needs.release_linux_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
+          if [[ ${{ needs.release_linux_tui.result }} != 'success' && ( ${{ inputs.channel }} == 'dev' || ${{ inputs.channel }} == 'preview' ) ]]; then
             FAILED+=('Linux TUI')
           fi
           if [[ ${{ needs.release_linux_x86.result }} != 'success' ]]; then

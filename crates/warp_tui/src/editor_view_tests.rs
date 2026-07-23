@@ -264,9 +264,11 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
         let expected = HashSet::from(["home".to_string(), "ctrl-a".to_string()]);
         assert_eq!(triggers_for("tui:input:move_to_line_start"), expected);
         assert_eq!(triggers_for("tui:editor:move_to_line_start"), expected);
+        let kill_to_line_end = HashSet::from(["ctrl-k".to_string(), "cmd-delete".to_string()]);
+        assert_eq!(triggers_for("tui:input:kill_to_line_end"), kill_to_line_end);
         assert_eq!(
             triggers_for("tui:editor:kill_to_line_end"),
-            HashSet::from(["ctrl-k".to_string()])
+            kill_to_line_end
         );
         assert_eq!(
             triggers_for("tui:input:insert_newline"),
@@ -285,6 +287,49 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
             ])
         );
         assert!(app.read(|ctx| ctx.get_binding_by_name("tui:editor:move_up").is_none()));
+    });
+}
+
+/// Regression for APP-4915: `cmd-delete` must bind to `KillToLineEnd` (delete to
+/// end of line) in both the TUI input editor and the standalone editor view,
+/// matching the GUI's `cmd-delete` / delete-all-right convention. `alt-delete`
+/// must remain bound to `DeleteWordForward` (option+delete deletes a word).
+#[test]
+fn cmd_delete_binds_kill_to_line_end_and_alt_delete_binds_delete_word_forward() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+
+        let triggers_for = |name: &str| {
+            app.read(|ctx| {
+                ctx.get_key_bindings()
+                    .filter(|binding| binding.name == name)
+                    .filter_map(|binding| match binding.trigger {
+                        Trigger::Keystrokes(keys) => keys.first().map(|key| key.normalized()),
+                        Trigger::Empty | Trigger::Standard(_) | Trigger::Custom(_) => None,
+                    })
+                    .collect::<HashSet<_>>()
+            })
+        };
+
+        // `cmd-delete` deletes to end of line in both editor surfaces.
+        assert!(
+            triggers_for("tui:input:kill_to_line_end").contains("cmd-delete"),
+            "cmd-delete must bind tui:input:kill_to_line_end"
+        );
+        assert!(
+            triggers_for("tui:editor:kill_to_line_end").contains("cmd-delete"),
+            "cmd-delete must bind tui:editor:kill_to_line_end"
+        );
+
+        // `alt-delete` keeps deleting the next word (option+delete -> DeleteWordForward).
+        assert!(
+            triggers_for("tui:input:delete_word_forward").contains("alt-delete"),
+            "alt-delete must remain bound to tui:input:delete_word_forward"
+        );
+        assert!(
+            triggers_for("tui:editor:delete_word_forward").contains("alt-delete"),
+            "alt-delete must remain bound to tui:editor:delete_word_forward"
+        );
     });
 }
 

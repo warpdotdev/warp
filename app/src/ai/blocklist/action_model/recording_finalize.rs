@@ -135,7 +135,7 @@ async fn finalize_recording(
     // file, when produced, is a sibling of the mp4.
     let mut upload_path = local_path.clone();
     let mut overlay_path: Option<std::path::PathBuf> = None;
-    match computer_use::burn_in_action_log(
+    match computer_use::post_process_recording(
         &local_path,
         &actions,
         (output.width, output.height),
@@ -153,6 +153,15 @@ async fn finalize_recording(
             log::warn!("Recording cut/overlay burn-in failed; uploading original: {error}");
         }
     }
+    let duration = match computer_use::finalized_video_duration(&upload_path).await {
+        Ok(duration) => duration,
+        Err(error) => {
+            log::warn!(
+                "Failed to inspect finalized recording duration; using capture duration: {error}"
+            );
+            output.duration
+        }
+    };
 
     let request = FileArtifactUploadRequest {
         path: upload_path,
@@ -177,10 +186,10 @@ async fn finalize_recording(
     match upload_result {
         Ok(upload) => StopRecordingResult::Success(RecordingStopped {
             artifact_uid: upload.artifact.artifact_uid,
-            duration: output.duration,
+            duration,
             width_px: output.width as i32,
             height_px: output.height as i32,
-            size_bytes: output.size_bytes as i64,
+            size_bytes: upload.size_bytes,
             completion_status: output.completion_status,
             termination_reason: reason.termination_reason(output.completion_status),
         }),

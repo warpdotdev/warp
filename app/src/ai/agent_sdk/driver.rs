@@ -97,6 +97,8 @@ use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 
 pub(crate) mod attachments;
+#[cfg(feature = "local_fs")]
+pub(crate) mod cache_setup;
 pub(crate) mod cloud_provider;
 pub(crate) mod environment;
 mod error_classification;
@@ -3044,7 +3046,7 @@ impl AgentDriver {
                 .map_err(|_| AgentDriverError::ProfileError(profile.clone()))?;
             let sync_id = SyncId::ServerId(server_id);
             AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
-                if let Some(profile_id) = model.get_profile_id_by_sync_id(&sync_id) {
+                if let Some(profile_id) = model.get_profile_id_by_sync_id(&sync_id, ctx) {
                     model.set_active_profile(terminal_id, profile_id, ctx);
                 } else {
                     return Err(AgentDriverError::ProfileError(profile.clone()));

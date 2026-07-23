@@ -166,6 +166,13 @@ pub struct AgentConversationCapabilities {
 }
 
 impl AgentConversationEntry {
+    /// Returns whether this entry represents a cloud agent run.
+    pub fn is_cloud_agent_run(&self) -> bool {
+        matches!(self.provenance, AgentConversationProvenance::AmbientRun)
+            || self.backing.has_ambient_run
+            || self.identity.ambient_agent_task_id.is_some()
+    }
+
     pub(super) fn matches_filters(
         &self,
         filters: &AgentManagementFilters,

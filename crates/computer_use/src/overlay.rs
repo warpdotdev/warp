@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use crate::{Action, Key, ScrollDirection, TargetedAction};
+use crate::{Action, Key, MouseButton, ScrollDirection, TargetedAction, Vector2I};
 
 /// A group of semantic actions dispatched in one `UseComputer` call.
 ///
@@ -23,6 +23,32 @@ pub struct ActionLogEntry {
     /// sequence (and any post-action screenshot) finished.
     pub finish_offset: Duration,
     pub labels: Vec<String>,
+    /// Resolved pointer events dispatched during this group, in capture-space
+    /// pixels, used to burn in click ripples and drag trails. Empty on paths
+    /// that record no pointer geometry.
+    pub pointer_events: Vec<PointerEvent>,
+}
+
+/// A single resolved pointer event captured at dispatch time.
+///
+/// `point` is a capture-space pixel (full-screen capture: physical root/screen
+/// pixels; window capture: window-local pixels) and `offset` is measured on the
+/// same source/1x timeline as [`ActionLogEntry::offset`].
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PointerEvent {
+    pub offset: Duration,
+    pub kind: PointerEventKind,
+    /// The button for a press/release; `None` for a move.
+    pub button: Option<MouseButton>,
+    pub point: Vector2I,
+}
+
+/// Which pointer primitive a [`PointerEvent`] represents.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum PointerEventKind {
+    Down,
+    Move,
+    Up,
 }
 
 /// Returns true if a `UseComputer` action batch contains at least one real
@@ -204,6 +230,45 @@ const PILL_BOTTOM_MARGIN: i32 = 90;
 const SEGMENT_MARGIN_PRE: Duration = Duration::from_millis(250);
 #[cfg(any(linux, test))]
 const SEGMENT_MARGIN_POST: Duration = Duration::from_millis(1000);
+
+// --- Pointer (click ripple / drag trail) annotation constants ----------------
+/// Shared orange fill/stroke for pointer annotations, as ASS `BBGGRR` (RGB
+/// `[255, 80, 40]`).
+#[cfg(any(linux, test))]
+const POINTER_COLOR_BGR: &str = "2850FF";
+#[cfg(any(linux, test))]
+const CLICK_RING_MIN_RADIUS: f64 = 18.0;
+#[cfg(any(linux, test))]
+const CLICK_RING_MAX_RADIUS: f64 = 36.0;
+#[cfg(any(linux, test))]
+const CLICK_RING_THICKNESS: i32 = 4;
+#[cfg(any(linux, test))]
+const HELD_INDICATOR_RADIUS: f64 = 16.0;
+#[cfg(any(linux, test))]
+const DRAG_ANCHOR_RADIUS: f64 = 10.0;
+#[cfg(any(linux, test))]
+const DRAG_TRAIL_THICKNESS: f64 = 4.0;
+/// The click ripple and the post-release drag-trail fade are expressed directly
+/// as a function of the cut's retained post-action margin
+/// ([`SEGMENT_MARGIN_POST`]): each is that margin minus a small headroom, so it
+/// always ends before the retained footage runs out (and can never be clipped
+/// by the cut, shrinking automatically if the margin is reduced). The headroom
+/// also absorbs ASS centisecond rounding and frame quantization. At the current
+/// 1000 ms margin these evaluate to the design values of 900 ms and 600 ms.
+#[cfg(any(linux, test))]
+const CLICK_RING_TAIL_HEADROOM: Duration = Duration::from_millis(100);
+#[cfg(any(linux, test))]
+const DRAG_FADE_TAIL_HEADROOM: Duration = Duration::from_millis(400);
+
+#[cfg(any(linux, test))]
+fn click_ring_duration() -> Duration {
+    SEGMENT_MARGIN_POST.saturating_sub(CLICK_RING_TAIL_HEADROOM)
+}
+
+#[cfg(any(linux, test))]
+fn drag_trail_fade_duration() -> Duration {
+    SEGMENT_MARGIN_POST.saturating_sub(DRAG_FADE_TAIL_HEADROOM)
+}
 
 /// One retained source segment of the cut recording.
 ///
@@ -408,6 +473,12 @@ pub(crate) fn build_overlay_ass(
         "Style: Pill,DejaVu Sans Mono,{PILL_FONT_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&HB0000000,\
          -1,0,0,0,100,100,0,0,3,16,0,2,40,40,90,1\n\n",
     ));
+    // Vector-drawing style for pointer annotations: no background box
+    // (BorderStyle 1), top-left origin so `\pos`/`\p` coordinates are absolute.
+    script.push_str(
+        "Style: Cursor,DejaVu Sans Mono,10,&H002850FF,&H000000FF,&H002850FF,&H00000000,\
+         0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n\n",
+    );
     script.push_str("[Events]\n");
     script.push_str(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
@@ -448,6 +519,12 @@ pub(crate) fn build_overlay_ass(
             left += pill_width + PILL_GAP;
         }
     }
+
+    // Pointer geometry is drawn in a separate pass so it is unaffected by a
+    // group whose pill interval fell in a removed gap, and layered above pills.
+    for entry in &ordered {
+        append_pointer_dialogues(&mut script, entry, &segments, width, height);
+    }
     script
 }
 
@@ -476,6 +553,259 @@ fn escape_ass_text(text: &str) -> String {
         .replace('{', "(")
         .replace('}', ")")
         .replace(['\n', '\r'], " ")
+}
+
+/// A pointer gesture reconstructed from an entry's ordered pointer events.
+#[cfg(any(linux, test))]
+enum PointerGesture {
+    /// A press + release with no intervening move: rendered as one ring.
+    Click { offset: Duration, point: Vector2I },
+    /// A press + one-or-more moves + release (a drag), or a lone held press
+    /// (a single point with no release): rendered as a trail/anchor/held dot,
+    /// never a ring.
+    Drag {
+        points: Vec<(Duration, Vector2I)>,
+        release: Option<Duration>,
+    },
+}
+
+/// Groups an entry's ordered pointer events into clicks and drags. A press with
+/// no intervening move but a release is a click; a press with at least one move
+/// is a drag; a press with neither a move nor a release renders as a held
+/// indicator (a drag with a single point and no release). This enforces the
+/// drag-vs-click exclusivity invariant: a drag never emits a click ring.
+#[cfg(any(linux, test))]
+fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
+    let mut gestures = Vec::new();
+    let mut i = 0;
+    while i < events.len() {
+        if events[i].kind != PointerEventKind::Down {
+            // A stray move/up with no owning press carries no drawable gesture.
+            i += 1;
+            continue;
+        }
+        let down = &events[i];
+        let mut points = vec![(down.offset, down.point)];
+        let mut moved = false;
+        let mut release = None;
+        let mut j = i + 1;
+        while j < events.len() {
+            match events[j].kind {
+                PointerEventKind::Move => {
+                    moved = true;
+                    points.push((events[j].offset, events[j].point));
+                    j += 1;
+                }
+                PointerEventKind::Up => {
+                    release = Some(events[j].offset);
+                    if moved {
+                        points.push((events[j].offset, events[j].point));
+                    }
+                    j += 1;
+                    break;
+                }
+                PointerEventKind::Down => break,
+            }
+        }
+        match (moved, release) {
+            (true, _) => gestures.push(PointerGesture::Drag { points, release }),
+            (false, Some(offset)) => gestures.push(PointerGesture::Click {
+                offset,
+                point: down.point,
+            }),
+            (false, None) => gestures.push(PointerGesture::Drag {
+                points,
+                release: None,
+            }),
+        }
+        i = j;
+    }
+    gestures
+}
+
+/// Emits the ASS vector dialogues for one entry's pointer gestures, each remapped
+/// through the retained segments onto the compacted output timeline.
+#[cfg(any(linux, test))]
+fn append_pointer_dialogues(
+    script: &mut String,
+    entry: &ActionLogEntry,
+    segments: &[KeepSegment],
+    width: u32,
+    height: u32,
+) {
+    for gesture in classify_pointer_gestures(&entry.pointer_events) {
+        match gesture {
+            PointerGesture::Click { offset, point } => {
+                append_click_ring(script, offset, point, segments, width, height);
+            }
+            PointerGesture::Drag { points, release } => {
+                append_drag(script, &points, release, segments, width, height);
+            }
+        }
+    }
+}
+
+/// An expanding, fading orange ring centered on the click: a transparent-fill
+/// circle whose orange outline scales from the min to the max radius and fades
+/// to clear over the (cut-remapped) ring duration.
+#[cfg(any(linux, test))]
+fn append_click_ring(
+    script: &mut String,
+    offset: Duration,
+    point: Vector2I,
+    segments: &[KeepSegment],
+    width: u32,
+    height: u32,
+) {
+    let duration = click_ring_duration();
+    let Some((out_start, out_end)) = remap_source_interval(offset, offset + duration, segments)
+    else {
+        return;
+    };
+    let (cx, cy) = clamp_point(point, width, height);
+    let dur_ms = (out_end - out_start).as_millis();
+    let start_scale = ((CLICK_RING_MIN_RADIUS / CLICK_RING_MAX_RADIUS) * 100.0).round() as i32;
+    let path = ass_circle_path(CLICK_RING_MAX_RADIUS);
+    script.push_str(&format!(
+        "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+         {{\\an5\\pos({cx},{cy})\\clip(0,0,{width},{height})\\1a&HFF&\
+         \\3c&H{POINTER_COLOR_BGR}&\\3a&H00&\\bord{CLICK_RING_THICKNESS}\
+         \\fscx{start_scale}\\fscy{start_scale}\
+         \\t(0,{dur_ms},\\fscx100\\fscy100\\3a&HFF&)\\p1}}{path}{{\\p0}}\n",
+        start = format_ass_timecode(out_start),
+        end = format_ass_timecode(out_end),
+    ));
+}
+
+/// A drag's trail (a stroked polyline), start anchor, and held indicator (a dot
+/// that moves along the path). On release the trail and anchor fade over the
+/// (capped) fade duration; a held press with no release stays through the end of
+/// its retained window.
+#[cfg(any(linux, test))]
+fn append_drag(
+    script: &mut String,
+    points: &[(Duration, Vector2I)],
+    release: Option<Duration>,
+    segments: &[KeepSegment],
+    width: u32,
+    height: u32,
+) {
+    let Some(&(start_off, _)) = points.first() else {
+        return;
+    };
+    let last_off = points[points.len() - 1].0;
+    let fade = drag_trail_fade_duration();
+    let vis_end = match release {
+        Some(r) => r + fade,
+        // Held with no release: keep it visible for the longest animation tail
+        // (the ring duration), which stays within the retained post-action footage.
+        None => last_off + click_ring_duration(),
+    };
+    let clamped: Vec<(i32, i32)> = points
+        .iter()
+        .map(|(_, point)| clamp_point(*point, width, height))
+        .collect();
+    let (anchor_x, anchor_y) = clamped[0];
+    let (last_x, last_y) = clamped[clamped.len() - 1];
+
+    // Trail + anchor, shown from press through the end of the release fade.
+    if let Some((out_start, out_end)) = remap_source_interval(start_off, vis_end, segments) {
+        let dur_ms = (out_end - out_start).as_millis();
+        let fade_tag = if release.is_some() {
+            let fade_from = dur_ms.saturating_sub(fade.as_millis());
+            format!("\\t({fade_from},{dur_ms},\\1a&HFF&)")
+        } else {
+            String::new()
+        };
+        if clamped.len() >= 2 {
+            let quads = ass_trail_quads(&clamped);
+            script.push_str(&format!(
+                "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+                 {{\\an7\\pos(0,0)\\clip(0,0,{width},{height})\
+                 \\1c&H{POINTER_COLOR_BGR}&\\1a&H73&\\bord0{fade_tag}\\p1}}{quads}{{\\p0}}\n",
+                start = format_ass_timecode(out_start),
+                end = format_ass_timecode(out_end),
+            ));
+        }
+        let anchor = ass_circle_path(DRAG_ANCHOR_RADIUS);
+        script.push_str(&format!(
+            "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+             {{\\an5\\pos({anchor_x},{anchor_y})\\clip(0,0,{width},{height})\
+             \\1c&H{POINTER_COLOR_BGR}&\\1a&H87&\\bord0{fade_tag}\\p1}}{anchor}{{\\p0}}\n",
+            start = format_ass_timecode(out_start),
+            end = format_ass_timecode(out_end),
+        ));
+    }
+
+    // Held indicator: a filled dot moving from the press to the release point
+    // while the button is held. Disappears at release (no fade).
+    let held_end = release.unwrap_or(vis_end);
+    if let Some((out_start, out_end)) = remap_source_interval(start_off, held_end, segments) {
+        let dur_ms = (out_end - out_start).as_millis();
+        let held = ass_circle_path(HELD_INDICATOR_RADIUS);
+        script.push_str(&format!(
+            "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+             {{\\an5\\move({anchor_x},{anchor_y},{last_x},{last_y},0,{dur_ms})\
+             \\clip(0,0,{width},{height})\\1c&H{POINTER_COLOR_BGR}&\\1a&H4B&\\bord0\\p1}}{held}{{\\p0}}\n",
+            start = format_ass_timecode(out_start),
+            end = format_ass_timecode(out_end),
+        ));
+    }
+}
+
+/// Clamps a capture-space point into the video frame so a drawing can never
+/// address outside `[0,width) x [0,height)`.
+#[cfg(any(linux, test))]
+fn clamp_point(point: Vector2I, width: u32, height: u32) -> (i32, i32) {
+    let max_x = width.saturating_sub(1) as i32;
+    let max_y = height.saturating_sub(1) as i32;
+    (point.x().clamp(0, max_x), point.y().clamp(0, max_y))
+}
+
+/// A closed circle of radius `r` centered at the drawing origin, as ASS `\p`
+/// drawing commands (four cubic beziers, kappa approximation).
+#[cfg(any(linux, test))]
+fn ass_circle_path(r: f64) -> String {
+    let k = (r * 0.552_284_7).round() as i64;
+    let r = r.round() as i64;
+    format!(
+        "m {r} 0 b {r} {k} {k} {r} 0 {r} b -{k} {r} -{r} {k} -{r} 0 \
+         b -{r} -{k} -{k} -{r} 0 -{r} b {k} -{r} {r} -{k} {r} 0"
+    )
+}
+
+/// A stroked polyline through `points`, as one filled quad per segment so the
+/// line has an even width and no spurious closing edge.
+#[cfg(any(linux, test))]
+fn ass_trail_quads(points: &[(i32, i32)]) -> String {
+    let half = DRAG_TRAIL_THICKNESS / 2.0;
+    let mut path = String::new();
+    for pair in points.windows(2) {
+        let (x0, y0) = (pair[0].0 as f64, pair[0].1 as f64);
+        let (x1, y1) = (pair[1].0 as f64, pair[1].1 as f64);
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < f64::EPSILON {
+            continue;
+        }
+        let (px, py) = (-dy / len * half, dx / len * half);
+        let round = |v: f64| v.round() as i64;
+        if !path.is_empty() {
+            path.push(' ');
+        }
+        path.push_str(&format!(
+            "m {} {} l {} {} l {} {} l {} {}",
+            round(x0 + px),
+            round(y0 + py),
+            round(x1 + px),
+            round(y1 + py),
+            round(x1 - px),
+            round(y1 - py),
+            round(x0 - px),
+            round(y0 - py),
+        ));
+    }
+    path
 }
 
 #[cfg(test)]

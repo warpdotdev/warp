@@ -422,8 +422,13 @@ impl RunAgentsCardView {
                 );
                 // The runner picker isn't part of the shared picker sync
                 // (its options load asynchronously and are cached on the
-                // view), so re-apply its selection now that the streamed
-                // request has finalized with the requested runner.
+                // view). Lazily create it now if the final streamed
+                // execution mode is Remote but `new()` started with Local
+                // (ensure_runner_picker is idempotent and a no-op when the
+                // picker already exists or the flag/mode gate is not met).
+                me.ensure_runner_picker(ctx);
+                // Re-apply its selection now that the streamed request has
+                // finalized with the requested runner.
                 me.resync_runner_selection(ctx);
                 me.refresh_accept_button_state(ctx);
                 me.maybe_auto_open_create_modal(ctx);
@@ -663,6 +668,12 @@ impl RunAgentsCardView {
                 new_state.orchestration_config_state;
             self.card = new_state.card;
             if harness_or_model_changed {
+                // If the execution mode switched to Remote, lazily build the
+                // Runner picker now (same as the ExecutionModeToggled handler).
+                // Without this, a Local→Remote mode change during streaming
+                // would leave runner_picker as None, causing the "Runner"
+                // label to render with no dropdown below it.
+                self.ensure_runner_picker(ctx);
                 // Repopulate pickers and re-arm auto-open for the newly-
                 // streamed harness.
                 oc::repopulate_all_pickers(

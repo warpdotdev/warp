@@ -45,6 +45,9 @@ fn parse_resume_token(token: String) -> Result<ServerConversationToken> {
 
 /// Boots the headless Warp app and mounts the transcript-capable TUI session.
 pub fn run() -> Result<()> {
+    // Protect this managed version before any worker dispatch or resource
+    // access. The guard stays alive until this process exits.
+    let _version_lease = crate::autoupdate::VersionLease::acquire_for_current_process()?;
     // If this process was re-exec'd as a Warp worker (e.g. the terminal
     // server), dispatch that instead of starting another TUI — otherwise the
     // worker re-exec would recursively launch TUIs.

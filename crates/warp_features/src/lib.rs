@@ -989,7 +989,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::FileBackedExecutionProfiles,
-    FeatureFlag::BackgroundComputerUse,
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::WaitForEventsParentRegistration,

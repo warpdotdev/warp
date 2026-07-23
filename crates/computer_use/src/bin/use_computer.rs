@@ -227,6 +227,7 @@ async fn main() -> ExitCode {
     let options = Options {
         screenshot_params,
         background_enabled: true,
+        pointer_sink: None,
     };
 
     let mut actor = computer_use::create_actor();

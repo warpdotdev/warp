@@ -3,12 +3,68 @@ use std::collections::HashSet;
 use super::*;
 
 #[test]
-fn command_names_are_unique() {
-    let names = COMMAND_REGISTRY.all_commands().map(|command| command.name);
-    let mut seen = HashSet::new();
-    for name in names {
-        assert!(seen.insert(name), "duplicate slash command name: {name}");
+fn command_names_and_kinds_are_unique_per_surface() {
+    for settings_mode in [settings::SettingsMode::Gui, settings::SettingsMode::Tui] {
+        let mut names = HashSet::new();
+        let mut kinds = HashSet::new();
+        for command in all_commands(settings_mode) {
+            assert!(
+                names.insert(command.name),
+                "duplicate slash command name on {settings_mode:?}: {}",
+                command.name
+            );
+            assert!(
+                kinds.insert(command.kind),
+                "duplicate slash command kind on {settings_mode:?}: {:?}",
+                command.kind
+            );
+        }
     }
+}
+
+#[test]
+fn gui_icon_metadata_matches_surface_support() {
+    let mut checked_kinds = HashSet::new();
+    for settings_mode in [settings::SettingsMode::Gui, settings::SettingsMode::Tui] {
+        for command in all_commands(settings_mode) {
+            if checked_kinds.insert(command.kind) {
+                assert_eq!(
+                    command.supported_surfaces.gui_icon_path().is_some(),
+                    command.supports_gui(),
+                    "{} has inconsistent GUI icon metadata",
+                    command.name
+                );
+            }
+        }
+    }
+}
+#[test]
+fn command_registry_filters_explicit_surface_metadata() {
+    for settings_mode in [settings::SettingsMode::Gui, settings::SettingsMode::Tui] {
+        for command in all_commands(settings_mode) {
+            assert!(
+                command.supports_surface(settings_mode),
+                "{} should support {settings_mode:?}",
+                command.name
+            );
+        }
+    }
+    assert_eq!(COST.kind, SlashCommandKind::Cost);
+    assert!(matches!(
+        COST.supported_surfaces,
+        SlashCommandSurfaces::GuiAndTui {
+            icon_path: "bundled/svg/bar-chart-04.svg"
+        }
+    ));
+    assert_eq!(EXIT.kind, SlashCommandKind::Exit);
+    assert_eq!(EXIT.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert_eq!(ADD_MCP.kind, SlashCommandKind::AddMcp);
+    assert!(matches!(
+        ADD_MCP.supported_surfaces,
+        SlashCommandSurfaces::GuiOnly {
+            icon_path: "bundled/svg/dataflow.svg"
+        }
+    ));
 }
 #[test]
 fn view_logs_command_is_registered_only_for_tui_mode() {
@@ -38,7 +94,7 @@ fn auto_approve_command_is_local_agent_action_without_arguments() {
     );
 
     assert_eq!(command.description, "Toggle auto approve");
-    assert_eq!(command.icon_path, "bundled/svg/fast-forward.svg");
+    assert_eq!(command.supported_surfaces.gui_icon_path(), None);
     assert!(!command.auto_enter_ai_mode);
     assert_eq!(
         command.availability,
@@ -102,7 +158,10 @@ fn rename_conversation_command_is_active_conversation_scoped_and_requires_argume
         .expect("expected /rename-conversation to require an argument");
 
     assert_eq!(command.name, "/rename-conversation");
-    assert_eq!(command.icon_path, "bundled/svg/pencil-line.svg");
+    assert_eq!(
+        command.supported_surfaces.gui_icon_path(),
+        Some("bundled/svg/pencil-line.svg")
+    );
     assert!(!command.auto_enter_ai_mode);
     assert_eq!(
         command.availability,
@@ -121,7 +180,10 @@ fn continue_locally_command_is_registered() {
         .expect("expected /continue-locally to be registered");
 
     assert_eq!(command.name, "/continue-locally");
-    assert_eq!(command.icon_path, "bundled/svg/arrow-split.svg");
+    assert_eq!(
+        command.supported_surfaces.gui_icon_path(),
+        Some("bundled/svg/arrow-split.svg")
+    );
     assert!(command.auto_enter_ai_mode);
     assert_eq!(
         command.availability,
