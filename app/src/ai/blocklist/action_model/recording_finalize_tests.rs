@@ -67,6 +67,7 @@ fn agent_discard_finalization_skips_upload() {
             started_at: Instant::now(),
             frame_rate: 15,
             target: computer_use::Target::Screen,
+            pointer_session: computer_use::PointerSession::new(),
             actions: Vec::new(),
             summary: None,
             description: None,
