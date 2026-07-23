@@ -7,9 +7,7 @@
 //! the first accepted submission produces a block and returns whenever the
 //! transcript empties out again.
 
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::time::Duration;
 
 use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
@@ -27,7 +25,7 @@ use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
-use crate::zero_state_animation::{StarfieldState, ZeroStateAnimationElement};
+use crate::zero_state_animation::ZeroStateAnimationElement;
 
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
@@ -37,7 +35,7 @@ const MAX_CHANGELOG_BULLETS: usize = 3;
 /// (changelog, MCP status, project context).
 const LEFT_COLUMN_COLS: u16 = 48;
 
-/// Maximum width of the starfield animation panel.  On wide terminals the
+/// Maximum width of the portrait animation panel.  On wide terminals the
 /// animation stays at this width and excess space becomes blank background.
 const MAX_ANIMATION_COLS: u16 = 100;
 
@@ -47,12 +45,9 @@ const MAX_ANIMATION_COLS: u16 = 100;
 
 /// The zero-state view: displayed when the transcript is empty.
 ///
-/// Owns the starfield animation state so it persists across view re-renders
-/// (e.g. when MCP connects or a changelog loads).  The animation element
-/// receives an `Rc<RefCell<StarfieldState>>` clone on each render, keeping
-/// the star positions continuous through paint-only animation repaints.
+/// Owns the [`AnimationClock`] so the portrait animation runs continuously
+/// across view re-renders (e.g. when MCP connects or a changelog loads).
 pub(crate) struct TuiZeroStateView {
-    starfield: Rc<RefCell<StarfieldState>>,
     clock: AnimationClock,
     active_session: ModelHandle<ActiveSession>,
 }
@@ -96,7 +91,6 @@ impl TuiZeroStateView {
         });
 
         Self {
-            starfield: Rc::new(RefCell::new(StarfieldState::new())),
             clock: AnimationClock::starting_at(Duration::ZERO),
             active_session,
         }
@@ -126,12 +120,7 @@ impl TuiView for TuiZeroStateView {
                 .with_max_cols(LEFT_COLUMN_COLS)
                 .finish();
         let animation = TuiConstrainedBox::new(
-            ZeroStateAnimationElement::new(
-                Rc::clone(&self.starfield),
-                self.clock,
-                builder.accent_color(),
-            )
-            .finish(),
+            ZeroStateAnimationElement::new(self.clock, builder.accent_color()).finish(),
         )
         .with_max_cols(MAX_ANIMATION_COLS)
         .finish();
