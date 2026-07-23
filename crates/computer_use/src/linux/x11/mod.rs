@@ -253,7 +253,7 @@ impl crate::Actor for Actor {
                         record_down_move(
                             pointer_sink.as_ref(),
                             PointerEventKind::Down,
-                            Some(button.clone()),
+                            Some(*button),
                             target,
                             *at,
                             *at,
@@ -261,7 +261,7 @@ impl crate::Actor for Actor {
                     }
                     Action::MouseUp { button } => {
                         screen_mouse.button_up(button)?;
-                        record_up(pointer_sink.as_ref(), button.clone());
+                        record_up(pointer_sink.as_ref(), *button);
                     }
                     Action::MouseMove { to } => {
                         screen_mouse.move_to(*to)?;
@@ -319,7 +319,7 @@ impl crate::Actor for Actor {
                             record_down_move(
                                 pointer_sink.as_ref(),
                                 PointerEventKind::Down,
-                                Some(button.clone()),
+                                Some(*button),
                                 target,
                                 local,
                                 at,
@@ -327,7 +327,7 @@ impl crate::Actor for Actor {
                         }
                         Action::MouseUp { button } => {
                             agent_mouse.button_up(button)?;
-                            record_up(pointer_sink.as_ref(), button.clone());
+                            record_up(pointer_sink.as_ref(), *button);
                         }
                         Action::MouseMove { to } => {
                             let local = *to;

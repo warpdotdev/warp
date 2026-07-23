@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use super::{
-    ActionLogEntry, KeepSegment, PointerEvent, PointerEventKind, build_keep_segments,
-    build_overlay_ass, is_meaningful_action_group, overlay_labels_for, remap_source_interval,
-    ass_circle_path, CLICK_RING_MAX_RADIUS, DRAG_ANCHOR_RADIUS, HELD_INDICATOR_RADIUS,
+    ActionLogEntry, CLICK_RING_MAX_RADIUS, DRAG_ANCHOR_RADIUS, HELD_INDICATOR_RADIUS, KeepSegment,
+    PointerEvent, PointerEventKind, ass_circle_path, build_keep_segments, build_overlay_ass,
+    is_meaningful_action_group, overlay_labels_for, remap_source_interval,
 };
 use crate::{Action, Key, MouseButton, ScrollDirection, ScrollDistance, TargetedAction, Vector2I};
 
@@ -673,23 +673,6 @@ fn click_animation_fits_within_retained_post_action_margin() {
 
 // --- Centering (QUALITY-1169 follow-up) --------------------------------------
 
-/// Models libass's placement of an origin-centered circle drawing: with `\an7`
-/// (top-left alignment) the drawing origin (0, 0) — and thus the circle's
-/// geometric center — is placed exactly at `pos`; with `\an5` (center
-/// alignment) libass shifts the drawing origin by half the path's bounding box
-/// (one radius), placing the center at `pos - (r, r)` (above-left). This matches
-/// the libass replay measurements recorded in the QUALITY-1169 follow-up spec
-/// (a `\an5` ring at (640, 360) rendered at ~(603.5, 323.5); `\an7` at
-/// ~(639.5, 359.5)).
-fn libass_circle_center(alignment: &str, pos: (i32, i32), radius: i32) -> (i32, i32) {
-    match alignment {
-        "an5" => (pos.0 - radius, pos.1 - radius),
-        // `\an7` (and any other top-left-anchored alignment) centers the
-        // origin-centered path on `pos`.
-        _ => pos,
-    }
-}
-
 #[test]
 fn circle_path_is_origin_centered() {
     // `ass_circle_path(r)` draws a circle centered at the drawing origin (0, 0):
@@ -711,11 +694,21 @@ fn circle_path_is_origin_centered() {
 }
 
 #[test]
-fn click_ring_and_drag_circles_are_centered_under_libass() {
+fn click_ring_and_drag_circles_center_via_an7() {
     // A click and a drag in one recording exercise every circle dialogue: the
-    // click ring, the drag anchor, and the held indicator.
+    // click ring, the drag anchor, and the held indicator. Centering is proven
+    // here at the ASS-string level — each circle dialogue carries `\an7`, and
+    // `circle_path_is_origin_centered` proves the path is centered on the
+    // drawing origin, so `\pos` lands the circle's center on the cursor. The
+    // libass pixel-level confirmation is the synthetic-frame proof in the PR
+    // body, not a model assertion here.
     let entries = vec![
-        pointer_entry(1000, 2000, &[], vec![down(1000, 100, 200), up(1000, 100, 200)]),
+        pointer_entry(
+            1000,
+            2000,
+            &[],
+            vec![down(1000, 100, 200), up(1000, 100, 200)],
+        ),
         pointer_entry(
             3000,
             4000,
@@ -740,17 +733,6 @@ fn click_ring_and_drag_circles_are_centered_under_libass() {
         .find(|line| line.contains("\\pos(100,200)"))
         .expect("ring dialogue");
     assert!(ring.contains("\\an7\\pos(100,200)"), "{ring}");
-    assert_eq!(
-        libass_circle_center("an7", (100, 200), CLICK_RING_MAX_RADIUS as i32),
-        (100, 200),
-        "`\\an7` must center the ring on the cursor"
-    );
-    // The pre-change `\an5` would have rendered the ring above-left — the defect.
-    assert_ne!(
-        libass_circle_center("an5", (100, 200), CLICK_RING_MAX_RADIUS as i32),
-        (100, 200),
-        "`\\an5` must not center the ring (regression guard)"
-    );
 
     // The drag anchor and held indicator center on their points via `\an7`.
     let anchor = cursor
@@ -758,10 +740,6 @@ fn click_ring_and_drag_circles_are_centered_under_libass() {
         .find(|line| line.contains("\\1a&H87&"))
         .expect("anchor dialogue");
     assert!(anchor.contains("\\an7\\pos(50,60)"), "{anchor}");
-    assert_eq!(
-        libass_circle_center("an7", (50, 60), DRAG_ANCHOR_RADIUS as i32),
-        (50, 60),
-    );
     let held = cursor
         .iter()
         .find(|line| line.contains("\\1a&H4B&"))
@@ -795,8 +773,7 @@ fn split_call_drag_renders_one_trail_like_a_canonical_drag() {
         vec![down(1000, 100, 100), mv(1200, 300, 400), up(1400, 300, 400)],
     )];
     let split_ass = build_overlay_ass(&split, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
-    let canonical_ass =
-        build_overlay_ass(&canonical, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let canonical_ass = build_overlay_ass(&canonical, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
     // A drag never emits a click ring, in either form.
     assert!(ring_dialogues(&split_ass).is_empty(), "{split_ass}");
     assert!(ring_dialogues(&canonical_ass).is_empty(), "{canonical_ass}");
@@ -811,9 +788,18 @@ fn split_call_drag_renders_one_trail_like_a_canonical_drag() {
     // Sanity: that is one trail, one anchor, one held indicator.
     let cursor = cursor_dialogues(&split_ass);
     assert_eq!(cursor.len(), 3, "{split_ass}");
-    assert!(cursor.iter().any(|l| l.contains("\\1a&H73&")), "{split_ass}");
-    assert!(cursor.iter().any(|l| l.contains("\\1a&H87&")), "{split_ass}");
-    assert!(cursor.iter().any(|l| l.contains("\\1a&H4B&")), "{split_ass}");
+    assert!(
+        cursor.iter().any(|l| l.contains("\\1a&H73&")),
+        "{split_ass}"
+    );
+    assert!(
+        cursor.iter().any(|l| l.contains("\\1a&H87&")),
+        "{split_ass}"
+    );
+    assert!(
+        cursor.iter().any(|l| l.contains("\\1a&H4B&")),
+        "{split_ass}"
+    );
 }
 
 #[test]
@@ -883,7 +869,12 @@ fn right_and_middle_clicks_render_rings() {
             up_with(2100, 20, 20, MouseButton::Middle),
         ],
     );
-    let ass = build_overlay_ass(&[right, middle], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let ass = build_overlay_ass(
+        &[right, middle],
+        (1280, 720),
+        SOURCE_TEN_SECS,
+        FRAME_RATE_15,
+    );
     assert_eq!(ring_dialogues(&ass).len(), 2, "{ass}");
 }
 
@@ -891,9 +882,18 @@ fn right_and_middle_clicks_render_rings() {
 fn unmatched_release_and_stray_move_render_nothing() {
     // A release whose button was never pressed, and a move with no owning press,
     // carry no drawable gesture.
-    let stray_release =
-        pointer_entry(1000, 1100, &[], vec![up_with(1000, 30, 30, MouseButton::Left)]);
-    let ass = build_overlay_ass(&[stray_release], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let stray_release = pointer_entry(
+        1000,
+        1100,
+        &[],
+        vec![up_with(1000, 30, 30, MouseButton::Left)],
+    );
+    let ass = build_overlay_ass(
+        &[stray_release],
+        (1280, 720),
+        SOURCE_TEN_SECS,
+        FRAME_RATE_15,
+    );
     assert!(cursor_dialogues(&ass).is_empty(), "{ass}");
 
     let stray_move = pointer_entry(2000, 2100, &[], vec![mv(2000, 40, 50)]);
