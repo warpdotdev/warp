@@ -147,19 +147,17 @@ pub(super) fn parse_markdown_into_text_and_code_sections(
                         );
                     }
                     current_section = CurrentSection::PlainText(String::new());
+                } else if code.is_empty()
+                    && language_token.is_none()
+                    && let Some(language_name) = known_language_identifier(line)
+                {
+                    *language_token = Some(language_name.clone());
+                    *language = Some(language_name.into());
                 } else {
-                    if code.is_empty()
-                        && language_token.is_none()
-                        && let Some(language_name) = known_language_identifier(line)
-                    {
-                        *language_token = Some(language_name.clone());
-                        *language = Some(language_name.into());
-                    } else {
-                        if !code.is_empty() {
-                            code.push('\n');
-                        }
-                        code.push_str(line);
+                    if !code.is_empty() {
+                        code.push('\n');
                     }
+                    code.push_str(line);
                 }
             }
         }
