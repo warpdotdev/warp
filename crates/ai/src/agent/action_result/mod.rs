@@ -823,7 +823,9 @@ impl AIAgentActionResultType {
             | Self::InsertReviewComments(InsertReviewCommentsResult::Success { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Approved { .. })
             | Self::StartRecording(StartRecordingResult::Success(_))
-            | Self::StopRecording(StopRecordingResult::Success(_))
+            | Self::StopRecording(
+                StopRecordingResult::Success(_) | StopRecordingResult::Discarded,
+            )
             | Self::OpenCodeReview
             | Self::ReadSkill(ReadSkillResult::Success { .. })
             | Self::FetchConversation(FetchConversationResult::Success { .. })
@@ -1264,6 +1266,10 @@ pub enum StopRecordingResult {
     Success(RecordingStopped),
     Error(String),
     Cancelled,
+    /// The agent opted not to persist the recording (`should_persist=false`), so
+    /// it was discarded without uploading. Distinct from `Cancelled` so the
+    /// agent's turn continues.
+    Discarded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1287,6 +1293,7 @@ impl Display for StopRecordingResult {
             ),
             StopRecordingResult::Error(error) => write!(f, "Stop recording error: {error}"),
             StopRecordingResult::Cancelled => write!(f, "Stop recording cancelled"),
+            StopRecordingResult::Discarded => write!(f, "Recording discarded"),
         }
     }
 }

@@ -227,6 +227,7 @@ impl TuiPermissionPrompt {
                 ctx.emit(TuiPermissionPromptEvent::RejectRequested);
             }
             TuiOptionSelectorEvent::LayoutInvalidated
+            | TuiOptionSelectorEvent::CustomTextCleared
             | TuiOptionSelectorEvent::CustomTextOpened
             | TuiOptionSelectorEvent::CustomTextClosed => self.invalidate_layout(ctx),
             TuiOptionSelectorEvent::Confirmed { .. } | TuiOptionSelectorEvent::RetryRequested => {}

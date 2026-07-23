@@ -17,6 +17,8 @@ use super::{
     RepositoryCacheSource, aggregate_mode_stats, construct_plan, create_retained_scratch_directory,
     is_valid_env_name, run_command_with_timeout, setup_cache,
 };
+#[cfg(unix)]
+use super::{create_cache_dir_all, current_owner};
 use crate::spacectl::{Mount, MountInput, MountOutput, MountResponse};
 
 fn identity(host: &str, owner: &str, repo: &str) -> RepoIdentity {
@@ -65,6 +67,52 @@ fn response(modes: &[&str], envs: &[(&str, &str)], mounts: &[(&str, bool)]) -> V
 
 fn command_args(command: &Command) -> Vec<OsString> {
     command.get_args().map(ToOwned::to_owned).collect()
+}
+#[cfg(unix)]
+#[test]
+fn permission_denied_cache_directory_uses_noninteractive_sudo_mkdir_and_chown() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if !super::has_command("sudo") {
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let locked = temp.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+    let target = locked.join("child").join("grandchild");
+    let commands = Rc::new(RefCell::new(Vec::new()));
+    let result = block_on(create_cache_dir_all(&target, &mut {
+        let commands = Rc::clone(&commands);
+        move |command| {
+            commands.borrow_mut().push(command_args(&command));
+            futures::future::ready(Ok(Vec::new()))
+        }
+    }));
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert_eq!(result, Ok(()));
+    let commands = commands.borrow();
+    assert_eq!(commands.len(), 2);
+    assert_eq!(
+        commands[0],
+        [
+            OsString::from("-n"),
+            OsString::from("mkdir"),
+            OsString::from("-p"),
+            target.clone().into_os_string()
+        ]
+    );
+    assert_eq!(
+        commands[1],
+        [
+            OsString::from("-n"),
+            OsString::from("chown"),
+            OsString::from(current_owner()),
+            target.into_os_string()
+        ]
+    );
 }
 
 fn is_detect(command: &Command) -> bool {

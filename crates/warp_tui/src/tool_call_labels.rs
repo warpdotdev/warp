@@ -8,7 +8,7 @@ use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
     AskUserQuestionResult, FileGlobV2Result, GrepResult, RequestCommandOutputResult,
     RunAgentsAgentOutcomeKind, RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-    SuggestNewConversationResult,
+    StopRecordingResult, SuggestNewConversationResult,
 };
 use warp_core::command::ExitCode;
 use warpui_core::elements::tui::TuiStyle;
@@ -446,7 +446,12 @@ fn label_for_action(
         AIAgentActionType::StopRecording { .. } => match state {
             State::Pending | State::Blocked => "Stop recording".to_owned(),
             State::Constructing | State::Running => "Stopping recording…".to_owned(),
-            State::Succeeded => "Saved screen recording".to_owned(),
+            State::Succeeded => match result {
+                Some(AIAgentActionResultType::StopRecording(StopRecordingResult::Discarded)) => {
+                    "Discarded screen recording".to_owned()
+                }
+                _ => "Saved screen recording".to_owned(),
+            },
             State::Failed => "Failed to save recording".to_owned(),
             State::Cancelled => "Stop recording cancelled".to_owned(),
         },
