@@ -75,7 +75,7 @@ fn tui_list_policy_classifies_selected_terminal_and_unavailable_entries() {
 }
 
 #[test]
-fn tui_list_policy_ignores_status_for_non_cloud_agent_conversations() {
+fn tui_list_policy_ignores_status_for_local_task_backed_conversations() {
     for status in [
         AgentRunDisplayStatus::ConversationInProgress,
         AgentRunDisplayStatus::TaskInProgress,
@@ -95,7 +95,7 @@ fn tui_list_policy_ignores_status_for_non_cloud_agent_conversations() {
 }
 
 #[test]
-fn tui_list_policy_requires_terminal_status_for_cloud_agent_runs() {
+fn tui_list_policy_requires_terminal_status_for_remote_agent_runs() {
     assert_eq!(
         classify_conversation_list_entry(ConversationListEntryContext {
             selected_id: None,

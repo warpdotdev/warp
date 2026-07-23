@@ -2,8 +2,8 @@ use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 
 use super::{
-    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskState, TaskStatusErrorCode,
-    TaskStatusMessage,
+    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskState, ExecutionLocation,
+    TaskStatusErrorCode, TaskStatusMessage,
 };
 
 fn make_task(snapshot_name: Option<&str>, title: &str) -> AmbientAgentTask {
@@ -24,6 +24,7 @@ fn make_task(snapshot_name: Option<&str>, title: &str) -> AmbientAgentTask {
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: None,
         session_link: None,
         creator: None,
@@ -49,6 +50,7 @@ fn task_json_with_run_time(run_time_key: &str, run_time: Value) -> Value {
         "started_at": now,
         "updated_at": now,
         "status_message": null,
+        "execution_location": "LOCAL",
         "session_id": null,
         "session_link": null,
         "creator": null,
@@ -142,4 +144,5 @@ fn ambient_agent_task_deserializes_run_time_iso8601() {
         serde_json::from_value(task_json_with_run_time("run_time", json!("PT2M30S"))).unwrap();
 
     assert_eq!(task.run_time(), Some(Duration::seconds(150)));
+    assert_eq!(task.execution_location, Some(ExecutionLocation::Local));
 }

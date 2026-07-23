@@ -30,6 +30,7 @@ use crate::ai::agent::conversation::{
 use crate::ai::ambient_agents::task::{HarnessConfig, TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::{
     AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    ExecutionLocation,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::{
@@ -62,6 +63,7 @@ fn create_test_task(
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: None,
         session_link: None,
         creator: Some(TaskPrincipalInfo {
@@ -960,8 +962,43 @@ fn test_get_entries_includes_task_only_entry() {
             assert_eq!(entry.identity.local_conversation_id, None);
             assert_eq!(entry.provenance, AgentConversationProvenance::AmbientRun);
             assert_eq!(entry.display.run_time.as_deref(), Some("2.00 min"));
+            assert_eq!(entry.display.execution_location, None);
             assert!(entry.backing.has_ambient_run);
             assert!(!entry.backing.has_loaded_conversation);
+        });
+    });
+}
+
+#[test]
+fn test_task_entry_preserves_execution_location_independently_of_task_backing() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let mut model = create_test_model();
+        let mut local_task = create_test_task(&make_uuid(8101), "user-a", Utc::now());
+        local_task.execution_location = Some(ExecutionLocation::Local);
+        let mut remote_task = create_test_task(&make_uuid(8102), "user-a", Utc::now());
+        remote_task.execution_location = Some(ExecutionLocation::Remote);
+        model.tasks.insert(local_task.task_id, local_task);
+        model.tasks.insert(remote_task.task_id, remote_task);
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let local_entry = entries
+                .iter()
+                .find(|entry| entry.display.execution_location == Some(ExecutionLocation::Local))
+                .expect("local task entry");
+            let remote_entry = entries
+                .iter()
+                .find(|entry| entry.display.execution_location == Some(ExecutionLocation::Remote))
+                .expect("remote task entry");
+
+            assert!(local_entry.backing.has_ambient_run);
+            assert!(local_entry.identity.ambient_agent_task_id.is_some());
+            assert!(!local_entry.is_cloud_agent_run());
+            assert!(remote_entry.backing.has_ambient_run);
+            assert!(remote_entry.identity.ambient_agent_task_id.is_some());
+            assert!(remote_entry.is_cloud_agent_run());
         });
     });
 }
