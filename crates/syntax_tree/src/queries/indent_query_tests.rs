@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arborium::tree_sitter::Tree;
-use languages::{language_by_filename, Language};
+use languages::{Language, language_by_filename};
 use warp_editor::content::buffer::{Buffer, BufferSnapshot};
 use warp_editor::content::selection_model::BufferSelectionModel;
 use warp_editor::content::text::IndentBehavior;

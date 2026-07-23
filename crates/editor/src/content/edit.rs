@@ -14,8 +14,8 @@ use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_errors::report_error;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui_core::fonts::Weight;
 use warpui_core::image_cache::ImageType;
@@ -104,9 +104,14 @@ pub fn resolve_asset_source_relative_to_directory(
     }
 }
 
+/// Resolve an image source when its Markdown block is laid out.
+///
+/// Local-file metadata is read here so refreshes get a new cache key, while
+/// ordinary frame rendering continues to reuse the resolved source without I/O.
 fn resolve_asset_source(source: &str, base_path: Option<&Path>) -> AssetSource {
     let base_directory = base_path.map(|base| base.parent().unwrap_or(base));
     resolve_asset_source_relative_to_directory(source, base_directory)
+        .with_local_file_content_version()
 }
 
 #[cfg(target_arch = "wasm32")]

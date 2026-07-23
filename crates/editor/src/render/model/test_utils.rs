@@ -313,9 +313,9 @@ pub fn init_logging() {
     // If multiple tests run in the same process, we should still only set up logging once.
     static INIT: Once = Once::new();
     INIT.call_once(|| {
-        env_logger::builder()
+        let _ = env_logger::builder()
             .parse_filters("warp_editor=trace")
             .is_test(true)
-            .init();
+            .try_init();
     });
 }

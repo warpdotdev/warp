@@ -355,6 +355,23 @@ impl RepoMetadataModel {
         })
     }
 
+    /// Loads a specific directory inside an already-tracked local tree and returns a future that
+    /// resolves once the async load has been applied or rejected.
+    #[cfg(feature = "local_fs")]
+    pub fn load_directory_with_completion(
+        &self,
+        repo_root: &StandardizedPath,
+        dir_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<futures::future::BoxFuture<'static, Result<(), RepoMetadataError>>, RepoMetadataError>
+    {
+        let repo_root = repo_root.clone();
+        let dir_path = dir_path.clone();
+        self.local.update(ctx, |local, ctx| {
+            local.load_directory_with_completion(&repo_root, &dir_path, ctx)
+        })
+    }
+
     /// Registers paths that must be loaded even when gitignored or beyond the
     /// tree's size limit.
     ///

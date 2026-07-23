@@ -234,10 +234,13 @@ impl VimHandler for CodeEditorView {
                                 let selection_model = model.buffer_selection_model().as_ref(ctx);
                                 let current_selections = selection_model.selection_offsets();
 
+                                let max_row = buffer.max_point().row;
+                                let row = (*line_number).saturating_sub(1).min(max_row);
+
                                 let new_selections = current_selections.mapped(|selection| {
                                     let cursor_pos = selection.head;
                                     let target_pos =
-                                        Point::new(*line_number, 0).to_buffer_char_offset(buffer);
+                                        Point::new(row, 0).to_buffer_char_offset(buffer);
 
                                     SelectionOffsets {
                                         head: target_pos,
@@ -256,8 +259,11 @@ impl VimHandler for CodeEditorView {
                                     model.vim_extend_selection_linewise(include_newline, ctx);
                                 }
                             }
-                            _ => {
-                                // TODO: Implement other motions (find char, brackets, etc.)
+                            VimMotion::JumpToMatchingBracket => {
+                                model.vim_select_for_matching_bracket(ctx);
+                            }
+                            VimMotion::JumpToUnmatchedBracket(bracket) => {
+                                model.vim_jump_to_unmatched_bracket(bracket, true, ctx);
                             }
                         }
                     }
@@ -485,20 +491,20 @@ impl VimHandler for CodeEditorView {
 
         let word_under_cursor = self.model.as_ref(ctx).word_under_cursor_for_search(ctx);
 
-        if let Some(word) = word_under_cursor {
-            if !word.trim().is_empty() {
-                find_bar.update(ctx, |find_bar, ctx| {
-                    find_bar.set_find_query(ctx, &word);
-                    find_bar.set_open(true);
-                    // Disable the find input; the search is already defined.
-                    find_bar.set_find_input_editable(ctx, false);
-                });
+        if let Some(word) = word_under_cursor
+            && !word.trim().is_empty()
+        {
+            find_bar.update(ctx, |find_bar, ctx| {
+                find_bar.set_find_query(ctx, &word);
+                find_bar.set_open(true);
+                // Disable the find input; the search is already defined.
+                find_bar.set_find_input_editable(ctx, false);
+            });
 
-                self.searcher
-                    .update(ctx, |searcher, _| searcher.set_auto_select(true));
-                self.run_find(&word, ctx);
-                ctx.notify();
-            }
+            self.searcher
+                .update(ctx, |searcher, _| searcher.set_auto_select(true));
+            self.run_find(&word, ctx);
+            ctx.notify();
         }
     }
 
@@ -664,7 +670,10 @@ impl VimHandler for CodeEditorView {
 
     fn jump_to_line(&mut self, line_number: u32, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
-            model.jump_to_line_column(line_number as usize, None, ctx);
+            let buffer = model.content().as_ref(ctx);
+            let max_row = buffer.max_point().row;
+            let row = line_number.saturating_sub(1).min(max_row);
+            model.jump_to_line_column(row as usize, None, ctx);
         });
     }
 

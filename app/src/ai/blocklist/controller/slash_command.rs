@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{
-    add_pending_file_attachments, input_context_for_request, parse_context_attachments,
-    BlocklistAIController, BlocklistAIControllerEvent, RequestInput,
+    BlocklistAIController, BlocklistAIControllerEvent, RequestInput, add_pending_file_attachments,
+    input_context_for_request, parse_context_attachments,
 };
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentContext, AIAgentInput, CancellationReason, CloneRepositoryURL, EntrypointType,
@@ -19,7 +21,6 @@ use crate::ai::blocklist::context_model::{
 use crate::ai::blocklist::queued_query::{QueuedQueryId, QueuedQueryModel};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::{report_error, BlocklistAIHistoryModel};
 
 pub enum SlashCommandRequest {
     CreateNewProject {
@@ -35,9 +36,6 @@ pub enum SlashCommandRequest {
     },
     Summarize {
         prompt: Option<String>,
-    },
-    FetchReviewComments {
-        repo_path: String,
     },
     /// Invoke a skill.
     InvokeSkill {
@@ -221,13 +219,12 @@ impl SlashCommandRequest {
         app: &AppContext,
     ) -> Option<AIConversationId> {
         match self {
-            Self::Summarize { .. }
-            | Self::CreateEnvironment { .. }
-            | Self::InvokeSkill { .. }
-            | Self::FetchReviewComments { .. } => controller
-                .context_model
-                .as_ref(app)
-                .selected_conversation_id(app),
+            Self::Summarize { .. } | Self::CreateEnvironment { .. } | Self::InvokeSkill { .. } => {
+                controller
+                    .context_model
+                    .as_ref(app)
+                    .selected_conversation_id(app)
+            }
             _ => None,
         }
     }
@@ -277,9 +274,6 @@ impl SlashCommandRequest {
             SlashCommandRequest::Summarize { prompt, .. } => {
                 vec![AIAgentInput::SummarizeConversation { prompt, context }]
             }
-            SlashCommandRequest::FetchReviewComments { repo_path } => {
-                vec![AIAgentInput::FetchReviewComments { repo_path, context }]
-            }
             SlashCommandRequest::InvokeSkill { skill, user_query } => {
                 let user_query = if FeatureFlag::SkillArguments.is_enabled() {
                     let query = user_query
@@ -313,7 +307,6 @@ impl SlashCommandRequest {
             SlashCommandRequest::CreateNewProject { .. }
             | SlashCommandRequest::CreateEnvironment { .. }
             | SlashCommandRequest::Summarize { .. }
-            | SlashCommandRequest::FetchReviewComments { .. }
             | SlashCommandRequest::InvokeSkill { .. } => EntrypointType::UserInitiated,
         }
     }

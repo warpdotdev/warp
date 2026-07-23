@@ -1,11 +1,10 @@
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use parking_lot::FairMutex;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use crate::persistence::{ModelEvent, StartedCommandMetadata};
-use crate::report_error;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::view::ExecuteCommandEvent;
 use crate::terminal::{History, HistoryEntry, TerminalModel};
@@ -69,7 +68,7 @@ pub fn update_command_history(
             .spawn(async move {
                 // Sending over a sync sender can block the current thread, so we do this async.
                 if let Err(e) = sender_clone.send(insert_command_event) {
-                    report_error!(anyhow::Error::new(e).context("Error sending ModelEvent"));
+                    log::warn!("Error sending ModelEvent: {e:#}");
                 }
             })
             .detach();

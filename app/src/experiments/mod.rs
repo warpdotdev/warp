@@ -16,17 +16,18 @@ use std::ops::Range;
 use std::str::FromStr;
 
 use anyhow::Result;
-pub use block_onboarding_layer::{BlockOnboarding, BLOCK_ONBOARDING_LAYER};
+pub use block_onboarding_layer::{BLOCK_ONBOARDING_LAYER, BlockOnboarding};
 use dashmap::DashMap;
-pub use improved_palette_search_layer::{ImprovedPaletteSearch, IMPROVED_PALETTE_SEARCH_LAYER};
+pub use improved_palette_search_layer::{IMPROVED_PALETTE_SEARCH_LAYER, ImprovedPaletteSearch};
 use lazy_static::lazy_static;
 pub use login_layer::{AuthFlowInstructions, LOGIN_LAYER};
 use warp_core::user_preferences::GetUserPreferences as _;
+use warp_errors::report_error;
 use warpui::{AppContext, SingletonEntity};
 
 use crate::auth::auth_state::AuthStateProvider;
 use crate::channel::{Channel, ChannelState};
-use crate::{report_error, send_telemetry_sync_from_app_ctx};
+use crate::send_telemetry_sync_from_app_ctx;
 
 /// Number of buckets we are using to partition user traffic. The largest valid
 /// bucket index is NUM_BUCKETS - 1.
@@ -311,18 +312,18 @@ pub trait Experiment<T: Experiment<T>>: FromStr {
 
         // Check for user override. Only used in local and dev builds or if the
         // this experiment allows overrides.
-        if Self::can_use_user_override(ChannelState::channel()) {
-            if let Some(variant) = USER_OVERRIDES.get(Self::name()) {
-                match T::from_str(&variant) {
-                    Ok(group) => assigned_group = Some(group),
-                    Err(e) => {
-                        report_error!(
-                            anyhow::anyhow!("{INVALID_USER_OVERRIDE_ERR}"),
-                            extra: { "error" => ?e }
-                        );
-                    }
-                };
-            }
+        if Self::can_use_user_override(ChannelState::channel())
+            && let Some(variant) = USER_OVERRIDES.get(Self::name())
+        {
+            match T::from_str(&variant) {
+                Ok(group) => assigned_group = Some(group),
+                Err(e) => {
+                    report_error!(
+                        anyhow::anyhow!("{INVALID_USER_OVERRIDE_ERR}"),
+                        extra: { "error" => ?e }
+                    );
+                }
+            };
         }
 
         // If there was no override, derive the assignment from the user's anonymous id.

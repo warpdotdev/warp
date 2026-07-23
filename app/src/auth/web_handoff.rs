@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use warp_errors::report_error;
 use warpui::ui_components::components::UiComponent as _;
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
 use wasm_bindgen::prelude::*;
@@ -7,8 +8,7 @@ use super::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_view_modal::AuthRedirectPayload;
 use crate::auth::credentials::RefreshToken;
 use crate::auth::login_error_modal::LoginErrorModal;
-use crate::platform::wasm::{user_handoff, AuthHandoffError};
-use crate::report_error;
+use crate::platform::wasm::{AuthHandoffError, user_handoff};
 
 #[wasm_bindgen]
 extern "C" {}

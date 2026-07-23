@@ -1,8 +1,8 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+use warp_errors::report_error;
 
 use crate::env_vars::EnvVarCollection;
-use crate::report_error;
 
 #[derive(Clone, Debug)]
 /// Result of fuzzy matching an [`EnvVarCollection`].

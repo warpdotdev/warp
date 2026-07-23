@@ -173,9 +173,11 @@ fn reconcile_snapshot_fully_replaces_all_host_context() {
             assert!(manager.skill_by_path(&home_path).is_none());
         });
         rules.read(&app, |model, _| {
-            assert!(model
-                .find_applicable_rules(&remote_path(&host_id, "/repo").unwrap())
-                .is_none());
+            assert!(
+                model
+                    .find_applicable_rules(&remote_path(&host_id, "/repo").unwrap())
+                    .is_none()
+            );
         });
     });
 }
@@ -209,9 +211,11 @@ fn remove_host_context_clears_only_the_matching_host() {
             assert!(manager.skill_by_path(&second_bundled_path).is_some());
         });
         rules.read(&app, |model, _| {
-            assert!(model
-                .find_applicable_rules(&remote_path(&first_host, "/repo").unwrap())
-                .is_none());
+            assert!(
+                model
+                    .find_applicable_rules(&remote_path(&first_host, "/repo").unwrap())
+                    .is_none()
+            );
             assert_eq!(
                 model
                     .find_applicable_rules(&remote_path(&second_host, "/repo").unwrap())

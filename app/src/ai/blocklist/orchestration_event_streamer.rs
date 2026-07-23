@@ -16,18 +16,16 @@ use warpui::{
 
 use super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::orchestration_events::{
-    build_lifecycle_event, LifecycleEventDetailPayload, LifecycleEventDetailStage,
-    OrchestrationEventService, PendingEvent, PendingEventDetail,
+    LifecycleEventDetailPayload, LifecycleEventDetailStage, OrchestrationEventService,
+    PendingEvent, PendingEventDetail, build_lifecycle_event,
 };
 use crate::ai::agent::conversation::{AIAgentHarness, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentExchangeId, AIAgentOutputMessageType, ReceivedMessageInput};
 use crate::ai::agent_events::{
-    run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, AgentEventFilter, AgentMessageEventMetadata, MessageHydrator,
-    ServerApiAgentEventSource,
+    AgentEventConsumer, AgentEventConsumerControlFlow, AgentEventDriverConfig, AgentEventFilter,
+    AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource, run_agent_event_driver,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::report_error;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ai::{AIClient, AgentRunEvent, TaskListFilter};
 use crate::server::server_api::{ServerApi, ServerApiProvider};
@@ -43,8 +41,6 @@ const RESTORE_FETCH_PERMANENT_BACKOFF_STEPS: &[u64] = &[30];
 const SSE_DRAIN_INTERVAL_MS: u64 = 500;
 /// Cap killed-run tombstones while keeping normal sessions well below the limit.
 const MAX_KILLED_RUN_IDS: usize = 1024;
-/// Maximum number of explicit run IDs the server accepts on a `run_ids[]` SSE stream.
-const MAX_RUN_ID_STREAM_FILTER: usize = 100;
 /// Max child runs fetched per cold-start `?ancestor_run_id=` REST seed in
 /// viewer mode. Matches the legacy `OrchestrationViewerModel` poller's value
 /// (the server caps at 100 anyway).
@@ -300,6 +296,7 @@ pub struct OrchestrationEventStreamer {
     killed_run_id_order: VecDeque<String>,
 }
 
+#[allow(private_interfaces)]
 pub enum OrchestrationEventStreamerEvent {
     DormantClaudeWakeReady {
         conversation_id: AIConversationId,
@@ -317,19 +314,21 @@ pub enum OrchestrationEventStreamerEvent {
         run_id: String,
         status: ConversationStatus,
     },
+    /// Lifecycle transition observed on an owner-side stream for a watched run.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    WatchedRunStatusChanged {
+        owner_conversation_id: AIConversationId,
+        run_id: String,
+        status: ConversationStatus,
+    },
 }
 
 /// Outcome of selecting the SSE wire filter for an owner-side conversation.
 enum DesiredSseFilter {
     /// Open (or keep) a stream with this filter.
     Filter(AgentEventFilter),
-    /// Nothing to watch yet (no watched run IDs); do not open a stream.
+    /// Nothing to watch yet; do not open a stream.
     NoFilter,
-    /// The conversation is a parent with more watched children than the
-    /// explicit `run_ids[]` stream allows and parent-family ancestor
-    /// streaming is unavailable. The payload is the watched-run-id total,
-    /// used only for diagnostics.
-    UnsupportedRunIdCount(usize),
 }
 
 impl OrchestrationEventStreamer {
@@ -575,7 +574,7 @@ impl OrchestrationEventStreamer {
         // regression.
         let is_child = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| c.has_parent_agent());
+            .is_some_and(|c| c.is_child_agent_conversation());
         if is_child {
             return;
         }
@@ -612,8 +611,7 @@ impl OrchestrationEventStreamer {
 
     /// Completes the wait-time parent registration fetch. A non-empty
     /// `children` list confirms the conversation is an orchestrator: install
-    /// the children and reevaluate eligibility, which (with
-    /// `OwnerOrchestrationAncestorStreamer` on) opens the
+    /// the children and reevaluate eligibility, opening the
     /// `AncestorRunId { include_self: true }` stream that thereafter tracks
     /// all children dynamically. Empty children means it is not a parent; an
     /// error is a graceful no-op (the next wait re-checks).
@@ -642,11 +640,10 @@ impl OrchestrationEventStreamer {
             .map(|stream| stream.event_cursor)
             .unwrap_or(0);
         self.apply_task_children(conversation_id, &task, base_cursor);
-        // Mirror `register_watched_run_id`: also watch `self_run_id` so the
-        // parent's own inbox is delivered if `desired_sse_filter` falls back to
-        // `RunIds` (i.e. `OwnerOrchestrationAncestorStreamer` disabled, where
-        // the filter would otherwise watch only children). A no-op in the
-        // ancestor-stream path, which already covers self via `include_self`.
+        // Also watch `self_run_id` — a no-op on the ancestor-stream path
+        // (which covers self via `include_self`), but needed defensively
+        // for the no-self_run_id fallback where `RunIds` would otherwise
+        // watch only the children.
         self.ensure_self_run_id_watched(conversation_id, ctx);
         self.reevaluate_eligibility(conversation_id, ctx);
     }
@@ -1226,7 +1223,7 @@ impl OrchestrationEventStreamer {
             let Some(run_id) = conversation.run_id() else {
                 return false;
             };
-            (run_id, conversation.has_parent_agent())
+            (run_id, conversation.is_child_agent_conversation())
         };
 
         // Parent role: any watched run_id that isn't this conversation's
@@ -1494,7 +1491,9 @@ impl OrchestrationEventStreamer {
                         "Restore: get_agent_run failed for {conv_id:?}: {err:#}; will retry"
                     );
                 } else {
-                    log::warn!("Restore: get_agent_run hit permanent error for {conv_id:?}: {err:#}; retrying with slow backoff");
+                    log::warn!(
+                        "Restore: get_agent_run hit permanent error for {conv_id:?}: {err:#}; retrying with slow backoff"
+                    );
                 }
                 self.start_restore_fetch_retry_timer(conv_id, task_id, sqlite_cursor, &err, ctx);
             }
@@ -1654,7 +1653,7 @@ impl OrchestrationEventStreamer {
         }
         let has_parent = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
-            .is_some_and(|c| c.has_parent_agent());
+            .is_some_and(|c| c.is_child_agent_conversation());
         has_parent || self.is_parent_agent_conversation(conversation_id, ctx)
     }
 
@@ -1691,22 +1690,29 @@ impl OrchestrationEventStreamer {
         conversation_id: AIConversationId,
         ctx: &warpui::AppContext,
     ) -> DesiredSseFilter {
-        let is_parent = self.is_parent_agent_conversation(conversation_id, ctx);
-        if is_parent && FeatureFlag::OwnerOrchestrationAncestorStreamer.is_enabled() {
-            if let Some(self_run_id) = self.self_run_id(conversation_id, ctx) {
-                return DesiredSseFilter::Filter(AgentEventFilter::AncestorRunId {
+        if self.is_parent_agent_conversation(conversation_id, ctx) {
+            // A parent always has self_run_id by the time it has children
+            // (the server must assign the parent a run before any child can
+            // be created). Return NoFilter defensively if it's absent so
+            // `on_server_token_assigned` re-evaluates when the token arrives.
+            return match self.self_run_id(conversation_id, ctx) {
+                Some(self_run_id) => DesiredSseFilter::Filter(AgentEventFilter::AncestorRunId {
                     ancestor_run_id: self_run_id,
                     include_self: true,
-                });
-            }
+                }),
+                None => {
+                    log::warn!(
+                        "Parent conversation {conversation_id:?} has watched children \
+                         but no self_run_id; deferring SSE until token arrives"
+                    );
+                    DesiredSseFilter::NoFilter
+                }
+            };
         }
 
         let run_ids = self.run_ids_for_sse(conversation_id);
         if run_ids.is_empty() {
             return DesiredSseFilter::NoFilter;
-        }
-        if is_parent && run_ids.len() > MAX_RUN_ID_STREAM_FILTER {
-            return DesiredSseFilter::UnsupportedRunIdCount(run_ids.len());
         }
         DesiredSseFilter::Filter(AgentEventFilter::RunIds(run_ids))
     }
@@ -1870,15 +1876,15 @@ impl OrchestrationEventStreamer {
     }
 
     fn teardown_dormant_claude_wake_listener(&mut self, conversation_id: AIConversationId) {
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.wake_connection.take() {
-                log::info!(
-                    "Tearing down dormant Claude wake listener for {conversation_id:?} \
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.wake_connection.take()
+        {
+            log::info!(
+                "Tearing down dormant Claude wake listener for {conversation_id:?} \
                      (gen={})",
-                    connection.generation
-                );
-                connection.task.abort();
-            }
+                connection.generation
+            );
+            connection.task.abort();
         }
     }
 
@@ -1892,19 +1898,6 @@ impl OrchestrationEventStreamer {
         let filter = match self.desired_sse_filter(conversation_id, ctx) {
             DesiredSseFilter::Filter(filter) => filter,
             DesiredSseFilter::NoFilter => return,
-            DesiredSseFilter::UnsupportedRunIdCount(count) => {
-                report_error!(
-                    "Owner-side SSE delivery blocked: watched run IDs exceed the explicit-run-id \
-                     limit and parent-family ancestor streaming is disabled; enable \
-                     OwnerOrchestrationAncestorStreamer to deliver events for large orchestrators",
-                    extra: {
-                        "conversation_id" => ?conversation_id,
-                        "watched_run_ids" => %count,
-                        "limit" => %MAX_RUN_ID_STREAM_FILTER
-                    }
-                );
-                return;
-            }
         };
 
         let cursor = self
@@ -1996,7 +1989,6 @@ impl OrchestrationEventStreamer {
             }
             // Nothing watchable tears down through the eligibility predicate.
             DesiredSseFilter::NoFilter => false,
-            DesiredSseFilter::UnsupportedRunIdCount(_) => true,
         }
     }
 
@@ -2119,6 +2111,25 @@ impl OrchestrationEventStreamer {
                 .extend(message_ids);
         }
 
+        // The owner-side event service delivers lifecycle notifications to the
+        // orchestrator conversation, but passive remote-child views do not run
+        // their own SSE stream. Broadcast the same canonical status mapping so
+        // frontends retaining those views can project the child's lifecycle.
+        for event in &events {
+            if event.run_id == self_run_id {
+                continue;
+            }
+            let Some(lifecycle_type) = lifecycle_event_type_from_wire(event.event_type.as_str())
+            else {
+                continue;
+            };
+            ctx.emit(OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
+                owner_conversation_id: conversation_id,
+                run_id: event.run_id.clone(),
+                status: conversation_status_from_lifecycle_event_type(lifecycle_type),
+            });
+        }
+
         let lifecycle_events = convert_lifecycle_events(&events, self_run_id);
         if messages.is_empty() && lifecycle_events.is_empty() {
             return;
@@ -2136,10 +2147,10 @@ impl OrchestrationEventStreamer {
         // Drain buffered events before dropping the channel so we don't
         // discard already-fetched message bodies.
         self.drain_sse_events(conversation_id, ctx);
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.sse_connection.take() {
-                connection.abort_handle.abort();
-            }
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.sse_connection.take()
+        {
+            connection.abort_handle.abort();
         }
 
         if self.is_eligible(conversation_id, ctx) {
@@ -2153,11 +2164,11 @@ impl OrchestrationEventStreamer {
     fn teardown_sse(&mut self, conversation_id: AIConversationId, ctx: &mut ModelContext<Self>) {
         // Drain anything buffered so we don't lose hydrated messages.
         self.drain_sse_events(conversation_id, ctx);
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            if let Some(connection) = stream.sse_connection.take() {
-                log::info!("Tearing down SSE for {conversation_id:?} (no longer eligible)");
-                connection.abort_handle.abort();
-            }
+        if let Some(stream) = self.streams.get_mut(&conversation_id)
+            && let Some(connection) = stream.sse_connection.take()
+        {
+            log::info!("Tearing down SSE for {conversation_id:?} (no longer eligible)");
+            connection.abort_handle.abort();
         }
     }
 }

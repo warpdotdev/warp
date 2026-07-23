@@ -1,11 +1,11 @@
 use super::components::{UiComponent, UiComponentStyles};
 use super::text::Span;
+use crate::Element;
 use crate::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, MainAxisAlignment, MainAxisSize,
     ParentElement,
 };
 use crate::scene::Border;
-use crate::Element;
 
 pub struct Chip {
     label: String,

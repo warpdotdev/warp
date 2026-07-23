@@ -11,11 +11,11 @@ use warpui::platform::WindowStyle;
 use warpui::{App, EntityId, TypedActionView, ViewHandle};
 
 use super::*;
+use crate::ai::agent::AIAgentInput;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, ConversationStatus, ServerAIConversationMetadata,
 };
-use crate::ai::agent::AIAgentInput;
 use crate::ai::agent_conversations_model::{
     AgentConversationsModel, AgentConversationsModelEvent, AgentRunDisplayStatus,
 };
@@ -29,17 +29,17 @@ use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::context_chips::prompt_type::PromptType;
 use crate::editor::InteractionState;
 use crate::server::ids::ServerId;
-use crate::terminal::model::blocks::{ToTotalIndex as _, INLINE_BANNER_HEIGHT};
+use crate::terminal::TerminalView;
+use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::terminal::view::ambient_agent::{
     HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
 };
 use crate::terminal::view::shared_session::test_utils::terminal_view_for_viewer;
-use crate::terminal::view::{resolve_ai_query_routing, AIQueryRouting, TerminalAction};
-use crate::terminal::TerminalView;
+use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
-use crate::{assert_lines_approx_eq, FeatureFlag};
+use crate::{FeatureFlag, assert_lines_approx_eq};
 
 #[test]
 fn test_prompt_context_menu_items_shared_session_viewer_no_edit_prompt() {
@@ -84,8 +84,8 @@ fn test_prompt_context_menu_items_shared_session_viewer_no_edit_prompt() {
 }
 
 #[test]
-fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non_owner_finished_view(
-) {
+fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non_owner_finished_view()
+ {
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
     let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
@@ -601,8 +601,8 @@ fn test_on_session_share_ended_restores_size_after_viewer_driven_resize() {
 }
 
 #[test]
-fn test_on_session_share_ended_does_not_insert_tombstone_for_ambient_session_under_cloud_mode_setup_v2(
-) {
+fn test_on_session_share_ended_does_not_insert_tombstone_for_ambient_session_under_cloud_mode_setup_v2()
+ {
     let _flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -1576,8 +1576,8 @@ fn test_on_session_share_ended_clears_frozen_followup_input_for_owned_ambient_se
 }
 
 #[test]
-fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session_under_cloud_mode_setup_v2(
-) {
+fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session_under_cloud_mode_setup_v2()
+ {
     let _flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -2347,5 +2347,55 @@ fn test_on_ambient_agent_execution_ended_inserts_tombstone_without_handoff() {
             assert_eq!(final_block_height_items, initial_block_height_items + 1);
             assert!(view.conversation_ended_tombstone_view_id.is_some());
         });
+    });
+}
+
+#[test]
+fn passive_suggestions_suppressed_for_shared_ambient_viewer() {
+    // A link-join viewer of a shared *cloud-agent* session starts with no ambient view model
+    // (it is created lazily at `SessionJoined` and never propagated back to the
+    // passive-suggestions model). In this case, we still should not send passive suggestion requests.
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.ambient_agent_view_model().is_none(),
+                "a link-join shared-session viewer starts without an ambient view model"
+            );
+        });
+
+        // A non-ambient (user) shared-session viewer must still get passive suggestions:
+        // the fix must not over-suppress ordinary shared sessions.
+        let suppressed_for_user_viewer = terminal.update(&mut app, |view, ctx| {
+            view.passive_suggestions_models
+                .maa
+                .update(ctx, |model, ctx| {
+                    model.is_ambient_agent_session_for_test(ctx)
+                })
+        });
+        assert!(
+            !suppressed_for_user_viewer,
+            "passive suggestions must not be suppressed for a non-ambient shared-session viewer"
+        );
+
+        // Once the viewer discovers it is viewing an ambient (cloud-agent) run, passive
+        // suggestions must be suppressed even though the ambient view model is still absent.
+        let suppressed_for_ambient_viewer = terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                    "44444444-4444-4444-4444-444444444444".to_string(),
+                )));
+            view.passive_suggestions_models
+                .maa
+                .update(ctx, |model, ctx| {
+                    model.is_ambient_agent_session_for_test(ctx)
+                })
+        });
+        assert!(
+            suppressed_for_ambient_viewer,
+            "passive suggestions must be suppressed for a shared cloud-agent viewer"
+        );
     });
 }

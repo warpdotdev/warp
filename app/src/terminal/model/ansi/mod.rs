@@ -27,6 +27,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::debug;
 use vte::{Params, Parser as VteParser, Perform as VtePerform};
+use warp_errors::report_error;
 pub use warp_terminal::model::ansi::control_sequence_parameters::*;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::color::ColorU;
@@ -39,7 +40,7 @@ use crate::terminal::model::completions::{
 use crate::terminal::model::escape_sequences::C0;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
-use crate::{report_error, safe_debug, safe_error};
+use crate::{safe_debug, safe_error, safe_warn};
 
 /// Marks an OSC as one that is sent by Warp logic registered in the shell.
 ///
@@ -164,7 +165,12 @@ fn parse_osc_7_cwd(payload: &[u8]) -> Option<String> {
         return None;
     }
 
-    percent_decode_utf8(encoded_path)
+    let decoded = percent_decode_utf8(encoded_path)?;
+
+    #[cfg(windows)]
+    let decoded = warp_util::path::file_uri_drive_path_to_windows(&decoded).into_owned();
+
+    Some(decoded)
 }
 
 fn osc_7_host_is_local(host: &str) -> bool {
@@ -578,10 +584,10 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
     /// Calls the appropriate `ansi::Handler` function according to the given hook. This function
     /// assumes that the hook was encoded originally.
     fn handle_decoded_hook(&mut self, hook: Result<DProtoHook, serde_json::Error>) {
-        if let Ok(ref hook) = hook {
-            if !self.validate_hook_session_id(hook) {
-                return;
-            }
+        if let Ok(ref hook) = hook
+            && !self.validate_hook_session_id(hook)
+        {
+            return;
         }
         match hook {
             Ok(DProtoHook::CommandFinished { value }) => self.handler.command_finished(value),
@@ -626,10 +632,10 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         // This is because we can guarantee that theses RC file hook don't contain non-ASCII chars
         // that might otherwise corrupt parsing of the PTY output (the same can't be said for the
         // payloads of other DCS hooks).
-        if let Ok(ref hook) = hook {
-            if !self.validate_hook_session_id(hook) {
-                return;
-            }
+        if let Ok(ref hook) = hook
+            && !self.validate_hook_session_id(hook)
+        {
+            return;
         }
         match hook {
             Ok(DProtoHook::InitShell { value }) => self.handler.init_shell(value),
@@ -675,7 +681,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         match params.get(2) {
             Some(&WARP_KV_START_BYTE) => {
                 let Some(hook) = params.get(3).map(|data| String::from_utf8_lossy(data)) else {
-                    report_error!("Start pending hook OSC did not contain shell hook");
+                    log::warn!("Start pending hook OSC did not contain shell hook");
                     return;
                 };
                 self.handler.start_receiving_hook(hook.into());
@@ -699,7 +705,7 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
             }
             Some(&WARP_KV_ENTRY_BYTE) => {
                 let Some(key) = params.get(3) else {
-                    report_error!("Pending hook update OSC did not contain key");
+                    log::warn!("Pending hook update OSC did not contain key");
                     return;
                 };
                 let key = String::from_utf8_lossy(key);
@@ -713,9 +719,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
                 self.handler.update_hook(key.to_string(), value);
             }
             invalid_marker => {
-                report_error!(
-                    "Invalid marker received for pending shell hook OSC",
-                    extra: { "marker" => ?invalid_marker }
+                safe_warn!(
+                    safe: ("Invalid marker received for pending shell hook OSC"),
+                    full: ("Invalid marker received for pending shell hook OSC: marker={:?}", invalid_marker)
                 );
             }
         }
@@ -865,6 +871,23 @@ where
                 unhandled(params);
             }
 
+            // OSC 8: Hyperlink (terminal anchor) sequences.
+            // Format: OSC 8 ; params ; URI ST. An empty URI closes the active
+            // hyperlink.
+            // Reference: https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
+            b"8" if FeatureFlag::OscHyperlinks.is_enabled() => {
+                match Hyperlink::parse_osc_params(&params[1..]) {
+                    Ok(hyperlink) => self.handler.set_hyperlink(hyperlink),
+                    // A malformed, non-UTF-8, or over-length sequence closes any
+                    // active hyperlink so later unrelated output can't inherit a
+                    // stale URI.
+                    Err(_) => {
+                        self.handler.set_hyperlink(None);
+                        unhandled(params);
+                    }
+                }
+            }
+
             // OSC 9: Desktop notification (iTerm2/xterm style)
             // Format: OSC 9 ; <message> ST
             //
@@ -887,12 +910,12 @@ where
                         .map(|x| str::from_utf8(x))
                         .collect::<Result<Vec<_>, _>>()
                         .map(|parts| parts.join(";").trim().to_owned());
-                    if let Ok(body) = body {
-                        if !body.is_empty() {
-                            log::info!("Received OSC 9 notification: {}", body);
-                            self.handler.pluggable_notification(None, body);
-                            return;
-                        }
+                    if let Ok(body) = body
+                        && !body.is_empty()
+                    {
+                        log::info!("Received OSC 9 notification: {}", body);
+                        self.handler.pluggable_notification(None, body);
+                        return;
                     }
                 }
                 unhandled(params);
@@ -900,35 +923,35 @@ where
 
             // Get/set Foreground, Background, Cursor colors.
             b"10" | b"11" | b"12" => {
-                if params.len() >= 2 {
-                    if let Some(mut dynamic_code) = parse_number(params[0]) {
-                        for param in &params[1..] {
-                            // 10 is the first dynamic color, also the foreground.
-                            let offset = dynamic_code as usize - 10;
-                            let index = color_index::FOREGROUND + offset;
+                if params.len() >= 2
+                    && let Some(mut dynamic_code) = parse_number(params[0])
+                {
+                    for param in &params[1..] {
+                        // 10 is the first dynamic color, also the foreground.
+                        let offset = dynamic_code as usize - 10;
+                        let index = color_index::FOREGROUND + offset;
 
-                            // End of setting dynamic colors.
-                            if index > color_index::CURSOR {
-                                unhandled(params);
-                                break;
-                            }
-
-                            if let Some(color) = xparse_color(param) {
-                                self.handler.set_color(index, color);
-                            } else if param == b"?" {
-                                self.handler.dynamic_color_sequence(
-                                    writer,
-                                    dynamic_code,
-                                    index,
-                                    terminator,
-                                );
-                            } else {
-                                unhandled(params);
-                            }
-                            dynamic_code += 1;
+                        // End of setting dynamic colors.
+                        if index > color_index::CURSOR {
+                            unhandled(params);
+                            break;
                         }
-                        return;
+
+                        if let Some(color) = xparse_color(param) {
+                            self.handler.set_color(index, color);
+                        } else if param == b"?" {
+                            self.handler.dynamic_color_sequence(
+                                writer,
+                                dynamic_code,
+                                index,
+                                terminator,
+                            );
+                        } else {
+                            unhandled(params);
+                        }
+                        dynamic_code += 1;
                     }
+                    return;
                 }
                 unhandled(params);
             }
@@ -1095,7 +1118,7 @@ where
                     .map(|json_marker_bytes| String::from_utf8_lossy(json_marker_bytes))
                     .and_then(|json_marker_str| json_marker_str.chars().next())
                 else {
-                    report_error!("Could not retrieve OSC JSON marker");
+                    log::warn!("Could not retrieve OSC JSON marker");
                     return;
                 };
 
@@ -1106,7 +1129,7 @@ where
                             .get(2)
                             .map(|osc_data| String::from_utf8_lossy(osc_data))
                         else {
-                            report_error!("Warp OSC marker did not contain payload");
+                            log::warn!("Warp OSC marker did not contain payload");
                             return;
                         };
                         safe_debug!(
@@ -1122,7 +1145,7 @@ where
                             .get(2)
                             .map(|osc_data| String::from_utf8_lossy(osc_data))
                         else {
-                            report_error!("Warp OSC marker did not contain payload");
+                            log::warn!("Warp OSC marker did not contain payload");
                             return;
                         };
                         safe_debug!(
@@ -1134,9 +1157,9 @@ where
                     }
                     UNENCODED_KV_MARKER => self.handle_kv_marker(params),
                     _ => {
-                        report_error!(
-                            "Invalid OSC JSON marker found",
-                            extra: { "marker" => %json_marker_char }
+                        safe_warn!(
+                            safe: ("Invalid OSC JSON marker found"),
+                            full: ("Invalid OSC JSON marker found: marker={}", json_marker_char)
                         );
                     }
                 }
@@ -1209,7 +1232,9 @@ where
                             );
                         }
                         _ => {
-                            log::warn!("Invalid Warp OSC marker parameter for completions match metadata: {parameter}");
+                            log::warn!(
+                                "Invalid Warp OSC marker parameter for completions match metadata: {parameter}"
+                            );
                         }
                     }
                 }
@@ -1502,7 +1527,7 @@ where
         }
 
         macro_rules! configure_charset {
-            ($charset:path, $intermediates:expr) => {{
+            ($charset:path, $intermediates:expr_2021) => {{
                 let index: CharsetIndex = match $intermediates {
                     [b'('] => CharsetIndex::G0,
                     [b')'] => CharsetIndex::G1,

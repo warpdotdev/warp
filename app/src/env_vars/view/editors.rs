@@ -6,16 +6,16 @@ use warpui::fonts::FamilyId;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, ViewContext, ViewHandle};
 
+use crate::Appearance;
 use crate::editor::{
     EditOrigin, EditorOptions, EditorView, Event as EditorEvent, InteractionState,
     PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions,
 };
+use crate::env_vars::EnvVarValue;
 use crate::env_vars::active_env_var_collection_data::SavingStatus;
 use crate::env_vars::view::env_var_collection::{
-    EditorType, EnvVarCollectionView, DESCRIPTION_EDITOR_POSITION, ROW_SPACING,
+    DESCRIPTION_EDITOR_POSITION, EditorType, EnvVarCollectionView, ROW_SPACING,
 };
-use crate::env_vars::EnvVarValue;
-use crate::Appearance;
 
 // Metadata labels (name and description)
 const LABEL_FONT_SIZE: f32 = 12.;

@@ -2,9 +2,10 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::external_product_icon::ExternalProductIcon;
-use warp_core::ui::icons::{Icon, ICON_DIMENSIONS};
-use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::icons::{ICON_DIMENSIONS, Icon};
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::accessibility::ActionAccessibilityContent;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Fill, Flex,
@@ -15,7 +16,7 @@ use warpui::fonts::Weight;
 use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::chip::Chip;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
@@ -23,8 +24,7 @@ use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::{MCPServerState, TemplatableMCPServerManager};
 use crate::appearance::Appearance;
 use crate::cloud_object::{CloudObject, CloudObjectUuidLookup as _};
-use crate::report_error;
-use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::settings_view::mcp_servers::{ServerCardItemId, style};
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
@@ -447,12 +447,6 @@ impl ServerCardView {
                 Chip::new(
                     tool.to_string(),
                     UiComponentStyles {
-                        margin: Some(Coords {
-                            top: 0.,
-                            bottom: 0.,
-                            left: 0.,
-                            right: 6.,
-                        }),
                         font_family_id: Some(appearance.ui_font_family()),
                         font_size: Some(style::TOOL_CHIP_TEXT_SIZE),
                         font_color: Some(blended_colors::text_main(
@@ -1045,15 +1039,16 @@ impl View for ServerCardView {
                 )
                 .with_spacing(style::SERVER_CARD_INTERIOR_SPACING);
 
-            if self.is_tools_expanded {
-                if let Some(tools) = &self.tools {
-                    let tool_chips = ServerCardView::render_tool_chips(tools, appearance);
-                    let tool_chips_row = Wrap::row()
-                        .with_run_spacing(6.)
-                        .with_children(tool_chips)
-                        .finish();
-                    card_body = card_body.with_child(tool_chips_row);
-                }
+            if self.is_tools_expanded
+                && let Some(tools) = &self.tools
+            {
+                let tool_chips = ServerCardView::render_tool_chips(tools, appearance);
+                let tool_chips_row = Wrap::row()
+                    .with_spacing(6.)
+                    .with_run_spacing(6.)
+                    .with_children(tool_chips)
+                    .finish();
+                card_body = card_body.with_child(tool_chips_row);
             }
 
             let mut card = Container::new(

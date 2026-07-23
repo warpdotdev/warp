@@ -16,19 +16,20 @@ use regex::Regex;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use settings::{
-    define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
+    RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud, define_settings_group,
 };
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
-use warpui::platform::keyboard::KeyCode;
+use warp_errors::report_if_error;
 use warpui::platform::OperatingSystem;
+use warpui::platform::keyboard::KeyCode;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
+use crate::ai::execution_profiles::ExecutionProfilesConfig;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
-use crate::report_if_error;
 use crate::settings::PrivacySettings;
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -276,6 +277,200 @@ impl VoiceInputToggleKey {
     }
 }
 
+/// The full ISO-639-1 language catalog offered in the voice-input Speech
+/// Language picker, as `(code, display_name)` pairs. The empty code is the
+/// `Auto-detect` sentinel: when it is the stored value, no language is forced
+/// and the transcription provider (Wispr Flow) auto-detects the language.
+/// Kept as a data table (rather than an enum) so the entire list stays easy to
+/// scan and extend; the picker is filterable, so the length is not a problem.
+pub const VOICE_INPUT_LANGUAGES: &[(&str, &str)] = &[
+    ("", "Auto-detect"),
+    ("ab", "Abkhaz"),
+    ("aa", "Afar"),
+    ("af", "Afrikaans"),
+    ("ak", "Akan"),
+    ("sq", "Albanian"),
+    ("am", "Amharic"),
+    ("ar", "Arabic"),
+    ("an", "Aragonese"),
+    ("hy", "Armenian"),
+    ("as", "Assamese"),
+    ("av", "Avaric"),
+    ("ae", "Avestan"),
+    ("ay", "Aymara"),
+    ("az", "Azerbaijani"),
+    ("bm", "Bambara"),
+    ("ba", "Bashkir"),
+    ("eu", "Basque"),
+    ("be", "Belarusian"),
+    ("bn", "Bengali"),
+    ("bh", "Bihari"),
+    ("bi", "Bislama"),
+    ("bs", "Bosnian"),
+    ("br", "Breton"),
+    ("bg", "Bulgarian"),
+    ("my", "Burmese"),
+    ("ca", "Catalan"),
+    ("ch", "Chamorro"),
+    ("ce", "Chechen"),
+    ("ny", "Chichewa"),
+    ("zh", "Chinese"),
+    ("cv", "Chuvash"),
+    ("kw", "Cornish"),
+    ("co", "Corsican"),
+    ("cr", "Cree"),
+    ("hr", "Croatian"),
+    ("cs", "Czech"),
+    ("da", "Danish"),
+    ("dv", "Divehi"),
+    ("nl", "Dutch"),
+    ("dz", "Dzongkha"),
+    ("en", "English"),
+    ("eo", "Esperanto"),
+    ("et", "Estonian"),
+    ("ee", "Ewe"),
+    ("fo", "Faroese"),
+    ("fj", "Fijian"),
+    ("fi", "Finnish"),
+    ("fr", "French"),
+    ("ff", "Fulah"),
+    ("gl", "Galician"),
+    ("lg", "Ganda"),
+    ("ka", "Georgian"),
+    ("de", "German"),
+    ("el", "Greek"),
+    ("gn", "Guarani"),
+    ("gu", "Gujarati"),
+    ("ht", "Haitian Creole"),
+    ("ha", "Hausa"),
+    ("he", "Hebrew"),
+    ("hz", "Herero"),
+    ("hi", "Hindi"),
+    ("ho", "Hiri Motu"),
+    ("hu", "Hungarian"),
+    ("is", "Icelandic"),
+    ("io", "Ido"),
+    ("ig", "Igbo"),
+    ("id", "Indonesian"),
+    ("ia", "Interlingua"),
+    ("ie", "Interlingue"),
+    ("iu", "Inuktitut"),
+    ("ik", "Inupiaq"),
+    ("ga", "Irish"),
+    ("it", "Italian"),
+    ("ja", "Japanese"),
+    ("jv", "Javanese"),
+    ("kl", "Kalaallisut"),
+    ("kn", "Kannada"),
+    ("kr", "Kanuri"),
+    ("ks", "Kashmiri"),
+    ("kk", "Kazakh"),
+    ("km", "Khmer"),
+    ("ki", "Kikuyu"),
+    ("rw", "Kinyarwanda"),
+    ("kv", "Komi"),
+    ("kg", "Kongo"),
+    ("ko", "Korean"),
+    ("ku", "Kurdish"),
+    ("kj", "Kwanyama"),
+    ("ky", "Kyrgyz"),
+    ("lo", "Lao"),
+    ("la", "Latin"),
+    ("lv", "Latvian"),
+    ("li", "Limburgish"),
+    ("ln", "Lingala"),
+    ("lt", "Lithuanian"),
+    ("lu", "Luba-Katanga"),
+    ("lb", "Luxembourgish"),
+    ("mk", "Macedonian"),
+    ("mg", "Malagasy"),
+    ("ms", "Malay"),
+    ("ml", "Malayalam"),
+    ("mt", "Maltese"),
+    ("gv", "Manx"),
+    ("mi", "Maori"),
+    ("mr", "Marathi"),
+    ("mh", "Marshallese"),
+    ("mn", "Mongolian"),
+    ("na", "Nauru"),
+    ("nv", "Navajo"),
+    ("ng", "Ndonga"),
+    ("ne", "Nepali"),
+    ("nd", "North Ndebele"),
+    ("se", "Northern Sami"),
+    ("no", "Norwegian"),
+    ("nb", "Norwegian Bokmal"),
+    ("nn", "Norwegian Nynorsk"),
+    ("ii", "Nuosu"),
+    ("oc", "Occitan"),
+    ("oj", "Ojibwe"),
+    ("cu", "Old Church Slavonic"),
+    ("or", "Oriya"),
+    ("om", "Oromo"),
+    ("os", "Ossetian"),
+    ("pi", "Pali"),
+    ("ps", "Pashto"),
+    ("fa", "Persian"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("pa", "Punjabi"),
+    ("qu", "Quechua"),
+    ("ro", "Romanian"),
+    ("rm", "Romansh"),
+    ("rn", "Rundi"),
+    ("ru", "Russian"),
+    ("sm", "Samoan"),
+    ("sg", "Sango"),
+    ("sa", "Sanskrit"),
+    ("sc", "Sardinian"),
+    ("gd", "Scottish Gaelic"),
+    ("sr", "Serbian"),
+    ("sn", "Shona"),
+    ("sd", "Sindhi"),
+    ("si", "Sinhala"),
+    ("sk", "Slovak"),
+    ("sl", "Slovenian"),
+    ("so", "Somali"),
+    ("nr", "South Ndebele"),
+    ("st", "Southern Sotho"),
+    ("es", "Spanish"),
+    ("su", "Sundanese"),
+    ("sw", "Swahili"),
+    ("ss", "Swati"),
+    ("sv", "Swedish"),
+    ("tl", "Tagalog"),
+    ("ty", "Tahitian"),
+    ("tg", "Tajik"),
+    ("ta", "Tamil"),
+    ("tt", "Tatar"),
+    ("te", "Telugu"),
+    ("th", "Thai"),
+    ("bo", "Tibetan"),
+    ("ti", "Tigrinya"),
+    ("to", "Tongan"),
+    ("ts", "Tsonga"),
+    ("tn", "Tswana"),
+    ("tr", "Turkish"),
+    ("tk", "Turkmen"),
+    ("tw", "Twi"),
+    ("uk", "Ukrainian"),
+    ("ur", "Urdu"),
+    ("ug", "Uyghur"),
+    ("uz", "Uzbek"),
+    ("ve", "Venda"),
+    ("vi", "Vietnamese"),
+    ("vo", "Volapuk"),
+    ("wa", "Walloon"),
+    ("cy", "Welsh"),
+    ("fy", "Western Frisian"),
+    ("wo", "Wolof"),
+    ("xh", "Xhosa"),
+    ("yi", "Yiddish"),
+    ("yo", "Yoruba"),
+    ("za", "Zhuang"),
+    ("zu", "Zulu"),
+];
+
 /// The default mode for new terminal sessions.
 #[derive(
     Default,
@@ -435,6 +630,52 @@ settings::macros::implement_setting_for_enum!(
     toml_path: "agents.warp_agent.other.orchestration_message_display_mode",
     description: "Controls how child-agent messages are displayed.",
 );
+
+/// Which unit the usage entry displays in Warp Agent CLI.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Which unit the usage entry displays in Warp Agent CLI.",
+    rename_all = "snake_case"
+)]
+pub enum TuiUsageDisplayMode {
+    /// Credits spent — the same number the GUI's usage footer shows (default).
+    #[default]
+    Credits,
+    /// Provider dollar cost.
+    Cost,
+}
+
+settings::macros::implement_setting_for_enum!(
+    TuiUsageDisplayMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Never,
+    surface: settings::SettingSurfaces::TUI,
+    private: false,
+    toml_path: "agents.usage_display_mode",
+    description: "Which unit the usage entry displays in Warp Agent CLI: credits or provider cost.",
+);
+
+impl TuiUsageDisplayMode {
+    /// The other unit — clicking the usage entry flips to this.
+    pub fn toggled(self) -> Self {
+        match self {
+            TuiUsageDisplayMode::Credits => TuiUsageDisplayMode::Cost,
+            TuiUsageDisplayMode::Cost => TuiUsageDisplayMode::Credits,
+        }
+    }
+}
 
 impl OrchestrationMessageDisplayMode {
     /// Display name for the settings dropdown.
@@ -738,8 +979,8 @@ impl schemars::JsonSchema for ToolbarCommandMap {
         std::borrow::Cow::Borrowed("ToolbarCommandMap")
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<HashMap<String, String>>()
+    fn json_schema(r#gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        r#gen.subschema_for::<HashMap<String, String>>()
     }
 }
 
@@ -758,10 +999,10 @@ impl settings_value::SettingsValue for ToolbarCommandMap {
 
     fn from_file_value(value: &serde_json::Value) -> Option<Self> {
         // Try map format first (using from_value to preserve insertion order), then legacy array format.
-        if value.is_object() {
-            if let Ok(map) = serde_json::from_value::<IndexMap<String, String>>(value.clone()) {
-                return Some(ToolbarCommandMap::new(map));
-            }
+        if value.is_object()
+            && let Ok(map) = serde_json::from_value::<IndexMap<String, String>>(value.clone())
+        {
+            return Some(ToolbarCommandMap::new(map));
         }
         if let Some(arr) = value.as_array() {
             let result: IndexMap<String, String> = arr
@@ -802,10 +1043,10 @@ define_settings_group!(AISettings, settings: [
     // `is_ai_autodetection_enabled()` getter.
     ai_autodetection_enabled_internal: AIAutoDetectionEnabled {
         type: bool,
-        default: true,
+        default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "agents.warp_agent.input.ai_auto_detection_enabled",
         description: "Controls whether AI automatically detects natural language input.",
@@ -962,6 +1203,19 @@ define_settings_group!(AISettings, settings: [
     // This field is used to store the key used for voice input toggling.
     // Note this is not the named key, but rather corresponds to the physical key.
     voice_input_toggle_key: VoiceInputToggleKey,
+    // Preferred spoken language for voice transcription. Stored as an ISO-639-1
+    // code (e.g. "es"); an empty string means Auto-detect. Options come from
+    // VOICE_INPUT_LANGUAGES.
+    voice_input_language: VoiceInputLanguage {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "agents.voice.voice_input_language",
+        description: "Preferred spoken language for voice input transcription.",
+    },
     // This is not a user-visible setting - it's merely a one-time flag to track if the user has
     // explicitly interacted with voice input. We use this to determine whether we should show a toast
     // to inform the user about voice input and auto-set the keybinding.
@@ -1051,21 +1305,25 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.profiles.agent_mode_coding_file_read_allowlist",
         description: "File paths the agent can read without asking for permission.",
     }
-    // The default model the TUI agent uses, as a file-backed setting.
-    //
-    // TUI-only (`surface: Tui`): the GUI selects its model via execution
-    // profiles, so this key only appears in (and is read from) the TUI's
-    // settings file. `"auto"` defers to Warp's automatic model selection.
-    agent_model: TuiAgentModel {
-        type: String,
-        default: "auto".to_string(),
+    // The complete execution-profile collection shared by GUI and TUI.
+    // GUI cloud synchronization respects the user's settings-sync preference;
+    // TUI settings mode keeps this value local.
+    execution_profiles: ExecutionProfiles {
+        type: ExecutionProfilesConfig,
+        default: ExecutionProfilesConfig::default(),
         supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Never,
-        surface: settings::SettingSurfaces::TUI,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
         private: false,
-        toml_path: "agents.model",
-        description: "The default model the TUI agent uses.",
+        toml_path: "agents.execution_profiles",
+        max_table_depth: 2,
+        description: "AI execution profiles and their permissions.",
     }
+    // Which unit the TUI footer's usage entry displays (credits or provider
+    // cost), flipped by clicking the entry.
+    //
+    // TUI-only and file-backed so the choice persists across TUI sessions.
+    usage_display_mode: TuiUsageDisplayMode,
     // Whether or not the profile-level command autoexecution speedbump has been shown.
     //
     // Not a user-visible setting - we model it as a setting so we can track how often
@@ -1693,6 +1951,21 @@ define_settings_group!(AISettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     }
+
+    // Not a user-visible setting - it tracks which one-time feature-intro popups the
+    // user has already seen, keyed by the feature-intro id (see `FEATURE_INTROS`).
+    //
+    // We model it as a globally-synced setting (not respecting the user's sync setting)
+    // so each feature is announced at most once per user, regardless of how many devices
+    // they use. A feature is considered seen when its id is present and mapped to `true`.
+    seen_feature_intro_ids: SeenFeatureIntroIds {
+        type: HashMap<String, bool>,
+        default: HashMap::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    }
 ]);
 
 impl AISettings {
@@ -1829,6 +2102,12 @@ impl AISettings {
             && *self.voice_input_enabled_internal
     }
 
+    /// Preferred spoken language for voice transcription, or `None` for auto-detect.
+    pub fn voice_input_language_code(&self) -> Option<&str> {
+        let code = self.voice_input_language.as_str();
+        if code.is_empty() { None } else { Some(code) }
+    }
+
     /// Returns `true` if input autodetection is enabled.
     ///
     /// If `FeatureFlag::AgentView` is enabled, this specifically gates NLD enablement in the agent
@@ -1920,10 +2199,11 @@ impl AISettings {
             .rev()
             .find(|cycle| cycle.end_date < Utc::now());
 
-        if let Some(cycle) = most_recent_completed_cycle {
-            if cycle.was_quota_exceeded && !cycle.banner_state.dismissed {
-                return true;
-            }
+        if let Some(cycle) = most_recent_completed_cycle
+            && cycle.was_quota_exceeded
+            && !cycle.banner_state.dismissed
+        {
+            return true;
         }
 
         false
@@ -1939,9 +2219,10 @@ impl AISettings {
             }
         }
 
-        report_if_error!(self
-            .ai_request_quota_info
-            .set_value(AIRequestQuotaInfo { cycle_history }, ctx));
+        report_if_error!(
+            self.ai_request_quota_info
+                .set_value(AIRequestQuotaInfo { cycle_history }, ctx)
+        );
     }
 
     /// Updates the quota info based on the latest RequestLimitInfo.
@@ -1967,12 +2248,12 @@ impl AISettings {
         let mut updated_existing_cycle = false;
 
         // Find or create a cycle that matches the current period
-        if let Some(current_cycle) = cycle_history.last_mut() {
-            if now <= current_cycle.end_date {
-                // Update existing cycle
-                current_cycle.was_quota_exceeded = is_quota_exceeded;
-                updated_existing_cycle = true;
-            }
+        if let Some(current_cycle) = cycle_history.last_mut()
+            && now <= current_cycle.end_date
+        {
+            // Update existing cycle
+            current_cycle.was_quota_exceeded = is_quota_exceeded;
+            updated_existing_cycle = true;
         }
 
         // Only create a new cycle if we didn't update an existing one
@@ -1987,9 +2268,10 @@ impl AISettings {
             cycle_history.push(new_cycle);
         }
 
-        report_if_error!(self
-            .ai_request_quota_info
-            .set_value(AIRequestQuotaInfo { cycle_history }, ctx));
+        report_if_error!(
+            self.ai_request_quota_info
+                .set_value(AIRequestQuotaInfo { cycle_history }, ctx)
+        );
     }
 
     pub fn is_command_denylist_editable(&self, app: &AppContext) -> bool {
@@ -2090,9 +2372,10 @@ impl AISettings {
             }
         };
 
-        report_if_error!(self
-            .voice_input_toggle_key
-            .set_value(voice_input_toggle_key, ctx));
+        report_if_error!(
+            self.voice_input_toggle_key
+                .set_value(voice_input_toggle_key, ctx)
+        );
 
         report_if_error!(self.explicitly_interacted_with_voice.set_value(true, ctx));
 
@@ -2118,9 +2401,10 @@ impl AISettings {
 
         let mut map = self.cli_agent_footer_enabled_commands.value().0.clone();
         map.insert(command.to_string(), String::new());
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
     }
 
     pub fn remove_cli_agent_footer_enabled_command(
@@ -2131,9 +2415,10 @@ impl AISettings {
         let command = command.trim();
         let mut map = self.cli_agent_footer_enabled_commands.value().0.clone();
         map.shift_remove(command);
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
     }
 
     pub fn set_cli_agent_for_command(
@@ -2148,9 +2433,29 @@ impl AISettings {
         }
         let value = agent.map(|a| a.to_serialized_name()).unwrap_or_default();
         map.insert(pattern.to_string(), value);
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
+    }
+
+    /// Whether the feature-intro popover with the given id key has been seen.
+    pub fn is_feature_intro_seen(&self, key: &str) -> bool {
+        self.seen_feature_intro_ids
+            .get(key)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Records that the feature-intro popover with the given id key has been seen,
+    /// so it is never shown again. No-op if already recorded.
+    pub fn mark_feature_intro_seen(&mut self, key: &str, ctx: &mut ModelContext<Self>) {
+        if self.is_feature_intro_seen(key) {
+            return;
+        }
+        let mut map = self.seen_feature_intro_ids.clone();
+        map.insert(key.to_owned(), true);
+        report_if_error!(self.seen_feature_intro_ids.set_value(map, ctx));
     }
 
     /// Whether the plugin install chip was dismissed for the given agent/host.
@@ -2187,9 +2492,10 @@ impl AISettings {
     ) {
         let mut map = self.plugin_update_chip_dismissed_for_version_map.clone();
         map.insert(key.to_owned(), version);
-        report_if_error!(self
-            .plugin_update_chip_dismissed_for_version_map
-            .set_value(map, ctx));
+        report_if_error!(
+            self.plugin_update_chip_dismissed_for_version_map
+                .set_value(map, ctx)
+        );
     }
 }
 

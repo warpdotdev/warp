@@ -39,6 +39,7 @@ use session_sharing_protocol::sharer::{
     UpstreamMessage,
 };
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_server_client::iap::IapManager;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
@@ -47,18 +48,25 @@ use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::server_api::ServerApiProvider;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use crate::server::telemetry::telemetry_context;
+use crate::terminal::TerminalModel;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::{
-    connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
-    SharedSessionSource, SELECTION_THROTTLE_PERIOD,
+    EventNumber, SELECTION_THROTTLE_PERIOD, SharedSessionScrollbackType, SharedSessionSource,
+    connect_endpoint, max_session_size,
 };
-use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
-#[cfg(not(any(test, feature = "integration_tests")))]
-use crate::{report_error, server::telemetry::telemetry_context};
 
-/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
+/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server.
+#[cfg(not(any(test, feature = "integration_tests")))]
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
+/// Under `test`/`integration_tests` the threshold is larger so the transient
+/// `Batching` state is reliably observable instead of racing the real ~50ms timer
+/// under coarse scheduler granularity (which flaked on Windows CI); see
+/// `test_handle_pty_read_event_while_not_batching`.
+#[cfg(any(test, feature = "integration_tests"))]
+const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(250);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
@@ -75,7 +83,7 @@ const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
 .with_jitter(0.2);
 
 macro_rules! sharer_info {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         log::info!(
             "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
@@ -87,7 +95,7 @@ macro_rules! sharer_info {
 }
 
 macro_rules! sharer_warn {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         log::warn!(
             "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
@@ -99,9 +107,9 @@ macro_rules! sharer_warn {
 }
 
 macro_rules! sharer_error {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
-        $crate::report_error!(
+        warp_errors::report_error!(
             anyhow::anyhow!("{}", format_args!($($arg)+)),
             extra: {
                 "session_id" => ?session_id,
@@ -726,10 +734,10 @@ impl Network {
         update: UniversalDeveloperInputContextUpdate,
     ) {
         // Skip update if nothing would change
-        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context {
-            if !update.changes_cached_context(cached) {
-                return;
-            }
+        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context
+            && !update.changes_cached_context(cached)
+        {
+            return;
         }
 
         sharer_info!(
@@ -1254,7 +1262,7 @@ impl Network {
                 }
                 log::info!("Closing websocket to session sharing server as sharer");
                 if let Err(e) = sink.close().await {
-                    crate::report_error!(anyhow::Error::new(e)
+                    report_error!(anyhow::Error::new(e)
                         .context("Failed to close session sharing websocket as sharer"));
                 }
                 startup_send_failed
@@ -1652,13 +1660,13 @@ impl Network {
                 .insert(event.event_no, event.clone());
         }
 
-        if let Stage::StartedSuccessfully { .. } = self.stage {
-            if let Err(e) = self.ws_proxy_tx.try_send(message) {
-                sharer_warn!(
-                    self,
-                    "Failed to send message over ws_proxy channel in session sharer: {e}"
-                );
-            }
+        if let Stage::StartedSuccessfully { .. } = self.stage
+            && let Err(e) = self.ws_proxy_tx.try_send(message)
+        {
+            sharer_warn!(
+                self,
+                "Failed to send message over ws_proxy channel in session sharer: {e}"
+            );
         }
     }
 

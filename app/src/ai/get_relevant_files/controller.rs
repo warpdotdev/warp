@@ -2,15 +2,16 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ai::index::full_source_code_embedding::RetrievalID;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
-use ai::index::full_source_code_embedding::RetrievalID;
 use ai::index::locations::CodeContextLocation;
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 #[cfg(not(target_family = "wasm"))]
@@ -20,7 +21,7 @@ use crate::ai::blocklist::SessionContext;
 use crate::ai::get_relevant_files::api::{FileContext as FileContextRequest, GetRelevantFiles};
 use crate::ai::outline::{OutlineStatus, RepoOutlines};
 use crate::server::server_api::{AIApiError, ServerApiProvider};
-use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 #[cfg_attr(not(target_family = "wasm"), path = "remote_search/native.rs")]
 #[cfg_attr(target_family = "wasm", path = "remote_search/wasm.rs")]
 mod remote_search;

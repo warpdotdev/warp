@@ -1,5 +1,6 @@
 use chrono::Local;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
 use warp_graphql::queries::get_conversation_usage::ConversationUsage;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
@@ -12,7 +13,6 @@ use crate::ai::blocklist::format_credits;
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, DisplayMode,
 };
-use crate::report_error;
 use crate::settings_view::billing_and_usage_page::BillingAndUsagePageAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -46,28 +46,28 @@ impl UsageHistoryEntry {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(self.render_header(appearance));
 
-        if let Some(entry) = &self.entry {
-            if self.is_expanded {
-                res = res
-                    .with_child(
-                        // Separator between header and usage component
-                        Container::new(Empty::new().finish())
-                            .with_border(
-                                Border::top(2.0).with_border_fill(appearance.theme().outline()),
-                            )
-                            .with_overdraw_bottom(0.)
-                            .finish(),
-                    )
-                    .with_child(
-                        ConversationUsageView::new(
-                            ConversationUsageInfo::from(entry),
-                            DisplayMode::Settings,
-                            None,
-                            self.tooltip_mouse_state.clone(),
+        if let Some(entry) = &self.entry
+            && self.is_expanded
+        {
+            res = res
+                .with_child(
+                    // Separator between header and usage component
+                    Container::new(Empty::new().finish())
+                        .with_border(
+                            Border::top(2.0).with_border_fill(appearance.theme().outline()),
                         )
-                        .render(app),
-                    );
-            }
+                        .with_overdraw_bottom(0.)
+                        .finish(),
+                )
+                .with_child(
+                    ConversationUsageView::new(
+                        ConversationUsageInfo::from(entry),
+                        DisplayMode::Settings,
+                        None,
+                        self.tooltip_mouse_state.clone(),
+                    )
+                    .render(app),
+                );
         }
 
         Container::new(res.finish())

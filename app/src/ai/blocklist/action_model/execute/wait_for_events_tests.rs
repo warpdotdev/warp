@@ -8,17 +8,16 @@ use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
 
 use super::{
-    watchdog_timeout_for_stamped_seconds, AnyActionExecution, ExecuteActionInput,
-    WaitForEventsExecutor, CLIENT_WATCHDOG_SAFETY_MARGIN,
-    DEFAULT_ORCHESTRATED_IDLE_TIMEOUT_SECONDS, HARD_FLOOR,
+    AnyActionExecution, CLIENT_WATCHDOG_SAFETY_MARGIN, DEFAULT_ORCHESTRATED_IDLE_TIMEOUT_SECONDS,
+    ExecuteActionInput, HARD_FLOOR, WaitForEventsExecutor, watchdog_timeout_for_stamped_seconds,
 };
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentAction, AIAgentActionId, AIAgentActionType};
-use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::server::server_api::ai::{AIClient, MockAIClient};
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, MockAIClient};
 
 #[test]
 fn watchdog_timeout_constants_match_documented_values() {
@@ -84,9 +83,10 @@ fn watchdog_timeout_preserves_large_stamped_value() {
 #[test]
 fn execute_invokes_parent_registration_and_honors_child_short_circuit() {
     // `execute()` must route into the orchestration streamer behind the flag.
-    // For a child conversation (has_parent_agent), the streamer short-circuits
-    // without a server fetch (asserted via the mock's times(0) expectation),
-    // and the wait still flips the conversation into WaitingForEvents.
+    // For a child conversation (is_child_agent_conversation), the streamer
+    // short-circuits without a server fetch (asserted via the mock's times(0)
+    // expectation), and the wait still flips the conversation into
+    // WaitingForEvents.
     App::test((), |mut app| async move {
         let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
 

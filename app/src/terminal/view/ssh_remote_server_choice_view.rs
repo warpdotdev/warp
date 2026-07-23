@@ -18,6 +18,7 @@
 //! deregistered) is the parent's responsibility.
 use settings::Setting;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::elements::{
     Border, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
@@ -30,7 +31,7 @@ use warpui::{
 };
 
 use crate::ai::blocklist::block::keyboard_navigable_buttons::{
-    rich_navigation_button, KeyboardNavigableButtons,
+    KeyboardNavigableButtons, rich_navigation_button,
 };
 use crate::ai::blocklist::inline_action::inline_action_header::{
     HeaderConfig, INLINE_ACTION_HORIZONTAL_PADDING,
@@ -39,7 +40,7 @@ use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::ui_components::blended_colors;
-use crate::{report_error, send_telemetry_from_ctx, Appearance};
+use crate::{Appearance, send_telemetry_from_ctx};
 
 const PROMPT_BORDER_RADIUS: f32 = 8.;
 

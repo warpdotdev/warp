@@ -1,9 +1,11 @@
 use anyhow::Result;
+#[cfg(unix)]
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, SingletonEntity};
 #[cfg(unix)]
 use {
-    crate::report_error, crate::terminal::local_tty::server::TerminalServer, anyhow::bail,
-    std::cmp::Reverse, std::collections::HashMap, std::ffi::OsString, std::process::Child,
+    crate::terminal::local_tty::server::TerminalServer, anyhow::bail, std::cmp::Reverse,
+    std::collections::HashMap, std::ffi::OsString, std::process::Child,
 };
 
 #[cfg(target_os = "windows")]
@@ -71,9 +73,7 @@ impl PtyHandle for DirectPtyHandle {
     }
 
     fn kill(&mut self) -> Result<()> {
-        // The logic to kill the process and file handles are fully contained in
-        // EventedPty::kill().
-        Ok(())
+        self.child.kill()
     }
 }
 /// Invokes the provided callback function without crash reporting enabled.
@@ -302,7 +302,7 @@ fn is_e2big(err: &anyhow::Error) -> bool {
 /// env var / secret configurations (E2BIG on Linux, socket overflow on macOS).
 #[cfg(unix)]
 fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
-    report_error!("Shell spawn env var diagnostics (names and sizes only, no values):");
+    log::error!("Shell spawn env var diagnostics (names and sizes only, no values):");
 
     // Log the additional env vars supplied via PtyOptions.
     let mut extra: Vec<(&OsString, usize)> = extra_env_vars
@@ -310,15 +310,9 @@ fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
         .map(|(k, v)| (k, k.len() + v.len() + 2))
         .collect();
     extra.sort_by_key(|(_, size)| Reverse(*size));
-    report_error!(
-        "PtyOptions env_vars",
-        extra: { "entries" => %extra_env_vars.len() }
-    );
+    log::error!("PtyOptions env_vars entries={}", extra_env_vars.len());
     for (key, size) in extra.iter().take(20) {
-        report_error!(
-            "PtyOptions env var entry",
-            extra: { "key" => ?key, "bytes" => %size }
-        );
+        log::error!("PtyOptions env var entry key={key:?} bytes={size}");
     }
 
     // Log the largest vars from the inherited process environment.
@@ -330,14 +324,11 @@ fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
         .collect();
     inherited.sort_by_key(|(_, size)| Reverse(*size));
     let total: usize = inherited.iter().map(|(_, s)| s).sum();
-    report_error!(
-        "Inherited process env summary",
-        extra: { "vars" => %inherited.len(), "bytes" => %total }
+    log::error!(
+        "Inherited process env summary vars={} bytes={total}",
+        inherited.len()
     );
     for (key, size) in inherited.iter().take(20) {
-        report_error!(
-            "Inherited process env entry",
-            extra: { "key" => ?key, "bytes" => %size }
-        );
+        log::error!("Inherited process env entry key={key:?} bytes={size}");
     }
 }

@@ -10,13 +10,13 @@ use derivative::Derivative;
 use derive_more::AddAssign;
 use ordered_float::OrderedFloat;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use sum_tree::SumTree;
 
 use super::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use super::{AppContext, Axis, Element, ScrollData, ScrollableElement, SizeConstraint};
-use crate::units::{IntoPixels, Pixels};
 use crate::ClipBounds;
+use crate::units::{IntoPixels, Pixels};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd)]
 pub struct ScrollOffset {
@@ -140,7 +140,7 @@ impl<T> ListState<T> {
         let (start_absolute, end_absolute) = {
             let mut cursor = inner.content.cursor::<Count, Height>();
             cursor.seek(&Count(item_index), sum_tree::SeekBias::Right);
-            let item_start = cursor.start().0 .0;
+            let item_start = cursor.start().0.0;
             (item_start + start_offset, item_start + end_offset)
         };
 
@@ -367,18 +367,15 @@ impl<T: 'static> Element for List<T> {
 
         // If the current scroll item was invalidated (height was None at layout start),
         // apply scroll preservation to maintain visual position.
-        if scroll_item_was_invalidated {
-            if let Some(scroll_ctx) = &list_state.current_scroll_context {
-                if let Some(scroll_preservation) = &list_state.scroll_preservation {
-                    if let Some(new_scroll_offset) =
-                        (scroll_preservation.adjustment_fn)(scroll_item_index, scroll_ctx, app)
-                    {
-                        list_state.scroll_top.offset_from_start = new_scroll_offset;
-                        (_, self.children) =
-                            self.render_visible_items(child_constraint, &mut list_state, ctx, app);
-                    }
-                }
-            }
+        if scroll_item_was_invalidated
+            && let Some(scroll_ctx) = &list_state.current_scroll_context
+            && let Some(scroll_preservation) = &list_state.scroll_preservation
+            && let Some(new_scroll_offset) =
+                (scroll_preservation.adjustment_fn)(scroll_item_index, scroll_ctx, app)
+        {
+            list_state.scroll_top.offset_from_start = new_scroll_offset;
+            (_, self.children) =
+                self.render_visible_items(child_constraint, &mut list_state, ctx, app);
         }
 
         self.size = size;
@@ -718,7 +715,7 @@ impl<T> ListStateInner<T> {
     fn scroll_top_pixels(&self) -> Pixels {
         let mut cursor = self.content.cursor::<Count, Height>();
         cursor.seek(&self.scroll_top.list_item_index, sum_tree::SeekBias::Right);
-        cursor.start().0 .0 + self.scroll_top.offset_from_start
+        cursor.start().0.0 + self.scroll_top.offset_from_start
     }
 
     fn add_item(&mut self) {

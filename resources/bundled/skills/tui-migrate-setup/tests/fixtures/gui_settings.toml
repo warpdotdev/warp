@@ -1,0 +1,11 @@
+[agent.permissions]
+command_policy = "always-ask"
+file_allowlist = ["/tmp/shared"]
+gui_internal = "GUI_PRIVATE_SENTINEL"
+tui_internal = "TUI_ONLY_SOURCE_SENTINEL"
+
+[appearance]
+theme = "GUI_THEME_SENTINEL"
+
+[private]
+credential = "PRIVATE_SETTING_SENTINEL"

@@ -5,8 +5,9 @@ use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_if_error;
 use warp_managed_secrets::client::SecretOwner;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
@@ -23,7 +24,6 @@ use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
-use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::delete_auth_secret_confirmation_dialog::{
     DeleteAuthSecretConfirmationDialog, DeleteAuthSecretConfirmationDialogEvent,
@@ -32,8 +32,8 @@ use crate::terminal::view::ambient_agent::delete_auth_secret_confirmation_dialog
 use crate::terminal::view::ambient_agent::host_selector::NakedHeaderButtonTheme;
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, ButtonSize};
 use crate::view_components::DismissibleToast;
+use crate::view_components::action_button::{ActionButton, ButtonSize};
 use crate::workspace::ToastStack;
 
 const HEADER_FONT_SIZE: f32 = 12.;

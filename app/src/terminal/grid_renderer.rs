@@ -1,3 +1,4 @@
+mod box_drawing;
 mod cell_glyph_cache;
 mod cell_type;
 
@@ -10,15 +11,16 @@ use lazy_static::lazy_static;
 use num_traits::Float as _;
 use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::color::ColorU;
-use warpui::elements::{Border, CornerRadius, Fill, Radius, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use warpui::elements::{Border, CornerRadius, DEFAULT_UI_LINE_HEIGHT_RATIO, Fill, Radius};
 use warpui::fonts::{FamilyId, FontId, Properties, Style, Weight};
 use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::image_cache::{AnimatedImageBehavior, CacheOption, FitType, Image, ImageCache};
 use warpui::platform::LineStyle;
-use warpui::text_layout::{Line, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO};
+use warpui::text_layout::{DEFAULT_TOP_BOTTOM_RATIO, Line, StyleAndFont, TextStyle};
 use warpui::units::{IntoLines as _, Lines, Pixels};
 use warpui::{AppContext, Element, EntityId, PaintContext, Scene, SingletonEntity};
 
@@ -27,11 +29,10 @@ use self::cell_type::{CellType, IsFocused, Secret};
 use super::block_filter::{BLOCK_FILTER_DOTTED_LINE_DASH, BLOCK_FILTER_DOTTED_LINE_WIDTH};
 use super::blockgrid_renderer::GridRenderParams;
 use super::model::char_or_str::CharOrStr;
-use super::model::grid::grid_handler::{ContainsPoint, GridHandler, Link};
 use super::model::grid::RespectDisplayedOutput;
+use super::model::grid::grid_handler::{ContainsPoint, GridHandler, Link};
 use super::model::image_map::{ImagePlacementData, StoredImageMetadata};
 use super::model::terminal_model::RangeInModel;
-use crate::report_error;
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
@@ -40,7 +41,7 @@ use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
 use crate::terminal::model::{ObfuscateSecrets, SecretHandle};
-use crate::terminal::{color, SizeInfo};
+use crate::terminal::{SizeInfo, color};
 use crate::themes::theme::WarpTheme;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 
@@ -91,7 +92,7 @@ impl ColorSampler {
     pub fn most_common(&self) -> Option<ColorU> {
         self.counts
             .iter()
-            .max_by_key(|(_, &count)| count)
+            .max_by_key(|&(_, &count)| count)
             .map(|(&color, _)| color)
     }
 
@@ -158,6 +159,10 @@ struct NativeGlyph {
 /// Describes a specific type of glyph that we are able to render natively.
 #[derive(Debug)]
 enum NativeGlyphType {
+    /// A solid box-drawing line glyph (a supported subset of U+2500..=U+257F),
+    /// rendered as cell-filling, non-overlapping rects so adjacent cells tile
+    /// with no seam.
+    BoxDrawing(char),
     UpperHalfBlock,
     PowerlineLeftHardDivider,
     PowerlineRightHardDivider,
@@ -772,21 +777,20 @@ fn render_grid_without_ligatures<'a>(
                 has_seen_cell_in_link = true;
             }
 
-            if obfuscate_secrets.should_redact_secret() {
-                if let Some((handle, secret)) =
+            if obfuscate_secrets.should_redact_secret()
+                && let Some((handle, secret)) =
                     grid.secret_at_displayed_point(Point::new(offset_row, col))
-                {
-                    let range = secret.range();
-                    if row_idx == range.start().row && col == range.start().col {
-                        first_cell_in_secret = FirstCellInSecret::Yes { handle };
-                    }
-                    cell_type.secret = Some(Secret {
-                        hovered: hovered_secret_range
-                            .as_ref()
-                            .is_some_and(|r| r.contains(&Point::new(row_idx, col))),
-                        is_obfuscated: secret.is_obfuscated(),
-                    });
+            {
+                let range = secret.range();
+                if row_idx == range.start().row && col == range.start().col {
+                    first_cell_in_secret = FirstCellInSecret::Yes { handle };
                 }
+                cell_type.secret = Some(Secret {
+                    hovered: hovered_secret_range
+                        .as_ref()
+                        .is_some_and(|r| r.contains(&Point::new(row_idx, col))),
+                    is_obfuscated: secret.is_obfuscated(),
+                });
             }
 
             // Don't apply cursor contrast colouring when hide_cursor_cell
@@ -1309,21 +1313,20 @@ fn render_grid_with_ligatures<'a>(
                 has_seen_cell_in_link = true;
             }
 
-            if obfuscate_secrets.should_redact_secret() {
-                if let Some((handle, secret)) =
+            if obfuscate_secrets.should_redact_secret()
+                && let Some((handle, secret)) =
                     grid.secret_at_displayed_point(Point::new(offset_row, col))
-                {
-                    let range = secret.range();
-                    if row_idx == range.start().row && col == range.start().col {
-                        first_cell_in_secret = FirstCellInSecret::Yes { handle };
-                    }
-                    cell_type.secret = Some(Secret {
-                        hovered: hovered_secret_range
-                            .as_ref()
-                            .is_some_and(|r| r.contains(&Point::new(row_idx, col))),
-                        is_obfuscated: secret.is_obfuscated(),
-                    });
+            {
+                let range = secret.range();
+                if row_idx == range.start().row && col == range.start().col {
+                    first_cell_in_secret = FirstCellInSecret::Yes { handle };
                 }
+                cell_type.secret = Some(Secret {
+                    hovered: hovered_secret_range
+                        .as_ref()
+                        .is_some_and(|r| r.contains(&Point::new(row_idx, col))),
+                    is_obfuscated: secret.is_obfuscated(),
+                });
             }
 
             // Don't apply cursor contrast colouring when hide_cursor_cell
@@ -1884,6 +1887,14 @@ fn render_image(
 /// if it should be rendered with a font glyph.
 fn native_glyph_for_cell(cell: &Cell) -> Option<NativeGlyphType> {
     let glyph_type = match cell.c {
+        // Supported solid box-drawing lines render as cell-filling rects so
+        // adjacent cells tile seamlessly. Other box-drawing glyphs use the font.
+        c @ '\u{2500}'..='\u{257F}'
+            if FeatureFlag::BoxDrawingGlyphs.is_enabled() && box_drawing::is_supported(c) =>
+        {
+            NativeGlyphType::BoxDrawing(c)
+        }
+
         // Unicode upper half block (U+2580).
         '▀' => NativeGlyphType::UpperHalfBlock,
         // Unicode bottom-aligned fractional block characters (U+2581 - U+2588).
@@ -2013,6 +2024,36 @@ fn render_native_glyph(native_glyph: NativeGlyph, ctx: &mut PaintContext, app: &
         glyph_type,
     } = native_glyph;
     let svg_data = match glyph_type {
+        NativeGlyphType::BoxDrawing(c) => {
+            let scale_factor = ctx.scene.scale_factor();
+            let metrics = box_drawing::StrokeMetrics::new(
+                cell_bounds.width() * scale_factor,
+                cell_bounds.height() * scale_factor,
+            );
+            // Snap the cell box to the integer device-pixel grid so adjacent
+            // cells share exact edges and the strokes tile with no seam.
+            let left = (cell_bounds.origin().x() * scale_factor).round();
+            let right = ((cell_bounds.origin().x() + cell_bounds.width()) * scale_factor).round();
+            let top = (cell_bounds.origin().y() * scale_factor).round();
+            let bottom = ((cell_bounds.origin().y() + cell_bounds.height()) * scale_factor).round();
+            for cell_rect in box_drawing::rects(c, right - left, bottom - top, metrics) {
+                let origin = cell_rect.origin();
+                let rect = RectF::new(
+                    vec2f(
+                        (left + origin.x()) / scale_factor,
+                        (top + origin.y()) / scale_factor,
+                    ),
+                    vec2f(
+                        cell_rect.width() / scale_factor,
+                        cell_rect.height() / scale_factor,
+                    ),
+                );
+                ctx.scene
+                    .draw_rect_without_hit_recording(rect)
+                    .with_background(Fill::Solid(foreground_color));
+            }
+            None
+        }
         NativeGlyphType::UpperHalfBlock => {
             let rect = RectF::new(
                 cell_bounds.origin(),

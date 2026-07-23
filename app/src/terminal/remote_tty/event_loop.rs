@@ -5,10 +5,10 @@ use async_channel::Receiver;
 use futures_util::SinkExt;
 use parking_lot::FairMutex;
 use serde::Serialize;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
-use crate::report_error;
 use crate::terminal::bootstrap::init_shell_script_for_shell;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::Processor;
@@ -127,8 +127,10 @@ impl EventLoop {
                     match message {
                         EventLoopMessage::Input(bytes) => {
                             if let Err(e) = sink.send(Message::new_binary(bytes.to_vec())).await {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to send message to network-backed PTY"));
+                                report_error!(
+                                    anyhow::Error::new(e)
+                                        .context("Failed to send message to network-backed PTY")
+                                );
                             };
                         }
                         EventLoopMessage::Resize(size_info) => {
@@ -148,8 +150,10 @@ impl EventLoop {
                             // control channel message. The SSH proxy server should
                             // make this distinction.
                             if let Err(e) = sink.send(Message::new_text(serialized)).await {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to send message to network-backed PTY"));
+                                report_error!(
+                                    anyhow::Error::new(e)
+                                        .context("Failed to send message to network-backed PTY")
+                                );
                             };
                         }
                         // TODO(alokedesai): Implement shutdown on the network backed PTY.

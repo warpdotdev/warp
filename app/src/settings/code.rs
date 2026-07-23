@@ -87,4 +87,17 @@ define_settings_group!(CodeSettings, settings: [
         toml_path: "code.editor.format_on_save",
         description: "Whether the language server automatically formats the file on save. Other LSP features (hover, go-to-definition, references, diagnostics) are unaffected.",
     },
+    // Controls whether the Warp text editor automatically saves file changes as the
+    // user types (debounced) and when the editor loses focus. Only applies to the
+    // Warp text editor, not the command line or AI input.
+    auto_save: AutoSave {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "code.editor.auto_save",
+        description: "Whether the Warp text editor automatically saves changes as you type and when the editor loses focus.",
+    },
 ]);

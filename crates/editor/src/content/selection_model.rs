@@ -3,7 +3,7 @@ use std::ops::Range;
 use itertools::Itertools;
 use string_offset::CharOffset;
 use vec1::{Vec1, vec1};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui_core::{AppContext, Entity, ModelHandle};
 
 use crate::content::anchor::{Anchor, AnchorSide, AnchorUpdate, Anchors};

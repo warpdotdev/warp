@@ -9,19 +9,19 @@ use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, View, ViewContext
 
 use super::buffer_model::InputBufferModel;
 use super::message_bar::common::render_terminal_message;
-use super::message_bar::{truncated_command_for_block, Message, MessageItem, MessageProvider};
+use super::message_bar::{Message, MessageItem, MessageProvider, truncated_command_for_block};
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
 };
 use crate::appearance::Appearance;
 use crate::search::slash_command_menu::static_commands::commands;
+use crate::terminal::input::SET_INPUT_MODE_TERMINAL_ACTION_NAME;
 use crate::terminal::input::inline_history::{AcceptHistoryItem, HistoryTab};
 use crate::terminal::input::inline_menu::{InlineMenuModel, InlineMenuModelEvent};
 use crate::terminal::input::message_bar::MessageTransformer;
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
-use crate::terminal::input::SET_INPUT_MODE_TERMINAL_ACTION_NAME;
 use crate::terminal::model::TerminalModel;
 use crate::terminal::view::init::SELECT_PREVIOUS_BLOCK_ACTION_NAME;
 use crate::util::bindings::keybinding_name_to_keystroke;
@@ -261,10 +261,10 @@ impl MessageProvider<TerminalMessageArgs<'_>> for ContinueConversationMessagePro
 }
 
 mod internal {
+    use crate::terminal::TerminalModel;
     use crate::terminal::model::blocks::{
         BlockHeight, BlockHeightItem, BlockHeightSummary, RichContentItem,
     };
-    use crate::terminal::TerminalModel;
 
     impl TerminalModel {
         pub(super) fn is_last_visible_item_agent_view_block(&self) -> bool {

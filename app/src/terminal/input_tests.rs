@@ -7,9 +7,9 @@ use std::time::Duration;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::Local;
 use fuzzy_match::FuzzyMatchResult;
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use repo_metadata::RepoMetadataModel;
 use session_sharing_protocol::common::Role;
 use smol_str::SmolStr;
 use unindent::Unindent;
@@ -20,16 +20,16 @@ use warp_completer::completer::{
     SuggestionResults, SuggestionType,
 };
 use warp_completer::meta::Span;
+use warp_util::standardized_path::StandardizedPath;
 use warp_util::user_input::UserInput;
 use warpui::platform::WindowStyle;
-use warpui::r#async::Timer;
-use warpui::telemetry::EventPayload;
 use warpui::text::SelectionType;
 use warpui::{App, ReadModel, UpdateView, WindowId};
 use watcher::HomeDirectoryWatcher;
 use workflows::workflow::{Argument, ArgumentType, Workflow};
 
 use super::*;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
@@ -48,9 +48,8 @@ use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::changelog_model::ChangelogModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::context_chips::prompt::Prompt;
@@ -59,6 +58,7 @@ use crate::input_suggestions::{HistoryOrder, Item};
 use crate::network::NetworkStatus;
 use crate::pricing::PricingInfoModel;
 use crate::search::files::model::FileSearchModel;
+use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
@@ -73,6 +73,7 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 #[cfg(windows)]
 use crate::system::SystemInfo;
 use crate::system::SystemStats;
+use crate::terminal::TerminalView;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::block_list_viewport::ScrollPosition;
 use crate::terminal::cli_agent_sessions::{
@@ -84,14 +85,13 @@ use crate::terminal::event::{
     UserBlockCompleted,
 };
 use crate::terminal::general_settings::UserDefaultShellUnsupportedBannerState;
-use crate::terminal::input::slash_command_model::SlashCommandEntryState;
 use crate::terminal::input::slash_commands::SlashCommandsEvent;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::local_tty::shell::ShellStarter;
 use crate::terminal::model::ansi::{Handler, PromptMetadata};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::model::blocks::{insert_block, BlockListPoint};
+use crate::terminal::model::blocks::{BlockListPoint, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Side;
 use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
@@ -103,7 +103,6 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
-use crate::terminal::TerminalView;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -112,8 +111,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    experiments, AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
-    ReferralThemeStatus,
+    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
+    ReferralThemeStatus, experiments,
 };
 
 #[test]
@@ -205,6 +204,18 @@ fn renders_fixed_prompt_chip_command_without_interpolation() {
 
 pub fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
+
+    // NLD is now opt-in by default (`ai_autodetection_enabled_internal` defaults to false).
+    // These tests exercise the natural-language-detection-on code paths (buffer-driven slash
+    // command detection, auto-detection input mode), so explicitly re-enable it here to preserve
+    // the pre-opt-in test behavior. The opt-in default itself is covered by
+    // `ai_autodetection_defaults_to_opt_in` in `settings/ai_tests.rs`.
+    crate::settings::AISettings::handle(app).update(app, |settings, ctx| {
+        settings
+            .ai_autodetection_enabled_internal
+            .set_value(true, ctx)
+            .unwrap();
+    });
 
     // Make sure we set up all necessary custom action bindings.
     app.update(init);
@@ -718,6 +729,87 @@ fn test_input_tab() {
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "    cd so");
         });
+    });
+}
+
+#[test]
+fn zero_state_hint_text_only_registers_active_slash_command_placeholders() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_zero_state_hint_text(ctx);
+        });
+
+        let editor = input.read(&app, |input, _| input.editor().clone());
+        let rename_tab_prefix = format!("{} ", commands::RENAME_TAB.name);
+        let continue_locally_prefix = format!("{} ", commands::CONTINUE_LOCALLY.name);
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_placeholder_text_with_prefix(
+                continue_locally_prefix.clone(),
+                "stale hint",
+                ctx,
+            );
+        });
+        input.update(&mut app, |input, ctx| {
+            input.set_zero_state_hint_text(ctx);
+        });
+
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&rename_tab_prefix)
+                .is_some()),
+            "always-active slash command placeholders should still be registered"
+        );
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&continue_locally_prefix)
+                .is_none()),
+            "/continue-locally should not be registered outside cloud conversation context"
+        );
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_placeholder_text_with_prefix(
+                continue_locally_prefix.clone(),
+                "stale hint",
+                ctx,
+            );
+        });
+
+        let repo_dir = tempfile::TempDir::new().expect("repo temp dir");
+        let repo_path = repo_dir.path().to_path_buf();
+        simulate_directory_for_completion(
+            session_id,
+            &terminal,
+            &mut app,
+            repo_path.to_string_lossy().into_owned(),
+        );
+        DetectedRepositories::handle(&app).update(&mut app, |repos, _| {
+            let root = StandardizedPath::from_local_canonicalized(&repo_path)
+                .expect("canonicalized repo root");
+            repos.insert_test_repo_root(root);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.update_repo_path(Some(repo_path), ctx);
+        });
+
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&continue_locally_prefix)
+                .is_none()),
+            "active slash-command data source updates should refresh stale placeholders"
+        );
     });
 }
 
@@ -1652,7 +1744,6 @@ fn queued_command_completion_preserves_draft() {
             input.deferred_remote_operations.latest_block_id = BlockId::new();
             input.handle_block_completed_event(
                 BlockCompletedEvent {
-                    block_latency_data: None,
                     block_type: BlockType::User(UserBlockCompleted {
                         index: BlockIndex::zero(),
                         serialized_block: Arc::new(SerializedBlock::new_for_test(
@@ -2858,11 +2949,13 @@ fn test_tab_completion_with_cursor_movement() {
             input
                 .input_suggestions
                 .read(&app, |input_suggestions, _ctx| {
-                    assert!(input_suggestions
-                        .items()
-                        .iter()
-                        .map(|item| item.text())
-                        .eq(["add", "audit", "autoclean",]))
+                    assert!(
+                        input_suggestions
+                            .items()
+                            .iter()
+                            .map(|item| item.text())
+                            .eq(["add", "audit", "autoclean",])
+                    )
                 });
         });
 
@@ -2875,11 +2968,13 @@ fn test_tab_completion_with_cursor_movement() {
             input
                 .input_suggestions
                 .read(&app, |input_suggestions, _ctx| {
-                    assert!(input_suggestions
-                        .items()
-                        .iter()
-                        .map(|item| item.text())
-                        .eq(["audit", "autoclean",]))
+                    assert!(
+                        input_suggestions
+                            .items()
+                            .iter()
+                            .map(|item| item.text())
+                            .eq(["audit", "autoclean",])
+                    )
                 });
 
             assert!(matches!(
@@ -2899,11 +2994,13 @@ fn test_tab_completion_with_cursor_movement() {
             input
                 .input_suggestions
                 .read(&app, |input_suggestions, _ctx| {
-                    assert!(input_suggestions
-                        .items()
-                        .iter()
-                        .map(|item| item.text())
-                        .eq(["add", "audit", "autoclean",]))
+                    assert!(
+                        input_suggestions
+                            .items()
+                            .iter()
+                            .map(|item| item.text())
+                            .eq(["add", "audit", "autoclean",])
+                    )
                 });
 
             assert!(matches!(
@@ -3700,11 +3797,13 @@ fn test_tab_completion_hides_autosuggestion() {
             ));
 
             // Autosuggestion should be closed.
-            assert!(input
-                .editor
-                .as_ref(ctx)
-                .current_autosuggestion_text()
-                .is_none());
+            assert!(
+                input
+                    .editor
+                    .as_ref(ctx)
+                    .current_autosuggestion_text()
+                    .is_none()
+            );
         });
     });
 }
@@ -3742,11 +3841,13 @@ fn test_completions_while_typing_doesnt_hide_autosuggestion() {
 
         // Autosuggestion should be active.
         input.read(&app, |input, ctx| {
-            assert!(input
-                .editor
-                .as_ref(ctx)
-                .current_autosuggestion_text()
-                .is_some());
+            assert!(
+                input
+                    .editor
+                    .as_ref(ctx)
+                    .current_autosuggestion_text()
+                    .is_some()
+            );
         });
 
         input.update(&mut app, |input, ctx| {
@@ -3769,11 +3870,13 @@ fn test_completions_while_typing_doesnt_hide_autosuggestion() {
                 InputSuggestionsMode::CompletionSuggestions { .. }
             ));
 
-            assert!(input
-                .editor
-                .as_ref(ctx)
-                .current_autosuggestion_text()
-                .is_some());
+            assert!(
+                input
+                    .editor
+                    .as_ref(ctx)
+                    .current_autosuggestion_text()
+                    .is_some()
+            );
         });
     });
 }
@@ -3846,10 +3949,7 @@ fn test_plan_slash_command_argument_with_slash_does_not_disable_slash_command_pa
 
         input.read(&app, |input, ctx| {
             assert!(
-                !matches!(
-                    input.slash_command_model.as_ref(ctx).state(),
-                    SlashCommandEntryState::DisabledUntilEmptyBuffer
-                ),
+                !input.slash_command_model.as_ref(ctx).is_disabled(),
                 "slash command parsing should not be disabled when the argument contains '/'"
             );
         });
@@ -5739,13 +5839,18 @@ fn test_workflow_view_does_not_panic() {
             Workflow::new("Test Workflow", "echo \"Hello World\""),
             Workflow::new("Test Workflow with Description", "echo \"Hello World\"")
                 .with_description("This is a test workflow that prints Hello World!".into()),
-            Workflow::new("Test Workflow with Args", "echo \"Hello {{person}}\"")
-                .with_arguments(vec![Argument::new("person", ArgumentType::Text)
-                    .with_description("The person you want to say hello to".to_string())]),
+            Workflow::new("Test Workflow with Args", "echo \"Hello {{person}}\"").with_arguments(
+                vec![
+                    Argument::new("person", ArgumentType::Text)
+                        .with_description("The person you want to say hello to".to_string()),
+                ],
+            ),
             Workflow::new("test", "echo \"Hello {{person}}\"")
                 .with_description("This is a test workflow that prints Hello {{person}}!".into())
-                .with_arguments(vec![Argument::new("person", ArgumentType::Text)
-                    .with_description("The person you want to say hello to".to_string())]),
+                .with_arguments(vec![
+                    Argument::new("person", ArgumentType::Text)
+                        .with_description("The person you want to say hello to".to_string()),
+                ]),
         ];
 
         for workflow in workflows {
@@ -6753,6 +6858,126 @@ fn test_tab_completions_menu_for_classic_completions_with_files() {
 }
 
 #[test]
+fn test_classic_tab_completions_close_after_user_backspace() {
+    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let editor = input.read(&app, |input, _| input.editor().clone());
+
+        app.update(|ctx| {
+            InputSettings::handle(ctx).update(ctx, |setting, ctx| {
+                setting
+                    .classic_completions_mode
+                    .toggle_and_save_value(ctx)
+                    .expect("Able to turn on classic completions");
+            })
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("cd Do", ctx);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.input_tab(ctx);
+            input.handle_completion_suggestions_results(
+                build_suggestion_results(
+                    vec![file_suggestion("Downloads"), file_suggestion("Documents")],
+                    (3, 5),
+                    MatchStrategy::CaseInsensitive,
+                ),
+                CompletionsTrigger::Keybinding,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+            // Cycle to apply a candidate into the buffer. This is a system-applied
+            // edit, which must keep the result set alive.
+            input.input_tab(ctx);
+        });
+
+        // The user now backspaces all the way past the original completion query
+        // (`cd Do`). Once the buffer no longer starts with the original query, the
+        // stale result set must be discarded and the menu closed.
+        while input.read(&app, |input, ctx| input.buffer_text(ctx).len()) > "cd ".len() {
+            editor.update(&mut app, |editor, ctx| editor.backspace(ctx));
+        }
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "cd ");
+            // A closed menu is represented by `InputSuggestionsMode::Closed`; a closed
+            // menu is never rendered, so its stale result set is no longer shown. This
+            // mirrors the existing (non-classic) backspace-past-boundary behavior.
+            assert!(
+                matches!(
+                    input.suggestions_mode_model.as_ref(ctx).mode(),
+                    InputSuggestionsMode::Closed
+                ),
+                "completion menu should close after the user backspaces past the query"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_classic_tab_completions_keep_menu_open_while_cycling() {
+    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        app.update(|ctx| {
+            InputSettings::handle(ctx).update(ctx, |setting, ctx| {
+                setting
+                    .classic_completions_mode
+                    .toggle_and_save_value(ctx)
+                    .expect("Able to turn on classic completions");
+            })
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("cd Do", ctx);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.input_tab(ctx);
+            input.handle_completion_suggestions_results(
+                build_suggestion_results(
+                    vec![file_suggestion("Downloads"), file_suggestion("Documents")],
+                    (3, 5),
+                    MatchStrategy::CaseInsensitive,
+                ),
+                CompletionsTrigger::Keybinding,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+            // Cycling rewrites the buffer to each candidate in turn. These are
+            // system-applied edits and must keep the menu open even though the
+            // buffer no longer matches the original query.
+            input.input_tab(ctx);
+            input.input_tab(ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(
+                matches!(
+                    input.suggestions_mode_model.as_ref(ctx).mode(),
+                    InputSuggestionsMode::CompletionSuggestions { .. }
+                ),
+                "completion menu should stay open while cycling candidates"
+            );
+            assert!(
+                !input.input_suggestions.as_ref(ctx).items().is_empty(),
+                "result set should be preserved while cycling candidates"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_vim_escape_with_history_menu() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -7299,7 +7524,7 @@ fn run_input_mode_prefix_test(udi_enabled: bool, input_type: InputType) {
 }
 
 macro_rules! input_mode_prefix_tests {
-    ($($name:ident: ($udi_enabled:literal, $input_mode:expr),)*) => {
+    ($($name:ident: ($udi_enabled:literal, $input_mode:expr_2021),)*) => {
         $(
             #[test]
             fn $name() {
@@ -7784,67 +8009,6 @@ fn test_source_less_locked_config_clears_decision_source() {
     });
 }
 
-#[test]
-fn test_input_buffer_submitted_telemetry_uses_raw_input_type_decision_source() {
-    fn input_buffer_submitted_events() -> Vec<serde_json::Value> {
-        warpui::telemetry::flush_events()
-            .into_iter()
-            .filter_map(|event| match event.payload {
-                EventPayload::NamedEvent { name, value, .. }
-                    if name == "AgentMode.NaturalLanguageDetection.InputBufferSubmitted" =>
-                {
-                    value
-                }
-                _ => None,
-            })
-            .collect_vec()
-    }
-    async fn wait_for_input_buffer_submitted_events() -> Vec<serde_json::Value> {
-        let mut events = Vec::new();
-        for _ in 0..100 {
-            events.extend(input_buffer_submitted_events());
-            if !events.is_empty() {
-                break;
-            }
-            Timer::after(Duration::from_millis(10)).await;
-        }
-        events
-    }
-
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        crate::server::telemetry::clear_event_queue();
-
-        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-
-        input.update(&mut app, |input, ctx| {
-            input.ai_input_model().update(ctx, |input_model, ctx| {
-                input_model.set_input_config(
-                    InputConfig {
-                        input_type: InputType::Shell,
-                        is_locked: true,
-                    },
-                    true,
-                    None,
-                    ctx,
-                );
-            });
-            input.clear_buffer_and_reset_undo_stack(ctx);
-            input.user_insert("pwd", ctx);
-            input.input_enter(ctx);
-        });
-
-        let telemetry_events = wait_for_input_buffer_submitted_events().await;
-        assert_eq!(telemetry_events.len(), 1);
-        assert_eq!(telemetry_events[0]["input_type"], "Shell");
-        assert_eq!(telemetry_events[0]["is_locked"], true);
-        assert_eq!(
-            telemetry_events[0]["input_type_decision_source"],
-            serde_json::Value::Null
-        );
-    });
-}
 #[test]
 fn test_image_attachment_preserves_lock_state() {
     App::test((), |mut app| async move {
@@ -8339,7 +8503,6 @@ fn test_agent_view_terminal_only_initial_input_config_unlocked_when_autodetectio
 
 #[test]
 fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
-    use crate::ai::blocklist::agent_view::AgentViewState;
     use crate::ai::blocklist::InputConfig;
 
     App::test((), |mut app| async move {
@@ -8387,13 +8550,11 @@ fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
 
         // Agent view should now be active.
         terminal.read(&app, |terminal, _| {
-            let state = terminal
-                .model
-                .lock()
-                .block_list()
-                .agent_view_state()
-                .clone();
-            assert!(matches!(state, AgentViewState::Active { .. }));
+            let state = *terminal.model.lock().block_list().transcript_scope();
+            assert!(matches!(
+                state,
+                crate::terminal::model::block::TranscriptScope::Conversation(_)
+            ));
         });
     });
 }
@@ -8647,9 +8808,9 @@ fn test_custom_terminal_page_scroll_binding_applies_when_prompt_is_focused() {
         app.update(|ctx| {
             ctx.set_custom_trigger(
                 "terminal:scroll_up_one_page".to_owned(),
-                warpui::keymap::Trigger::Keystrokes(
-                    vec![Keystroke::parse("shift-pageup").unwrap()],
-                ),
+                warpui::keymap::Trigger::Keystrokes(vec![
+                    Keystroke::parse("shift-pageup").unwrap(),
+                ]),
             );
         });
 

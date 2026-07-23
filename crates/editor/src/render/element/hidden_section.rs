@@ -49,26 +49,25 @@ impl RenderableHiddenSection {
         let theme = appearance.theme();
         let base_background = internal_colors::fg_overlay_1(theme);
 
-        // This is UI chrome rather than code content.
+        // UI chrome rather than code content.
         let font_family = appearance.ui_font_family();
-        let font_size = LABEL_FONT_SIZE;
         let base_color = styles.placeholder_color;
         let hover_color = styles.base_text.text_color;
         let label_position_id = format!("hidden_section_label_{:p}", Arc::as_ptr(&mouse_state));
 
-        let element = Hoverable::new(mouse_state, move |state| {
-            // Keep the link immediate while delaying the tooltip.
+        let label = Hoverable::new(mouse_state, move |state| {
+            // Immediate hover style; tooltip waits for TOOLTIP_HOVER_DELAY.
             let mouse_over = state.is_mouse_over_element();
 
             let lines = line_count.as_usize();
-            let label = if lines == 1 {
+            let text_content = if lines == 1 {
                 "1 unmodified line".to_string()
             } else {
                 format!("{lines} unmodified lines")
             };
-            let label_char_count = label.chars().count();
+            let char_count = text_content.chars().count();
 
-            let mut text = Text::new_inline(label, font_family, font_size)
+            let mut text = Text::new_inline(text_content, font_family, LABEL_FONT_SIZE)
                 .with_color(if mouse_over { hover_color } else { base_color });
             if mouse_over {
                 text = text.with_single_highlight(
@@ -77,18 +76,12 @@ impl RenderableHiddenSection {
                             .with_foreground_color(hover_color)
                             .with_underline_color(hover_color),
                     ),
-                    (0..label_char_count).collect(),
+                    (0..char_count).collect(),
                 );
             }
 
-            let row = Flex::row()
-                .with_child(SavePosition::new(text.finish(), &label_position_id).finish())
-                .with_cross_axis_alignment(CrossAxisAlignment::Center);
-            let bar = Container::new(row.finish())
-                .with_background(base_background)
-                .with_padding_left(LABEL_LEFT_PADDING)
-                .finish();
-            let mut stack = Stack::new().with_child(bar);
+            let mut stack = Stack::new()
+                .with_child(SavePosition::new(text.finish(), &label_position_id).finish());
 
             if state.is_hovered() {
                 let tooltip = appearance
@@ -110,7 +103,6 @@ impl RenderableHiddenSection {
 
             stack.finish()
         })
-        // The handler also prevents the press from reaching text selection.
         .on_click(move |ctx, app, _| {
             if let Some(line_range) = full_line_range.clone()
                 && let Some(action) =
@@ -121,6 +113,16 @@ impl RenderableHiddenSection {
         })
         .with_hover_in_delay(TOOLTIP_HOVER_DELAY)
         .with_cursor(Cursor::PointingHand)
+        .finish();
+
+        let element = Container::new(
+            Flex::row()
+                .with_child(label)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .finish(),
+        )
+        .with_background(base_background)
+        .with_padding_left(LABEL_LEFT_PADDING)
         .finish();
 
         Self {

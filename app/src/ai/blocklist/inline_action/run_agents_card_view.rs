@@ -3,7 +3,6 @@
 //! Each card is a `View` keyed by `AIAgentActionId`, embedded by
 //! `AIBlock` via `ChildView`. Keybindings and Accept dispatch live on
 //! the view; only `RejectRequested` flows back to the parent.
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
@@ -12,6 +11,8 @@ use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigSt
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
+use warp_graphql::queries::get_runners::RunnerSortBy;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text, Wrap,
@@ -23,15 +24,15 @@ use warpui::{
 };
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{icons, AIAgentActionId, AIAgentActionResultType};
+use crate::ai::agent::{AIAgentActionId, AIAgentActionResultType, icons};
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, RunAgentsExecutor,
     RunAgentsExecutorEvent, RunAgentsSpawningSnapshot,
 };
 use crate::ai::blocklist::agent_view::orchestration_pill_bar::render_static_agent_pill;
+use crate::ai::blocklist::block::AIBlock;
 use crate::ai::blocklist::block::model::AIBlockModel;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
-use crate::ai::blocklist::block::AIBlock;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
     CreateEnvironmentModal, CreateEnvironmentModalEvent,
 };
@@ -39,16 +40,16 @@ use crate::ai::blocklist::inline_action::host_picker::{HostPicker, HostPickerEve
 use crate::ai::blocklist::inline_action::inline_action_header::{HeaderConfig, InteractionMode};
 use crate::ai::blocklist::inline_action::inline_action_icons;
 use crate::ai::blocklist::inline_action::orchestration_controls::{
-    self as oc, AuthSecretSelection, OrchestrationControlAction, OrchestrationPickerHandles,
+    self as oc, AuthSecretSelection, OrchestrationConfigState, OrchestrationControlAction,
+    OrchestrationEditState, OrchestrationPickerHandles,
 };
 use crate::ai::blocklist::inline_action::requested_action::{
-    render_requested_action_row_for_text, CTRL_C_KEYSTROKE, ENTER_KEYSTROKE,
+    CTRL_C_KEYSTROKE, ENTER_KEYSTROKE, render_requested_action_row_for_text,
 };
 use crate::ai::blocklist::telemetry::{
-    orchestration_modified_field, BlocklistOrchestrationTelemetryEvent,
-    OrchestrationApprovalStatus, OrchestrationEnteredEvent, OrchestrationEntrySource,
-    OrchestrationExecutionModeKind, OrchestrationHarnessKind, RunAgentsCardDecision,
-    RunAgentsCardDecisionEvent,
+    BlocklistOrchestrationTelemetryEvent, OrchestrationApprovalStatus, OrchestrationEnteredEvent,
+    OrchestrationEntrySource, OrchestrationExecutionModeKind, OrchestrationHarnessKind,
+    RunAgentsCardDecision, RunAgentsCardDecisionEvent, orchestration_modified_field,
 };
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -59,12 +60,13 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
-use crate::report_error;
+use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
+use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
 use crate::view_components::compactible_action_button::{
-    CompactibleActionButton, RenderCompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD,
+    CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD, RenderCompactibleActionButton,
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::dropdown::DropdownEvent;
@@ -94,12 +96,10 @@ pub fn init(app: &mut AppContext) {
     ]);
 }
 
-/// Per-action edit state for the orchestrate confirmation card.
-/// Delegates run-wide config fields to `oc::OrchestrationEditState`
-/// and adds card-specific fields.
+/// Card-only request fields; the run-wide config lives on the view's
+/// [`OrchestrationEditState`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunAgentsEditState {
-    pub orch: oc::OrchestrationEditState,
+pub struct RunAgentsCardFields {
     pub agent_run_configs: Vec<RunAgentsAgentRunConfig>,
     pub base_prompt: String,
     pub summary: String,
@@ -109,41 +109,54 @@ pub struct RunAgentsEditState {
     pub plan_id: String,
 }
 
+/// Per-action edit state for the orchestrate confirmation card: the
+/// run-wide config fields plus the card-only request fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunAgentsEditState {
+    pub orchestration_config_state: oc::OrchestrationConfigState,
+    pub card: RunAgentsCardFields,
+}
+
 impl RunAgentsEditState {
     pub fn from_request(req: &RunAgentsRequest) -> Self {
-        let mut orch = oc::OrchestrationEditState::from_run_agents_fields(
-            &req.model_id,
-            &req.harness_type,
+        let mut orchestration_config_state = oc::OrchestrationConfigState::from_run_agents_fields(
+            Some(&req.model_id),
+            Some(&req.harness_type),
             &req.execution_mode,
         );
         // Carry the request's auth secret across the round trip. Absence
         // becomes `Unset`; the picker re-resolves from persisted settings.
-        orch.auth_secret_selection =
+        orchestration_config_state.auth_secret_selection =
             AuthSecretSelection::from_optional_name(req.harness_auth_secret_name.clone());
         if matches!(req.execution_mode, RunAgentsExecutionMode::Local) {
-            orch.sanitize_for_local_execution();
+            orchestration_config_state.sanitize_for_local_execution();
         }
         Self {
-            orch,
-            agent_run_configs: req.agent_run_configs.clone(),
-            base_prompt: req.base_prompt.clone(),
-            summary: req.summary.clone(),
-            skills: req.skills.clone(),
-            plan_id: req.plan_id.clone(),
+            orchestration_config_state,
+            card: RunAgentsCardFields {
+                agent_run_configs: req.agent_run_configs.clone(),
+                base_prompt: req.base_prompt.clone(),
+                summary: req.summary.clone(),
+                skills: req.skills.clone(),
+                plan_id: req.plan_id.clone(),
+            },
         }
     }
 
     pub fn to_request(&self) -> RunAgentsRequest {
         RunAgentsRequest {
-            summary: self.summary.clone(),
-            base_prompt: self.base_prompt.clone(),
-            skills: self.skills.clone(),
-            model_id: self.orch.model_id.clone(),
-            harness_type: self.orch.harness_type.clone(),
-            execution_mode: self.orch.execution_mode.clone(),
-            agent_run_configs: self.agent_run_configs.clone(),
-            plan_id: self.plan_id.clone(),
-            harness_auth_secret_name: self.orch.auth_secret_name().map(str::to_string),
+            summary: self.card.summary.clone(),
+            base_prompt: self.card.base_prompt.clone(),
+            skills: self.card.skills.clone(),
+            model_id: self.orchestration_config_state.model_id.clone(),
+            harness_type: self.orchestration_config_state.harness_type.clone(),
+            execution_mode: self.orchestration_config_state.execution_mode.clone(),
+            agent_run_configs: self.card.agent_run_configs.clone(),
+            plan_id: self.card.plan_id.clone(),
+            harness_auth_secret_name: self
+                .orchestration_config_state
+                .auth_secret_name()
+                .map(str::to_string),
         }
     }
 }
@@ -163,6 +176,9 @@ impl OrchestrationControlAction for RunAgentsCardViewAction {
     }
     fn create_environment_requested() -> Self {
         Self::CreateEnvironmentRequested
+    }
+    fn runner_changed(runner_id: String) -> Self {
+        Self::RunnerChanged { runner_id }
     }
     fn auth_secret_changed(auth_secret_name: Option<String>) -> Self {
         Self::AuthSecretChanged { auth_secret_name }
@@ -199,6 +215,9 @@ pub enum RunAgentsCardViewAction {
         environment_id: String,
     },
     CreateEnvironmentRequested,
+    RunnerChanged {
+        runner_id: String,
+    },
     WorkerHostChanged {
         worker_host: String,
     },
@@ -216,7 +235,10 @@ pub enum RunAgentsCardViewEvent {
 
 pub struct RunAgentsCardView {
     action_id: AIAgentActionId,
-    state: RunAgentsEditState,
+    /// Run-wide config being edited plus per-harness model memory.
+    orchestration_edit_state: OrchestrationEditState,
+    /// Card-only request fields.
+    card: RunAgentsCardFields,
     handles: RunAgentsCardHandles,
     spawning: Option<RunAgentsSpawningSnapshot>,
     /// Retained for interactive defaults and telemetry about plan-sourced
@@ -230,9 +252,6 @@ pub struct RunAgentsCardView {
 
     action_model: ModelHandle<BlocklistAIActionModel>,
     block_model: Rc<dyn AIBlockModel<View = AIBlock>>,
-    /// UI-only per-harness model memory so switching harnesses preserves
-    /// the user's previous model selection for each harness.
-    saved_model_per_harness: HashMap<String, String>,
     create_environment_modal: ViewHandle<CreateEnvironmentModal>,
     /// Snapshot of the latest raw `RunAgentsRequest` from the LLM
     /// stream. Used at decision time to diff the run-wide config
@@ -245,6 +264,11 @@ pub struct RunAgentsCardView {
     /// One-shot guard: cancelling the auto-popped modal must not re-pop.
     /// Reset on harness / execution-mode change.
     has_auto_opened_create_modal: bool,
+    /// Runners fetched via `getRunners` for the Runner picker: (uid, name).
+    /// Runners aren't cached client-side, so we fetch them lazily.
+    runners: Vec<(String, String)>,
+    /// True while the `getRunners` fetch is in flight.
+    runners_loading: bool,
 }
 
 /// Resolves UI-only interactive defaults on edit state that has
@@ -256,24 +280,25 @@ pub struct RunAgentsCardView {
 /// 2. Defaults Remote worker_host to "warp".
 /// 3. Defaults a Remote environment from settings / recency.
 fn resolve_interactive_defaults(
-    state: &mut RunAgentsEditState,
+    orchestration_config_state: &mut OrchestrationConfigState,
     block_model: &dyn AIBlockModel<View = AIBlock>,
     ctx: &AppContext,
 ) {
-    if state.orch.model_id.is_empty() {
-        let harness =
-            warp_cli::agent::Harness::parse_orchestration_harness(&state.orch.harness_type);
-        if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-            if let Some(base) = block_model.base_model(ctx).map(|id| id.to_string()) {
-                state.orch.model_id = base;
-            }
+    if orchestration_config_state.model_id.is_empty() {
+        let harness = warp_cli::agent::Harness::parse_orchestration_harness(
+            &orchestration_config_state.harness_type,
+        );
+        if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None)
+            && let Some(base) = block_model.base_model(ctx).map(|id| id.to_string())
+        {
+            orchestration_config_state.model_id = base;
         }
     }
     if let RunAgentsExecutionMode::Remote {
         environment_id,
         worker_host,
         ..
-    } = &state.orch.execution_mode
+    } = &orchestration_config_state.execution_mode
     {
         let needs_host = worker_host.is_empty();
         let needs_env = environment_id.is_empty();
@@ -284,12 +309,10 @@ fn resolve_interactive_defaults(
             // `HostSelector` initial-selection behavior.
             let default_host = oc::resolve_default_host_slug(ctx)
                 .unwrap_or_else(|| oc::ORCHESTRATION_WARP_WORKER_HOST.to_string());
-            state.orch.set_worker_host(default_host);
+            orchestration_config_state.set_worker_host(default_host);
         }
-        if needs_env {
-            if let Some(default_env) = oc::resolve_default_environment_id(ctx) {
-                state.orch.set_environment_id(default_env);
-            }
+        if needs_env && let Some(default_env) = oc::resolve_default_environment_id(ctx) {
+            orchestration_config_state.set_environment_id(default_env);
         }
     }
 }
@@ -303,7 +326,10 @@ impl RunAgentsCardView {
         block_model: Rc<dyn AIBlockModel<View = AIBlock>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let state = RunAgentsEditState::from_request(request);
+        let RunAgentsEditState {
+            orchestration_config_state,
+            card,
+        } = RunAgentsEditState::from_request(request);
         // Snapshot the raw incoming request so we can diff against the
         // edited state at Accept time.
         let original_tool_call_request = request.clone();
@@ -384,8 +410,26 @@ impl RunAgentsCardView {
                 // ready for user confirmation. Re-render so the card
                 // transitions from the "Configuring agents..." placeholder
                 // to the full confirmation UI.
-                resolve_interactive_defaults(&mut me.state, &*me.block_model, ctx);
-                oc::repopulate_all_pickers(&mut me.state.orch, &me.handles.pickers, ctx);
+                resolve_interactive_defaults(
+                    &mut me.orchestration_edit_state.orchestration_config_state,
+                    &*me.block_model,
+                    ctx,
+                );
+                oc::repopulate_all_pickers(
+                    &mut me.orchestration_edit_state.orchestration_config_state,
+                    &me.handles.pickers,
+                    ctx,
+                );
+                // The runner picker isn't part of the shared picker sync
+                // (its options load asynchronously and are cached on the
+                // view). Lazily create it now if the final streamed
+                // execution mode is Remote but `new()` started with Local
+                // (ensure_runner_picker is idempotent and a no-op when the
+                // picker already exists or the flag/mode gate is not met).
+                me.ensure_runner_picker(ctx);
+                // Re-apply its selection now that the streamed request has
+                // finalized with the requested runner.
+                me.resync_runner_selection(ctx);
                 me.refresh_accept_button_state(ctx);
                 me.maybe_auto_open_create_modal(ctx);
                 if let Some(conversation_id) = me.block_model.conversation_id(ctx) {
@@ -396,21 +440,41 @@ impl RunAgentsCardView {
             _ => {}
         });
 
+        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, _, event, ctx| {
+            let ServerExperimentsEvent::ExperimentsUpdated = event;
+            if !oc::runner_controls_enabled(ctx) {
+                me.handles.pickers.runner_picker = None;
+                me.runners.clear();
+                me.runners_loading = false;
+            } else {
+                me.ensure_runner_picker(ctx);
+            }
+            ctx.notify();
+        });
+
         // Repopulate the model picker when available Warp LLMs change.
         // Only relevant for Oz harness — non-Oz harnesses get their
         // model catalog from HarnessAvailabilityModel, not LLMPreferences.
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
-            if let LLMPreferencesEvent::UpdatedAvailableLLMs = event {
-                if let Some(handle) = &me.handles.pickers.model_picker {
-                    let is_local = !me.state.orch.execution_mode.is_remote();
-                    oc::populate_model_picker_for_harness(
-                        handle,
-                        &me.state.orch.model_id,
-                        &me.state.orch.harness_type,
-                        is_local,
-                        ctx,
-                    );
-                }
+            if let LLMPreferencesEvent::UpdatedAvailableLLMs = event
+                && let Some(handle) = &me.handles.pickers.model_picker
+            {
+                let is_local = !me
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .execution_mode
+                    .is_remote();
+                oc::populate_model_picker_for_harness(
+                    handle,
+                    &me.orchestration_edit_state
+                        .orchestration_config_state
+                        .model_id,
+                    &me.orchestration_edit_state
+                        .orchestration_config_state
+                        .harness_type,
+                    is_local,
+                    ctx,
+                );
             }
         });
 
@@ -424,12 +488,16 @@ impl RunAgentsCardView {
                 HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
                     // Adopt the new secret before repopulating the picker.
                     oc::apply_created_auth_secret_if_matches(
-                        &mut me.state.orch,
+                        &mut me.orchestration_edit_state.orchestration_config_state,
                         *harness,
                         name,
                         ctx,
                     );
-                    oc::repopulate_all_pickers(&mut me.state.orch, &me.handles.pickers, ctx);
+                    oc::repopulate_all_pickers(
+                        &mut me.orchestration_edit_state.orchestration_config_state,
+                        &me.handles.pickers,
+                        ctx,
+                    );
                     me.refresh_accept_button_state(ctx);
                     ctx.notify();
                 }
@@ -440,7 +508,11 @@ impl RunAgentsCardView {
                     // Repopulate even on fetch failure to replace "Loading…".
                     // Deleted events also force a repopulate so this card
                     // stops surfacing the deleted secret as an option.
-                    oc::repopulate_all_pickers(&mut me.state.orch, &me.handles.pickers, ctx);
+                    oc::repopulate_all_pickers(
+                        &mut me.orchestration_edit_state.orchestration_config_state,
+                        &me.handles.pickers,
+                        ctx,
+                    );
                     me.refresh_accept_button_state(ctx);
                     me.maybe_auto_open_create_modal(ctx);
                     ctx.notify();
@@ -464,7 +536,11 @@ impl RunAgentsCardView {
             &ConnectedSelfHostedWorkersModel::handle(ctx),
             |me, _, event, ctx| match event {
                 ConnectedSelfHostedWorkersEvent::Changed => {
-                    oc::repopulate_all_pickers(&mut me.state.orch, &me.handles.pickers, ctx);
+                    oc::repopulate_all_pickers(
+                        &mut me.orchestration_edit_state.orchestration_config_state,
+                        &me.handles.pickers,
+                        ctx,
+                    );
                     me.refresh_accept_button_state(ctx);
                     ctx.notify();
                 }
@@ -475,7 +551,8 @@ impl RunAgentsCardView {
         // hasn't been queued in pending_actions yet at construction time.
         let mut view = Self {
             action_id,
-            state,
+            orchestration_edit_state: OrchestrationEditState::new(orchestration_config_state),
+            card,
             handles: RunAgentsCardHandles {
                 reject_button: Some(reject_button),
                 accept_button: Some(accept_button),
@@ -488,12 +565,13 @@ impl RunAgentsCardView {
             position_id_prefix,
             action_model,
             block_model,
-            saved_model_per_harness: HashMap::new(),
             create_environment_modal,
             original_tool_call_request,
             entered_event_emitted: false,
             decision_event_emitted: false,
             has_auto_opened_create_modal: false,
+            runners: Vec::new(),
+            runners_loading: false,
         };
 
         view.ensure_pickers(ctx);
@@ -503,6 +581,18 @@ impl RunAgentsCardView {
         view.maybe_auto_open_create_modal(ctx);
 
         view
+    }
+
+    /// Reassembles the value-type edit state from the run-wide config
+    /// and card fields (request building and streaming-update comparison).
+    fn config_state(&self) -> RunAgentsEditState {
+        RunAgentsEditState {
+            orchestration_config_state: self
+                .orchestration_edit_state
+                .orchestration_config_state
+                .clone(),
+            card: self.card.clone(),
+        }
     }
 
     /// Re-sync edit state from the latest streaming request.
@@ -515,41 +605,100 @@ impl RunAgentsCardView {
         self.original_tool_call_request = request.clone();
         let mut new_state = RunAgentsEditState::from_request(request);
         // Resolve empty fields from the active config (same as in new()).
-        if let Some((config, status)) = &self.active_config {
-            if status.is_approved() {
-                new_state.orch.resolve_from_config(config);
-            }
+        if let Some((config, status)) = &self.active_config
+            && status.is_approved()
+        {
+            new_state
+                .orchestration_config_state
+                .resolve_from_config(config);
         }
-        if new_state.orch.model_id.is_empty() {
-            let harness =
-                warp_cli::agent::Harness::parse_orchestration_harness(&new_state.orch.harness_type);
-            if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-                if let Some(base) = self.block_model.base_model(ctx).map(|id| id.to_string()) {
-                    new_state.orch.model_id = base;
-                }
+        if new_state.orchestration_config_state.model_id.is_empty() {
+            let harness = warp_cli::agent::Harness::parse_orchestration_harness(
+                &new_state.orchestration_config_state.harness_type,
+            );
+            if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None)
+                && let Some(base) = self.block_model.base_model(ctx).map(|id| id.to_string())
+            {
+                new_state.orchestration_config_state.model_id = base;
             }
         }
         // Re-seed an Unset selection from persisted per-harness settings,
         // honoring an explicit `Inherit` choice for this harness.
         if matches!(
-            new_state.orch.auth_secret_selection,
+            new_state.orchestration_config_state.auth_secret_selection,
             AuthSecretSelection::Unset
         ) {
-            new_state.orch.auth_secret_selection =
-                oc::resolve_auth_secret_selection_for_harness(&new_state.orch.harness_type, ctx);
+            new_state.orchestration_config_state.auth_secret_selection =
+                oc::resolve_auth_secret_selection_for_harness(
+                    &new_state.orchestration_config_state.harness_type,
+                    ctx,
+                );
         }
-        if self.state != new_state {
-            let harness_or_model_changed = self.state.orch.harness_type
-                != new_state.orch.harness_type
-                || self.state.orch.model_id != new_state.orch.model_id
-                || self.state.orch.execution_mode != new_state.orch.execution_mode;
-            self.state = new_state;
+        // Preserve a non-empty runner across streamed updates. `update_request`
+        // runs on every stream chunk, but run_agents requests usually omit a
+        // `runner_id`; without this, a runner the user picked in the card (or a
+        // runner already resolved on the call) would be clobbered back to
+        // "use environment default" on the next chunk. A request that *does*
+        // carry a runner still wins.
+        if let (
+            RunAgentsExecutionMode::Remote {
+                runner_id: new_runner,
+                ..
+            },
+            RunAgentsExecutionMode::Remote {
+                runner_id: current_runner,
+                ..
+            },
+        ) = (
+            &mut new_state.orchestration_config_state.execution_mode,
+            &self
+                .orchestration_edit_state
+                .orchestration_config_state
+                .execution_mode,
+        ) && new_runner.is_empty()
+            && !current_runner.is_empty()
+        {
+            *new_runner = current_runner.clone();
+        }
+        if self.config_state() != new_state {
+            let harness_or_model_changed = self
+                .orchestration_edit_state
+                .orchestration_config_state
+                .harness_type
+                != new_state.orchestration_config_state.harness_type
+                || self
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .model_id
+                    != new_state.orchestration_config_state.model_id
+                || self
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .execution_mode
+                    != new_state.orchestration_config_state.execution_mode;
+            self.orchestration_edit_state.orchestration_config_state =
+                new_state.orchestration_config_state;
+            self.card = new_state.card;
             if harness_or_model_changed {
+                // If the execution mode switched to Remote, lazily build the
+                // Runner picker now (same as the ExecutionModeToggled handler).
+                // Without this, a Local→Remote mode change during streaming
+                // would leave runner_picker as None, causing the "Runner"
+                // label to render with no dropdown below it.
+                self.ensure_runner_picker(ctx);
                 // Repopulate pickers and re-arm auto-open for the newly-
                 // streamed harness.
-                oc::repopulate_all_pickers(&mut self.state.orch, &self.handles.pickers, ctx);
+                oc::repopulate_all_pickers(
+                    &mut self.orchestration_edit_state.orchestration_config_state,
+                    &self.handles.pickers,
+                    ctx,
+                );
                 self.has_auto_opened_create_modal = false;
             }
+            // Re-apply the runner selection: a streamed update can finalize
+            // the requested `runner_id` after the runner options have loaded,
+            // and the shared picker sync does not cover the runner picker.
+            self.resync_runner_selection(ctx);
             self.refresh_accept_button_state(ctx);
             self.maybe_auto_open_create_modal(ctx);
             ctx.notify();
@@ -565,11 +714,14 @@ impl RunAgentsCardView {
         if self.spawning.is_some() {
             return;
         }
-        if let Some(reason) = oc::accept_disabled_reason_with_auth(&self.state.orch, ctx) {
+        if let Some(reason) = oc::accept_disabled_reason_with_auth(
+            &self.orchestration_edit_state.orchestration_config_state,
+            ctx,
+        ) {
             log::warn!("RunAgentsCardView: refusing Accept because action is disabled: {reason}");
             return;
         }
-        let request = self.state.to_request();
+        let request = self.config_state().to_request();
         self.emit_decision(RunAgentsCardDecision::Accept, ctx);
         let action_id = self.action_id.clone();
         self.action_model.update(ctx, |action_model, action_ctx| {
@@ -591,7 +743,7 @@ impl RunAgentsCardView {
         send_telemetry_from_ctx!(
             BlocklistOrchestrationTelemetryEvent::OrchestrationEntered(OrchestrationEnteredEvent {
                 conversation_id,
-                plan_id: (!self.state.plan_id.is_empty()).then(|| self.state.plan_id.clone()),
+                plan_id: (!self.card.plan_id.is_empty()).then(|| self.card.plan_id.clone()),
                 entry_source: OrchestrationEntrySource::RunAgentsCardShown,
             }),
             ctx
@@ -607,8 +759,10 @@ impl RunAgentsCardView {
         let Some(conversation_id) = self.block_model.conversation_id(ctx) else {
             return;
         };
-        let modified_fields_from_tool_call =
-            diverged_orch_fields(&self.state.orch, &self.original_tool_call_request);
+        let modified_fields_from_tool_call = diverged_orch_fields(
+            &self.orchestration_edit_state.orchestration_config_state,
+            &self.original_tool_call_request,
+        );
         let (had_active_config, active_config_status, modified_fields_from_active_config) =
             match &self.active_config {
                 Some((cfg, status)) => {
@@ -620,7 +774,10 @@ impl RunAgentsCardView {
                         None
                     };
                     let diff = if status.is_approved() {
-                        diverged_orch_fields_against_config(&self.state.orch, cfg)
+                        diverged_orch_fields_against_config(
+                            &self.orchestration_edit_state.orchestration_config_state,
+                            cfg,
+                        )
                     } else {
                         Vec::new()
                     };
@@ -632,12 +789,20 @@ impl RunAgentsCardView {
             BlocklistOrchestrationTelemetryEvent::RunAgentsCardDecision(
                 RunAgentsCardDecisionEvent {
                     conversation_id,
-                    plan_id: (!self.state.plan_id.is_empty()).then(|| self.state.plan_id.clone()),
+                    plan_id: (!self.card.plan_id.is_empty()).then(|| self.card.plan_id.clone()),
                     decision,
-                    agent_count: self.state.agent_run_configs.len(),
-                    harness: OrchestrationHarnessKind::from_str(&self.state.orch.harness_type),
+                    agent_count: self.card.agent_run_configs.len(),
+                    harness: OrchestrationHarnessKind::from_str(
+                        &self
+                            .orchestration_edit_state
+                            .orchestration_config_state
+                            .harness_type
+                    ),
                     execution_mode: OrchestrationExecutionModeKind::from_run_agents(
-                        &self.state.orch.execution_mode,
+                        &self
+                            .orchestration_edit_state
+                            .orchestration_config_state
+                            .execution_mode,
                     ),
                     modified_fields_from_tool_call,
                     modified_fields_from_active_config,
@@ -673,18 +838,25 @@ impl RunAgentsCardView {
         ) {
             return;
         }
-        if !oc::should_show_auth_secret_picker(&self.state.orch) {
+        if !oc::should_show_auth_secret_picker(
+            &self.orchestration_edit_state.orchestration_config_state,
+        ) {
             return;
         }
         if !matches!(
-            self.state.orch.auth_secret_selection,
+            self.orchestration_edit_state
+                .orchestration_config_state
+                .auth_secret_selection,
             AuthSecretSelection::Unset
         ) {
             return;
         }
-        let Some(harness) =
-            warp_cli::agent::Harness::parse_orchestration_harness(&self.state.orch.harness_type)
-        else {
+        let Some(harness) = warp_cli::agent::Harness::parse_orchestration_harness(
+            &self
+                .orchestration_edit_state
+                .orchestration_config_state
+                .harness_type,
+        ) else {
             return;
         };
         // Only auto-open on `Loaded([])`. Other fetch states are
@@ -703,9 +875,12 @@ impl RunAgentsCardView {
     }
 
     /// Re-derives the Accept button's `disabled` + tooltip from the gate.
-    /// Call after every code path that mutates `self.state.orch`.
+    /// Call after every code path that mutates `self.orchestration_edit_state.orchestration_config_state`.
     fn refresh_accept_button_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let reason = oc::accept_disabled_reason_with_auth(&self.state.orch, ctx);
+        let reason = oc::accept_disabled_reason_with_auth(
+            &self.orchestration_edit_state.orchestration_config_state,
+            ctx,
+        );
         let Some(mut accept) = self.handles.accept_button.clone() else {
             return;
         };
@@ -725,21 +900,21 @@ impl RunAgentsCardView {
             .base_model(ctx)
             .map(|id| id.to_string())
             .unwrap_or_default();
-        let state = &self.state;
+        let state = &self.orchestration_edit_state.orchestration_config_state;
 
         if self.handles.pickers.model_picker.is_none() {
-            let initial_model_id = if state.orch.model_id.trim().is_empty() {
+            let initial_model_id = if state.model_id.trim().is_empty() {
                 initial_model_id_default.clone()
             } else {
-                state.orch.model_id.clone()
+                state.model_id.clone()
             };
-            let is_local = !state.orch.execution_mode.is_remote();
+            let is_local = !state.execution_mode.is_remote();
             let handle = oc::new_standard_filterable_picker_dropdown(&styles, ctx);
             Self::set_upward_filterable_menu_position(&handle, ctx);
             oc::populate_model_picker_for_harness(
                 &handle,
                 &initial_model_id,
-                &state.orch.harness_type,
+                &state.harness_type,
                 is_local,
                 ctx,
             );
@@ -747,21 +922,23 @@ impl RunAgentsCardView {
             self.handles.pickers.model_picker = Some(handle);
         }
 
+        let state = &self.orchestration_edit_state.orchestration_config_state;
         if self.handles.pickers.harness_picker.is_none() {
             let handle = oc::new_standard_picker_dropdown(&colors, ctx);
             Self::set_upward_menu_position(&handle, ctx);
             oc::populate_harness_picker(
                 &handle,
-                &state.orch.harness_type,
-                !state.orch.execution_mode.is_remote(),
+                &state.harness_type,
+                !state.execution_mode.is_remote(),
                 ctx,
             );
             Self::subscribe_picker_close(&handle, ctx);
             self.handles.pickers.harness_picker = Some(handle);
         }
 
+        let state = &self.orchestration_edit_state.orchestration_config_state;
         if self.handles.pickers.environment_picker.is_none() {
-            let initial_env = match &state.orch.execution_mode {
+            let initial_env = match &state.execution_mode {
                 RunAgentsExecutionMode::Remote { environment_id, .. } => environment_id.as_str(),
                 RunAgentsExecutionMode::Local => "",
             };
@@ -777,8 +954,11 @@ impl RunAgentsCardView {
             self.handles.pickers.environment_picker = Some(handle);
         }
 
+        self.ensure_runner_picker(ctx);
+
+        let state = &self.orchestration_edit_state.orchestration_config_state;
         if self.handles.pickers.host_picker.is_none() {
-            let initial_host = match &state.orch.execution_mode {
+            let initial_host = match &state.execution_mode {
                 RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
                 RunAgentsExecutionMode::Local => oc::ORCHESTRATION_WARP_WORKER_HOST,
             };
@@ -817,17 +997,31 @@ impl RunAgentsCardView {
             // matches what cloud-mode would show. Honors an explicit
             // `Inherit` choice for this harness.
             if matches!(
-                self.state.orch.auth_secret_selection,
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .auth_secret_selection,
                 AuthSecretSelection::Unset
             ) {
-                self.state.orch.auth_secret_selection =
-                    oc::resolve_auth_secret_selection_for_harness(
-                        &self.state.orch.harness_type,
-                        ctx,
-                    );
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .auth_secret_selection = oc::resolve_auth_secret_selection_for_harness(
+                    &self
+                        .orchestration_edit_state
+                        .orchestration_config_state
+                        .harness_type,
+                    ctx,
+                );
             }
-            let selection = self.state.orch.auth_secret_selection.clone();
-            let harness_type = self.state.orch.harness_type.clone();
+            let selection = self
+                .orchestration_edit_state
+                .orchestration_config_state
+                .auth_secret_selection
+                .clone();
+            let harness_type = self
+                .orchestration_edit_state
+                .orchestration_config_state
+                .harness_type
+                .clone();
             let handle = oc::new_standard_picker_dropdown(&colors, ctx);
             Self::set_upward_menu_position(&handle, ctx);
             oc::populate_auth_secret_picker_for_harness(&handle, &selection, &harness_type, ctx);
@@ -836,6 +1030,118 @@ impl RunAgentsCardView {
         }
 
         self.sync_picker_selections(ctx);
+    }
+
+    /// Builds the Runner picker and kicks off the `getRunners` fetch, but
+    /// only when the `CloudAgentRunners` feature is enabled and the macOS
+    /// runner experiment is active, and the card is
+    /// in remote mode — otherwise the Runner control is not rendered, so
+    /// there is no reason to create the picker or hit `getRunners`.
+    /// Idempotent, and re-invoked on the Local→Cloud toggle so the picker
+    /// appears (and loads) the first time the card enters remote mode.
+    fn ensure_runner_picker(&mut self, ctx: &mut ViewContext<Self>) {
+        if !oc::runner_controls_enabled(ctx) {
+            return;
+        }
+        if !self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+            .is_remote()
+        {
+            return;
+        }
+        if self.handles.pickers.runner_picker.is_some() {
+            return;
+        }
+        let appearance = Appearance::as_ref(ctx);
+        let (styles, _colors) = oc::picker_styles(appearance);
+        let initial_runner = match &self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+        {
+            RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+            RunAgentsExecutionMode::Local => String::new(),
+        };
+        let handle = oc::create_runner_picker(
+            &initial_runner,
+            &self.runners,
+            self.runners_loading,
+            &styles,
+            ctx,
+        );
+        handle.update(ctx, |d, _| {
+            d.set_orientation(FilterableDropdownOrientation::Up)
+        });
+        ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
+            if let FilterableDropdownEvent::Close = event {
+                me.refocus_after_picker_close(ctx);
+            }
+        });
+        self.handles.pickers.runner_picker = Some(handle);
+        self.fetch_runners(ctx);
+    }
+
+    /// Fetches available runners via `getRunners` (name-sorted server-side)
+    /// and repopulates the Runner picker once they resolve. Runners are not
+    /// cached client-side (unlike environments), so this lazy fetch backs
+    /// the picker.
+    fn fetch_runners(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.runners_loading || !self.runners.is_empty() {
+            return;
+        }
+        self.runners_loading = true;
+        let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        ctx.spawn(
+            async move { client.get_runners(Some(RunnerSortBy::Name)).await },
+            |me, result, ctx| {
+                me.runners_loading = false;
+                match result {
+                    Ok(runners) => {
+                        me.runners = runners
+                            .into_iter()
+                            .map(|r| (r.uid.inner().to_string(), r.config.name))
+                            .collect();
+                    }
+                    Err(err) => {
+                        log::warn!("Failed to fetch runners for orchestration picker: {err}");
+                    }
+                }
+                let current = match &me
+                    .orchestration_edit_state
+                    .orchestration_config_state
+                    .execution_mode
+                {
+                    RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+                    RunAgentsExecutionMode::Local => String::new(),
+                };
+                if let Some(handle) = me.handles.pickers.runner_picker.clone() {
+                    oc::populate_runner_picker(&handle, &me.runners, &current, false, ctx);
+                }
+                ctx.notify();
+            },
+        );
+    }
+
+    /// Re-applies the runner picker's selection from the current
+    /// `runner_id`, using the view-cached runner list. The runner picker
+    /// is intentionally excluded from the shared picker sync (its options
+    /// are fetched asynchronously and cached on the view, not in a global
+    /// catalog), so callers must invoke this after the run-wide config's
+    /// `runner_id` may have changed (e.g. a streamed request finalizing).
+    fn resync_runner_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        let current = match &self
+            .orchestration_edit_state
+            .orchestration_config_state
+            .execution_mode
+        {
+            RunAgentsExecutionMode::Remote { runner_id, .. } => runner_id.clone(),
+            RunAgentsExecutionMode::Local => String::new(),
+        };
+        if let Some(handle) = self.handles.pickers.runner_picker.clone() {
+            oc::populate_runner_picker(&handle, &self.runners, &current, self.runners_loading, ctx);
+        }
     }
 
     /// Opens the dropdown menu above the trigger to avoid overlapping
@@ -898,7 +1204,11 @@ impl RunAgentsCardView {
     }
 
     fn sync_picker_selections(&mut self, ctx: &mut ViewContext<Self>) {
-        oc::sync_picker_selections(&self.state.orch, &self.handles.pickers, ctx);
+        oc::sync_picker_selections(
+            &self.orchestration_edit_state.orchestration_config_state,
+            &self.handles.pickers,
+            ctx,
+        );
     }
 
     fn open_create_environment_modal(&mut self, ctx: &mut ViewContext<Self>) {
@@ -912,7 +1222,9 @@ impl RunAgentsCardView {
     }
 
     fn select_created_environment(&mut self, environment_id: String, ctx: &mut ViewContext<Self>) {
-        self.state.orch.set_environment_id(environment_id.clone());
+        self.orchestration_edit_state
+            .orchestration_config_state
+            .set_environment_id(environment_id.clone());
         if let Some(environment_picker) = &self.handles.pickers.environment_picker {
             oc::populate_environment_picker(environment_picker, &environment_id, ctx);
         }
@@ -974,7 +1286,7 @@ impl View for RunAgentsCardView {
         }
         if matches!(status, Some(AIActionStatus::RunningAsync)) {
             let snapshot = RunAgentsSpawningSnapshot {
-                agent_count: self.state.agent_run_configs.len(),
+                agent_count: self.card.agent_run_configs.len(),
             };
             return render_spawning_card(&snapshot, appearance, app);
         }
@@ -1004,7 +1316,13 @@ impl View for RunAgentsCardView {
         }
 
         let is_blocked = matches!(status, Some(AIActionStatus::Blocked));
-        let card = render_confirmation_card(&self.state, &self.handles, is_blocked, app);
+        let card = render_confirmation_card(
+            &self.orchestration_edit_state.orchestration_config_state,
+            &self.card,
+            &self.handles,
+            is_blocked,
+            app,
+        );
 
         let mut root_stack = Stack::new();
         root_stack.add_child(card);
@@ -1061,14 +1379,18 @@ impl TypedActionView for RunAgentsCardView {
                 ctx.emit(RunAgentsCardViewEvent::RejectRequested);
             }
             RunAgentsCardViewAction::ExecutionModeToggled { is_remote } => {
-                let block_model = self.block_model.clone();
+                let fallback = self.block_model.base_model(ctx).map(|id| id.to_string());
                 oc::apply_execution_mode_change(
-                    &mut self.state.orch,
+                    &mut self.orchestration_edit_state.orchestration_config_state,
                     &self.handles.pickers,
                     *is_remote,
-                    |ctx| block_model.base_model(ctx).map(|id| id.to_string()),
+                    fallback,
                     ctx,
                 );
+                // Switching to Cloud reveals the Runner control (when the
+                // flag is on); build + fetch it lazily so Local cards never
+                // hit `getRunners`.
+                self.ensure_runner_picker(ctx);
                 // Mode change can newly reveal the auth picker (Local
                 // → Cloud) — give the user a fresh auto-open prompt.
                 self.has_auto_opened_create_modal = false;
@@ -1077,18 +1399,19 @@ impl TypedActionView for RunAgentsCardView {
                 ctx.notify();
             }
             RunAgentsCardViewAction::ModelChanged { model_id } => {
-                self.state.orch.model_id = model_id.clone();
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .model_id = model_id.clone();
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
             }
             RunAgentsCardViewAction::HarnessChanged { harness_type } => {
-                let block_model = self.block_model.clone();
+                let fallback = self.block_model.base_model(ctx).map(|id| id.to_string());
                 oc::apply_harness_change(
-                    &mut self.state.orch,
-                    &mut self.saved_model_per_harness,
+                    &mut self.orchestration_edit_state,
                     &self.handles.pickers,
                     harness_type,
-                    |ctx| block_model.base_model(ctx).map(|id| id.to_string()),
+                    fallback,
                     ctx,
                 );
                 // Harness change resets per-harness selection state, so
@@ -1099,7 +1422,9 @@ impl TypedActionView for RunAgentsCardView {
                 ctx.notify();
             }
             RunAgentsCardViewAction::EnvironmentChanged { environment_id } => {
-                self.state.orch.set_environment_id(environment_id.clone());
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .set_environment_id(environment_id.clone());
                 oc::persist_environment_selection(environment_id, ctx);
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
@@ -1107,26 +1432,47 @@ impl TypedActionView for RunAgentsCardView {
             RunAgentsCardViewAction::CreateEnvironmentRequested => {
                 self.open_create_environment_modal(ctx);
             }
+            RunAgentsCardViewAction::RunnerChanged { runner_id } => {
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .set_runner_id(runner_id.clone());
+                self.refresh_accept_button_state(ctx);
+                // A menu click dispatches `SelectActionAndClose`, which does
+                // not update the dropdown's displayed selection, and we're
+                // mid-dispatch from the runner dropdown itself so we cannot
+                // repopulate it synchronously (that panics with "Circular
+                // view update"). Defer the re-sync so the closed dropdown
+                // reflects the runner the user just picked.
+                ctx.spawn(async {}, |me, _, ctx| {
+                    me.resync_runner_selection(ctx);
+                });
+                ctx.notify();
+            }
             RunAgentsCardViewAction::WorkerHostChanged { worker_host } => {
-                self.state.orch.set_worker_host(worker_host.clone());
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .set_worker_host(worker_host.clone());
                 oc::persist_host_selection(worker_host, ctx);
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
             }
             RunAgentsCardViewAction::AuthSecretChanged { auth_secret_name } => {
-                oc::apply_auth_secret_change(
-                    &mut self.state.orch,
-                    &self.handles.pickers,
-                    auth_secret_name.clone(),
-                    ctx,
-                );
+                self.orchestration_edit_state
+                    .orchestration_config_state
+                    .apply_auth_secret_change(auth_secret_name.clone(), ctx);
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
             }
             RunAgentsCardViewAction::CreateNewAuthSecretRequested => {
-                oc::apply_create_new_auth_secret_requested(&mut self.state.orch, ctx);
+                oc::apply_create_new_auth_secret_requested(
+                    &mut self.orchestration_edit_state.orchestration_config_state,
+                    ctx,
+                );
                 if let Some(harness) = warp_cli::agent::Harness::parse_orchestration_harness(
-                    &self.state.orch.harness_type,
+                    &self
+                        .orchestration_edit_state
+                        .orchestration_config_state
+                        .harness_type,
                 ) {
                     ctx.dispatch_typed_action(
                         &crate::workspace::WorkspaceAction::OpenCreateAuthSecretModal { harness },
@@ -1143,7 +1489,7 @@ impl TypedActionView for RunAgentsCardView {
 /// between the user-edited `state` and the LLM's original
 /// `RunAgentsRequest`.
 fn diverged_orch_fields(
-    state: &oc::OrchestrationEditState,
+    state: &oc::OrchestrationConfigState,
     original: &RunAgentsRequest,
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
@@ -1187,7 +1533,7 @@ fn diverged_orch_fields(
 /// approved `OrchestrationConfig`. auth_secret is omitted: managed
 /// secrets are per-user, not stored on the config.
 fn diverged_orch_fields_against_config(
-    state: &oc::OrchestrationEditState,
+    state: &oc::OrchestrationConfigState,
     config: &OrchestrationConfig,
 ) -> Vec<&'static str> {
     use ai::agent::orchestration_config::OrchestrationExecutionMode;
@@ -1214,6 +1560,7 @@ fn diverged_orch_fields_against_config(
         OrchestrationExecutionMode::Remote {
             environment_id: cfg_env,
             worker_host: cfg_host,
+            ..
         },
     ) = (&state.execution_mode, &config.execution_mode)
     {
@@ -1228,7 +1575,8 @@ fn diverged_orch_fields_against_config(
 }
 
 fn render_confirmation_card(
-    state: &RunAgentsEditState,
+    orchestration_config_state: &OrchestrationConfigState,
+    card: &RunAgentsCardFields,
     handles: &RunAgentsCardHandles,
     is_blocked: bool,
     app: &AppContext,
@@ -1237,14 +1585,14 @@ fn render_confirmation_card(
     let theme = appearance.theme();
 
     let header = render_header(handles, app);
-    let body = render_body(state, app);
+    let body = render_body(card, app);
 
     let mut content = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_child(header)
         .with_child(body);
 
-    content.add_child(render_editor(state, handles, app));
+    content.add_child(render_editor(orchestration_config_state, handles, app));
 
     let border_color = if is_blocked {
         theme.accent()
@@ -1281,13 +1629,13 @@ fn render_header(handles: &RunAgentsCardHandles, app: &AppContext) -> Box<dyn El
     config.render(app)
 }
 
-fn render_body(state: &RunAgentsEditState, app: &AppContext) -> Box<dyn Element> {
+fn render_body(card: &RunAgentsCardFields, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-    column.add_child(render_summary(state, appearance));
-    column.add_child(render_agents_section(state, app));
+    column.add_child(render_summary(card, appearance));
+    column.add_child(render_agents_section(card, app));
 
     Container::new(column.finish())
         .with_horizontal_padding(16.)
@@ -1297,15 +1645,15 @@ fn render_body(state: &RunAgentsEditState, app: &AppContext) -> Box<dyn Element>
         .finish()
 }
 
-fn render_summary(state: &RunAgentsEditState, appearance: &Appearance) -> Box<dyn Element> {
+fn render_summary(card: &RunAgentsCardFields, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let summary = if state.summary.trim().is_empty() {
+    let summary = if card.summary.trim().is_empty() {
         format!(
             "Spawn {} agent(s) to address this task.",
-            state.agent_run_configs.len()
+            card.agent_run_configs.len()
         )
     } else {
-        state.summary.clone()
+        card.summary.clone()
     };
     let summary_text = Text::new(
         summary,
@@ -1321,11 +1669,11 @@ fn render_summary(state: &RunAgentsEditState, appearance: &Appearance) -> Box<dy
         .finish()
 }
 
-fn render_agents_section(state: &RunAgentsEditState, app: &AppContext) -> Box<dyn Element> {
+fn render_agents_section(card: &RunAgentsCardFields, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let label = Text::new(
-        format!("Agents ({})", state.agent_run_configs.len()),
+        format!("Agents ({})", card.agent_run_configs.len()),
         appearance.ui_font_family(),
         appearance.monospace_font_size() - 1.,
     )
@@ -1337,8 +1685,7 @@ fn render_agents_section(state: &RunAgentsEditState, app: &AppContext) -> Box<dy
         .with_spacing(4.)
         .with_run_spacing(4.)
         .with_children(
-            state
-                .agent_run_configs
+            card.agent_run_configs
                 .iter()
                 .map(|cfg| render_static_agent_pill(&cfg.name, app)),
         )
@@ -1471,7 +1818,7 @@ fn render_status_only_card(
 }
 
 fn render_editor(
-    state: &RunAgentsEditState,
+    orchestration_config_state: &OrchestrationConfigState,
     handles: &RunAgentsCardHandles,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -1491,7 +1838,7 @@ fn render_editor(
 
     column.add_child(
         Container::new(oc::render_mode_toggle(
-            state.orch.execution_mode.is_remote(),
+            orchestration_config_state.execution_mode.is_remote(),
             &handles.pickers,
             appearance,
             None,
@@ -1501,19 +1848,20 @@ fn render_editor(
         .finish(),
     );
     column.add_child(oc::render_picker_row(
-        &state.orch,
+        orchestration_config_state,
         &handles.pickers,
         appearance,
+        oc::runner_controls_enabled(app),
     ));
 
-    if let Some(reason) = oc::accept_disabled_reason_with_auth(&state.orch, app) {
+    if let Some(reason) = oc::accept_disabled_reason_with_auth(orchestration_config_state, app) {
         column.add_child(oc::render_validation_error(
             reason,
             theme.ui_error_color(),
             appearance,
         ));
     } else if let Some(message) =
-        oc::empty_env_recommendation_message(&state.orch.execution_mode, app)
+        oc::empty_env_recommendation_message(&orchestration_config_state.execution_mode, app)
     {
         column.add_child(oc::render_validation_error(
             message,

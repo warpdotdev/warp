@@ -13,12 +13,11 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_conversations_model::{
-    AgentConversationEntry, AgentConversationProvenance, AgentConversationsModel,
-    AgentRunDisplayStatus,
+    AgentConversationEntry, AgentConversationsModel, AgentRunDisplayStatus,
 };
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalView;
-use crate::terminal::CLIAgent;
 use crate::ui_components::icon_with_status::IconWithStatusVariant;
 
 /// Returns the agent-icon variant for a live [`TerminalView`], or `None` when the terminal is
@@ -38,15 +37,18 @@ pub(crate) fn terminal_view_agent_icon_variant(
 ) -> Option<IconWithStatusVariant> {
     let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
 
+    // Ambient task id from a restored cloud transcript's server metadata. This is a genuine
+    // cloud signal (unlike an orchestrator task id on a `User` share's `source_task_id`).
+    let server_ambient_task_id = terminal_view
+        .selected_conversation_server_metadata(app)
+        .and_then(|m| m.ambient_agent_task_id);
+
     // Resolve the ambient task id from [`TerminalView::ambient_agent_task_id_for_details_panel`],
-    // falling back to the selected conversation's server metadata for restored cloud transcripts.
+    // falling back to the server metadata above. Used only to look up task data for status; the
+    // cloud-vs-local treatment is decided by `is_cloud` below.
     let ambient_task_id = terminal_view
         .ambient_agent_task_id_for_details_panel(app)
-        .or_else(|| {
-            terminal_view
-                .selected_conversation_server_metadata(app)
-                .and_then(|m| m.ambient_agent_task_id)
-        });
+        .or(server_ambient_task_id);
     let task_data = ambient_task_id
         .and_then(|task_id| AgentConversationsModel::as_ref(app).get_task_data(&task_id));
 
@@ -54,24 +56,30 @@ pub(crate) fn terminal_view_agent_icon_variant(
     // task id) but execute on the user's machine, so they must not get the cloud treatment.
     let is_local_child = terminal_view.selected_conversation_is_local_child(app);
 
+    // Whether this pane is genuinely a cloud/ambient conversation for icon purposes. Keys off
+    // [`TerminalView::is_cloud_agent_session`] or a restored cloud transcript (server metadata),
+    // NOT the mere presence of an orchestrator task id — a manually shared *local* (`User`)
+    // session carries a `source_task_id` sidecar but is not cloud (see QUALITY-726). Local
+    // orchestration children always keep the local treatment.
+    let is_cloud = (terminal_view.is_cloud_agent_session(app) || server_ambient_task_id.is_some())
+        && !is_local_child;
+
     // Defer to the card helper when we have task data and no CLI session takes precedence.
-    if cli_agent_session.is_none() {
-        if let Some(task) = task_data.as_ref() {
-            let status = AgentRunDisplayStatus::from_task(task, app).to_conversation_status();
-            let harness = task
-                .agent_config_snapshot
-                .as_ref()
-                .and_then(|config| config.harness.as_ref())
-                .map(|harness| harness.harness_type)
-                .unwrap_or(Harness::Oz);
-            return Some(agent_icon_variant_for_run(harness, status, !is_local_child));
-        }
+    if cli_agent_session.is_none()
+        && let Some(task) = task_data.as_ref()
+    {
+        let status = AgentRunDisplayStatus::from_task(task, app).to_conversation_status();
+        let harness = task
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|config| config.harness.as_ref())
+            .map(|harness| harness.harness_type)
+            .unwrap_or(Harness::Oz);
+        return Some(agent_icon_variant_for_run(harness, status, is_cloud));
     }
 
-    let is_ambient = terminal_view.is_ambient_agent_session(app)
-        || (ambient_task_id.is_some() && !is_local_child);
     let inputs = TerminalIconInputs {
-        is_ambient,
+        is_ambient: is_cloud,
         cli_session: cli_agent_session.map(|session| CLISessionInputs {
             agent: session.agent,
             has_listener: session.listener.is_some(),
@@ -93,13 +101,10 @@ pub(crate) fn agent_conversation_entry_icon_variant(
     entry: &AgentConversationEntry,
 ) -> IconWithStatusVariant {
     let status = entry.display.status.to_conversation_status();
-    let is_ambient = matches!(entry.provenance, AgentConversationProvenance::AmbientRun)
-        || entry.backing.has_ambient_run
-        || entry.identity.ambient_agent_task_id.is_some();
     agent_icon_variant_for_run(
         entry.display.harness.unwrap_or(Harness::Oz),
         status,
-        is_ambient,
+        entry.is_cloud_agent_run(),
     )
 }
 
@@ -153,17 +158,16 @@ fn agent_icon_variant_from_terminal_inputs(
     // 2. Live ambient run with a third-party harness selected, before task data is
     //    available (e.g. Claude pre-dispatch). `Unknown` is filtered so an unrecognized
     //    harness doesn't render as an unbranded gray circle.
-    if inputs.is_ambient {
-        if let Some(agent) = inputs
+    if inputs.is_ambient
+        && let Some(agent) = inputs
             .selected_third_party_cli_agent
             .filter(|agent| !matches!(agent, CLIAgent::Unknown))
-        {
-            return Some(IconWithStatusVariant::CLIAgent {
-                agent,
-                status: inputs.selected_conversation_status.clone(),
-                is_ambient: true,
-            });
-        }
+    {
+        return Some(IconWithStatusVariant::CLIAgent {
+            agent,
+            status: inputs.selected_conversation_status.clone(),
+            is_ambient: true,
+        });
     }
 
     // 3. Selected conversation OR ambient (Oz) terminal: Oz agent variant.

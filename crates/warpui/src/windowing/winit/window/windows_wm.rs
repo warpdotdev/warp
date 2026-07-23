@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use itertools::Itertools as _;
 use pathfinder_geometry::rect::RectF;
-use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromWindow};
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 use winit::monitor::MonitorHandle;
 use winit::platform::windows::MonitorHandleExtWindows;

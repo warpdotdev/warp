@@ -1,11 +1,12 @@
 use itertools::Itertools as _;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::user_preferences::registry_backed::KEY_NOT_FOUND_ERR;
 use windows_registry::CURRENT_USER;
 use windows_result::Error as WindowsError;
 
+use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
-use crate::{report_error, send_telemetry_from_ctx};
 
 const DOCKER_DESKTOP_WSL_DISTRO_PREFIX: &str = "docker-desktop";
 const RANCHER_DESKTOP_WSL_DISTRO_PREFIX: &str = "rancher-desktop";
@@ -73,8 +74,10 @@ impl WslInfo {
                 let distribution_key = key
                     .open(&uuid)
                     .map_err(|err| {
-                        report_error!(anyhow::Error::new(err)
-                            .context("Could not open distribution registry key"))
+                        report_error!(
+                            anyhow::Error::new(err)
+                                .context("Could not open distribution registry key")
+                        )
                     })
                     .ok()?;
                 let name = distribution_key

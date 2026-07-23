@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use pathfinder_color::ColorU;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ConstrainedBox, CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisSize, MouseState,
     MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
@@ -261,7 +261,7 @@ pub fn render_json_tree(
     on_copy_json: Arc<CopyJsonFn>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let font_family = appearance.ui_font_family();
+    let font_family = appearance.monospace_font_family();
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
     // Optional section label.

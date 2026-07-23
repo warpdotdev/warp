@@ -33,10 +33,10 @@ use command::blocking::Command;
 use cvt::cvt;
 use nix::sys::socket;
 use parking_lot::Mutex;
+use warp_errors::report_error;
 
 pub use self::client::TerminalServerClient;
 use super::spawner::PtyHandle;
-use crate::report_error;
 
 /// The file descriptor of the Unix domain socket where the terminal server will
 /// receive requests from the host application.

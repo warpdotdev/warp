@@ -5,8 +5,10 @@ use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -20,10 +22,9 @@ use crate::ai::blocklist::{
     BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
 };
 use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
+use crate::terminal::TerminalModel;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::TerminalModel;
-use crate::{report_error, BlocklistAIHistoryModel};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum UserTakeOverReason {
@@ -90,6 +91,23 @@ impl<'de> Deserialize<'de> for UserTakeOverReason {
 struct ActiveCLISubagentState {
     task_id: Option<TaskId>,
     last_snapshot_at: Option<Instant>,
+    latest_instruction: Option<String>,
+}
+/// Read-only identity and control state for a terminal command currently
+/// associated with a CLI subagent.
+///
+/// The terminal block remains the canonical owner of this state. Front-ends
+/// use this snapshot to keep rendering and input routing in agreement without
+/// exposing mutable block internals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CLISubagentTarget {
+    pub block_id: BlockId,
+    pub task_id: TaskId,
+    pub conversation_id: AIConversationId,
+    pub requested_command_action_id: Option<AIAgentActionId>,
+    pub control_state: LongRunningCommandControlState,
+    pub last_snapshot_at: Option<Instant>,
+    pub latest_instruction: Option<String>,
 }
 
 impl UserTakeOverReason {
@@ -360,6 +378,69 @@ impl CLISubagentController {
             .and_then(|state| state.last_snapshot_at)
     }
 
+    pub fn set_latest_instruction(
+        &mut self,
+        block_id: BlockId,
+        instruction: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
+        let previous = self
+            .active_subagents_by_block
+            .entry(block_id.clone())
+            .or_default()
+            .latest_instruction
+            .replace(instruction);
+        ctx.emit(CLISubagentEvent::UpdatedInstruction { block_id });
+        previous
+    }
+
+    pub fn restore_latest_instruction(
+        &mut self,
+        block_id: BlockId,
+        instruction: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(state) = self.active_subagents_by_block.get_mut(&block_id) {
+            state.latest_instruction = instruction;
+            ctx.emit(CLISubagentEvent::UpdatedInstruction { block_id });
+        }
+    }
+    /// Returns the CLI subagent associated with the active command block.
+    pub fn active_target(&self) -> Option<CLISubagentTarget> {
+        let terminal_model = self.terminal_model.lock();
+        let block = terminal_model.block_list().active_block();
+        if !block.is_active_and_long_running() {
+            return None;
+        }
+        self.target_for_block_in_model(block.id(), &terminal_model)
+    }
+
+    /// Returns the CLI subagent associated with `block_id`.
+    pub fn target_for_block(&self, block_id: &BlockId) -> Option<CLISubagentTarget> {
+        let terminal_model = self.terminal_model.lock();
+        self.target_for_block_in_model(block_id, &terminal_model)
+    }
+
+    fn target_for_block_in_model(
+        &self,
+        block_id: &BlockId,
+        terminal_model: &TerminalModel,
+    ) -> Option<CLISubagentTarget> {
+        let block = terminal_model.block_list().block_with_id(block_id)?;
+        Some(CLISubagentTarget {
+            block_id: block.id().clone(),
+            task_id: block.cli_subagent_task_id()?.clone(),
+            conversation_id: block.ai_conversation_id()?,
+            requested_command_action_id: block.requested_command_action_id().cloned(),
+            control_state: block.long_running_control_state()?.clone(),
+            last_snapshot_at: self.last_snapshot_at(block_id),
+            latest_instruction: self
+                .active_subagents_by_block
+                .get(block_id)
+                .and_then(|state| state.latest_instruction.clone()),
+        })
+    }
+
     /// Force the currently in-flight poll for the given long-running command block to
     /// resolve immediately with a fresh snapshot, bypassing the agent-set timeout.
     /// Backs the `Check now` affordance surfaced next to the `Last seen by agent ...`
@@ -407,16 +488,14 @@ impl CLISubagentController {
         // finishes or the user hands control back. We do NOT use ManuallyCancelled here
         // because that would mark the conversation (and ambient task) as cancelled,
         // which is incorrect since the conversation is still proceeding.
-        if should_cancel_conversation {
-            if let Some(conversation_id) = conversation_id {
-                self.controller.update(ctx, |controller, ctx| {
-                    controller.cancel_conversation_progress(
-                        conversation_id,
-                        CancellationReason::CLISubagentUserTakeover,
-                        ctx,
-                    );
-                });
-            }
+        if should_cancel_conversation && let Some(conversation_id) = conversation_id {
+            self.controller.update(ctx, |controller, ctx| {
+                controller.cancel_conversation_progress(
+                    conversation_id,
+                    CancellationReason::CLISubagentUserTakeover,
+                    ctx,
+                );
+            });
         }
 
         ctx.emit(CLISubagentEvent::UpdatedControl {
@@ -463,15 +542,17 @@ impl CLISubagentController {
         drop(terminal_model);
         if let Some(agent_view_controller) = &self.agent_view_controller {
             agent_view_controller.update(ctx, |controller, ctx| {
-                if !controller.is_inline() {
-                    if let Err(e) = controller.try_enter_inline_agent_view(
+                if !controller.is_inline()
+                    && let Err(e) = controller.try_enter_inline_agent_view(
                         conversation_id,
                         AgentViewEntryOrigin::LongRunningCommand,
                         ctx,
-                    ) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Failed to enter inline agent view for LRC handoff"));
-                    }
+                    )
+                {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to enter inline agent view for LRC handoff")
+                    );
                 }
             });
         }
@@ -587,8 +668,10 @@ impl CLISubagentController {
                     task_id,
                     *conversation_id,
                 ) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Could not update interaction mode to agent-monitored"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Could not update interaction mode to agent-monitored")
+                    );
                     return;
                 };
 
@@ -679,11 +762,28 @@ pub enum CLISubagentEvent {
         requested_command_action_id: Option<AIAgentActionId>,
         agent_has_control: bool,
     },
+    UpdatedInstruction {
+        block_id: BlockId,
+    },
     UpdatedLastSnapshot,
     ToggledHideResponses,
     /// Emitted when the user hands control back to the agent after a
     /// TransferShellCommandControlToUser action.
     ControlHandedBackAfterTransfer,
+}
+
+impl CLISubagentEvent {
+    pub fn block_id(&self) -> Option<&BlockId> {
+        match self {
+            Self::SpawnedSubagent { block_id, .. }
+            | Self::FinishedSubagent { block_id, .. }
+            | Self::UpdatedControl { block_id, .. }
+            | Self::UpdatedInstruction { block_id } => Some(block_id),
+            Self::UpdatedLastSnapshot
+            | Self::ToggledHideResponses
+            | Self::ControlHandedBackAfterTransfer => None,
+        }
+    }
 }
 
 impl Entity for CLISubagentController {

@@ -7,8 +7,8 @@
 //! attribute and embeds no `Info.plist`.
 
 use anyhow::Result;
-use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 use warp_core::AppId;
+use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 
 fn main() -> Result<()> {
     let mut state = ChannelState::new(

@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
+use warp_errors::{report_error, report_if_error};
 use warpui::r#async::executor::BackgroundTask;
 use warpui::{AppContext, SingletonEntity};
 use zbus::{interface, proxy, zvariant};
 
 use crate::channel::ChannelState;
-use crate::{report_error, report_if_error};
 
 /// Initializes application services.
 pub fn init(ctx: &mut AppContext) {
@@ -186,28 +186,30 @@ impl DBusServiceHost {
         let (tx, rx) = async_channel::unbounded();
 
         // Spawn a background task for the D-Bus server.
-        let server_task = ctx.background_executor().spawn(
-            async {
-                let conn = zbus::connection::Builder::session()?
-                    .name(Self::well_known_name())?
-                    .serve_at(Self::application_service_path(), ApplicationService { tx })?
-                    // Instead of having zbus spawn a thread to poll for new
-                    // messages, we'll poll on our own executor.
-                    .internal_executor(false)
-                    .build()
-                    .await?;
+        let server_task =
+            ctx.background_executor().spawn(
+                async {
+                    let conn = zbus::connection::Builder::session()?
+                        .name(Self::well_known_name())?
+                        .serve_at(Self::application_service_path(), ApplicationService { tx })?
+                        // Instead of having zbus spawn a thread to poll for new
+                        // messages, we'll poll on our own executor.
+                        .internal_executor(false)
+                        .build()
+                        .await?;
 
-                loop {
-                    conn.executor().tick().await;
+                    loop {
+                        conn.executor().tick().await;
+                    }
                 }
-            }
-            .map(|result: anyhow::Result<()>| {
-                if let Err(err) = result {
-                    report_error!(err
-                        .context("Failed to initialize org.freedesktop.Application D-Bus service"));
-                }
-            }),
-        );
+                .map(|result: anyhow::Result<()>| {
+                    if let Err(err) = result {
+                        report_error!(err.context(
+                            "Failed to initialize org.freedesktop.Application D-Bus service"
+                        ));
+                    }
+                }),
+            );
 
         // Process any events that we receive over D-Bus.
         ctx.spawn_stream_local(rx, |_, event, ctx| {

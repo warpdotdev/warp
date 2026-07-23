@@ -1,9 +1,8 @@
 use std::ffi::OsString;
 
 use warp_core::channel::ChannelState;
+use warp_errors::report_error;
 use windows_registry::{CURRENT_USER, HSTRING};
-
-use crate::report_error;
 
 pub(super) fn register_uri_handler() {
     // To change the settings for the user, changes must be made under
@@ -47,8 +46,10 @@ pub(super) fn register_uri_handler() {
             let command_key = match parent_key.create("shell\\open\\command") {
                 Ok(command_key) => command_key,
                 Err(err) => {
-                    report_error!(anyhow::Error::new(err)
-                        .context("Could not create shell\\open\\command key"));
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Could not create shell\\open\\command key")
+                    );
                     return;
                 }
             };
@@ -69,8 +70,10 @@ pub(super) fn register_uri_handler() {
             };
             // The empty string represents the "(Default)" value for a registry key.
             if let Err(err) = command_key.set_hstring("", &command) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Could not set shell command path for URI Scheme"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Could not set shell command path for URI Scheme")
+                );
             }
         }
         Err(err) => {

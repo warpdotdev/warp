@@ -1,6 +1,6 @@
 use chrono::{Local, TimeZone as _};
 
-use super::{interleave_conversations, MenuEntry, MenuItem};
+use super::{MenuEntry, MenuItem, interleave_conversations};
 use crate::input_suggestions::HistoryOrder;
 
 #[test]

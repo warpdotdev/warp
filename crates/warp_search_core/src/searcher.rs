@@ -25,7 +25,7 @@ use tantivy::schema::{
 use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warpui_core::r#async::executor::Background;
 use warpui_core::r#async::{Timer, block_on};
 

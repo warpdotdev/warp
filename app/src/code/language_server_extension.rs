@@ -4,8 +4,8 @@ use num_traits::SaturatingSub;
 use string_offset::CharOffset;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_editor::render::model::Decoration;
@@ -19,8 +19,8 @@ use warpui::{AppContext, Element, SingletonEntity, ViewContext};
 use super::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use super::lsp_telemetry::LspTelemetryEvent;
 use crate::code::local_code_editor::{
-    HoverContentSegment, LocalCodeEditorView, LspHoverState, HOVER_TOOLTIP_MAX_HEIGHT,
-    HOVER_TOOLTIP_MAX_WIDTH,
+    HOVER_TOOLTIP_MAX_HEIGHT, HOVER_TOOLTIP_MAX_WIDTH, HoverContentSegment, LocalCodeEditorView,
+    LspHoverState,
 };
 use crate::editor::InteractionState;
 

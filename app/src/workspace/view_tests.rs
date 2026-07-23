@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::CanonicalizedPath;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use session_sharing_protocol::common::SessionId;
 #[cfg(feature = "local_fs")]
 use tempfile::TempDir;
@@ -22,6 +22,7 @@ use warpui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_tips::AITipModel;
@@ -40,7 +41,6 @@ use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::context_chips::prompt::Prompt;
@@ -60,10 +60,10 @@ use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings::PrivacySettings;
-use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings_view::DisplayCount;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
@@ -87,26 +87,8 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    experiments, workspace, AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions,
+    AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions, experiments, workspace,
 };
-#[test]
-fn query_for_rewind_prefill_uses_custom_display_query_inputs() {
-    let context: std::sync::Arc<[crate::ai::agent::AIAgentContext]> = Vec::new().into();
-    let input = crate::ai::agent::AIAgentInput::FetchReviewComments {
-        repo_path: "/repo".to_string(),
-        context,
-    };
-
-    assert_eq!(
-        query_for_rewind_prefill(&[input]),
-        Some(
-            crate::search::slash_command_menu::static_commands::commands::PR_COMMENTS
-                .name
-                .to_string()
-        )
-    );
-}
-
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
@@ -208,6 +190,7 @@ pub(crate) fn initialize_app(app: &mut App) {
         warp_server_client::iap::IapManager::new(
             None,
             Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+            None,
             ctx,
         )
     });
@@ -380,9 +363,11 @@ fn assert_vertical_tabs_tools_panel_preserves_padding(config: HeaderToolbarChipS
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
-                report_if_error!(settings
-                    .header_toolbar_chip_selection
-                    .set_value(config, ctx));
+                report_if_error!(
+                    settings
+                        .header_toolbar_chip_selection
+                        .set_value(config, ctx)
+                );
             });
         });
 
@@ -475,9 +460,9 @@ fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default()
             let profiles = AIExecutionProfilesModel::handle(ctx);
             let default_profile_id = profiles.read(ctx, |p, _| p.default_profile_id());
             profiles.update(ctx, |p, ctx| {
-                p.set_base_model(default_profile_id, Some(m.clone()), ctx);
+                p.set_base_model(&default_profile_id, Some(m.clone()), ctx);
                 let source_profile_id = p.create_profile(ctx).expect("create source profile");
-                p.set_base_model(source_profile_id, Some(d.clone()), ctx);
+                p.set_base_model(&source_profile_id, Some(d.clone()), ctx);
                 p.set_active_profile(source_id, source_profile_id, ctx);
             });
 
@@ -1318,9 +1303,11 @@ fn test_workspace_sessions_retrieves_tabs() {
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(0).unwrap()))
                 .expect("WindowId was not retrieved.");
 
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == pane_id })
+            );
 
             // Add a tab and check if workspace_sessions finds the second session from the new tab.
             workspace.add_terminal_tab(false, ctx);
@@ -1329,9 +1316,11 @@ fn test_workspace_sessions_retrieves_tabs() {
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(0).unwrap()))
                 .expect("WindowId was not retrieved.");
 
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == new_pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
+            );
         });
     });
 }
@@ -1356,9 +1345,11 @@ fn test_workspace_sessions_retrieves_panes() {
                 .get_pane_group_view(0)
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(1).unwrap()))
                 .expect("WindowId was not retrieved.");
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == new_pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
+            );
         });
     });
 }
@@ -2213,8 +2204,11 @@ fn test_tab_context_menu_share_session_items() {
         workspace.read(&app, |workspace, ctx| {
             let items =
                 workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
-            assert!(items[0]
-                .is_approximately_same_item_as(&MenuItemFields::new("Stop sharing").into_item()));
+            assert!(
+                items[0].is_approximately_same_item_as(
+                    &MenuItemFields::new("Stop sharing").into_item()
+                )
+            );
             assert!(items[1].is_approximately_same_item_as(
                 &MenuItemFields::new("Stop sharing all").into_item()
             ));
@@ -2235,8 +2229,11 @@ fn test_tab_context_menu_share_session_items() {
         workspace.read(&app, |workspace, ctx| {
             let items =
                 workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
-            assert!(items[0]
-                .is_approximately_same_item_as(&MenuItemFields::new("Share session").into_item()));
+            assert!(
+                items[0].is_approximately_same_item_as(
+                    &MenuItemFields::new("Share session").into_item()
+                )
+            );
             assert!(items[1].is_approximately_same_item_as(
                 &MenuItemFields::new("Stop sharing all").into_item()
             ));
@@ -2252,8 +2249,11 @@ fn test_tab_context_menu_share_session_items() {
         workspace.read(&app, |workspace, ctx| {
             let items =
                 workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
-            assert!(items[0]
-                .is_approximately_same_item_as(&MenuItemFields::new("Share session").into_item()));
+            assert!(
+                items[0].is_approximately_same_item_as(
+                    &MenuItemFields::new("Share session").into_item()
+                )
+            );
             assert!(items[1].is_approximately_same_item_as(&MenuItem::Separator));
         });
     });
@@ -2851,9 +2851,11 @@ fn test_vertical_tabs_panel_restored_open_when_show_in_restored_windows_enabled(
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
-                report_if_error!(settings
-                    .show_vertical_tab_panel_in_restored_windows
-                    .set_value(true, ctx));
+                report_if_error!(
+                    settings
+                        .show_vertical_tab_panel_in_restored_windows
+                        .set_value(true, ctx)
+                );
             });
         });
 
@@ -3090,6 +3092,47 @@ fn test_pointer_opened_tab_configs_menu_does_not_select_top_item() {
                     .read(ctx, |menu, _| menu.selected_index()),
                 None
             );
+        });
+    });
+}
+
+#[test]
+fn test_new_session_menu_is_capped_to_window_height() {
+    let _tab_configs_guard = FeatureFlag::TabConfigs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let window_height = ctx
+                .windows()
+                .platform_window(ctx.window_id())
+                .expect("expected workspace window")
+                .size()
+                .y();
+
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+
+            let expected_height =
+                (window_height - NEW_SESSION_MENU_WINDOW_MARGIN - NEW_SESSION_MENU_CHROME_HEIGHT)
+                    .max(NEW_SESSION_MENU_MIN_HEIGHT);
+            let menu_height = workspace.new_session_menu_max_height(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+
+            assert!((menu_height - expected_height).abs() < f32::EPSILON);
+
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+            assert!(workspace.show_new_session_dropdown_menu.is_some());
         });
     });
 }
@@ -3376,11 +3419,13 @@ fn test_worktree_sidecar_search_editor_proxies_navigation_and_escape() {
             assert!(workspace.show_new_session_dropdown_menu.is_none());
             assert!(!workspace.show_new_session_sidecar);
             assert!(workspace.worktree_sidecar_search_query.is_empty());
-            assert!(workspace
-                .worktree_sidecar_search_editor
-                .as_ref(ctx)
-                .buffer_text(ctx)
-                .is_empty());
+            assert!(
+                workspace
+                    .worktree_sidecar_search_editor
+                    .as_ref(ctx)
+                    .buffer_text(ctx)
+                    .is_empty()
+            );
         });
     });
 }
@@ -3480,9 +3525,11 @@ fn test_vertical_tabs_context_menu_does_not_show_hover_only_tab_bar() {
 
         workspace.update(&mut app, |workspace, ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .workspace_decoration_visibility
-                    .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
+                report_if_error!(
+                    settings
+                        .workspace_decoration_visibility
+                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
+                );
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
             });
             workspace.should_show_ai_assistant_warm_welcome = false;
@@ -3507,9 +3554,11 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 
         workspace.update(&mut app, |workspace, ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .workspace_decoration_visibility
-                    .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
+                report_if_error!(
+                    settings
+                        .workspace_decoration_visibility
+                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
+                );
             });
             workspace.should_show_ai_assistant_warm_welcome = false;
 
@@ -3543,10 +3592,12 @@ fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempot
                     .current_workspace_state
                     .is_agent_management_view_open
             );
-            assert!(workspace
-                .agent_management_view
-                .as_ref(ctx)
-                .is_showing_setup_guide());
+            assert!(
+                workspace
+                    .agent_management_view
+                    .as_ref(ctx)
+                    .is_showing_setup_guide()
+            );
 
             workspace.handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
             assert!(
@@ -3554,10 +3605,12 @@ fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempot
                     .current_workspace_state
                     .is_agent_management_view_open
             );
-            assert!(workspace
-                .agent_management_view
-                .as_ref(ctx)
-                .is_showing_setup_guide());
+            assert!(
+                workspace
+                    .agent_management_view
+                    .as_ref(ctx)
+                    .is_showing_setup_guide()
+            );
         });
     });
 }
@@ -3892,10 +3945,12 @@ fn test_close_tab_group_removes_group_and_members() {
 
             // All group members are closed and the group entry is removed.
             assert!(!workspace.tab_groups.contains_key(&group_id));
-            assert!(workspace
-                .tabs
-                .iter()
-                .all(|tab| tab.group_id != Some(group_id)));
+            assert!(
+                workspace
+                    .tabs
+                    .iter()
+                    .all(|tab| tab.group_id != Some(group_id))
+            );
         });
     });
 }
@@ -3911,9 +3966,11 @@ fn test_new_tab_with_after_all_tabs_setting_lands_top_level_at_end() {
         initialize_app(&mut app);
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .new_tab_placement
-                    .set_value(NewTabPlacement::AfterAllTabs, ctx));
+                report_if_error!(
+                    settings
+                        .new_tab_placement
+                        .set_value(NewTabPlacement::AfterAllTabs, ctx)
+                );
             });
         });
 
@@ -3965,9 +4022,11 @@ fn test_new_tab_with_after_current_tab_setting_lands_after_active_tab_in_group()
         initialize_app(&mut app);
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .new_tab_placement
-                    .set_value(NewTabPlacement::AfterCurrentTab, ctx));
+                report_if_error!(
+                    settings
+                        .new_tab_placement
+                        .set_value(NewTabPlacement::AfterCurrentTab, ctx)
+                );
             });
         });
 
@@ -4339,6 +4398,95 @@ fn test_pin_tab_on_grouped_tab_extracts_then_pins() {
             assert_eq!(workspace.tabs[2].pane_group.id(), id2);
             assert!(workspace.tabs[2].group_id.is_none());
             assert!(!workspace.tabs[2].pinned);
+        });
+    });
+}
+
+/// Regression for the tools-panel tab visibility toggles surfaced in the
+/// Appearance settings page: toggling a tab's backing setting must add/remove
+/// that tab from the tools panel live, and re-enabling Warp Drive must make it
+/// selectable again (the original report was that Warp Drive could vanish from
+/// the tools panel with no way back).
+#[test]
+fn test_tools_panel_warp_drive_toggle_updates_available_views() {
+    // Force the non-anonymous path so `is_warp_drive_enabled` follows the
+    // `enable_warp_drive` setting rather than the auth state.
+    let _skip_anon_guard = FeatureFlag::SkipFirebaseAnonymousUser.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        // Warp Drive is enabled by default, so it is an available tools-panel
+        // tab and can be made the active view.
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Warp Drive should be an available tools-panel tab by default"
+            );
+            workspace.left_panel_view.update(ctx, |lp, ctx| {
+                lp.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+            });
+            assert_eq!(
+                workspace.left_panel_view.as_ref(ctx).active_view(),
+                ToolPanelView::WarpDrive,
+                "Warp Drive should be selectable as the active view"
+            );
+        });
+
+        // Turning the toggle off (via its backing setting) removes Warp Drive
+        // from the tools panel; if other tabs remain the active view falls back
+        // to one of them.
+        app.update(|ctx| {
+            WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .enable_warp_drive
+                    .set_value(false, ctx)
+                    .expect("disable warp drive");
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                !workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Disabling the setting should remove Warp Drive from the tools panel"
+            );
+            if !workspace.left_panel_views.is_empty() {
+                assert_ne!(
+                    workspace.left_panel_view.as_ref(ctx).active_view(),
+                    ToolPanelView::WarpDrive,
+                    "Active view should fall back to a remaining tab when Warp Drive is removed"
+                );
+            }
+        });
+
+        // Re-enabling restores Warp Drive as a selectable tab.
+        app.update(|ctx| {
+            WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .enable_warp_drive
+                    .set_value(true, ctx)
+                    .expect("re-enable warp drive");
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Re-enabling the setting should restore Warp Drive to the tools panel"
+            );
+            workspace.left_panel_view.update(ctx, |lp, ctx| {
+                lp.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+            });
+            assert_eq!(
+                workspace.left_panel_view.as_ref(ctx).active_view(),
+                ToolPanelView::WarpDrive,
+                "Warp Drive should be selectable again after re-enabling"
+            );
         });
     });
 }

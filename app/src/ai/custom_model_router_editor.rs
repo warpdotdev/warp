@@ -22,8 +22,8 @@ use warpui::{
 };
 
 use crate::ai::custom_model_routers::{
-    is_auto_target, ComplexityRouting, CustomModelRouter, CustomModelRouting, PromptRouting,
-    PromptRule,
+    ComplexityRouting, CustomModelRouter, CustomModelRouting, PromptRouting, PromptRule,
+    is_auto_target,
 };
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
@@ -37,11 +37,11 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 #[cfg(feature = "local_fs")]
 use crate::user_config::WarpConfig;
+use crate::view_components::FilterableDropdown;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme,
 };
 use crate::view_components::dropdown::DropdownAction;
-use crate::view_components::FilterableDropdown;
 
 pub const HEADER_TEXT: &str = "Router Editor";
 

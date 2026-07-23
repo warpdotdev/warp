@@ -19,12 +19,12 @@ pub fn crossterm_event_to_tui_event(event: CrosstermEvent) -> Option<TuiEvent> {
     match event {
         CrosstermEvent::Key(key_event) => key_event_to_tui_event(key_event),
         CrosstermEvent::Mouse(mouse_event) => TuiEvent::try_from(mouse_event).ok(),
-        // TODO: FocusGained, FocusLost, and Paste have no TUI equivalents yet.
+        CrosstermEvent::Paste(text) => Some(TuiEvent::Paste { text }),
+        // TODO: FocusGained and FocusLost have no TUI equivalents yet.
         // If these are needed in the future, consider adding matching TuiEvent variants.
-        CrosstermEvent::FocusGained
-        | CrosstermEvent::FocusLost
-        | CrosstermEvent::Paste(_)
-        | CrosstermEvent::Resize(_, _) => None,
+        CrosstermEvent::FocusGained | CrosstermEvent::FocusLost | CrosstermEvent::Resize(_, _) => {
+            None
+        }
     }
 }
 
@@ -140,7 +140,7 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
         KeyCode::End => Some("end".to_owned()),
         KeyCode::PageUp => Some("pageup".to_owned()),
         KeyCode::PageDown => Some("pagedown".to_owned()),
-        KeyCode::Tab | KeyCode::BackTab => Some("\t".to_owned()),
+        KeyCode::Tab | KeyCode::BackTab => Some("tab".to_owned()),
         KeyCode::Delete => Some("delete".to_owned()),
         KeyCode::Insert => Some("insert".to_owned()),
         KeyCode::Esc => Some("escape".to_owned()),

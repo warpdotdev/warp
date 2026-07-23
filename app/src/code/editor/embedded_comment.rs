@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde_yaml::Mapping;
 use uuid::Uuid;
 use warp_editor::content::markdown::MarkdownStyle;
@@ -15,13 +15,13 @@ use warp_editor::render::model::{
     BlockSpacing, EmbeddedItem, EmbeddedItemHTMLRepresentation, EmbeddedItemRichFormat,
     LaidOutEmbeddedItem, RenderState,
 };
+use warp_errors::report_error;
 use warpui::event::DispatchedEvent;
 use warpui::units::Pixels;
 use warpui::{AppContext, EntityId, EventContext, LayoutContext, ViewHandle, WindowId};
 
 use crate::code::editor::comment_editor::CommentEditor;
 use crate::code_review::comments::CommentId;
-use crate::report_error;
 
 const COMMENT_ID_MAPPING_KEY: &str = "comment_id";
 const ENTITY_ID_MAPPING_KEY: &str = "entity_id";
@@ -90,10 +90,9 @@ impl EmbeddedItem for EmbeddedCommentSpace {
     }
 
     fn to_rich_format(&self, app: &AppContext) -> EmbeddedItemRichFormat<'_> {
-        let text = if let Some(editor) = self.get_comment_editor(app) {
-            editor.read(app, |editor, app| editor.comment_text(app))
-        } else {
-            String::new()
+        let text = match self.get_comment_editor(app) {
+            Some(editor) => editor.read(app, |editor, app| editor.comment_text(app)),
+            _ => String::new(),
         };
 
         EmbeddedItemRichFormat {

@@ -2,14 +2,14 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use command::r#async::Command;
 use itertools::Itertools as _;
 
 use super::shared::shell_escape_single_quotes;
 use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
-use crate::env_vars::{serialize_variables_for_shell, EnvVarValue};
+use crate::env_vars::{EnvVarValue, serialize_variables_for_shell};
 use crate::terminal::shell::Shell;
 
 /// `CommandExecutor` implementation that executes the given `command` in a forked process

@@ -2,7 +2,7 @@
 name = "repo_metadata"
 authors = ["Warp Team <dev@warp.dev>"]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Repository metadata utilities for Warp"
 publish.workspace = true
 license.workspace = true
@@ -23,11 +23,13 @@ walkdir.workspace = true
 itertools.workspace = true
 warpui_core.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true
 warp_util.workspace = true
 ignore = "0.4.23"
 once_cell.workspace = true
 log.workspace = true
 futures.workspace = true
+async-fs.workspace = true
 tempfile.workspace = true
 cfg-if = "1.0"
 dirs.workspace = true
@@ -37,7 +39,6 @@ strum.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 notify-debouncer-full.workspace = true
-async-fs.workspace = true
 watcher.workspace = true
 
 [build-dependencies]

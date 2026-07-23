@@ -1,19 +1,20 @@
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{
     AppContext, ClosedWindowData, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-use super::settings::UndoCloseSettingsChangedEvent;
 use super::UndoCloseSettings;
+use super::settings::UndoCloseSettingsChangedEvent;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{PaneGroup, PaneId};
+use crate::send_telemetry_from_app_ctx;
 use crate::server::telemetry::{TelemetryEvent, UndoCloseItemType};
 use crate::tab::TabData;
 use crate::workspace::Workspace;
-use crate::{report_error, send_telemetry_from_app_ctx};
 
 /// A unique identifier for an item in the undo close stack.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

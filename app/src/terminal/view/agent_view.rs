@@ -1,20 +1,23 @@
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
 use warpui::keymap::Keystroke;
 use warpui::{EntityId, SingletonEntity, ViewContext};
 
+use crate::TelemetryEvent;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlock, AgentViewEntryBlockEvent, AgentViewEntryBlockParams, AgentViewEntryOrigin,
-    AutoTriggerBehavior, DismissalStrategy, EnterAgentViewError, EphemeralMessage,
-    ENTER_OR_EXIT_CONFIRMATION_WINDOW,
+    AutoTriggerBehavior, DismissalStrategy, ENTER_OR_EXIT_CONFIRMATION_WINDOW, EnterAgentViewError,
+    EphemeralMessage,
 };
 use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::persistence::ModelEvent;
 use crate::server::telemetry::TelemetryAgentViewEntryOrigin;
+use crate::terminal::TerminalView;
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::view::load_ai_conversation::{
@@ -23,10 +26,8 @@ use crate::terminal::view::load_ai_conversation::{
 use crate::terminal::view::{
     AgentViewEntryMetadata, RichContentInsertionPosition, RichContentMetadata,
 };
-use crate::terminal::TerminalView;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::{report_error, TelemetryEvent};
 
 pub const ENTER_AGAIN_TO_SEND_MESSAGE_ID: &str = "enter_again_to_send";
 
@@ -270,8 +271,10 @@ impl TerminalView {
                         block_id: block_id.to_string(),
                         agent_view_visibility: agent_view_visibility.into(),
                     }) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Error sending UpdateBlockAgentViewVisibility event"));
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("Error sending UpdateBlockAgentViewVisibility event")
+                        );
                     }
                 }
             }

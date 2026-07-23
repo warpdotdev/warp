@@ -12,13 +12,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ::channel_versions::{ParsedVersion, VersionInfo};
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use rand::Rng as _;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_errors::report_if_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
-use warpui::platform::TerminationMode;
 use warpui::r#async::Timer;
+use warpui::platform::TerminationMode;
 use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::{self, WindowManager};
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, ViewContext};
@@ -30,10 +31,7 @@ use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::TelemetryEvent;
 use crate::workspace::Workspace;
-use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, send_telemetry_sync_from_app_ctx,
-    ChannelState,
-};
+use crate::{ChannelState, send_telemetry_from_ctx, send_telemetry_sync_from_app_ctx};
 
 /// A successfully downloaded and unpacked target update.
 #[derive(Clone, Debug)]
@@ -445,7 +443,7 @@ impl AutoupdateState {
                 self.stage = AutoupdateStage::NoUpdateAvailable;
                 log::info!("No update available");
             }
-            Err(ref e) => {
+            Err(e) => {
                 // We commonly get errors as the autoupdate code runs when a laptop wakes up
                 // briefly while asleep, but the network call to check for updates gets cancelled
                 // when returning to sleep. So we fail silently and wait for the next update poll.
@@ -983,7 +981,7 @@ where
                         autoupdate_state.relaunch_failed(ctx);
 
                         let err = anyhow!(err).context("Error applying installed update");
-                        crate::report_error!(&err);
+                        warp_errors::report_error!(&err);
                         callback(Err(err), ctx);
                     }
                 }
@@ -1035,7 +1033,7 @@ pub fn spawn_child_if_necessary(app: &mut AppContext) {
                 log::info!("Terminating app for relaunch. Bye!");
             }
             Err(e) => {
-                report_error!(e.context("Error relaunching app after autoupdate"));
+                crate::report_error!(e.context("Error relaunching app after autoupdate"));
                 AutoupdateState::handle(app).update(app, |autoupdate_state, ctx| {
                     autoupdate_state.relaunch_failed(ctx);
                 });

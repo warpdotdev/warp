@@ -6,15 +6,16 @@ use anyhow::anyhow;
 use chrono::{DateTime, Local, TimeDelta};
 use futures::channel::oneshot;
 use uuid::Uuid;
+use warp_errors::report_error;
 use warp_multi_agent_api::response_event;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::agent::api::{self, generate_multi_agent_output, ConvertToAPITypeError};
+use crate::ai::agent::api::{self, ConvertToAPITypeError, generate_multi_agent_output};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIIdentifiers, CancellationReason};
 use crate::network::NetworkStatus;
+use crate::send_telemetry_from_ctx;
 use crate::server::server_api::{AIApiError, ServerApiProvider};
-use crate::{report_error, send_telemetry_from_ctx};
 
 /// Maximum number of times a single MAA request is re-sent before the failure is
 /// surfaced.
@@ -302,10 +303,9 @@ impl ResponseStream {
                                     .grok_tokens()
                                     .and_then(|tokens| tokens.access_token_for_request())
                                     .map(str::to_owned)
+                                    && let Some(keys) = me.params.api_keys.as_mut()
                                 {
-                                    if let Some(keys) = me.params.api_keys.as_mut() {
-                                        keys.grok_oauth_access_token = access_token;
-                                    }
+                                    keys.grok_oauth_access_token = access_token;
                                 }
                                 Self::spawn_generate(
                                     request_id,
@@ -455,8 +455,8 @@ impl ResponseStream {
                                 Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None
                             ) {
                                 // Emit retry success telemetry if this was a successful completion after retries
-                                if self.retry_count > 0 {
-                                    if let Some(original_error) = &self.original_error {
+                                if self.retry_count > 0
+                                    && let Some(original_error) = &self.original_error {
                                         send_telemetry_from_ctx!(
                                             crate::TelemetryEvent::AgentModeRequestRetrySucceeded {
                                                 identifiers: self.ai_identifiers.clone(),
@@ -466,7 +466,6 @@ impl ResponseStream {
                                             ctx
                                         );
                                     }
-                                }
                             }
                         }
                     }

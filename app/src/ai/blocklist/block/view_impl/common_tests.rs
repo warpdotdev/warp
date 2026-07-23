@@ -11,15 +11,15 @@ use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{Empty, MouseStateHandle};
 use warpui::{App, Element};
 
-#[cfg(feature = "local_fs")]
-use super::{blocklist_image_asset_source, ResolvedBlocklistImageSources};
 use super::{
+    CollapsibleElementState, CollapsibleExpansionState, VisualMarkdownLightboxCollection,
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
     image_tooltip_handles_for_group, inline_image_source_label,
     is_supported_blocklist_image_source, lightbox_trigger_for_section, query_prefix_highlight_len,
     render_scrollable_collapsible_content, text_sections_with_indices, warping_footer_height,
-    CollapsibleElementState, CollapsibleExpansionState, VisualMarkdownLightboxCollection,
 };
+#[cfg(feature = "local_fs")]
+use super::{ResolvedBlocklistImageSources, blocklist_image_asset_source};
 use crate::ai::agent::{
     AIAgentInput, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
     AgentOutputMermaidDiagram, MessageId, UserQueryMode,
@@ -286,10 +286,12 @@ fn collect_visual_markdown_lightbox_collection_includes_mermaid_sections_in_sour
 
             assert_eq!(collection.section_indices, vec![11, 13]);
             assert_eq!(collection.images.len(), 2);
-            assert!(collection
-                .images
-                .iter()
-                .all(|image| image.description.is_none()));
+            assert!(
+                collection
+                    .images
+                    .iter()
+                    .all(|image| image.description.is_none())
+            );
         });
     });
 }

@@ -8,11 +8,11 @@ use futures::channel::oneshot;
 use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use rayon::prelude::*;
-use repo_metadata::entry::{is_file_parsable, BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::RepositoryUpdate;
+use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy, is_file_parsable};
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::index::file_outline::{FileOutline, Outline, Symbol};
@@ -57,7 +57,8 @@ pub async fn build_outline(
         0,
         &IgnoredPathStrategy::Exclude, // override_ignore_for_files
         BudgetExceededBehavior::StopAndLazyLoad,
-    )?;
+    )
+    .await?;
 
     let (sender, receiver) = oneshot::channel();
 
@@ -81,8 +82,10 @@ pub async fn build_outline(
         });
 
         if let Err(e) = sender.send(result) {
-            report_error!(anyhow::anyhow!("{e:?}")
-                .context("Could not send result of outline generation to background thread"))
+            report_error!(
+                anyhow::anyhow!("{e:?}")
+                    .context("Could not send result of outline generation to background thread")
+            )
         }
     });
 

@@ -1,31 +1,351 @@
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::agent::action::{
+    CreateDocumentsRequest, DocumentDiff, DocumentToCreate, EditDocumentsRequest,
+};
+use ai::document::AIDocumentId;
+use markdown_parser::parse_markdown;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIBlockModel, AIBlockOutputStatus,
-    AIConversationId, AIRequestType, Appearance, LLMId, MessageId, OutputStatusUpdateCallback,
-    RequestCommandOutputResult, ServerOutputId, Shared, TaskId, TerminalModel, UserQueryMode,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
+    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, AgentOutputImage,
+    AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable, Appearance,
+    FailedOutputPresentation, LLMId, MessageId, OutputStatusUpdateCallback, ReceivedMessageDisplay,
+    RenderableAIError, RequestCommandOutputResult, ServerOutputId, Shared, SummarizationType,
+    TaskId, TerminalModel, TodoOperation, TodoStatus, UserQueryMode,
+    should_show_failed_output_usage_notice,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPoint, TuiRect, TuiSize,
+    Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition,
+    TuiSize,
 };
-use warpui_core::elements::Fill as CoreFill;
+use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext, ViewHandle};
+use warpui_core::{App, AppContext, EntityId, EntityIdMap, TuiView, ViewContext, ViewHandle};
 
-use super::{TuiAIBlock, TuiAIBlockSection};
-use crate::agent_block_sections::render_fallback_tool_call_section;
-use crate::test_fixtures::{add_test_action_model, TestHostView};
+use super::{
+    CollapsibleSectionStates, TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection,
+    TuiCodeBlockKey, TuiRichTextSection, TuiToolCallView, render_failure_section,
+};
+use crate::agent_block_sections::{
+    completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
+};
+use crate::agent_message::agent_message_section_id;
+use crate::test_fixtures::{TestHostView, add_test_action_model_and_events};
+use crate::tui_builder::TuiUiBuilder;
+use crate::tui_plan_view::TuiPlanViewAction;
+use crate::tui_shell_command_view::TuiShellCommandViewAction;
+
+#[test]
+fn agent_block_renders_generic_failure_after_partial_output() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: vec![query_input("hello")],
+                status: failed_output(
+                    vec![plain_text_message("message-1", "partial response")],
+                    RenderableAIError::other("backend failed", false),
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            let lines = render_block_lines(block.as_ref(ctx), 60, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "> hello",
+                    "partial response",
+                    "⚠ I'm sorry, I couldn't complete that request.",
+                    "backend failed",
+                ]
+            );
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                block.as_ref(ctx).render_element(ctx),
+                TuiRect::new(0, 0, 60, 9),
+                ctx,
+            );
+            let failure_row = frame
+                .buffer
+                .to_lines()
+                .iter()
+                .position(|line| line.contains("couldn't complete"))
+                .expect("failure row");
+            let red: Color = CoreFill::from(ThemeFill::from(
+                Appearance::as_ref(ctx).theme().terminal_colors().normal.red,
+            ))
+            .into();
+            assert_eq!(frame.buffer[(0, failure_row as u16)].fg, red);
+        });
+    });
+}
+
+#[test]
+fn agent_block_renders_invalid_api_key_detail_without_usage_notice() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: failed_output(
+                    Vec::new(),
+                    RenderableAIError::InvalidApiKey {
+                        provider: "OpenAI".to_owned(),
+                        model_name: "GPT".to_owned(),
+                    },
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            let lines = render_block_lines(block.as_ref(ctx), 100, ctx);
+            assert_eq!(
+                lines,
+                vec![
+                    "⚠ Provided API key is not valid",
+                    "  Failed to authenticate with OpenAI when using GPT. Double-check that your API key is correct.",
+                ]
+            );
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| !line.contains("won't count towards your usage"))
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_block_suppresses_recovery_pending_failure() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: failed_output(
+                    vec![plain_text_message("message-1", "partial response")],
+                    RenderableAIError::Other {
+                        error_message: "temporary failure".to_owned(),
+                        will_attempt_resume: true,
+                        waiting_for_network: false,
+                        is_user_error: false,
+                    },
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            assert_eq!(
+                render_block_lines(block.as_ref(ctx), 60, ctx),
+                vec!["partial response"]
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_block_renders_context_window_failure() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: failed_output(
+                    Vec::new(),
+                    RenderableAIError::ContextWindowExceeded(
+                        "The conversation is too long.".to_owned(),
+                    ),
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            assert_eq!(
+                render_block_lines(block.as_ref(ctx), 60, ctx),
+                vec!["× The conversation is too long."]
+            );
+        });
+    });
+}
+
+#[test]
+fn out_of_credits_failure_uses_shared_copy_warning_style_and_tui_actions() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+
+        app.read(|ctx| {
+            let presentation = FailedOutputPresentation::OutOfCredits {
+                message: "I'm sorry, I couldn't complete that request.\n\nIn order to use Warp's AI features, subscribe to a Warp plan, or bring your own inference."
+                    .to_owned(),
+                can_use_own_api_keys: true,
+            };
+            let compare_plans_hover_state = MouseStateHandle::default();
+            let byok_hover_state = MouseStateHandle::default();
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 100, 4),
+                ctx,
+            );
+            assert_eq!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .collect::<Vec<_>>(),
+                vec![
+                    "⚠ I'm sorry, I couldn't complete that request.",
+                    "  In order to use Warp's AI features, subscribe to a Warp plan, or bring your own inference.",
+                    "",
+                    "  Compare plans  or  Use your own API keys",
+                ]
+            );
+            let builder = TuiUiBuilder::from_app(ctx);
+            let primary_foreground = builder
+                .primary_text_style()
+                .fg
+                .expect("primary foreground");
+            assert_eq!(
+                frame.buffer[(0, 0)].fg,
+                builder.error_text_style().fg.expect("error foreground")
+            );
+            assert_eq!(frame.buffer[(2, 0)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(2, 1)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(2, 3)].fg, primary_foreground);
+            assert_eq!(
+                frame.buffer[(17, 3)].fg,
+                builder.muted_text_style().fg.expect("muted foreground")
+            );
+            assert_eq!(frame.buffer[(21, 3)].fg, primary_foreground);
+            assert!(
+                frame.buffer[(2, 3)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED)
+            );
+            assert!(
+                frame.buffer[(21, 3)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED)
+            );
+
+            dispatch_click_on_text(
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                "Compare plans",
+                100,
+                4,
+                ctx,
+            );
+            dispatch_click_on_text(
+                render_failure_section(
+                    &presentation,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                "Use your own API keys",
+                100,
+                4,
+                ctx,
+            );
+
+            let without_byok = FailedOutputPresentation::OutOfCredits {
+                message: "I'm sorry, I couldn't complete that request.\n\nOut of credits."
+                    .to_owned(),
+                can_use_own_api_keys: false,
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_failure_section(
+                    &without_byok,
+                    &compare_plans_hover_state,
+                    &byok_hover_state,
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 100, 4),
+                ctx,
+            );
+            assert_eq!(frame.buffer.to_lines()[3].trim_end(), "  Compare plans");
+        });
+
+        assert_eq!(
+            &*opened_urls.borrow(),
+            &[
+                "https://www.warp.dev/pricing".to_owned(),
+                "https://docs.warp.dev/agent-platform/inference/bring-your-own-api-key/".to_owned(),
+            ]
+        );
+    });
+}
+
+#[test]
+fn failed_output_usage_notice_matches_gui_conditions() {
+    let error = RenderableAIError::other("failed", false);
+    assert!(should_show_failed_output_usage_notice(
+        &error, true, false, false
+    ));
+    assert!(should_show_failed_output_usage_notice(
+        &RenderableAIError::QuotaLimit {
+            user_display_message: Some("You've reached your credit limit.".to_owned()),
+        },
+        true,
+        false,
+        false,
+    ));
+    assert!(!should_show_failed_output_usage_notice(
+        &error, false, false, false
+    ));
+    assert!(!should_show_failed_output_usage_notice(
+        &error, true, true, false
+    ));
+    assert!(!should_show_failed_output_usage_notice(
+        &error, true, false, true
+    ));
+    assert!(!should_show_failed_output_usage_notice(
+        &RenderableAIError::InvalidApiKey {
+            provider: "OpenAI".to_owned(),
+            model_name: "GPT".to_owned(),
+        },
+        true,
+        false,
+        false,
+    ));
+}
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
@@ -42,7 +362,7 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            assert_eq!(block.desired_height(20, app_ctx), 6);
+            assert_eq!(desired_height(block, 20, app_ctx), 6);
 
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
@@ -57,9 +377,12 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["", "≫ hello", "", "one", "two", "three"],
+                vec!["", "> hello", "", "one", "two", "three"],
             );
-            assert_eq!(frame.buffer[(0, 1)].fg, expected_prompt_text_color(app_ctx));
+            assert_eq!(
+                frame.buffer[(0, 1)].fg,
+                expected_prompt_prefix_color(app_ctx)
+            );
             assert_eq!(frame.buffer[(0, 1)].bg, expected_input_background(app_ctx));
             assert!(frame.buffer[(0, 1)].modifier.contains(Modifier::BOLD));
             assert_eq!(frame.buffer[(2, 1)].fg, expected_prompt_text_color(app_ctx));
@@ -69,6 +392,27 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
             // terminal's own background.
             assert_eq!(frame.buffer[(0, 3)].bg, Color::Reset);
             assert_eq!(frame.buffer[(19, 3)].bg, Color::Reset);
+        });
+    });
+}
+
+#[test]
+fn agent_block_uses_fallback_row_for_edit_without_rich_body() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let edit = test_edit_documents_action("edit-1");
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", edit)]),
+            },
+        );
+
+        app.read(|ctx| {
+            let rendered = render_block_lines(block.as_ref(ctx), 60, ctx);
+            assert_eq!(rendered.len(), 1);
+            assert!(rendered[0].contains("Update"));
         });
     });
 }
@@ -88,8 +432,8 @@ fn simple_agent_block_reflows_height_at_narrow_width() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            let wide = block.desired_height(40, app_ctx);
-            let narrow = block.desired_height(6, app_ctx);
+            let wide = desired_height(block, 40, app_ctx);
+            let narrow = desired_height(block, 6, app_ctx);
             assert!(narrow > wide, "narrow text should occupy more logical rows");
         });
     });
@@ -99,26 +443,49 @@ fn expected_prompt_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
     CoreFill::from(theme.foreground()).into()
 }
+fn expected_prompt_prefix_color(app: &AppContext) -> Color {
+    let theme = Appearance::as_ref(app).theme();
+    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into()
+}
 
 fn expected_input_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
     let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-    CoreFill::from(theme.background().blend(&accent.with_opacity(20))).into()
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&accent.with_opacity(10))
+            .blend(&accent.with_opacity(10)),
+    )
+    .into()
 }
 
 fn expected_output_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()
+    let opacity = theme.details().main_text_opacity;
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(opacity)),
+    )
+    .into()
 }
 
 fn expected_tool_call_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into()
+    let opacity = theme.details().sub_text_opacity;
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(opacity)),
+    )
+    .into()
 }
 
 #[test]
 fn agent_block_extracts_input_and_plain_text_from_model() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         let block = test_agent_block(
             &mut app,
             FakeAgentBlockModel {
@@ -139,8 +506,8 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
                 block.sections(app_ctx),
                 vec![
                     TuiAIBlockSection::Input("hello".to_owned()),
-                    TuiAIBlockSection::PlainText("one".to_owned()),
-                    TuiAIBlockSection::PlainText("two".to_owned()),
+                    rich_text("one"),
+                    rich_text("two"),
                 ]
             );
         });
@@ -168,9 +535,9 @@ fn agent_block_renders_tool_calls_in_message_order() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    rich_text("before"),
                     TuiAIBlockSection::ToolCall(Box::new(action.clone())),
-                    TuiAIBlockSection::PlainText("after".to_owned()),
+                    rich_text("after"),
                 ]
             );
 
@@ -252,6 +619,97 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
 }
 
 #[test]
+fn orchestration_outputs_render_without_wait_for_events_tool_row() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let wait_action = AIAgentAction {
+            id: AIAgentActionId::from("wait-action".to_string()),
+            action: AIAgentActionType::WaitForEvents {
+                tool_call_id: "wait-call".to_string(),
+                idle_timeout_seconds: 600,
+            },
+            task_id: TaskId::new("wait-task".to_string()),
+            requires_result: false,
+        };
+        let received = ReceivedMessageDisplay {
+            message_id: "message-1".to_string(),
+            sender_agent_id: "researcher".to_string(),
+            addresses: vec!["lead".to_string()],
+            subject: "Investigation complete".to_string(),
+            message_body: "Found the issue".to_string(),
+        };
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("m1", wait_action),
+                    AIAgentOutputMessage {
+                        id: MessageId::new("m2".to_string()),
+                        message: AIAgentOutputMessageType::MessagesReceivedFromAgents {
+                            messages: vec![received.clone()],
+                        },
+                        citations: Vec::new(),
+                    },
+                    AIAgentOutputMessage {
+                        id: MessageId::new("m3".to_string()),
+                        message: AIAgentOutputMessageType::EventsFromAgents {
+                            event_ids: vec!["event-1".to_string(), "event-2".to_string()],
+                        },
+                        citations: Vec::new(),
+                    },
+                ]),
+            },
+        );
+
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![TuiAIBlockSection::AgentMessage(received)],
+            );
+            let lines = render_block_lines(block, 80, app_ctx);
+            assert_eq!(lines.len(), 1);
+            assert!(lines[0].ends_with(" ▸"));
+            assert!(!lines[0].contains("lifecycle event"));
+        });
+    });
+}
+
+#[test]
+fn hidden_only_orchestration_exchange_has_zero_height() {
+    App::test((), |mut app| async move {
+        let wait_action = AIAgentAction {
+            id: AIAgentActionId::from("wait-action".to_string()),
+            action: AIAgentActionType::WaitForEvents {
+                tool_call_id: "wait-call".to_string(),
+                idle_timeout_seconds: 600,
+            },
+            task_id: TaskId::new("wait-task".to_string()),
+            requires_result: false,
+        };
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("m1", wait_action),
+                    AIAgentOutputMessage::events_from_agents(
+                        MessageId::new("m2".to_owned()),
+                        vec!["event-1".to_owned()],
+                    ),
+                ]),
+            },
+        );
+
+        app.read(|ctx| {
+            let block = block.as_ref(ctx);
+            assert!(block.sections(ctx).is_empty());
+            assert_eq!(desired_height(block, 80, ctx), 0);
+        });
+    });
+}
+#[test]
 fn tool_call_row_glyph_and_colors_reflect_state() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -263,10 +721,8 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
                 CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.yellow)).into();
             let red: Color =
                 CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.red)).into();
-            let white: Color =
-                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
-            let grey: Color =
-                CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
+            let primary = expected_output_text_color(app_ctx);
+            let muted = expected_tool_call_text_color(app_ctx);
 
             let render = |action: &AIAgentAction, status: Option<&AIActionStatus>| {
                 let mut presenter = TuiPresenter::new();
@@ -286,14 +742,14 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
                 "✓ Init project — done"
             );
             assert_eq!(frame.buffer[(0, 0)].fg, green);
-            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
             assert!(!frame.buffer[(2, 0)].modifier.contains(Modifier::DIM));
 
             // Running: yellow dot.
             let frame = render(&action, Some(&AIActionStatus::RunningAsync));
             assert_eq!(frame.buffer.to_lines()[0].trim_end(), "● Init project…");
             assert_eq!(frame.buffer[(0, 0)].fg, yellow);
-            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
 
             // Failed (denylisted command): red x, normal-foreground label.
             let command_action = test_command_action("action-2", "git status");
@@ -308,10 +764,10 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
             let frame = render(&command_action, Some(&failed));
             assert_eq!(
                 frame.buffer.to_lines()[0].trim_end(),
-                "✗ `git status` denied (denylisted)"
+                "× `git status` denied (denylisted)"
             );
             assert_eq!(frame.buffer[(0, 0)].fg, red);
-            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
 
             // Cancelled: grey block, normal-foreground label.
             let cancelled = finished_status(
@@ -325,9 +781,9 @@ fn tool_call_row_glyph_and_colors_reflect_state() {
                 frame.buffer.to_lines()[0].trim_end(),
                 "■ Cancelled `git status`"
             );
-            assert_eq!(frame.buffer[(0, 0)].fg, grey);
+            assert_eq!(frame.buffer[(0, 0)].fg, muted);
             assert!(!frame.buffer[(0, 0)].modifier.contains(Modifier::DIM));
-            assert_eq!(frame.buffer[(2, 0)].fg, white);
+            assert_eq!(frame.buffer[(2, 0)].fg, primary);
         });
     });
 }
@@ -349,11 +805,289 @@ fn agent_block_desired_height_accounts_for_tool_call_stub() {
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
             // One tool-call stub line plus the block's top padding row.
-            assert_eq!(block.desired_height(40, app_ctx), 2);
+            assert_eq!(desired_height(block, 40, app_ctx), 2);
         });
     });
 }
 
+#[test]
+fn shell_command_disclosure_invalidates_agent_block_layout() {
+    App::test((), |mut app| async move {
+        let action = test_command_action("action-1", "printf result");
+        let action_id = action.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", action)]),
+            },
+        );
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = layout_invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::LayoutInvalidated => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::BlockingStateChanged
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+
+        let shell_view = app.read(|ctx| {
+            let Some(TuiToolCallView::ShellCommand(view)) =
+                block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("shell-command child view");
+            };
+            view.clone()
+        });
+        app.update(|ctx| {
+            let window_id = shell_view.window_id(ctx);
+            ctx.dispatch_typed_action_for_view(
+                window_id,
+                shell_view.id(),
+                &TuiShellCommandViewAction::ToggleExpanded,
+            );
+        });
+
+        assert_eq!(layout_invalidations.get(), 1);
+    });
+}
+
+#[test]
+fn agent_block_registers_create_and_edit_plan_children() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let create = test_create_documents_action(
+            "create-1",
+            vec![DocumentToCreate {
+                title: "Plan".to_owned(),
+                content: "# Overview\n\nRich body".to_owned(),
+            }],
+        );
+        let edit = test_edit_documents_action("edit-1");
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("message-1", create.clone()),
+                    action_message("message-2", edit.clone()),
+                ]),
+            },
+        );
+
+        app.read(|ctx| {
+            let block = block.as_ref(ctx);
+            let Some(TuiToolCallView::Plan(create_view)) = block.action_views.get(&create.id)
+            else {
+                panic!("create action has a plan child");
+            };
+            let Some(TuiToolCallView::Plan(edit_view)) = block.action_views.get(&edit.id) else {
+                panic!("edit action has a plan child");
+            };
+            assert!(create_view.as_ref(ctx).renders_rich_body());
+            assert!(!edit_view.as_ref(ctx).renders_rich_body());
+            assert_eq!(block.child_view_ids(ctx).len(), 2);
+            let rendered = render_tui_view_lines(create_view.as_ref(ctx), 60, 20, ctx);
+            assert!(rendered.iter().any(|line| line.trim() == "Overview"));
+            assert!(rendered.iter().any(|line| line.trim() == "Rich body"));
+        });
+    });
+}
+
+#[test]
+fn plan_collapse_invalidates_agent_block_layout() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = test_create_documents_action(
+            "create-1",
+            vec![DocumentToCreate {
+                title: "Plan".to_owned(),
+                content: "body".to_owned(),
+            }],
+        );
+        let action_id = action.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", action)]),
+            },
+        );
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = layout_invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::LayoutInvalidated => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::BlockingStateChanged
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+
+        let plan_view = app.read(|ctx| {
+            let Some(TuiToolCallView::Plan(view)) = block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("create action has a plan child");
+            };
+            view.clone()
+        });
+        app.update(|ctx| {
+            ctx.dispatch_typed_action_for_view(
+                plan_view.window_id(ctx),
+                plan_view.id(),
+                &TuiPlanViewAction::SetCollapsed(true),
+            );
+        });
+
+        assert_eq!(layout_invalidations.get(), 1);
+        app.read(|ctx| {
+            assert_eq!(
+                render_tui_view_lines(plan_view.as_ref(ctx), 40, 5, ctx),
+                vec!["○ Create plan ▸"]
+            );
+        });
+    });
+}
+
+#[test]
+fn keyboard_toggle_targets_latest_exposed_plan_in_message_order() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let first = test_create_documents_action(
+            "create-1",
+            vec![DocumentToCreate {
+                title: "First".to_owned(),
+                content: "first body".to_owned(),
+            }],
+        );
+        let second = test_create_documents_action(
+            "create-2",
+            vec![DocumentToCreate {
+                title: "Second".to_owned(),
+                content: "second body".to_owned(),
+            }],
+        );
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("message-1", first),
+                    action_message("message-2", second),
+                ]),
+            },
+        );
+
+        app.read(|ctx| assert!(block.as_ref(ctx).has_exposed_plan(ctx)));
+        assert!(block.update(&mut app, |block, ctx| block.toggle_latest_plan(ctx)));
+
+        app.read(|ctx| {
+            let block = block.as_ref(ctx);
+            let Some(TuiToolCallView::Plan(first)) = block.action_views.get(&first_id) else {
+                panic!("first action has a plan child");
+            };
+            let Some(TuiToolCallView::Plan(second)) = block.action_views.get(&second_id) else {
+                panic!("second action has a plan child");
+            };
+            assert!(
+                render_tui_view_lines(first.as_ref(ctx), 40, 8, ctx)
+                    .iter()
+                    .any(|line| line.trim() == "first body")
+            );
+            assert_eq!(
+                render_tui_view_lines(second.as_ref(ctx), 40, 8, ctx),
+                vec!["○ Create plan ▸"]
+            );
+        });
+    });
+}
+#[test]
+fn ask_user_question_action_registers_a_stateful_child_view() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = ask_user_question_action("ask-1", "Which one?");
+        let action_id = action.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", action)]),
+            },
+        );
+        app.read(|ctx| {
+            assert!(matches!(
+                block.as_ref(ctx).action_views.get(&action_id),
+                Some(TuiToolCallView::AskQuestion(_))
+            ));
+        });
+    });
+}
+
+#[test]
+fn streamed_ask_user_question_payload_replaces_the_initial_empty_child_view() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action_id = AIAgentActionId::from("ask-1".to_owned());
+        let initial_action = AIAgentAction {
+            id: action_id.clone(),
+            task_id: TaskId::new("task-1".to_owned()),
+            action: AIAgentActionType::AskUserQuestion {
+                questions: Vec::new(),
+            },
+            requires_result: true,
+        };
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message("message-1", initial_action)]),
+            },
+        );
+        let initial_view_id = app.read(|ctx| {
+            let Some(TuiToolCallView::AskQuestion(view)) =
+                block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("initial ask-question child view");
+            };
+            assert!(view.as_ref(ctx).matches_action(&action_id, &[]));
+            view.id()
+        });
+
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: complete_output_messages(vec![action_message(
+                        "message-1",
+                        ask_user_question_action("ask-1", "Which one?"),
+                    )]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        app.read(|ctx| {
+            let Some(TuiToolCallView::AskQuestion(view)) =
+                block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("updated ask-question child view");
+            };
+            assert_ne!(view.id(), initial_view_id);
+            assert!(
+                view.as_ref(ctx)
+                    .matches_action(&action_id, &ask_user_question_items("Which one?"))
+            );
+        });
+    });
+}
 #[test]
 fn agent_block_ignores_unsupported_message_variants() {
     App::test((), |mut app| async move {
@@ -372,9 +1106,39 @@ fn agent_block_ignores_unsupported_message_variants() {
             let block = block.as_ref(app_ctx);
             assert_eq!(
                 block.sections(app_ctx),
+                vec![rich_text("before"), rich_text("after"),]
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_block_preserves_received_messages_and_hides_lifecycle_ids() {
+    App::test((), |mut app| async move {
+        let first = received_message("run-1", "first", "Starting work");
+        let second = received_message("run-2", "second", "Reviewing changes");
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    AIAgentOutputMessage::messages_received_from_agents(
+                        MessageId::new("messages-1".to_owned()),
+                        vec![first.clone(), second.clone()],
+                    ),
+                    AIAgentOutputMessage::events_from_agents(
+                        MessageId::new("events-1".to_owned()),
+                        vec!["event-1".to_owned(), "event-2".to_owned()],
+                    ),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            assert_eq!(
+                block.as_ref(app_ctx).sections(app_ctx),
                 vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
-                    TuiAIBlockSection::PlainText("after".to_owned()),
+                    TuiAIBlockSection::AgentMessage(first),
+                    TuiAIBlockSection::AgentMessage(second),
                 ]
             );
         });
@@ -382,8 +1146,51 @@ fn agent_block_ignores_unsupported_message_variants() {
 }
 
 #[test]
-fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
+fn agent_message_defaults_collapsed_and_expands_through_block_state() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let received = received_message("run-1", "progress", "Starting work");
+        let message_id = agent_message_section_id(&received);
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    AIAgentOutputMessage::messages_received_from_agents(
+                        MessageId::new("messages-1".to_owned()),
+                        vec![received],
+                    ),
+                ]),
+            },
+        );
+        app.read(|ctx| {
+            let lines = render_block_lines(block.as_ref(ctx), 40, ctx);
+            assert!(lines[0].ends_with(" ▸"));
+            assert!(lines.iter().all(|line| !line.contains("Starting work")));
+        });
+
+        app.update(|ctx| {
+            ctx.dispatch_typed_action_for_view(
+                block.window_id(ctx),
+                block.id(),
+                &TuiAIBlockAction::SetSectionCollapsed {
+                    message_id,
+                    collapsed: false,
+                },
+            );
+        });
+        app.read(|ctx| {
+            let lines = render_block_lines(block.as_ref(ctx), 40, ctx);
+            assert!(lines[0].ends_with(" ▾"));
+            assert_eq!(lines[1], "    Starting work");
+        });
+    });
+}
+
+#[test]
+fn agent_block_preserves_and_renders_code_sections_in_order() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         let block = test_agent_block(
             &mut app,
             FakeAgentBlockModel {
@@ -402,14 +1209,210 @@ fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
+            let code_key = TuiCodeBlockKey {
+                message_id: MessageId::new("message-1".to_owned()),
+                section_index: 0,
+            };
             assert_eq!(
                 block.sections(app_ctx),
-                vec![TuiAIBlockSection::PlainText("visible".to_owned())]
+                vec![
+                    TuiAIBlockSection::RichText(TuiRichTextSection::Code(code_key.clone())),
+                    rich_text("visible"),
+                ]
             );
+            assert!(block.code_block_views.contains_key(&code_key));
+            assert_eq!(block.child_view_ids(app_ctx).len(), 1);
+            let code_view = block.code_block_views[&code_key].as_ref(app_ctx);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                code_view.render(app_ctx),
+                TuiRect::new(0, 0, 40, 3),
+                app_ctx,
+            );
+            assert!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .iter()
+                    .any(|line| line.contains("println!"))
+            );
+
+            let rendered = render_block_lines(block, 40, app_ctx);
+            assert_eq!(rendered.last().map(String::as_str), Some("visible"));
         });
     });
 }
 
+#[test]
+fn agent_block_preserves_table_image_and_mermaid_source_order() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let table_content = "Name\tValue\nAlpha\t1";
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![text_message(
+                    "rich-1",
+                    vec![
+                        AIAgentTextSection::PlainText {
+                            text: "before".to_owned().into(),
+                        },
+                        AIAgentTextSection::Table {
+                            table: AgentOutputTable::legacy(table_content.to_owned()),
+                        },
+                        AIAgentTextSection::Image {
+                            image: AgentOutputImage {
+                                alt_text: "architecture".to_owned(),
+                                source: "diagram.png".to_owned(),
+                                title: None,
+                                markdown_source: "![architecture](diagram.png)".to_owned(),
+                                layout: AgentOutputImageLayout::Block,
+                            },
+                        },
+                        AIAgentTextSection::MermaidDiagram {
+                            diagram: AgentOutputMermaidDiagram {
+                                source: "graph TD\nA-->B".to_owned(),
+                                markdown_source: "```mermaid\ngraph TD\nA-->B\n```".to_owned(),
+                            },
+                        },
+                        AIAgentTextSection::PlainText {
+                            text: "after".to_owned().into(),
+                        },
+                    ],
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            let mermaid_key = TuiCodeBlockKey {
+                message_id: MessageId::new("rich-1".to_owned()),
+                section_index: 3,
+            };
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    rich_text("before"),
+                    TuiAIBlockSection::RichText(TuiRichTextSection::Table {
+                        structured: None,
+                        fallback: table_content.to_owned(),
+                    }),
+                    TuiAIBlockSection::RichText(TuiRichTextSection::Image {
+                        alt_text: "architecture".to_owned(),
+                        source: "diagram.png".to_owned(),
+                    }),
+                    TuiAIBlockSection::RichText(TuiRichTextSection::Code(mermaid_key.clone())),
+                    rich_text("after"),
+                ]
+            );
+            assert!(block.code_block_views.contains_key(&mermaid_key));
+
+            let rendered = render_block_lines(block, 40, app_ctx);
+            let joined = rendered.join("\n");
+            assert!(joined.contains("Name"));
+            assert!(joined.contains("Image: architecture (diagram.png)"));
+            assert!(joined.ends_with("after"));
+        });
+    });
+}
+
+#[test]
+fn code_children_reconcile_across_streamed_section_boundaries() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![text_message(
+                    "stream-1",
+                    vec![AIAgentTextSection::Code {
+                        code: "first".to_owned(),
+                        language: None,
+                        source: None,
+                    }],
+                )]),
+            },
+        );
+        let old_key = TuiCodeBlockKey {
+            message_id: MessageId::new("stream-1".to_owned()),
+            section_index: 0,
+        };
+        let original_id = app.read(|ctx| block.as_ref(ctx).code_block_views[&old_key].id());
+        let invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::LayoutInvalidated => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::BlockingStateChanged
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+
+        block.update(&mut app, |block, ctx| {
+            block.block_model = Rc::new(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![text_message(
+                    "stream-1",
+                    vec![AIAgentTextSection::Code {
+                        code: "second".to_owned(),
+                        language: None,
+                        source: None,
+                    }],
+                )]),
+            });
+            block.sync_code_block_views(ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                block.as_ref(ctx).code_block_views[&old_key].id(),
+                original_id
+            );
+        });
+        assert!(invalidations.get() > 0);
+
+        let new_key = TuiCodeBlockKey {
+            message_id: MessageId::new("stream-1".to_owned()),
+            section_index: 1,
+        };
+        block.update(&mut app, |block, ctx| {
+            block.block_model = Rc::new(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![text_message(
+                    "stream-1",
+                    vec![
+                        AIAgentTextSection::PlainText {
+                            text: "prefix".to_owned().into(),
+                        },
+                        AIAgentTextSection::Code {
+                            code: "second".to_owned(),
+                            language: None,
+                            source: None,
+                        },
+                    ],
+                )]),
+            });
+            block.sync_code_block_views(ctx);
+        });
+        app.read(|ctx| {
+            let block = block.as_ref(ctx);
+            assert!(!block.code_block_views.contains_key(&old_key));
+            assert!(block.code_block_views.contains_key(&new_key));
+            assert_ne!(block.code_block_views[&new_key].id(), original_id);
+        });
+
+        block.update(&mut app, |block, ctx| {
+            block.block_model = Rc::new(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![plain_text_message("stream-1", "finished")]),
+            });
+            block.sync_code_block_views(ctx);
+        });
+        app.read(|ctx| assert!(block.as_ref(ctx).code_block_views.is_empty()));
+    });
+}
 #[test]
 fn streaming_reasoning_renders_thinking_header_with_body() {
     App::test((), |mut app| async move {
@@ -428,15 +1431,20 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
                 vec![TuiAIBlockSection::Thinking {
                     message_id: MessageId::new("reasoning-1".to_owned()),
                     finished_duration: None,
-                    body: "line one\nline two".to_owned(),
+                    body: rich_body("line one\nline two"),
                 }]
             );
 
-            let rendered = render_block_lines(block, 40, app_ctx);
-            assert_eq!(rendered[0], "Thinking... ▾");
-            // Body lines are indented four spaces beneath the header.
-            assert_eq!(rendered[1], "    line one");
-            assert_eq!(rendered[2], "    line two");
+            // A blank line separates the header from the body, and body lines
+            // are left-aligned with the header (no indent).
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            let header = rendered
+                .iter()
+                .position(|line| line == "Thinking... ▾")
+                .expect("thinking header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "line one");
+            assert_eq!(rendered[header + 3], "line two");
         });
     });
 }
@@ -462,6 +1470,31 @@ fn finished_reasoning_renders_collapsed_thought_for_header() {
     });
 }
 
+/// Duration-only reasoning records do not create empty thinking sections.
+#[test]
+fn empty_finished_reasoning_is_omitted() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    reasoning_message("r1", Some(Duration::from_secs(15)), ""),
+                    plain_text_message("m2", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![rich_text("before"), rich_text("after")]
+            );
+        });
+    });
+}
+
 #[test]
 fn manual_expand_override_shows_finished_reasoning_body() {
     App::test((), |mut app| async move {
@@ -477,7 +1510,7 @@ fn manual_expand_override_shows_finished_reasoning_body() {
             let block = block.as_ref(app_ctx);
             // A manual expand wins over the collapsed-when-finished default.
             block
-                .thinking_states
+                .collapsible_states
                 .set_collapsed(MessageId::new("reasoning-1".to_owned()), false);
 
             let rendered = render_block_lines(block, 40, app_ctx);
@@ -488,7 +1521,7 @@ fn manual_expand_override_shows_finished_reasoning_body() {
 }
 
 #[test]
-fn header_click_records_a_manual_collapse_override() {
+fn thinking_action_records_a_manual_collapse_override() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let block = test_agent_block(
@@ -498,51 +1531,20 @@ fn header_click_records_a_manual_collapse_override() {
                 status: reasoning_status(None, "body"),
             },
         );
+        let message_id = MessageId::new("reasoning-1".to_owned());
+        app.update(|ctx| {
+            ctx.dispatch_typed_action_for_view(
+                block.window_id(ctx),
+                block.id(),
+                &TuiAIBlockAction::SetSectionCollapsed {
+                    message_id: message_id.clone(),
+                    collapsed: true,
+                },
+            );
+        });
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            let mut element = block.render_element(app_ctx);
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let area = TuiRect::new(0, 0, 40, 5);
-            element.layout(TuiConstraint::loose(TuiSize::new(40, 5)), &mut ctx, app_ctx);
-
-            // Click the `Thinking...` header row (row 1, below the block's top
-            // padding): the press arms the header's click and the release fires
-            // it. The runtime attributes dispatch to a rendered view, so give
-            // the context an origin view for the toggle's `notify()`.
-            let mut event_ctx = TuiEventContext::default();
-            event_ctx.set_origin_view(Some(EntityId::new()));
-            let handled = element.dispatch_event(
-                &TuiEvent::LeftMouseDown {
-                    position: TuiPoint::new(0, 1),
-                    modifiers: ModifiersState::default(),
-                    click_count: 1,
-                    is_first_mouse: false,
-                },
-                area,
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
-            assert!(handled, "the press arming the click must be consumed");
-            let handled = element.dispatch_event(
-                &TuiEvent::LeftMouseUp {
-                    position: TuiPoint::new(0, 1),
-                    modifiers: ModifiersState::default(),
-                },
-                area,
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
-            assert!(handled, "the release completing the click must be consumed");
-
-            // The streaming block was expanded, so the click records a collapse
-            // override that wins over the expanded-while-streaming default.
-            let message_id = MessageId::new("reasoning-1".to_owned());
-            assert!(block.thinking_states.is_collapsed(&message_id, false));
+            assert!(block.collapsible_states.is_collapsed(&message_id, false));
         });
     });
 }
@@ -566,15 +1568,110 @@ fn reasoning_interleaves_with_plain_text_in_message_order() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    rich_text("before"),
                     TuiAIBlockSection::Thinking {
                         message_id: MessageId::new("r1".to_owned()),
                         finished_duration: None,
-                        body: "thinking".to_owned(),
+                        body: rich_body("thinking"),
                     },
-                    TuiAIBlockSection::PlainText("after".to_owned()),
+                    rich_text("after"),
                 ]
             );
+        });
+    });
+}
+
+#[test]
+fn completed_conversation_summary_renders_collapsed_in_message_order() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    summarization_message(
+                        "summary-1",
+                        Some(Duration::from_secs(3)),
+                        SummarizationType::ConversationSummary,
+                        "condensed context",
+                    ),
+                    plain_text_message("m2", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    rich_text("before"),
+                    TuiAIBlockSection::Summarization {
+                        message_id: MessageId::new("summary-1".to_owned()),
+                        finished: true,
+                        body: rich_body("condensed context"),
+                    },
+                    rich_text("after"),
+                ]
+            );
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["before", "Conversation summarized ▸", "after"]
+            );
+        });
+    });
+}
+
+#[test]
+fn expanded_conversation_summary_shows_its_body() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    Some(Duration::from_secs(3)),
+                    SummarizationType::ConversationSummary,
+                    "condensed context",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            block
+                .collapsible_states
+                .set_collapsed(MessageId::new("summary-1".to_owned()), false);
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            let header = rendered
+                .iter()
+                .position(|line| line == "Conversation summarized ▾")
+                .expect("conversation summary header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "condensed context");
+        });
+    });
+}
+
+#[test]
+fn tool_call_result_summaries_remain_hidden() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    Some(Duration::from_secs(3)),
+                    SummarizationType::ToolCallResultSummary,
+                    "tool output",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            assert!(block.as_ref(app_ctx).sections(app_ctx).is_empty());
         });
     });
 }
@@ -596,13 +1693,351 @@ fn multiple_reasoning_blocks_render_independent_collapse_state() {
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
             // The finished block collapses; the streaming one stays expanded.
-            let rendered = render_block_lines(block, 40, app_ctx);
-            assert_eq!(rendered[0], "Thought for 3 seconds ▸");
-            assert_eq!(rendered[1], "Thinking... ▾");
-            assert_eq!(rendered[2], "    still going");
+            // Blank-line gap, then the left-aligned body.
+            let rendered = render_block_lines_including_blank(block, 40, app_ctx);
+            assert!(
+                rendered
+                    .iter()
+                    .any(|line| line == "Thought for 3 seconds ▸"),
+                "{rendered:?}"
+            );
+            let header = rendered
+                .iter()
+                .position(|line| line == "Thinking... ▾")
+                .expect("streaming thinking header rendered");
+            assert_eq!(rendered[header + 1], "");
+            assert_eq!(rendered[header + 2], "still going");
             assert!(rendered.iter().all(|line| !line.contains("done body")));
         });
     });
+}
+
+#[test]
+fn todo_operations_map_to_sections_in_message_order() {
+    App::test((), |mut app| async move {
+        let todos = vec![todo("t1", "Compile list"), todo("t2", "Create suggestions")];
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    update_todos_message("m2", todos.clone()),
+                    mark_completed_message("m3", vec![todo("t1", "Compile list")]),
+                    plain_text_message("m4", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    rich_text("before"),
+                    TuiAIBlockSection::TodoList {
+                        message_id: MessageId::new("m2".to_owned()),
+                        todos: todos.clone(),
+                    },
+                    TuiAIBlockSection::CompletedTodos {
+                        completed: vec![todo("t1", "Compile list")],
+                    },
+                    rich_text("after"),
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_todo_operations_are_ignored() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    update_todos_message("m1", Vec::new()),
+                    mark_completed_message("m2", Vec::new()),
+                    plain_text_message("m3", "visible"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(block.sections(app_ctx), vec![rich_text("visible")]);
+        });
+    });
+}
+
+#[test]
+fn task_list_renders_header_and_status_glyph_rows() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let theme = Appearance::as_ref(app_ctx).theme();
+            let yellow: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.yellow)).into();
+            let green: Color =
+                CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.green)).into();
+            let primary = expected_output_text_color(app_ctx);
+            let muted = expected_tool_call_text_color(app_ctx);
+
+            let rows = vec![
+                ("Compile list".to_owned(), TodoStatus::Completed),
+                ("Determine duplications".to_owned(), TodoStatus::InProgress),
+                ("Create suggestions".to_owned(), TodoStatus::Pending),
+                ("Old task".to_owned(), TodoStatus::Cancelled),
+            ];
+            let states = CollapsibleSectionStates::default();
+            let message_id = MessageId::new("m1".to_owned());
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_todo_list_section(&states, &message_id, &rows, app_ctx),
+                TuiRect::new(0, 0, 40, 5),
+                app_ctx,
+            );
+            assert_eq!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .collect::<Vec<_>>(),
+                vec![
+                    "≡ Tasks 4 ▾",
+                    "  ✓ Compile list",
+                    "  • Determine duplications",
+                    "  ◌ Create suggestions",
+                    "  ■ Old task",
+                ],
+            );
+            // Header is bold primary text (the design's prominent header).
+            assert_eq!(frame.buffer[(0, 0)].fg, primary);
+            assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+            // Completed: green check, primary title.
+            assert_eq!(frame.buffer[(2, 1)].fg, green);
+            assert_eq!(frame.buffer[(4, 1)].fg, primary);
+            // In progress: yellow bullet, primary title.
+            assert_eq!(frame.buffer[(2, 2)].fg, yellow);
+            assert_eq!(frame.buffer[(4, 2)].fg, primary);
+            // Pending: primary glyph and title.
+            assert_eq!(frame.buffer[(2, 3)].fg, primary);
+            // Cancelled: muted glyph, struck-through muted title.
+            assert_eq!(frame.buffer[(2, 4)].fg, muted);
+            assert_eq!(frame.buffer[(4, 4)].fg, muted);
+            assert!(
+                frame.buffer[(4, 4)]
+                    .modifier
+                    .contains(Modifier::CROSSED_OUT)
+            );
+        });
+    });
+}
+
+#[test]
+fn task_list_collapse_override_hides_rows() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let rows = vec![("Compile list".to_owned(), TodoStatus::Pending)];
+            let states = CollapsibleSectionStates::default();
+            let message_id = MessageId::new("m1".to_owned());
+
+            // Default: expanded, even though nothing is streaming — task
+            // lists never default to collapsed.
+            assert!(!states.is_collapsed(&message_id, false));
+
+            states.set_collapsed(message_id.clone(), true);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_todo_list_section(&states, &message_id, &rows, app_ctx),
+                TuiRect::new(0, 0, 40, 2),
+                app_ctx,
+            );
+            let lines = frame.buffer.to_lines();
+            assert_eq!(lines[0].trim_end(), "≡ Tasks 1 ▸");
+            assert!(lines.iter().all(|line| !line.contains("Compile list")));
+        });
+    });
+}
+
+#[test]
+fn task_list_header_hover_underlines_only_the_label() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let rows = vec![("Compile list".to_owned(), TodoStatus::Pending)];
+            let states = CollapsibleSectionStates::default();
+            let message_id = MessageId::new("m1".to_owned());
+            let area = TuiRect::new(0, 0, 40, 2);
+
+            // Move the pointer onto the header row so the shared hover state
+            // reports it hovered, as the runtime would.
+            let mut element = render_todo_list_section(&states, &message_id, &rows, app_ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(TuiConstraint::loose(TuiSize::new(40, 2)), &mut ctx, app_ctx);
+            // Paint once so the element retains its scene geometry for
+            // hit-testing the hover move.
+            let scene = {
+                let mut buffer = TuiBuffer::empty(area);
+                let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+                Rc::new(paint_ctx.scene.clone())
+            };
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            element.dispatch_event(
+                &TuiEvent::MouseMoved {
+                    position: TuiPoint::new(0, 0),
+                    modifiers: ModifiersState::default(),
+                    is_synthetic: false,
+                },
+                &mut event_ctx,
+                app_ctx,
+            );
+
+            // Re-render hovered: `≡ Tasks 1 ▾` underlines exactly the label's
+            // cells — not the ≡ glyph, the chevron, or trailing cells. The
+            // label's start column is located from the buffer since the
+            // glyph's cell width varies by rendering backend.
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_todo_list_section(&states, &message_id, &rows, app_ctx),
+                area,
+                app_ctx,
+            );
+            assert_eq!(frame.buffer.to_lines()[0].trim_end(), "≡ Tasks 1 ▾");
+            let label_start = (0..40u16)
+                .find(|&x| frame.buffer[(x, 0)].symbol() == "T")
+                .expect("the header row contains the label");
+            let underlined: Vec<u16> = (0..40u16)
+                .filter(|&x| frame.buffer[(x, 0)].modifier.contains(Modifier::UNDERLINED))
+                .collect();
+            // "Tasks 1" spans seven cells.
+            let label_cells: Vec<u16> = (label_start..label_start + 7).collect();
+            assert_eq!(underlined, label_cells);
+        });
+    });
+}
+
+#[test]
+fn task_list_desired_height_accounts_for_rows_and_collapse() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![update_todos_message(
+                    "m1",
+                    vec![todo("t1", "one"), todo("t2", "two")],
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            // Top padding + header + two task rows.
+            assert_eq!(desired_height(block, 40, app_ctx), 4);
+
+            block
+                .collapsible_states
+                .set_collapsed(MessageId::new("m1".to_owned()), true);
+            // Collapsed: top padding + header only.
+            assert_eq!(desired_height(block, 40, app_ctx), 2);
+        });
+    });
+}
+
+#[test]
+fn task_list_without_conversation_state_falls_back_to_cancelled() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        // The block's conversation is unknown to the (default) history model,
+        // so every item resolves to the Cancelled fallback.
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![update_todos_message(
+                    "m1",
+                    vec![todo("t1", "orphaned task")],
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            let rendered = render_block_lines(block, 40, app_ctx);
+            assert_eq!(rendered[0], "≡ Tasks 1 ▾");
+            assert_eq!(rendered[1], "  ■ orphaned task");
+        });
+    });
+}
+
+#[test]
+fn completed_todos_render_muted_completion_row() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![mark_completed_message(
+                    "m1",
+                    vec![todo("t1", "Compile list")],
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            // No active list is known to the history model, so the position
+            // suffix is omitted.
+            let rendered = render_block_lines(block, 40, app_ctx);
+            assert_eq!(rendered[0], "✓ Completed Compile list");
+
+            let frame = {
+                let mut presenter = TuiPresenter::new();
+                presenter.present_element(
+                    block.render_element(app_ctx),
+                    TuiRect::new(0, 0, 40, 2),
+                    app_ctx,
+                )
+            };
+            assert_eq!(
+                frame.buffer[(0, 1)].fg,
+                expected_tool_call_text_color(app_ctx)
+            );
+        });
+    });
+}
+
+#[test]
+fn completed_todos_label_includes_active_list_positions() {
+    let list = AIAgentTodoList::default()
+        .with_completed_items(vec![todo("t1", "one")])
+        .with_pending_items(vec![todo("t2", "two"), todo("t3", "three")]);
+
+    // Items in the active list carry their (n/m) position; unknown items omit it.
+    assert_eq!(
+        completed_todos_label(&[todo("t1", "one")], Some(&list)),
+        "Completed one (1/3)"
+    );
+    assert_eq!(
+        completed_todos_label(&[todo("t1", "one"), todo("t3", "three")], Some(&list)),
+        "Completed one (1/3), three (3/3)"
+    );
+    assert_eq!(
+        completed_todos_label(&[todo("t9", "unknown")], Some(&list)),
+        "Completed unknown"
+    );
+    assert_eq!(
+        completed_todos_label(&[todo("t1", "one")], None),
+        "Completed one"
+    );
+    assert_eq!(completed_todos_label(&[], Some(&list)), "");
 }
 
 struct FakeAgentBlockModel {
@@ -613,7 +2048,7 @@ struct FakeAgentBlockModel {
 /// Builds an agent block with fresh test identity, registered in a fresh TUI
 /// window and backed by a real action model.
 fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<TuiAIBlock> {
-    let action_model = add_test_action_model(app);
+    let (action_model, model_events) = add_test_action_model_and_events(app);
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
@@ -623,12 +2058,13 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
             },
             |_| TestHostView,
         );
-        ctx.add_tui_view(window_id, move |ctx| {
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
                 AIConversationId::new(),
                 AIAgentExchangeId::new(),
                 Rc::new(model),
                 action_model,
+                &model_events,
                 terminal_model,
                 ctx,
             )
@@ -636,6 +2072,31 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
     })
 }
 
+fn ask_user_question_action(id: &str, question: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::AskUserQuestion {
+            questions: ask_user_question_items(question),
+        },
+        requires_result: true,
+    }
+}
+
+fn ask_user_question_items(question: &str) -> Vec<ai::agent::action::AskUserQuestionItem> {
+    vec![ai::agent::action::AskUserQuestionItem {
+        question_id: "q1".to_owned(),
+        question: question.to_owned(),
+        question_type: ai::agent::action::AskUserQuestionType::MultipleChoice {
+            is_multiselect: false,
+            options: vec![ai::agent::action::AskUserQuestionOption {
+                label: "A".to_owned(),
+                recommended: false,
+            }],
+            supports_other: false,
+        },
+    }]
+}
 impl AIBlockModel for FakeAgentBlockModel {
     type View = TuiAIBlock;
 
@@ -690,6 +2151,18 @@ fn complete_output_messages(messages: Vec<AIAgentOutputMessage>) -> AIBlockOutpu
     }
 }
 
+fn failed_output(
+    messages: Vec<AIAgentOutputMessage>,
+    error: RenderableAIError,
+) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Failed {
+        partial_output: Some(Shared::new(AIAgentOutput {
+            messages,
+            ..Default::default()
+        })),
+        error,
+    }
+}
 /// Builds a text output message from plain-text sections.
 fn text_message(id: &str, sections: Vec<AIAgentTextSection>) -> AIAgentOutputMessage {
     AIAgentOutputMessage {
@@ -719,6 +2192,42 @@ fn debug_output_message(id: &str, text: &str) -> AIAgentOutputMessage {
     }
 }
 
+/// Builds one incoming orchestration message for extraction tests.
+fn received_message(sender: &str, subject: &str, body: &str) -> ReceivedMessageDisplay {
+    ReceivedMessageDisplay {
+        message_id: format!("message-{sender}"),
+        sender_agent_id: sender.to_owned(),
+        addresses: vec!["parent-run".to_owned()],
+        subject: subject.to_owned(),
+        message_body: body.to_owned(),
+    }
+}
+
+/// Builds a todo item for task-list tests.
+fn todo(id: &str, title: &str) -> AIAgentTodo {
+    AIAgentTodo::new(id.to_owned().into(), title.to_owned(), String::new())
+}
+
+/// Builds an `UpdateTodos` todo-operation output message.
+fn update_todos_message(id: &str, todos: Vec<AIAgentTodo>) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::TodoOperation(TodoOperation::UpdateTodos { todos }),
+        citations: Vec::new(),
+    }
+}
+
+/// Builds a `MarkAsCompleted` todo-operation output message.
+fn mark_completed_message(id: &str, completed_todos: Vec<AIAgentTodo>) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::TodoOperation(TodoOperation::MarkAsCompleted {
+            completed_todos,
+        }),
+        citations: Vec::new(),
+    }
+}
+
 /// Builds a tool-call action for message-ordering tests.
 fn test_action(id: &str) -> AIAgentAction {
     AIAgentAction {
@@ -743,6 +2252,30 @@ fn test_command_action(id: &str, command: &str) -> AIAgentAction {
             rationale: None,
             citations: Vec::new(),
         },
+        requires_result: true,
+    }
+}
+
+fn test_create_documents_action(id: &str, documents: Vec<DocumentToCreate>) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::CreateDocuments(CreateDocumentsRequest { documents }),
+        requires_result: true,
+    }
+}
+
+fn test_edit_documents_action(id: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::EditDocuments(EditDocumentsRequest {
+            diffs: vec![DocumentDiff {
+                document_id: AIDocumentId::new(),
+                search: "old".to_owned(),
+                replace: "new".to_owned(),
+            }],
+        }),
         requires_result: true,
     }
 }
@@ -786,6 +2319,28 @@ fn reasoning_message(
     }
 }
 
+fn summarization_message(
+    id: &str,
+    finished_duration: Option<Duration>,
+    summarization_type: SummarizationType,
+    body: &str,
+) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::Summarization {
+            text: AIAgentText {
+                sections: vec![AIAgentTextSection::PlainText {
+                    text: body.to_owned().into(),
+                }],
+            },
+            finished_duration,
+            summarization_type,
+            token_count: None,
+        },
+        citations: Vec::new(),
+    }
+}
+
 /// Builds a text output message from a single plain-text string.
 fn plain_text_message(id: &str, text: &str) -> AIAgentOutputMessage {
     text_message(
@@ -796,10 +2351,41 @@ fn plain_text_message(id: &str, text: &str) -> AIAgentOutputMessage {
     )
 }
 
+fn rich_text(text: &str) -> TuiAIBlockSection {
+    TuiAIBlockSection::RichText(rich_text_section(text))
+}
+
+fn rich_body(text: &str) -> Vec<TuiRichTextSection> {
+    vec![rich_text_section(text)]
+}
+
+fn rich_text_section(text: &str) -> TuiRichTextSection {
+    TuiRichTextSection::Markdown(Arc::new(parse_markdown(text).expect("valid test Markdown")))
+}
+
+/// Measures the block by laying out its rendered element with an empty layout
+/// context; these tests exercise blocks with no registered child views.
+fn desired_height(block: &TuiAIBlock, width: u16, app: &AppContext) -> usize {
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let mut element = block.render_element(app);
+    usize::from(
+        element
+            .layout(
+                TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                &mut ctx,
+                app,
+            )
+            .height,
+    )
+}
+
 /// Renders the block at `width` and returns its non-empty rows, trimmed of
 /// trailing padding, so header/body assertions ignore blank rows.
 fn render_block_lines(block: &TuiAIBlock, width: u16, app: &AppContext) -> Vec<String> {
-    let height = block.desired_height(width, app).max(1) as u16;
+    let height = desired_height(block, width, app).max(1) as u16;
     let mut presenter = TuiPresenter::new();
     let frame = presenter.present_element(
         block.render_element(app),
@@ -807,6 +2393,109 @@ fn render_block_lines(block: &TuiAIBlock, width: u16, app: &AppContext) -> Vec<S
         app,
     );
     frame
+        .buffer
+        .to_lines()
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// Renders the block at `width` and returns every row trimmed of trailing
+/// padding, preserving blank rows so tests can assert on inter-section spacing.
+fn render_block_lines_including_blank(
+    block: &TuiAIBlock,
+    width: u16,
+    app: &AppContext,
+) -> Vec<String> {
+    let height = desired_height(block, width, app).max(1) as u16;
+    let mut presenter = TuiPresenter::new();
+    let frame = presenter.present_element(
+        block.render_element(app),
+        TuiRect::new(0, 0, width, height),
+        app,
+    );
+    frame
+        .buffer
+        .to_lines()
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .collect()
+}
+
+fn dispatch_click_on_text(
+    mut element: Box<dyn TuiElement>,
+    label: &str,
+    width: u16,
+    height: u16,
+    app: &AppContext,
+) {
+    let area = TuiRect::new(0, 0, width, height);
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.layout(
+        TuiConstraint::loose(TuiSize::new(width, height)),
+        &mut layout_ctx,
+        app,
+    );
+    let (buffer, scene) = {
+        let mut buffer = TuiBuffer::empty(area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+        (buffer, Rc::new(paint_ctx.scene.clone()))
+    };
+    let lines = buffer.to_lines();
+    let (row, byte_index) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(row, line)| line.find(label).map(|byte_index| (row, byte_index)))
+        .expect("rendered element contains target link");
+    let x = lines[row][..byte_index].chars().count() as u16;
+    let position = TuiPoint::new(x, row as u16);
+    let modifiers = ModifiersState::default();
+    let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+    event_ctx.set_origin_view(Some(EntityId::new()));
+    element.dispatch_event(
+        &TuiEvent::MouseMoved {
+            position,
+            modifiers,
+            is_synthetic: false,
+        },
+        &mut event_ctx,
+        app,
+    );
+    element.dispatch_event(
+        &TuiEvent::LeftMouseDown {
+            position,
+            modifiers,
+            click_count: 1,
+            is_first_mouse: false,
+        },
+        &mut event_ctx,
+        app,
+    );
+    element.dispatch_event(
+        &TuiEvent::LeftMouseUp {
+            position,
+            modifiers,
+        },
+        &mut event_ctx,
+        app,
+    );
+}
+
+fn render_tui_view_lines(
+    view: &impl TuiView,
+    width: u16,
+    height: u16,
+    app: &AppContext,
+) -> Vec<String> {
+    let mut presenter = TuiPresenter::new();
+    presenter
+        .present_element(view.render(app), TuiRect::new(0, 0, width, height), app)
         .buffer
         .to_lines()
         .into_iter()

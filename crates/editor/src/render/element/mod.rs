@@ -10,8 +10,8 @@ use parking_lot::Mutex;
 use string_offset::CharOffset;
 use temporary_block::RenderableTemporaryBlock;
 use vim::vim::VimMode;
-use warp_core::report_error;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_errors::report_error;
 use warpui_core::color::ColorU;
 use warpui_core::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use warpui_core::elements::{

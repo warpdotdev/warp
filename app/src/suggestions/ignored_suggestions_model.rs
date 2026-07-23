@@ -1,10 +1,11 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+use crate::GlobalResourceHandlesProvider;
 use crate::persistence::ModelEvent;
-use crate::{report_error, GlobalResourceHandlesProvider};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum SuggestionType {
@@ -79,8 +80,10 @@ impl IgnoredSuggestionsModel {
                 suggestion_type,
             };
             if let Err(err) = sender.send(event) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to save ignored suggestion to database"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to save ignored suggestion to database")
+                );
             }
         }
 
@@ -112,8 +115,10 @@ impl IgnoredSuggestionsModel {
                 suggestion_type,
             };
             if let Err(err) = sender.send(event) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to remove ignored suggestion from database"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to remove ignored suggestion from database")
+                );
             }
         }
     }

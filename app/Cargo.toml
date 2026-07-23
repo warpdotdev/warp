@@ -2,7 +2,7 @@
 authors = ["Warp Team <dev@warp.dev>"]
 default-run = "warp-oss"
 description = "The cloud-backed terminal for individuals and teams"
-edition = "2021"
+edition = "2024"
 autobins = false
 name = "warp"
 version = "0.1.0"
@@ -235,6 +235,7 @@ warp_assets.workspace = true
 warp_channel_config.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
+warp_errors = { workspace = true, features = ["reqwest-errors"] }
 warp_editor.workspace = true
 warp_graphql.workspace = true
 warp_js = { workspace = true, optional = true }
@@ -307,6 +308,7 @@ wgpu.workspace = true
 app-installation-detection.workspace = true
 async-io.workspace = true
 axum.workspace = true
+build_cache.workspace = true
 cloud_object_persistence.workspace = true
 comfy-table = "7.1.4"
 inquire = "0.9.1"
@@ -328,6 +330,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
+warp_errors = { workspace = true, features = ["tokio-errors", "websocket-errors"] }
 
 # AWS SDK (loading credentials for BYO LLM)
 aws-config = { version = "1.8.16", features = ["credentials-login"] }
@@ -421,6 +424,7 @@ winreg.workspace = true
 [dev-dependencies]
 ai = { workspace = true, features = ["test-util"] }
 async-process.workspace = true
+computer_use = { workspace = true, features = ["test-util"] }
 firebase.workspace = true
 jsonschema = { workspace = true, default-features = false }
 async-executor = "1.5.1"
@@ -498,6 +502,7 @@ crash_reporting = [
     "dep:minidumper",
     "dep:crash-handler",
     "warp_logging/crash_reporting",
+    "warp_errors/crash_reporting",
     "ai/crash_reporting",
 ]
 creating_shared_sessions = []
@@ -590,6 +595,7 @@ default = [
     "cloud_environments",
     "create_environment_slash_command",
     "code_review_find",
+    "async_find",
     "shared_session_long_running_commands",
     "mcp_grouped_server_context",
     "fork_from_command",
@@ -616,6 +622,7 @@ default = [
     "cloud_mode_from_local_session",
     "cloud_mode_image_context",
     "agent_mode_computer_use",
+    "background_computer_use",
     "oz_platform_skills",
     "oz_identity_federation",
     "sync_ambient_plans",
@@ -648,7 +655,6 @@ default = [
     "blocklist_markdown_table_rendering",
     "markdown_mermaid",
     "blocklist_markdown_images",
-    "pr_comments_slash_command",
     "pr_comments_v2",
     "pr_comments_skill",
     "revert_to_checkpoints",
@@ -665,6 +671,7 @@ default = [
     "vertical_tabs_summary_mode",
     "tab_configs",
     "grouped_tabs",
+    "pinned_tabs",
     "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",
@@ -678,9 +685,6 @@ default = [
     "git_credential_refresh",
     "oz_handoff",
     "handoff_local_cloud",
-    "run_agents_tool",
-    "orchestration_viewer_streamer",
-    "owner_orchestration_ancestor_streamer",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
@@ -694,6 +698,9 @@ default = [
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
+    "terminal_lifecycle_recovery",
+    "cloud_runners",
+    "cloud_agent_runners",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -730,6 +737,7 @@ nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
 nld_prompt_history_match = []
 msys2_shells = []
+file_backed_execution_profiles = []
 file_retrieval_tools = []
 get_started_tab = []
 code_mode_chip = []
@@ -842,8 +850,16 @@ voice_input = ["dep:voice_input"]
 system_theme = []
 tab_close_button_on_left = []
 team_features_override = []
-test-util = ["cloud_object_client/test-util", "warp_server_auth/test-util"]
+test-util = [
+    "cloud_object_client/test-util",
+    "warp_server_auth/test-util",
+    "http_client/test-util",
+    "warp_core/test-util",
+    "ai/test-util",
+    "warp_server_client/test-util",
+]
 team_workflows = ["team_features_override"]
+terminal_lifecycle_recovery = []
 toggle_bootstrap_block = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = [
@@ -909,7 +925,6 @@ tabbed_editor_view = []
 selection_as_context = []
 send_telemetry_to_file = []
 multi_profile = []
-pr_comments_slash_command = []
 pr_comments_v2 = []
 pr_comments_skill = []
 conversation_artifacts = []
@@ -938,6 +953,7 @@ integration_command = []
 artifact_command = []
 cloud_environments = []
 cloud_runners = []
+cloud_agent_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
@@ -984,9 +1000,6 @@ file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-run_agents_tool = []
-orchestration_viewer_streamer = []
-owner_orchestration_ancestor_streamer = []
 wait_for_events_parent_registration = []
 pending_user_query_indicator = []
 queue_slash_command = []
@@ -1024,6 +1037,7 @@ cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 prompt_cache_expiry_warning = []
+osc_hyperlinks = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

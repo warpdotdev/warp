@@ -13,6 +13,7 @@ use repo_metadata::repository::{
 };
 use repo_metadata::{CanonicalizedPath, DirectoryWatcher, Repository, RepositoryUpdate};
 use settings::Setting as _;
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::OutlineStatus;
@@ -22,7 +23,7 @@ use crate::settings::{
     InputSettingsChangedEvent,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_error, safe_info, safe_warn, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, safe_info, safe_warn, send_telemetry_from_ctx};
 
 /// State for a repository outline, containing both the repository handle and the outline status.
 #[derive(Debug)]
@@ -198,10 +199,11 @@ impl RepoOutlines {
 
     /// Computes the outline for the repo containing the next path in the queue, if any.
     fn compute_next_outline(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.should_build_outlines(ctx) && self.active_outline_task.is_none() {
-            if let Some(repo_root) = self.outline_queue.pop_front() {
-                self.compute_outline_for_repo(repo_root, ctx);
-            }
+        if self.should_build_outlines(ctx)
+            && self.active_outline_task.is_none()
+            && let Some(repo_root) = self.outline_queue.pop_front()
+        {
+            self.compute_outline_for_repo(repo_root, ctx);
         }
     }
 

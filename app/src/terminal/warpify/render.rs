@@ -13,8 +13,8 @@ use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui::{AppContext, Element, EventContext, PaintContext, SingletonEntity as _};
 
-use super::settings::WarpifySettings;
 use super::SubshellSource;
+use super::settings::WarpifySettings;
 use crate::ai::blocklist::inline_action::inline_action_icons;
 use crate::ui_components::blended_colors;
 

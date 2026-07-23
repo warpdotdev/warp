@@ -12,9 +12,8 @@ use ai::agent::action_result::{
 };
 use ai::agent::orchestration_config::OrchestrationConfig;
 use ai::skills::SkillReference;
-use futures::future::BoxFuture;
 use futures::FutureExt;
-use settings::Setting;
+use futures::future::BoxFuture;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -26,14 +25,15 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentInput,
     StartAgentExecutionMode,
 };
-use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::plan_publication::{
     prepare_plan_publications, wait_for_plan_publications,
 };
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
+use crate::ai::orchestration::{
+    OrchestrationConfigState, can_execute_with_auth_secret,
+    populate_default_auth_secret_for_execution,
+};
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -335,6 +335,10 @@ impl RunAgentsExecutor {
                     .map(|(cfg, kind)| RunAgentsAgentOutcome {
                         name: cfg.name.clone(),
                         kind,
+                        // resolved_model_id is populated by the server in the
+                        // RunAgentsResult proto; the client fills it as empty here
+                        // and the real value arrives via convert_conversation.
+                        resolved_model_id: String::new(),
                     })
                     .collect();
                 me.record_launched_agents(parent_conversation_id_for_result, &agents);
@@ -344,10 +348,12 @@ impl RunAgentsExecutor {
                         environment_id,
                         worker_host,
                         computer_use_enabled,
+                        runner_id,
                     } => RunAgentsLaunchedExecutionMode::Remote {
                         environment_id: environment_id.clone(),
                         worker_host: worker_host.clone(),
                         computer_use_enabled: *computer_use_enabled,
+                        runner_id: runner_id.clone(),
                     },
                 };
                 let result = RunAgentsResult::Launched {
@@ -369,7 +375,7 @@ impl RunAgentsExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let AIAgentAction { action, id, .. } = input.action;
         let AIAgentActionType::RunAgents(request) = action else {
             return ActionExecution::InvalidAction;
@@ -610,80 +616,21 @@ fn normalize_agent_name(name: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_ascii_lowercase())
 }
 
-fn requires_default_auth_secret_for_execution(request: &RunAgentsRequest) -> bool {
-    if !request.execution_mode.is_remote() {
-        return false;
-    }
-    let Some(harness) = Harness::parse_orchestration_harness(&request.harness_type) else {
-        return false;
-    };
-    harness != Harness::Oz && !auth_secret_types_for_harness(harness).is_empty()
-}
-
-fn can_execute_with_auth_secret(
-    request: &RunAgentsRequest,
-    ctx: &ModelContext<RunAgentsExecutor>,
-) -> bool {
-    if !requires_default_auth_secret_for_execution(request) {
-        return true;
-    }
-    if request
-        .harness_auth_secret_name
-        .as_deref()
-        .is_some_and(|name| !name.trim().is_empty())
-    {
-        return true;
-    }
-    default_auth_secret_name_for_harness(&request.harness_type, ctx).is_some()
-}
-
-fn default_auth_secret_name_for_harness(
-    harness_type: &str,
-    ctx: &ModelContext<RunAgentsExecutor>,
-) -> Option<String> {
-    let harness = Harness::parse_orchestration_harness(harness_type)?;
-    if harness == Harness::Oz {
-        return None;
-    }
-    CloudAgentSettings::as_ref(ctx)
-        .last_selected_auth_secret
-        .value()
-        .get(harness.config_name())
-        .cloned()
-        .filter(|name| !name.trim().is_empty())
-}
-
-fn populate_default_auth_secret_for_execution(
-    request: &mut RunAgentsRequest,
-    ctx: &ModelContext<RunAgentsExecutor>,
-) {
-    if !requires_default_auth_secret_for_execution(request)
-        || request
-            .harness_auth_secret_name
-            .as_deref()
-            .is_some_and(|name| !name.trim().is_empty())
-    {
-        return;
-    }
-    request.harness_auth_secret_name =
-        default_auth_secret_name_for_harness(&request.harness_type, ctx);
-}
-
 /// Unconditionally overrides run-wide fields on a `RunAgentsRequest`
 /// from the approved orchestration config, delegating to
-/// `OrchestrationEditState::override_from_approved_config`.
+/// `OrchestrationConfigState::override_from_approved_config`.
 fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &OrchestrationConfig) {
     // The approved plan config is the source of truth for these run-wide fields,
     // so callers pass a mutable request and continue with the normalized value.
-    let mut edit_state = OrchestrationEditState::from_run_agents_fields(
-        &request.model_id,
-        &request.harness_type,
+    let mut config_state = OrchestrationConfigState::from_run_agents_fields(
+        Some(&request.model_id),
+        Some(&request.harness_type),
         &request.execution_mode,
     );
-    edit_state.override_from_approved_config(config);
-    request.model_id = edit_state.model_id;
-    request.harness_type = edit_state.harness_type;
-    request.execution_mode = edit_state.execution_mode;
+    config_state.override_from_approved_config(config);
+    request.model_id = config_state.model_id;
+    request.harness_type = config_state.harness_type;
+    request.execution_mode = config_state.execution_mode;
 }
 
 /// Defence-in-depth validation; mirrors the card view's
@@ -692,12 +639,11 @@ fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
     if request.agent_run_configs.is_empty() {
         return Err("orchestrate: empty agent_run_configs".to_string());
     }
-    if matches!(request.execution_mode, RunAgentsExecutionMode::Local) {
-        if let Some(harness) = Harness::parse_local_child_harness(&request.harness_type) {
-            if let Some(message) = local_harness_product_disabled_message(harness) {
-                return Err(message.to_string());
-            }
-        }
+    if matches!(request.execution_mode, RunAgentsExecutionMode::Local)
+        && let Some(harness) = Harness::parse_local_child_harness(&request.harness_type)
+        && let Some(message) = local_harness_product_disabled_message(harness)
+    {
+        return Err(message.to_string());
     }
     if matches!(
         request.execution_mode,
@@ -739,20 +685,33 @@ pub fn run_agents_to_start_agent_mode(
 ) -> Result<StartAgentExecutionMode, String> {
     match run_execution_mode {
         RunAgentsExecutionMode::Local => {
+            // Named-agent identity requires the public-API dispatch path, which
+            // only remote children use. Mirrors server-side validation.
+            if !cfg.agent_identity_uid.trim().is_empty() {
+                return Err(
+                    "agent_identity_uid requires remote execution; local child agents cannot \
+                     run as a different named agent."
+                        .to_string(),
+                );
+            }
             let trimmed = run_harness_type.trim();
-            // Propagate run-wide model selection for local launches.
-            let trimmed_model_id = run_model_id.trim();
-            let model_id = (!trimmed_model_id.is_empty()).then(|| trimmed_model_id.to_string());
+            // Per-agent model_id overrides the batch-level run_model_id when set.
+            let effective_model_id = if !cfg.model_id.trim().is_empty() {
+                cfg.model_id.trim()
+            } else {
+                run_model_id.trim()
+            };
+            let model_id = (!effective_model_id.is_empty()).then(|| effective_model_id.to_string());
             if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("oz") {
                 Ok(StartAgentExecutionMode::Local {
                     harness_type: None,
                     model_id,
                 })
             } else {
-                if let Some(harness) = Harness::parse_local_child_harness(trimmed) {
-                    if let Some(message) = local_harness_product_disabled_message(harness) {
-                        return Err(message.to_string());
-                    }
+                if let Some(harness) = Harness::parse_local_child_harness(trimmed)
+                    && let Some(message) = local_harness_product_disabled_message(harness)
+                {
+                    return Err(message.to_string());
                 }
                 Ok(StartAgentExecutionMode::Local {
                     harness_type: Some(trimmed.to_string()),
@@ -764,6 +723,7 @@ pub fn run_agents_to_start_agent_mode(
             environment_id,
             worker_host,
             computer_use_enabled,
+            runner_id,
         } => {
             // OpenCode is unsupported on Remote.
             if run_harness_type.eq_ignore_ascii_case("opencode") {
@@ -771,16 +731,25 @@ pub fn run_agents_to_start_agent_mode(
                     "Remote child agents do not support the opencode harness yet.".to_string(),
                 );
             }
+            // Per-agent model_id overrides the batch-level run_model_id when set.
+            let effective_model_id = if !cfg.model_id.trim().is_empty() {
+                cfg.model_id.clone()
+            } else {
+                run_model_id.to_string()
+            };
             Ok(StartAgentExecutionMode::Remote {
                 environment_id: environment_id.clone(),
                 skill_references: run_skills.to_vec(),
-                model_id: run_model_id.to_string(),
+                model_id: effective_model_id,
                 computer_use_enabled: *computer_use_enabled,
                 worker_host: worker_host.clone(),
                 harness_type: run_harness_type.to_string(),
                 title: cfg.title.clone(),
                 auth_secret_name: run_auth_secret_name
                     .map(str::to_string)
+                    .filter(|s| !s.trim().is_empty()),
+                runner_id: runner_id.clone(),
+                agent_identity_uid: Some(cfg.agent_identity_uid.clone())
                     .filter(|s| !s.trim().is_empty()),
             })
         }

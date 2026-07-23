@@ -5,18 +5,17 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use vec1::vec1;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors::{
     accent_overlay_2, accent_overlay_3, neutral_1, neutral_3, neutral_4, neutral_6, text_main,
     text_sub,
 };
-use warp_core::ui::theme::Fill;
 use warp_editor::model::CoreEditorModel;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::resizable::{
-    resizable_state_handle, DragBarSide, Resizable, ResizableStateHandle,
+    DragBarSide, Resizable, ResizableStateHandle, resizable_state_handle,
 };
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -261,31 +260,23 @@ impl CommentListView {
     fn recompute_comment_button_label(&mut self, ctx: &mut ViewContext<Self>) {
         let total_count = self.comments_by_id.len();
 
-        let label_text = if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-            let non_outdated_count = self
-                .comments_by_id
-                .values()
-                .filter(|state| !state.card.source().outdated)
-                .count();
+        let non_outdated_count = self
+            .comments_by_id
+            .values()
+            .filter(|state| !state.card.source().outdated)
+            .count();
 
-            if non_outdated_count == 0 && total_count > 0 {
-                format!(
-                    "{} outdated comment{}",
-                    total_count,
-                    if total_count == 1 { "" } else { "s" }
-                )
-            } else {
-                format!(
-                    "{} comment{}",
-                    non_outdated_count,
-                    if non_outdated_count == 1 { "" } else { "s" }
-                )
-            }
+        let label_text = if non_outdated_count == 0 && total_count > 0 {
+            format!(
+                "{} outdated comment{}",
+                total_count,
+                if total_count == 1 { "" } else { "s" }
+            )
         } else {
             format!(
                 "{} comment{}",
-                total_count,
-                if total_count == 1 { "" } else { "s" }
+                non_outdated_count,
+                if non_outdated_count == 1 { "" } else { "s" }
             )
         };
 
@@ -393,45 +384,50 @@ impl CommentListView {
         for comment in comments {
             let id = comment.id;
 
-            let entry = if let Some(mut existing) = self.comments_by_id.shift_remove(&id) {
-                existing
-                    .card
-                    .update_source(comment, self.repo_path.as_ref(), ctx);
-                existing
-            } else {
-                let card = CommentViewCard::new(
-                    comment,
-                    false, /* always_use_static_diff */
-                    false, /* disable_scrolling */
-                    Some(Pixels::new(DEFAULT_COMMENT_MAX_WIDTH)),
-                    self.repo_path.as_ref(),
-                    ctx,
-                );
-
-                ctx.subscribe_to_view(
-                    card.comment_editor(),
-                    Self::handle_comment_editor_selection_events,
-                );
-                if let Some(diff_editor) = card.static_diff_editor() {
-                    ctx.subscribe_to_view(
-                        diff_editor,
-                        Self::handle_static_diff_editor_selection_events,
-                    );
+            let entry = match self.comments_by_id.shift_remove(&id) {
+                Some(mut existing) => {
+                    existing
+                        .card
+                        .update_source(comment, self.repo_path.as_ref(), ctx);
+                    existing
                 }
+                _ => {
+                    let card = CommentViewCard::new(
+                        comment,
+                        false, /* always_use_static_diff */
+                        false, /* disable_scrolling */
+                        Some(Pixels::new(DEFAULT_COMMENT_MAX_WIDTH)),
+                        self.repo_path.as_ref(),
+                        ctx,
+                    );
 
-                let comment_id = id;
-                let action_button = ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::DotsVertical)
-                    .with_size(ButtonSize::Small)
-                    .on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CommentListAction::ShowOverflow { comment_id })
-                    });
-                let action_button = ctx.add_view(|_| action_button);
+                    ctx.subscribe_to_view(
+                        card.comment_editor(),
+                        Self::handle_comment_editor_selection_events,
+                    );
+                    if let Some(diff_editor) = card.static_diff_editor() {
+                        ctx.subscribe_to_view(
+                            diff_editor,
+                            Self::handle_static_diff_editor_selection_events,
+                        );
+                    }
 
-                CommentDisplayState {
-                    card,
-                    icon_button: action_button,
-                    mouse_state: Default::default(),
+                    let comment_id = id;
+                    let action_button = ActionButton::new("", NakedTheme)
+                        .with_icon(Icon::DotsVertical)
+                        .with_size(ButtonSize::Small)
+                        .on_click(move |ctx| {
+                            ctx.dispatch_typed_action(CommentListAction::ShowOverflow {
+                                comment_id,
+                            })
+                        });
+                    let action_button = ctx.add_view(|_| action_button);
+
+                    CommentDisplayState {
+                        card,
+                        icon_button: action_button,
+                        mouse_state: Default::default(),
+                    }
                 }
             };
 
@@ -560,10 +556,10 @@ impl CommentListView {
                 card.comment_editor()
                     .update(ctx, |view, ctx| view.clear_text_selection(ctx));
             }
-            if let Some(diff_editor) = card.static_diff_editor() {
-                if source_view_id.is_none_or(|id| diff_editor.id() != id) {
-                    diff_editor.update(ctx, |view, ctx| view.clear_selection(ctx));
-                }
+            if let Some(diff_editor) = card.static_diff_editor()
+                && source_view_id.is_none_or(|id| diff_editor.id() != id)
+            {
+                diff_editor.update(ctx, |view, ctx| view.clear_selection(ctx));
             }
         }
     }
@@ -584,35 +580,25 @@ impl CommentListView {
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-            let (outdated_comments, active_comments): (Vec<_>, Vec<_>) = self
-                .comments_by_id
-                .values()
-                .partition(|state| state.card.source().outdated);
+        let (outdated_comments, active_comments): (Vec<_>, Vec<_>) = self
+            .comments_by_id
+            .values()
+            .partition(|state| state.card.source().outdated);
 
-            if !outdated_comments.is_empty() {
-                comments_column.add_child(self.render_outdated_section(
-                    &outdated_comments,
-                    appearance,
-                    ctx,
-                ));
-            }
+        if !outdated_comments.is_empty() {
+            comments_column.add_child(self.render_outdated_section(
+                &outdated_comments,
+                appearance,
+                ctx,
+            ));
+        }
 
-            for comment_render_state in active_comments {
-                comments_column.add_child(
-                    Container::new(self.render_comment(comment_render_state, ctx))
-                        .with_margin_bottom(12.)
-                        .finish(),
-                );
-            }
-        } else {
-            for comment_render_state in self.comments_by_id.values() {
-                comments_column.add_child(
-                    Container::new(self.render_comment(comment_render_state, ctx))
-                        .with_margin_bottom(12.)
-                        .finish(),
-                );
-            }
+        for comment_render_state in active_comments {
+            comments_column.add_child(
+                Container::new(self.render_comment(comment_render_state, ctx))
+                    .with_margin_bottom(12.)
+                    .finish(),
+            );
         }
 
         let scrollable_content = NewScrollable::vertical(
@@ -1061,10 +1047,12 @@ impl CommentListView {
         html_url: Option<&str>,
         appearance: &Appearance,
     ) -> Vec<MenuItem<CommentListAction>> {
-        let mut items = vec![MenuItemFields::new("Copy text")
-            .with_icon(Icon::Copy)
-            .with_on_select_action(CommentListAction::CopyCommentText)
-            .into_item()];
+        let mut items = vec![
+            MenuItemFields::new("Copy text")
+                .with_icon(Icon::Copy)
+                .with_on_select_action(CommentListAction::CopyCommentText)
+                .into_item(),
+        ];
 
         let mut edit_item = MenuItemFields::new("Edit")
             .with_icon(Icon::Pencil)
@@ -1149,7 +1137,9 @@ impl View for CommentListView {
                 .with_dragbar_color(warpui::elements::Fill::Solid(
                     warpui::color::ColorU::transparent_black(),
                 ))
-                .with_bounds_callback(Box::new(|window_size| (100.0, window_size.y() * 0.8)))
+                .with_bounds_callback(Box::new(|window_size| {
+                    (100.0, (window_size.y() * 0.8).max(100.0))
+                }))
                 .on_resize(|ctx, _| {
                     ctx.notify();
                 })
@@ -1249,13 +1239,13 @@ impl TypedActionView for CommentListView {
             }
             CommentListAction::DismissOverflowMenu => self.close_overflow_menu(ctx),
             CommentListAction::CopyCommentText => {
-                if let Some(id) = self.active_overflow_comment_id.take() {
-                    if let Some(state) = self.comments_by_id.get(&id) {
-                        let content = state.card.source().content.clone();
-                        let mut clipboard = ClipboardContent::plain_text(content.clone());
-                        clipboard.html = markdown_to_html(state.card.comment_editor(), ctx);
-                        ctx.clipboard().write(clipboard);
-                    }
+                if let Some(id) = self.active_overflow_comment_id.take()
+                    && let Some(state) = self.comments_by_id.get(&id)
+                {
+                    let content = state.card.source().content.clone();
+                    let mut clipboard = ClipboardContent::plain_text(content.clone());
+                    clipboard.html = markdown_to_html(state.card.comment_editor(), ctx);
+                    ctx.clipboard().write(clipboard);
                 }
                 ctx.notify();
             }

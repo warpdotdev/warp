@@ -1,8 +1,9 @@
-use warp_core::{report_error, send_telemetry_from_ctx};
+use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext};
 
-use crate::telemetry::OnboardingEvent;
 use crate::OnboardingIntention;
+use crate::telemetry::OnboardingEvent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FinalState {

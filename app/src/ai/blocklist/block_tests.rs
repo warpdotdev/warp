@@ -1,17 +1,16 @@
 use std::path::PathBuf;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
-use ai::agent::action_result::StartAgentVersion;
 use ai::skills::SkillReference;
 use settings::Setting;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{App, SingletonEntity};
 
 use super::{
+    CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
-    user_avatar_info_for_conversation_creator, CollapsibleElementState, CollapsibleExpansionState,
-    UserAvatarInfo,
+    user_avatar_info_for_conversation_creator,
 };
 use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
 use crate::ai::blocklist::action_model::{
@@ -98,41 +97,14 @@ fn orchestration_send_message_starts_collapsed() {
 }
 
 #[test]
-fn orchestration_start_agent_prompt_stays_expanded_for_all_message_modes() {
-    for display_mode in [
-        OrchestrationMessageDisplayMode::ShowAndCollapse,
-        OrchestrationMessageDisplayMode::AlwaysCollapse,
-        OrchestrationMessageDisplayMode::AlwaysShow,
-    ] {
-        let state = default_collapsible_state_for_orchestration_action(
-            &AIAgentActionType::StartAgent {
-                version: StartAgentVersion::V1,
-                name: "child-agent".to_string(),
-                prompt: "Investigate".to_string(),
-                execution_mode: StartAgentExecutionMode::local_harness("claude-code".to_string()),
-                lifecycle_subscription: None,
-            },
-            display_mode,
-        )
-        .expect("start-agent actions should get a collapsible state");
-
-        assert!(matches!(
-            state.expansion_state,
-            CollapsibleExpansionState::Expanded {
-                is_finished: false,
-                scroll_pinned_to_bottom: true
-            }
-        ));
-    }
-}
-
-#[test]
 fn non_orchestration_actions_do_not_get_collapsible_state_defaults() {
-    assert!(default_collapsible_state_for_orchestration_action(
-        &AIAgentActionType::OpenCodeReview,
-        OrchestrationMessageDisplayMode::AlwaysCollapse,
-    )
-    .is_none());
+    assert!(
+        default_collapsible_state_for_orchestration_action(
+            &AIAgentActionType::OpenCodeReview,
+            OrchestrationMessageDisplayMode::AlwaysCollapse,
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -380,6 +352,8 @@ fn agent_cfg() -> RunAgentsAgentRunConfig {
         name: "child".to_string(),
         prompt: "do X".to_string(),
         title: "Child".to_string(),
+        agent_identity_uid: String::new(),
+        model_id: String::new(),
     }
 }
 
@@ -396,6 +370,7 @@ fn remote_arm_propagates_skills_into_skill_references() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: true,
+            runner_id: String::new(),
         },
         "oz",
         "auto",
@@ -413,6 +388,8 @@ fn remote_arm_propagates_skills_into_skill_references() {
         computer_use_enabled,
         title,
         auth_secret_name,
+        runner_id: _,
+        agent_identity_uid,
     } = mode
     else {
         panic!("expected Remote start-agent mode");
@@ -425,6 +402,44 @@ fn remote_arm_propagates_skills_into_skill_references() {
     assert!(computer_use_enabled);
     assert_eq!(title, "Child");
     assert_eq!(auth_secret_name, None);
+    assert_eq!(agent_identity_uid, None);
+}
+
+#[test]
+fn remote_arm_propagates_agent_identity_uid() {
+    let mut cfg = agent_cfg();
+    cfg.agent_identity_uid = "sa-uid-1".to_string();
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: false,
+            runner_id: String::new(),
+        },
+        "oz",
+        "auto",
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("Remote+oz must convert");
+    let StartAgentExecutionMode::Remote {
+        agent_identity_uid, ..
+    } = mode
+    else {
+        panic!("expected Remote start-agent mode");
+    };
+    assert_eq!(agent_identity_uid.as_deref(), Some("sa-uid-1"));
+}
+
+#[test]
+fn local_arm_rejects_agent_identity_uid() {
+    let mut cfg = agent_cfg();
+    cfg.agent_identity_uid = "sa-uid-1".to_string();
+    let err =
+        run_agents_to_start_agent_mode(&RunAgentsExecutionMode::Local, "", "", &[], None, &cfg)
+            .expect_err("Local + agent_identity_uid must be rejected");
+    assert!(err.contains("agent_identity_uid requires remote execution"));
 }
 
 #[test]
@@ -434,6 +449,7 @@ fn remote_arm_with_empty_skills_propagates_empty_vec() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "claude",
         "auto",
@@ -458,6 +474,7 @@ fn remote_arm_rejects_opencode() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "opencode",
         "auto",
@@ -510,6 +527,7 @@ fn remote_arm_propagates_claude_auth_secret_into_mode() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "claude",
         "auto",
@@ -534,6 +552,7 @@ fn remote_arm_filters_whitespace_auth_secret_name_to_none() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "codex",
         "auto",

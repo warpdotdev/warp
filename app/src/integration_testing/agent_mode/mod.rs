@@ -12,14 +12,14 @@ pub use assertions::*;
 pub use step::*;
 pub use user_defaults::*;
 pub use util::*;
+use warp_errors::report_error;
 use warpui::integration::PersistedDataMap;
 pub use warpui::integration::RUNTIME_TAG_FAILURE_REASON;
 use warpui::{App, SingletonEntity as _, WindowId};
 
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::{AIAgentActionType, AIAgentOutputStatus, FinishedAIAgentOutput};
-pub use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::integration_testing::view_getters::terminal_view;
-use crate::{report_error, BlocklistAIHistoryModel};
+pub use crate::integration_testing::view_getters::terminal_view;
 
 pub const TOTAL_REQUEST_COST_PREFIX: &str = "Total request cost: ";
 pub const TOTAL_EXCHANGES_PREFIX: &str = "Total number of exchanges: ";

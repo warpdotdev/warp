@@ -17,7 +17,7 @@ use warp_completer::completer::{CommandExitStatus, CommandOutput};
 #[cfg(windows)]
 use warp_core::paths::base_config_dir;
 use warp_core::platform::SessionPlatform;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
 };
@@ -324,10 +324,12 @@ impl ShellType {
             }
             #[cfg(windows)]
             ShellType::PowerShell => {
-                vec![base_config_dir()
-                    .join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt")
-                    .display()
-                    .to_string()]
+                vec![
+                    base_config_dir()
+                        .join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt")
+                        .display()
+                        .to_string(),
+                ]
             }
         }
     }

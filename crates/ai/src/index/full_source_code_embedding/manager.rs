@@ -17,14 +17,16 @@ cfg_if::cfg_if! {
         use warp_core::features::FeatureFlag;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui_core::r#async::Timer;
-        use warp_core::{send_telemetry_from_ctx, report_if_error};
+        use warp_core::send_telemetry_from_ctx;
+        use warp_errors::report_if_error;
         use crate::telemetry::AITelemetryEvent;
         use instant::Instant;
         use warp_core::channel::ChannelState;
         use warp_core::safe_warn;
     }
 }
-use warp_core::{report_error, safe_anyhow};
+use warp_core::safe_anyhow;
+use warp_errors::report_error;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress};
@@ -986,34 +988,33 @@ impl CodebaseIndexManager {
                             .as_ref()
                             .is_some_and(|storage| storage.has_snapshot(&p))
                     })
+                && let Some(snapshot_storage) = snapshot_storage.as_ref()
             {
-                if let Some(snapshot_storage) = snapshot_storage.as_ref() {
-                    let read_snapshot_start_time = Instant::now();
-                    match read_snapshot(
-                        store_client.clone(),
-                        snapshot_storage.path(),
-                        repository.clone(),
-                        max_files_repo_limit,
-                        embedding_generation_batch_size,
-                        ctx,
-                    ) {
-                        Ok(snapshot_index) => {
-                            send_telemetry_from_ctx!(
-                                AITelemetryEvent::MerkleTreeSnapshotRebuildSuccess {
-                                    duration: read_snapshot_start_time.elapsed()
-                                },
-                                ctx
-                            );
-                            return snapshot_index;
-                        }
-                        Err(err) => {
-                            send_telemetry_from_ctx!(
-                                AITelemetryEvent::MerkleTreeSnapshotRebuildFailed {
-                                    error: err.to_string()
-                                },
-                                ctx
-                            );
-                        }
+                let read_snapshot_start_time = Instant::now();
+                match read_snapshot(
+                    store_client.clone(),
+                    snapshot_storage.path(),
+                    repository.clone(),
+                    max_files_repo_limit,
+                    embedding_generation_batch_size,
+                    ctx,
+                ) {
+                    Ok(snapshot_index) => {
+                        send_telemetry_from_ctx!(
+                            AITelemetryEvent::MerkleTreeSnapshotRebuildSuccess {
+                                duration: read_snapshot_start_time.elapsed()
+                            },
+                            ctx
+                        );
+                        return snapshot_index;
+                    }
+                    Err(err) => {
+                        send_telemetry_from_ctx!(
+                            AITelemetryEvent::MerkleTreeSnapshotRebuildFailed {
+                                error: err.to_string()
+                            },
+                            ctx
+                        );
                     }
                 }
             }

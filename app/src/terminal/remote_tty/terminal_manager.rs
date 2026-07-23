@@ -1,6 +1,6 @@
 use std::any::Any;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use async_channel::{Receiver, Sender, TrySendError};
 use parking_lot::FairMutex;
@@ -23,8 +23,8 @@ use crate::terminal::writeable_pty::terminal_manager_util::{
 };
 use crate::terminal::writeable_pty::{self, Message};
 use crate::terminal::{
-    terminal_manager, ShellLaunchState, SizeInfo, TerminalManager as TerminalManagerTrait,
-    TerminalModel, TerminalView,
+    ShellLaunchState, SizeInfo, TerminalManager as TerminalManagerTrait, TerminalModel,
+    TerminalView, terminal_manager,
 };
 
 type PtyController = writeable_pty::PtyController<Sender<Message>>;
