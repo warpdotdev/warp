@@ -286,10 +286,11 @@ fn natural_language_detection_command_is_registered_only_for_tui_mode() {
 
 #[test]
 fn natural_language_detection_command_is_ai_enabled_and_executes_immediately() {
-    assert_eq!(
-        NATURAL_LANGUAGE_DETECTION.availability,
-        Availability::AI_ENABLED
-    );
-    assert!(!NATURAL_LANGUAGE_DETECTION.auto_enter_ai_mode);
-    assert!(NATURAL_LANGUAGE_DETECTION.argument.is_none());
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::NaturalLanguageDetection)
+        .expect("expected /natural-language-detection to be registered in TUI mode");
+    assert_eq!(command.availability, Availability::AI_ENABLED);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
 }

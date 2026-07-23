@@ -1256,8 +1256,7 @@ impl Input {
             }
             SlashCommandKind::AutoApprove
             | SlashCommandKind::ViewLogs
-            | SlashCommandKind::EnableNaturalLanguageDetection
-            | SlashCommandKind::DisableNaturalLanguageDetection
+            | SlashCommandKind::NaturalLanguageDetection
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout => {
                 debug_assert!(
