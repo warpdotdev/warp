@@ -30,7 +30,6 @@ fn run_agents_result(agents: Vec<RunAgentsAgentOutcome>) -> AIAgentActionResultT
     })
 }
 
-
 #[test]
 fn run_agents_is_successful_when_all_agents_launch() {
     let result = run_agents_result(vec![launched_agent("first"), launched_agent("second")]);

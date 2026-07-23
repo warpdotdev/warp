@@ -19,9 +19,9 @@ use crate::agent::action_result::{
     ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
     RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
     SendMessageToAgentResult, StartRecordingResult, StopRecordingResult,
-    SuggestNewConversationResult, SuggestPromptResult,
-    TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
-    WaitForEventsResult, WriteToLongRunningShellCommandResult,
+    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
+    UploadArtifactResult, UseComputerResult, WaitForEventsResult,
+    WriteToLongRunningShellCommandResult,
 };
 use crate::agent::{AIAgentCitation, FileLocations};
 use crate::diff_validation::ParsedDiff;
@@ -293,38 +293,6 @@ pub enum StartAgentExecutionMode {
     },
 }
 
-impl StartAgentExecutionMode {
-    /// Constructs a local execution mode using the legacy v1 default harness.
-    pub fn local_with_defaults() -> Self {
-        Self::Local {
-            harness_type: None,
-            model_id: None,
-        }
-    }
-    /// Constructs a local execution mode for a specific third-party harness.
-    pub fn local_harness(harness_type: String) -> Self {
-        Self::Local {
-            harness_type: Some(harness_type),
-            model_id: None,
-        }
-    }
-    /// Constructs a remote execution mode using the legacy v1 defaults for
-    /// fields that were added later in StartAgentV2.
-    pub fn remote_with_defaults(environment_id: String) -> Self {
-        Self::Remote {
-            environment_id,
-            skill_references: Vec::new(),
-            model_id: String::new(),
-            computer_use_enabled: false,
-            worker_host: String::new(),
-            harness_type: String::new(),
-            title: String::new(),
-            auth_secret_name: None,
-            runner_id: String::new(),
-            agent_identity_uid: None,
-        }
-    }
-}
 impl AIAgentActionType {
     pub fn is_request_command_output(&self) -> bool {
         matches!(self, Self::RequestCommandOutput { .. })

@@ -1,18 +1,13 @@
-use std::path::PathBuf;
-
 use ai::agent::action::AskUserQuestionType;
-use ai::skills::{SkillPathOrigin, SkillReference};
+use ai::skills::SkillPathOrigin;
 use warp_multi_agent_api as api;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::{
     ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
     convert_api_question,
 };
 use crate::ai::agent::task::TaskId;
-use crate::ai::agent::{
-    AIAgentActionType, AIAgentOutputMessageType, LifecycleEventType, StartAgentExecutionMode,
-};
+use crate::ai::agent::{AIAgentActionType, AIAgentOutputMessageType};
 
 fn upload_artifact_tool_call_message(path: &str, description: &str) -> api::Message {
     api::Message {

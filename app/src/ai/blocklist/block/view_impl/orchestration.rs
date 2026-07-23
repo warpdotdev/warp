@@ -13,9 +13,7 @@ use warpui::{AppContext, Element, SingletonEntity};
 use super::WithContentItemSpacing;
 use super::common::render_scrollable_collapsible_content;
 use super::output::{Props, action_icon};
-use crate::ai::agent::conversation::{
-    AIConversation, AIConversationId,
-};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResultType, MessageId, ReceivedMessageDisplay,
     SendMessageToAgentResult,
@@ -23,9 +21,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::agent_view::orchestration_avatar::OrchestrationAvatar;
-use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
-    dispatch_focus_or_open_child_agent_pane,
-};
+use crate::ai::blocklist::agent_view::orchestration_conversation_links::dispatch_focus_or_open_child_agent_pane;
 use crate::ai::blocklist::block::model::AIBlockModelHelper;
 use crate::ai::blocklist::block::{
     AIBlockAction, CollapsibleExpansionState, received_message_collapsible_id,
@@ -654,7 +650,6 @@ fn render_formatted_text_element(
     )
     .set_selectable(true)
 }
-
 
 #[cfg(test)]
 #[path = "orchestration_tests.rs"]

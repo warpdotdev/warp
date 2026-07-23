@@ -244,7 +244,6 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     // (client inputs -> redaction -> server request -> task messages)
                     AIAgentActionResultType::FetchConversation(_) => {}
 
-
                     // SendMessageToAgent results contain only a message ID or error string, no secrets
                     AIAgentActionResultType::SendMessageToAgent(_) => {}
                     // TransferShellCommandControlToUser result - similar to WriteToLongRunningShellCommand

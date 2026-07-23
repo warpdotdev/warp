@@ -18,7 +18,6 @@ pub enum StartAgentOutcome {
     Error(String),
 }
 
-
 /// Opaque, monotonically increasing request identifier.
 /// Disambiguates parallel in-flight StartAgent requests.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Default)]
@@ -277,8 +276,6 @@ impl StartAgentExecutor {
         )));
         receiver
     }
-
-
 }
 
 /// Whether a child that failed before launch should have its hidden pane and
@@ -345,7 +342,3 @@ pub enum StartAgentExecutorEvent {
         conversation_id: AIConversationId,
     },
 }
-
-#[cfg(test)]
-#[path = "start_agent_tests.rs"]
-mod tests;

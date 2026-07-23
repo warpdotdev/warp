@@ -92,7 +92,6 @@ pub enum AIAgentActionResultType {
     /// The result of fetching a conversation's tasks.
     FetchConversation(FetchConversationResult),
 
-
     /// The result of sending a message to another agent.
     SendMessageToAgent(SendMessageToAgentResult),
 
@@ -120,7 +119,6 @@ impl Display for ReadFilesFailedFile {
         write!(f, "{}: {}", self.path, self.message)
     }
 }
-
 
 impl AIAgentActionResultType {
     /// Returns the effective command string for command-related results, if any.
@@ -1313,7 +1311,6 @@ impl Display for FetchConversationResult {
         }
     }
 }
-
 
 /// The terminal outcome of an orchestrate tool call.
 ///

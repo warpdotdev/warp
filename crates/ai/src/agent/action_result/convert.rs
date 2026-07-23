@@ -1187,7 +1187,6 @@ impl TryFrom<FetchConversationResult> for api::request::input::tool_call_result:
     }
 }
 
-
 impl From<SendMessageToAgentResult> for api::request::input::tool_call_result::Result {
     fn from(result: SendMessageToAgentResult) -> Self {
         api::request::input::tool_call_result::Result::SendMessageToAgent(

@@ -76,7 +76,6 @@ pub(crate) fn convert_user_query_mode(mode: Option<&api::UserQueryMode>) -> User
     }
 }
 
-
 /// Maps the proto `Harness` oneof to a client-side string identifier
 /// (e.g. "oz", "claude"). Returns `None` for an unset variant.
 pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Option<String> {
@@ -92,7 +91,6 @@ pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Opti
         .to_string(),
     )
 }
-
 
 fn convert_run_agents_execution_mode(
     execution_mode: Option<api::run_agents::ExecutionMode>,
@@ -148,7 +146,6 @@ fn convert_run_agents(
         harness_auth_secret_name: None,
     })
 }
-
 
 /// Unexpected errors when trying to convert an [`api::Message`] to an [`AIAgentOutputMessage`].
 #[derive(Debug, thiserror::Error)]

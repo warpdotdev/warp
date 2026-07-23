@@ -1,19 +1,12 @@
-use ai::agent::action_result::StartAgentVersion;
 use warp_cli::agent::Harness;
-use warp_core::ui::appearance::Appearance;
-use warpui::elements::MouseStateHandle;
 use warpui::{App, EntityId};
 
 use super::{
-    ChildConversationCardData, OrchestrationAvatar, OrchestrationParticipant,
-    agent_display_name_from_id, child_conversation_card_data_for_result, participant_for_agent_id,
-    render_conversation_navigation_card_row, start_agent_cancelled_prefix,
-    start_agent_error_prefix, start_agent_in_progress_prefix, start_agent_success_suffix,
-    transcript_metadata,
+    OrchestrationAvatar, OrchestrationParticipant, agent_display_name_from_id,
+    participant_for_agent_id, transcript_metadata,
 };
 use crate::BlocklistAIHistoryModel;
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::{StartAgentExecutionMode, StartAgentResult};
+use crate::ai::agent::conversation::AIConversationId;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 #[test]
@@ -305,4 +298,3 @@ fn transcript_metadata_preserves_non_orchestrator_recipients() {
         Some("to Agent 1 • Fix tests".to_string())
     );
 }
-
