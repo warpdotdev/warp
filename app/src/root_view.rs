@@ -1663,11 +1663,12 @@ impl AccountFirstCompletion {
         }
     }
 
-    fn starts_tutorial(self) -> bool {
+    fn starts_agent_tutorial(self) -> bool {
         matches!(
             self,
             AccountFirstCompletion::PaidTeam
                 | AccountFirstCompletion::FreeIcpSetupLater
+                | AccountFirstCompletion::FreeStandardSetupLater
                 | AccountFirstCompletion::UpgradeCompleted
         )
     }
@@ -2363,11 +2364,11 @@ impl RootView {
             false
         };
 
-        if !completion.starts_tutorial() {
+        if !completion.starts_agent_tutorial() {
             self.pending_tutorial = None;
         }
         self.pending_account_first_tutorial_after_settings =
-            completion.starts_tutorial() && !settings_applied;
+            completion.starts_agent_tutorial() && !settings_applied;
 
         send_telemetry_from_ctx!(
             OnboardingEvent::OnboardingCompleted {
@@ -2378,7 +2379,7 @@ impl RootView {
 
         self.auth_onboarding_state = AuthOnboardingState::Terminal(target.to_workspace(ctx));
         ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
-        if completion.starts_tutorial() && settings_applied {
+        if completion.starts_agent_tutorial() && settings_applied {
             self.start_pending_tutorial(ctx);
         }
         self.start_autoupdate_polling(ctx);

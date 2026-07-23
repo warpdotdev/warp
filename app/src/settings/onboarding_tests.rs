@@ -177,7 +177,7 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
 }
 
 #[test]
-fn account_first_settings_follow_typed_entitlement_and_always_apply_ui_choices() {
+fn account_first_settings_enable_agent_for_authenticated_users_and_apply_ui_choices() {
     let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
@@ -216,7 +216,7 @@ fn account_first_settings_follow_typed_entitlement_and_always_apply_ui_choices()
 
         for (account_class, expected_ai) in [
             (None, false),
-            (Some(FtueAccountClass::FreeStandard), false),
+            (Some(FtueAccountClass::FreeStandard), true),
             (Some(FtueAccountClass::FreeIcp), true),
             (Some(FtueAccountClass::Paid), true),
         ] {

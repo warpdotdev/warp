@@ -19,10 +19,15 @@ pub fn apply_account_first_onboarding_settings(
     account_class: Option<FtueAccountClass>,
     app: &mut AppContext,
 ) {
-    let is_ai_enabled = matches!(
-        account_class,
-        Some(FtueAccountClass::Paid | FtueAccountClass::FreeIcp)
-    );
+    // Every authenticated account-first user gets the Warp Agent surface,
+    // including standard-free accounts with no included Warp credits. Skipping
+    // account creation is the only outcome that leaves Agent disabled.
+    let is_ai_enabled = match account_class {
+        None => false,
+        Some(
+            FtueAccountClass::Paid | FtueAccountClass::FreeIcp | FtueAccountClass::FreeStandard,
+        ) => true,
+    };
 
     match selected_settings {
         SelectedSettings::AgentDrivenDevelopment {

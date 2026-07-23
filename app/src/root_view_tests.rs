@@ -117,7 +117,7 @@ fn account_first_completion_metadata_matches_terminal_outcomes() {
             AccountFirstCompletion::FreeStandardSetupLater,
             "free_standard_setup_later",
             Some(FtueAccountClass::FreeStandard),
-            false,
+            true,
         ),
         (
             AccountFirstCompletion::UpgradeCompleted,
@@ -127,10 +127,10 @@ fn account_first_completion_metadata_matches_terminal_outcomes() {
         ),
     ];
 
-    for (completion, completion_type, account_class, starts_tutorial) in cases {
+    for (completion, completion_type, account_class, starts_agent_tutorial) in cases {
         assert_eq!(completion.completion_type(), completion_type);
         assert_eq!(completion.account_class(), account_class);
-        assert_eq!(completion.starts_tutorial(), starts_tutorial);
+        assert_eq!(completion.starts_agent_tutorial(), starts_agent_tutorial);
     }
 }
 
