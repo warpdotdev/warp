@@ -32,8 +32,8 @@ use warpui_core::{
 };
 
 use super::{
-    INPUT_HANDLES_ESCAPE_FLAG, SHELL_COMPLETION_AVAILABLE_FLAG, TuiInputAction, TuiInputView,
-    TuiInputViewEvent, input_keymap_context,
+    INPUT_HANDLES_ESCAPE_FLAG, InputKeymapContextConfig, SHELL_COMPLETION_AVAILABLE_FLAG,
+    TuiInputAction, TuiInputView, TuiInputViewEvent, input_keymap_context,
 };
 use crate::completion_menu::{TuiCompletionAcceptance, TuiCompletionMenuModel};
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
@@ -265,7 +265,7 @@ fn completion_can_append_a_space_at_buffer_end() {
 
 #[test]
 fn input_escape_context_is_present_only_while_escape_is_handled() {
-    let closed = input_keymap_context(false, false, false, false);
+    let closed = input_keymap_context(InputKeymapContextConfig::default());
     assert!(closed.set.contains("TuiInputView"));
     assert!(!closed.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
     assert!(
@@ -279,7 +279,12 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
             .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)
     );
 
-    let open = input_keymap_context(true, true, true, true);
+    let open = input_keymap_context(InputKeymapContextConfig {
+        input_handles_escape: true,
+        plan_toggle_available: true,
+        keyboard_enhancement_supported: true,
+        shell_completion_available: true,
+    });
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
     assert!(
@@ -2509,13 +2514,17 @@ fn keymap_context_flags_shell_mode() {
             let view = build_view(ctx);
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                input_keymap_context(false, false, false, false)
+                input_keymap_context(InputKeymapContextConfig::default())
             );
 
             type_str(&view, ctx, "!");
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                input_keymap_context(true, false, false, true)
+                input_keymap_context(InputKeymapContextConfig {
+                    input_handles_escape: true,
+                    shell_completion_available: true,
+                    ..Default::default()
+                })
             );
         });
     });

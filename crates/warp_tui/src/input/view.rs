@@ -23,7 +23,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use string_offset::CharOffset;
+use string_offset::{ByteOffset, CharOffset};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
@@ -34,6 +34,7 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
+use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
     ViewContext, ViewHandle,
@@ -495,12 +496,12 @@ impl TuiView for TuiInputView {
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
-        input_keymap_context(
-            self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx),
-            self.plan_toggle_available(ctx),
-            self.keyboard_enhancement_supported,
-            self.is_shell_mode(ctx),
-        )
+        input_keymap_context(InputKeymapContextConfig {
+            input_handles_escape: self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx),
+            plan_toggle_available: self.plan_toggle_available(ctx),
+            keyboard_enhancement_supported: self.keyboard_enhancement_supported,
+            shell_completion_available: self.is_shell_mode(ctx),
+        })
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
@@ -518,24 +519,27 @@ impl TuiView for TuiInputView {
     }
 }
 
-fn input_keymap_context(
+#[derive(Clone, Copy, Debug, Default)]
+struct InputKeymapContextConfig {
     input_handles_escape: bool,
     plan_toggle_available: bool,
     keyboard_enhancement_supported: bool,
     shell_completion_available: bool,
-) -> keymap::Context {
+}
+
+fn input_keymap_context(config: InputKeymapContextConfig) -> keymap::Context {
     let mut context = keymap::Context::default();
     context.set.insert(TuiInputView::ui_name());
-    if input_handles_escape {
+    if config.input_handles_escape {
         context.set.insert(INPUT_HANDLES_ESCAPE_FLAG);
     }
-    if plan_toggle_available {
+    if config.plan_toggle_available {
         context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
     }
-    if keyboard_enhancement_supported {
+    if config.keyboard_enhancement_supported {
         context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
     }
-    if shell_completion_available {
+    if config.shell_completion_available {
         context.set.insert(SHELL_COMPLETION_AVAILABLE_FLAG);
     }
     context
@@ -694,7 +698,9 @@ impl TuiInputView {
             .first_selection_head()
             .as_usize()
             .saturating_sub(1);
-        let cursor_byte_offset = byte_offset_for_char_offset(&buffer_text, cursor_char_offset)?;
+        let cursor_byte_offset =
+            byte_offset_for_char_offset(&buffer_text, CharOffset::from(cursor_char_offset))?
+                .as_usize();
         Some(TuiCompletionInputSnapshot {
             buffer_text,
             cursor_byte_offset,
@@ -707,11 +713,21 @@ impl TuiInputView {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let buffer_text = self.plain_text(ctx);
-        let Some(selection_range) =
-            char_range_for_byte_range(&buffer_text, acceptance.replacement_range)
+        let replacement_range = acceptance.replacement_range;
+        if replacement_range.start > replacement_range.end {
+            return false;
+        }
+        let Some(replacement_start) =
+            count_chars_up_to_byte(&buffer_text, ByteOffset::from(replacement_range.start))
         else {
             return false;
         };
+        let Some(replacement_end) =
+            count_chars_up_to_byte(&buffer_text, ByteOffset::from(replacement_range.end))
+        else {
+            return false;
+        };
+        let selection_range = replacement_start + 1..replacement_end + 1;
         let mut replacement = acceptance.replacement;
         if acceptance.append_space {
             replacement.push(' ');
@@ -944,28 +960,6 @@ impl TuiInputView {
             ctx,
         )
     }
-}
-
-fn byte_offset_for_char_offset(text: &str, char_offset: usize) -> Option<usize> {
-    if char_offset == text.chars().count() {
-        return Some(text.len());
-    }
-    text.char_indices()
-        .nth(char_offset)
-        .map(|(byte_offset, _)| byte_offset)
-}
-
-fn char_range_for_byte_range(text: &str, byte_range: Range<usize>) -> Option<Range<CharOffset>> {
-    if byte_range.start > byte_range.end
-        || byte_range.end > text.len()
-        || !text.is_char_boundary(byte_range.start)
-        || !text.is_char_boundary(byte_range.end)
-    {
-        return None;
-    }
-    let start = text[..byte_range.start].chars().count() + 1;
-    let end = text[..byte_range.end].chars().count() + 1;
-    Some(CharOffset::from(start)..CharOffset::from(end))
 }
 
 #[cfg(test)]
