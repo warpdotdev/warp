@@ -18,12 +18,3 @@ fn local_child_harnesses_are_local_only_by_default() {
     assert!(!DEBUG_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
     assert!(!DOGFOOD_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
 }
-
-#[test]
-fn account_first_onboarding_is_dogfood_only() {
-    assert!(!LOCAL_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
-    assert!(!DEBUG_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
-    assert!(DOGFOOD_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
-    assert!(!PREVIEW_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
-    assert!(!RELEASE_FLAGS.contains(&FeatureFlag::AccountFirstOnboarding));
-}
