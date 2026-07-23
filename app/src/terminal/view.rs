@@ -13572,9 +13572,7 @@ impl TerminalView {
         let auth_state = AuthStateProvider::as_ref(ctx).get();
         let is_onboarded = auth_state.is_onboarded().unwrap_or(true);
         let is_anonymous_or_logged_out = auth_state.is_anonymous_or_logged_out();
-        let should_show_onboarding = FeatureFlag::AgentOnboarding.is_enabled()
-            && !is_onboarded
-            && !is_anonymous_or_logged_out;
+        let should_show_onboarding = !is_onboarded && !is_anonymous_or_logged_out;
         let is_launch_modal_open = OneTimeModalModel::as_ref(ctx).is_oz_launch_modal_open();
 
         let has_plugin_instructions_block = self.rich_content_views.iter().any(|rc| {

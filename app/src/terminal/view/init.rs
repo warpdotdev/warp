@@ -848,9 +848,7 @@ pub fn init(app: &mut AppContext) {
                 AgentOnboardingVersion::UniversalInput { has_project: true },
             )),
         )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
+        .with_enabled(ChannelState::enable_debug_features)
         .with_context_predicate(
             id!("Terminal") & id!(SharedSessionStatus::NotShared.as_keymap_context()),
         ),
@@ -861,9 +859,7 @@ pub fn init(app: &mut AppContext) {
                 AgentOnboardingVersion::UniversalInput { has_project: false },
             )),
         )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
+        .with_enabled(ChannelState::enable_debug_features)
         .with_context_predicate(
             id!("Terminal") & id!(SharedSessionStatus::NotShared.as_keymap_context()),
         ),
@@ -878,9 +874,7 @@ pub fn init(app: &mut AppContext) {
                 },
             )),
         )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
+        .with_enabled(ChannelState::enable_debug_features)
         .with_context_predicate(
             id!("Terminal") & id!(SharedSessionStatus::NotShared.as_keymap_context()),
         ),
@@ -894,9 +888,7 @@ pub fn init(app: &mut AppContext) {
                 },
             )),
         )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
+        .with_enabled(ChannelState::enable_debug_features)
         .with_context_predicate(
             id!("Terminal") & id!(SharedSessionStatus::NotShared.as_keymap_context()),
         ),
@@ -910,9 +902,7 @@ pub fn init(app: &mut AppContext) {
                 },
             )),
         )
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        })
+        .with_enabled(ChannelState::enable_debug_features)
         .with_context_predicate(
             id!("Terminal") & id!(SharedSessionStatus::NotShared.as_keymap_context()),
         ),

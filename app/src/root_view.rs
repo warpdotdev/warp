@@ -471,9 +471,7 @@ pub fn init(app: &mut AppContext) {
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("RootView"))
         .with_key_binding("shift-f12")
-        .with_enabled(|| {
-            FeatureFlag::AgentOnboarding.is_enabled() && ChannelState::enable_debug_features()
-        }),
+        .with_enabled(ChannelState::enable_debug_features),
     ])
 }
 
@@ -1715,7 +1713,6 @@ impl RootView {
                     let has_completed_local_onboarding = FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
                         && has_completed_local_onboarding(ctx);
                     let should_show_pre_login_onboarding = FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-                        && FeatureFlag::AgentOnboarding.is_enabled()
                         && !has_completed_local_onboarding;
                     if FeatureFlag::ForceLogin.is_enabled() {
                         // ForceLogin is true for Preview
@@ -2050,11 +2047,6 @@ impl RootView {
     fn debug_enter_onboarding_state(&mut self, _: &(), ctx: &mut ViewContext<Self>) -> bool {
         if !ChannelState::enable_debug_features() {
             log::warn!("Attempted to enter onboarding state in release build");
-            return false;
-        }
-
-        if !FeatureFlag::AgentOnboarding.is_enabled() {
-            log::warn!("Attempted to enter onboarding state without AgentOnboarding enabled");
             return false;
         }
 
@@ -3467,11 +3459,7 @@ impl AuthOnboardingState {
 
         let has_completed_local_onboarding = has_completed_local_onboarding(ctx);
 
-        if !is_onboarded
-            && !is_anonymous
-            && !has_completed_local_onboarding
-            && FeatureFlag::AgentOnboarding.is_enabled()
-        {
+        if !is_onboarded && !is_anonymous && !has_completed_local_onboarding {
             self.try_open_onboarding_slides(ctx);
         }
 
