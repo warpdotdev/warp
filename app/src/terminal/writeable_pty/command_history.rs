@@ -7,7 +7,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 use crate::persistence::{ModelEvent, StartedCommandMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::view::ExecuteCommandEvent;
-use crate::terminal::{History, HistoryEntry, TerminalModel};
+use crate::terminal::{History, HistoryEntry, HistoryEvent, TerminalModel};
 
 pub fn update_command_history(
     event: &ExecuteCommandEvent,
@@ -31,7 +31,7 @@ pub fn update_command_history(
     let is_agent_executed = event.source.is_ai_command();
 
     let session_ref = &*session;
-    History::handle(ctx).update(ctx, move |history, _| {
+    History::handle(ctx).update(ctx, move |history, ctx| {
         history.append_commands(
             session_id,
             vec![HistoryEntry::for_session_command(
@@ -42,7 +42,8 @@ pub fn update_command_history(
                 event.workflow_command.to_owned(),
                 is_agent_executed,
             )],
-        )
+        );
+        ctx.emit(HistoryEvent::Updated(session_id));
     });
 
     if let Some(sender) = model_event_sender {

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, EntityId, SingletonEntity};
 
-use super::History;
+use super::{History, LinkedWorkflowData};
 use crate::ai::blocklist::history_model::AIQueryHistory;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig};
 use crate::input_suggestions::HistoryInputSuggestion;
@@ -13,9 +13,25 @@ use crate::terminal::model::session::SessionId;
 
 /// Controls which item types are included in up-arrow history results.
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct UpArrowHistoryConfig {
+pub struct UpArrowHistoryConfig {
     pub include_commands: bool,
     pub include_prompts: bool,
+}
+
+/// An owned history item suitable for storage by the TUI history menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TuiHistoryItem {
+    pub text: String,
+    pub kind: TuiHistoryItemKind,
+}
+
+/// The input kind represented by a TUI history item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TuiHistoryItemKind {
+    Prompt,
+    Command {
+        linked_workflow_data: Option<LinkedWorkflowData>,
+    },
 }
 
 impl UpArrowHistoryConfig {
@@ -102,6 +118,35 @@ pub fn prompt_history_for_terminal_view(
         })
         .collect()
 }
+/// Returns an owned, de-duplicated combined history snapshot for the TUI.
+pub fn up_arrow_history_for_terminal_view(
+    terminal_view_id: EntityId,
+    session_id: Option<SessionId>,
+    config: UpArrowHistoryConfig,
+    app: &AppContext,
+) -> Vec<TuiHistoryItem> {
+    History::handle(app)
+        .as_ref(app)
+        .up_arrow_suggestions_for_terminal_view(terminal_view_id, session_id, config, app)
+        .into_iter()
+        .filter_map(|suggestion| match suggestion {
+            HistoryInputSuggestion::Command { entry } => {
+                let text = entry.command.trim();
+                (!text.is_empty()).then(|| TuiHistoryItem {
+                    text: text.to_owned(),
+                    kind: TuiHistoryItemKind::Command {
+                        linked_workflow_data: entry.linked_workflow_data(),
+                    },
+                })
+            }
+            HistoryInputSuggestion::AIQuery { entry } => (!entry.query_text.trim().is_empty())
+                .then_some(TuiHistoryItem {
+                    text: entry.query_text,
+                    kind: TuiHistoryItemKind::Prompt,
+                }),
+        })
+        .collect()
+}
 
 impl History {
     pub(crate) fn up_arrow_suggestions_for_terminal_view<'a>(
@@ -111,25 +156,37 @@ impl History {
         config: UpArrowHistoryConfig,
         app: &'a AppContext,
     ) -> Vec<HistoryInputSuggestion<'a>> {
-        let ignored_suggestions = IgnoredSuggestionsModel::handle(app).as_ref(app);
+        let ignored_suggestions = app
+            .has_singleton_model::<IgnoredSuggestionsModel>()
+            .then(|| IgnoredSuggestionsModel::handle(app).as_ref(app));
 
-        let include_agent_commands = *AISettings::handle(app)
-            .as_ref(app)
-            .include_agent_commands_in_history;
+        let include_agent_commands = if app.has_singleton_model::<AISettings>() {
+            *AISettings::handle(app)
+                .as_ref(app)
+                .include_agent_commands_in_history
+        } else {
+            true
+        };
 
         let commands = session_id
             .and_then(|session_id| self.commands(session_id))
             .unwrap_or_default()
             .into_iter()
             .filter(|entry| {
-                !ignored_suggestions.is_ignored(&entry.command, SuggestionType::ShellCommand)
+                ignored_suggestions.is_none_or(|ignored_suggestions| {
+                    !ignored_suggestions.is_ignored(&entry.command, SuggestionType::ShellCommand)
+                })
             })
             .filter(move |entry| include_agent_commands || !entry.is_agent_executed)
             .map(|entry| HistoryInputSuggestion::Command { entry });
 
         let should_include_prompts = config.include_prompts
-            && FeatureFlag::AgentMode.is_enabled()
-            && AISettings::handle(app).as_ref(app).is_any_ai_enabled(app);
+            && if app.has_singleton_model::<AISettings>() {
+                FeatureFlag::AgentMode.is_enabled()
+                    && AISettings::handle(app).as_ref(app).is_any_ai_enabled(app)
+            } else {
+                true
+            };
         let all_live_session_ids = self.all_live_session_ids();
         if !should_include_prompts {
             if !config.include_commands {

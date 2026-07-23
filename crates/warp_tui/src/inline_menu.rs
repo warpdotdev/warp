@@ -4,7 +4,8 @@ use std::rc::Rc;
 
 use string_offset::CharOffset;
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, TuiMcpAction,
+    AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, TuiHistoryItemKind,
+    TuiMcpAction,
 };
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
 use warpui_core::elements::CrossAxisAlignment;
@@ -19,7 +20,7 @@ use crate::conversation_menu::TuiConversationMenuModel;
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::mcp_menu::TuiMcpMenuModel;
 use crate::model_menu::TuiModelMenuModel;
-use crate::prompt_history_menu::TuiPromptHistoryMenuModel;
+use crate::prompt_and_command_history_menu::TuiPromptAndCommandHistoryMenuModel;
 use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tui_builder::TuiUiBuilder;
@@ -101,10 +102,22 @@ impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TuiInlineMenuRow {
     pub(crate) title: String,
+    pub(crate) prefix: Option<TuiInlineMenuRowPrefix>,
     pub(crate) description: Option<String>,
     pub(crate) state_suffix: Option<String>,
     pub(crate) is_selectable: bool,
     pub(crate) style: TuiInlineMenuRowStyle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TuiInlineMenuRowPrefix {
+    pub(crate) text: String,
+    pub(crate) style: TuiInlineMenuRowPrefixStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TuiInlineMenuRowPrefixStyle {
+    ShellCommand,
 }
 /// Returns a single-line menu title while leaving the source text unchanged.
 pub(crate) fn single_line_menu_title(text: &str) -> String {
@@ -272,8 +285,10 @@ pub(crate) enum TuiInlineMenuAccepted {
     Conversation(AgentConversationEntryId),
     Model(LLMId),
     Mcp(TuiMcpAction),
-    /// The text of a prompt accepted from the up-arrow prompt-history menu.
-    PromptHistory(String),
+    PromptAndCommandHistory {
+        text: String,
+        kind: TuiHistoryItemKind,
+    },
 }
 
 /// Type-erased operations shared by TUI inline-menu model handles.
@@ -431,9 +446,9 @@ impl TuiInlineMenuHandle for ModelHandle<TuiConversationMenuModel> {
     }
 }
 
-impl TuiInlineMenuHandle for ModelHandle<TuiPromptHistoryMenuModel> {
+impl TuiInlineMenuHandle for ModelHandle<TuiPromptAndCommandHistoryMenuModel> {
     fn mode(&self) -> TuiInputSuggestionsMode {
-        TuiInputSuggestionsMode::PromptHistory
+        TuiInputSuggestionsMode::PromptAndCommandHistory
     }
 
     fn is_open(&self, ctx: &AppContext) -> bool {
@@ -461,7 +476,10 @@ impl TuiInlineMenuHandle for ModelHandle<TuiPromptHistoryMenuModel> {
 
     fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
         self.update(ctx, |model, ctx| model.accept_selected(ctx))
-            .map(TuiInlineMenuAccepted::PromptHistory)
+            .map(|row| TuiInlineMenuAccepted::PromptAndCommandHistory {
+                text: row.text,
+                kind: row.kind,
+            })
     }
 
     fn dismiss(&self, ctx: &mut AppContext) {
@@ -930,10 +948,19 @@ fn menu_result_row(
             slash_command_columns.with_second_visible(show_description),
         ),
     };
-    let title = TuiText::new(title)
-        .with_style(title_style)
-        .truncate_with_ellipsis()
-        .finish();
+    let title = if let Some(prefix) = &row.prefix {
+        let prefix_style = match prefix.style {
+            TuiInlineMenuRowPrefixStyle::ShellCommand => builder.shell_command_menu_prefix_style(),
+        };
+        TuiText::from_spans([(prefix.text.clone(), prefix_style), (title, title_style)])
+            .truncate_with_ellipsis()
+            .finish()
+    } else {
+        TuiText::new(title)
+            .with_style(title_style)
+            .truncate_with_ellipsis()
+            .finish()
+    };
     let description_style = if is_selected {
         builder.slash_command_selection_text_style()
     } else {

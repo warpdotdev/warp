@@ -12,6 +12,7 @@ pub use repo_metadata::repositories::RepoDetectionSource;
 pub use warp_cli::agent::Harness;
 use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
 use warp_completer::signatures::CommandRegistry;
+pub use warp_core::SessionId;
 use warpui::SingletonEntity as _;
 
 pub use crate::ai::agent::api::ServerConversationToken;
@@ -194,9 +195,9 @@ pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
-    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo, SizeUpdate,
-    TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
-    prompt_history_for_terminal_view,
+    BlockPadding, History, HistoryEvent, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo,
+    SizeUpdate, TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
+    TuiHistoryItem, TuiHistoryItemKind, UpArrowHistoryConfig, up_arrow_history_for_terminal_view,
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
@@ -206,6 +207,7 @@ pub use crate::tui::{
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
+    add_tui_history_test_models, append_tui_history_test_command,
     blocklist_ai_history_model_with_queries, queue_tui_permission_action,
     register_tui_session_view_test_singletons,
 };

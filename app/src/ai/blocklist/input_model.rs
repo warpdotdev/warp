@@ -224,6 +224,7 @@ pub struct BlocklistAIInputModel {
     /// View-supplied policy for decisions the model cannot make view-agnostically
     /// (lock gating, autodetection context, reactive config transitions).
     policy: InputModePolicyHandle,
+    record_agent_mode_entries: bool,
 
     autodetect_abort_handle: Option<AbortHandle>,
     model: Arc<FairMutex<TerminalModel>>,
@@ -303,6 +304,7 @@ impl BlocklistAIInputModel {
             conversation_selection,
             ai_context_model,
             policy,
+            record_agent_mode_entries: true,
             last_ai_autodetection_ts: None,
             last_ai_autodetection_source: None,
             last_explicit_input_type_set_at: None,
@@ -337,6 +339,7 @@ impl BlocklistAIInputModel {
             conversation_selection,
             ai_context_model,
             policy,
+            record_agent_mode_entries: false,
             last_ai_autodetection_ts: None,
             last_ai_autodetection_source: None,
             last_explicit_input_type_set_at: None,
@@ -472,7 +475,7 @@ impl BlocklistAIInputModel {
             self.last_ai_autodetection_ts = None;
         }
 
-        if new_config.input_type.is_ai() {
+        if new_config.input_type.is_ai() && self.record_agent_mode_entries {
             AISettings::handle(ctx).update(ctx, |settings, ctx| {
                 let new_num_times = *settings.entered_agent_mode_num_times + 1;
                 report_if_error!(

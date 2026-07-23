@@ -266,6 +266,7 @@ impl TuiSlashCommandModel {
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
+                    prefix: None,
                     description: row.description.clone(),
                     state_suffix: self.state_suffix(&row.title, ctx),
                     is_selectable: true,

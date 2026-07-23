@@ -27,7 +27,7 @@ use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
-    InputTypeAutoDetectionSource, LLMId, TuiMcpAction,
+    InputTypeAutoDetectionSource, LLMId, TuiHistoryItemKind, TuiMcpAction,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::MouseStateHandle;
@@ -122,9 +122,11 @@ pub enum TuiInputViewEvent {
     AcceptedMcp(TuiMcpAction),
     /// Shift+Up should move focus from the first visual row to the region above.
     MoveFocusUp,
-    /// The user accepted a prompt from the up-arrow prompt-history menu. Carries
-    /// the prompt text to fill into the input and submit.
-    AcceptedPromptHistory(String),
+    /// The user accepted an item from the up-arrow prompt-and-command history menu.
+    AcceptedPromptAndCommandHistory {
+        text: String,
+        kind: TuiHistoryItemKind,
+    },
     /// Selected prompt text was copied to the host clipboard.
     ClipboardCopySucceeded,
     /// Selected prompt text could not be copied to the host clipboard.
@@ -497,6 +499,9 @@ impl TuiView for TuiInputView {
 
     fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
         if blur_ctx.is_self_blurred() {
+            if let Some(inline_menu) = self.active_inline_menu(ctx) {
+                inline_menu.dismiss(ctx);
+            }
             self.focused = false;
             ctx.notify();
         }
@@ -575,10 +580,9 @@ impl TypedActionView for TuiInputView {
                     self.open_inline_menu(TuiInputSuggestionsMode::ConversationMenu, ctx);
                     TuiEditorInteractionOutcome::FollowCursor
                 } else if matches!(*command, TuiEditorCommand::MoveUp)
-                    && !self.is_shell_mode(ctx)
                     && self.single_cursor_on_first_row(ctx)
                 {
-                    self.open_inline_menu(TuiInputSuggestionsMode::PromptHistory, ctx);
+                    self.open_inline_menu(TuiInputSuggestionsMode::PromptAndCommandHistory, ctx);
                     TuiEditorInteractionOutcome::FollowCursor
                 // With nothing left to delete, backspace removes the `!`
                 // affordance instead; typed text is preserved.
@@ -731,7 +735,7 @@ impl TuiInputView {
     // ── Shell mode ────────────────────────────────────────────────────────────
 
     /// Locks the shared input mode to shell with the `!` shell-prefix source.
-    fn enter_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn enter_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
         self.input_mode.clone().update(ctx, |input_mode, ctx| {
             input_mode.set_input_config(
@@ -822,8 +826,11 @@ impl TuiInputView {
                         TuiInlineMenuAccepted::Mcp(action) => {
                             ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
                         }
-                        TuiInlineMenuAccepted::PromptHistory(text) => {
-                            ctx.emit(TuiInputViewEvent::AcceptedPromptHistory(text));
+                        TuiInlineMenuAccepted::PromptAndCommandHistory { text, kind } => {
+                            ctx.emit(TuiInputViewEvent::AcceptedPromptAndCommandHistory {
+                                text,
+                                kind,
+                            });
                         }
                     }
                 }

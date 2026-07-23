@@ -52,6 +52,7 @@ fn rows_snapshot(
         rows: (0..row_count)
             .map(|index| TuiInlineMenuRow {
                 title: format!("Conversation {index}"),
+                prefix: None,
                 description: None,
                 state_suffix: None,
                 is_selectable: true,
@@ -185,6 +186,7 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
         rows: vec![
             TuiInlineMenuRow {
                 title: "Current project".to_owned(),
+                prefix: None,
                 description: Some("2 minutes ago".to_owned()),
                 state_suffix: None,
                 is_selectable: true,
@@ -192,6 +194,7 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
             },
             TuiInlineMenuRow {
                 title: "Archived".to_owned(),
+                prefix: None,
                 description: None,
                 state_suffix: None,
                 is_selectable: false,
@@ -231,6 +234,7 @@ fn conversation_like_snapshot_keeps_selection_visible_within_production_height()
             rows: (0..8)
                 .map(|index| TuiInlineMenuRow {
                     title: format!("Conversation {index}"),
+                    prefix: None,
                     description: None,
                     state_suffix: None,
                     is_selectable: true,
@@ -266,6 +270,7 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                 rows: vec![
                     TuiInlineMenuRow {
                         title: "/agent".to_owned(),
+                        prefix: None,
                         description: Some("Start a new agent conversation".to_owned()),
                         state_suffix: Some("(currently on)".to_owned()),
                         is_selectable: true,
@@ -273,6 +278,7 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                     },
                     TuiInlineMenuRow {
                         title: "/plan".to_owned(),
+                        prefix: None,
                         description: Some("Create a plan".to_owned()),
                         state_suffix: Some("(currently off)".to_owned()),
                         is_selectable: true,
@@ -362,6 +368,7 @@ fn long_slash_command_titles_are_ellipsized_before_the_description() {
         header: None,
         rows: vec![TuiInlineMenuRow {
             title: "/respond-to-pr-comments-in-blocklist".to_owned(),
+            prefix: None,
             description: Some("Walk users through PR review comments".to_owned()),
             state_suffix: None,
             is_selectable: true,
@@ -383,6 +390,7 @@ fn wide_slash_command_rows_expand_to_show_long_titles() {
             header: None,
             rows: vec![TuiInlineMenuRow {
                 title: "/respond-to-pr-comments-in-blocklist".to_owned(),
+                prefix: None,
                 description: Some("Walk users through PR review comments".to_owned()),
                 state_suffix: None,
                 is_selectable: true,
@@ -411,6 +419,7 @@ fn boundary_width_preserves_useful_title_and_description_columns() {
             header: None,
             rows: vec![TuiInlineMenuRow {
                 title: "/agent".to_owned(),
+                prefix: None,
                 description: Some("Start a new agent conversation".to_owned()),
                 state_suffix: None,
                 is_selectable: true,
@@ -435,6 +444,7 @@ fn narrow_slash_command_rows_use_the_full_width_for_titles() {
             header: None,
             rows: vec![TuiInlineMenuRow {
                 title: "/12345678901234567890".to_owned(),
+                prefix: None,
                 description: Some("Description hidden at narrow widths".to_owned()),
                 state_suffix: None,
                 is_selectable: true,

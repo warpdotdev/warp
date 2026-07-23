@@ -21,8 +21,10 @@ use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowId, WorkflowSource, WorkflowType};
 
 mod up_arrow;
-pub(crate) use up_arrow::UpArrowHistoryConfig;
-pub use up_arrow::prompt_history_for_terminal_view;
+pub use up_arrow::{
+    TuiHistoryItem, TuiHistoryItemKind, UpArrowHistoryConfig, prompt_history_for_terminal_view,
+    up_arrow_history_for_terminal_view,
+};
 
 /// Data model for a history command persisted to sqlite, used as an intermediate representation
 /// between the sqlite schema (sqlite::model::Command) and the [`History`] model.
@@ -156,6 +158,8 @@ enum ReadHistoryFileState {
 pub enum HistoryEvent {
     /// History has been initialized for the session with the contained ID.
     Initialized(SessionId),
+    /// Commands for the session have changed.
+    Updated(SessionId),
 }
 
 /// This holds the aggregated data from the "commands" table in sqlite. We aggregate as a means of
@@ -207,7 +211,7 @@ pub struct History {
     session_id_to_shell_host: HashMap<SessionId, ShellHost>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkedWorkflowData {
     /// The history entry is linked to a `CloudWorkflow` by its ID.
     Id(SyncId),
@@ -481,6 +485,55 @@ impl History {
             persisted_commands_summary,
             ..Default::default()
         }
+    }
+    #[cfg(any(test, feature = "test-util"))]
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn new_for_tui_test(session_id: SessionId, commands: Vec<String>) -> Self {
+        let entries = commands
+            .into_iter()
+            .map(|command| {
+                let mut entry = HistoryEntry::command_only(command);
+                entry.session_id = Some(session_id);
+                entry
+            })
+            .collect();
+        Self::new_with_test_entries(session_id, entries)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_up_arrow_test(session_id: SessionId, entries: Vec<HistoryEntry>) -> Self {
+        Self::new_with_test_entries(session_id, entries)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn new_with_test_entries(session_id: SessionId, entries: Vec<HistoryEntry>) -> Self {
+        let shell_host = ShellHost {
+            shell_type: ShellType::Bash,
+            user: "test-user".to_owned(),
+            hostname: "test-host".to_owned(),
+        };
+        Self {
+            history_file_commands: HashMap::from([(shell_host.clone(), Vec::new())]),
+            session_commands: HashMap::from([(
+                shell_host.clone(),
+                entries.into_iter().map(Arc::new).collect(),
+            )]),
+            session_skip_indices: HashMap::from([(session_id, HashSet::new())]),
+            session_start_indices: HashMap::from([(session_id, 0)]),
+            read_history_file_state: HashMap::from([(
+                shell_host.clone(),
+                ReadHistoryFileState::Done,
+            )]),
+            session_id_to_shell_host: HashMap::from([(session_id, shell_host)]),
+            ..Default::default()
+        }
+    }
+    #[cfg(any(test, feature = "test-util"))]
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn append_command_for_tui_test(&mut self, session_id: SessionId, command: String) {
+        let mut entry = HistoryEntry::command_only(command);
+        entry.session_id = Some(session_id);
+        self.append_commands(session_id, vec![entry]);
     }
 
     pub fn all_live_session_ids(&self) -> HashSet<SessionId> {

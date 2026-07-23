@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use warp_core::SessionId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
@@ -66,10 +67,11 @@ impl ActiveSession {
     }
 
     pub fn session(&self, app: &AppContext) -> Option<Arc<Session>> {
-        self.model_event_dispatcher
-            .as_ref(app)
-            .active_session_id()
+        self.session_id(app)
             .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
+    }
+    pub fn session_id(&self, app: &AppContext) -> Option<SessionId> {
+        self.model_event_dispatcher.as_ref(app).active_session_id()
     }
 
     pub fn session_type(&self, app: &AppContext) -> Option<SessionType> {

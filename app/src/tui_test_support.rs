@@ -3,8 +3,9 @@
 use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::{Duration, Local};
+use warp_core::SessionId;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
-use warpui::{ModelContext, SingletonEntity as _};
+use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity as _};
 
 use crate::LaunchMode;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -30,11 +31,16 @@ use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::git_repo_model::GitRepoModels;
 use crate::network::NetworkStatus;
+use crate::persistence::PersistenceWriter;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::manager::SettingsManager;
 use crate::settings::{AISettings, PrivacySettings, init_and_register_user_preferences};
+use crate::terminal::History;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::model::session::Sessions;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model_events::ModelEventDispatcher;
 use crate::user_config::WarpConfig;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -61,6 +67,34 @@ pub fn blocklist_ai_history_model_with_queries(queries: Vec<String>) -> Blocklis
         .collect();
 
     BlocklistAIHistoryModel::new(persisted_queries, Vec::new(), &[])
+}
+/// Registers seeded command history and an active session for focused TUI history tests.
+pub fn add_tui_history_test_models(
+    commands: Vec<String>,
+    ctx: &mut AppContext,
+) -> (ModelHandle<ActiveSession>, SessionId) {
+    let session_id = SessionId::from(1);
+    ctx.add_singleton_model(|_| History::new_for_tui_test(session_id, commands));
+    let sessions = ctx.add_model(|_| Sessions::new_for_test());
+    let (_model_events_tx, model_events_rx) = async_channel::unbounded();
+    let model_events =
+        ctx.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+    model_events.update(ctx, |dispatcher, _| {
+        dispatcher.set_active_session_id(session_id);
+    });
+    let active_session = ctx.add_model(|ctx| ActiveSession::new(sessions, model_events, ctx));
+    (active_session, session_id)
+}
+/// Appends a command and emits the update observed by an open TUI history menu.
+pub fn append_tui_history_test_command(
+    session_id: SessionId,
+    command: String,
+    ctx: &mut AppContext,
+) {
+    History::handle(ctx).update(ctx, |history, ctx| {
+        history.append_command_for_tui_test(session_id, command);
+        ctx.emit(crate::terminal::HistoryEvent::Updated(session_id));
+    });
 }
 
 /// Queues an action as the active confirmation request for a TUI view test.
@@ -118,6 +152,8 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     });
 
     app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+    app.add_singleton_model(|_| History::default());
+    app.add_singleton_model(|_| PersistenceWriter::new(None));
     app.add_singleton_model(QueuedQueryModel::new);
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
@@ -148,6 +184,8 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.update(crate::settings::ScrollSettings::register);
     app.update(crate::settings::EmacsBindingsSettings::register);
     app.update(crate::terminal::general_settings::GeneralSettings::register);
+    app.update(crate::terminal::safe_mode_settings::SafeModeSettings::register);
+    app.update(crate::terminal::session_settings::SessionSettings::register);
 
     app.add_singleton_model(|_| repo_metadata::repositories::DetectedRepositories::default());
     app.add_singleton_model(watcher::HomeDirectoryWatcher::new_for_test);

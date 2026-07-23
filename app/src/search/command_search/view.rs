@@ -338,6 +338,7 @@ impl CommandSearchView {
                                 ctx.notify();
                             }
                         }
+                        HistoryEvent::Updated(_) => {}
                     },
                 );
             }

@@ -125,6 +125,15 @@ impl TuiUiBuilder {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// Bold bright-green `!` marker for shell commands in inline menus.
+    pub(crate) fn shell_command_menu_prefix_style(&self) -> TuiStyle {
+        TuiStyle::default()
+            .fg(cell_color(ThemeFill::from(
+                self.warp_theme.terminal_colors().bright.green,
+            )))
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// Full-strength accent text, distinct from translucent accent borders.
     pub(crate) fn accent_text_style(&self) -> TuiStyle {
         TuiStyle::default().fg(self.accent_color())

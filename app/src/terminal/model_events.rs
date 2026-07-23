@@ -59,7 +59,7 @@ impl ModelEventDispatcher {
     }
 
     /// Sets the active session ID directly, for use in unit tests where there's no `Precmd` event.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn set_active_session_id(&mut self, session_id: SessionId) {
         self.active_session_id = Some(session_id);
     }
