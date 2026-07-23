@@ -539,6 +539,14 @@ use crate::{
     autoupdate, send_telemetry_from_ctx, settings,
 };
 
+fn add_bonus_grant_toast(
+    toast_stack: &mut DismissibleToastStack<WorkspaceAction>,
+    message: String,
+    ctx: &mut ViewContext<DismissibleToastStack<WorkspaceAction>>,
+) {
+    toast_stack.add_ephemeral_toast(DismissibleToast::success(message), ctx);
+}
+
 /// The padding that should be applied to the workspace as a whole.
 pub const WORKSPACE_PADDING: f32 = 1.0;
 
@@ -3365,8 +3373,7 @@ impl Workspace {
             |me, _, event, ctx| {
                 let BonusGrantNotificationEvent::ShowNotification { message, .. } = event;
                 me.toast_stack.update(ctx, |toast_stack, ctx| {
-                    toast_stack
-                        .add_persistent_toast(DismissibleToast::success(message.clone()), ctx);
+                    add_bonus_grant_toast(toast_stack, message.clone(), ctx);
                 });
             },
         );

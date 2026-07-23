@@ -328,6 +328,26 @@ fn test_tab_bar_traffic_light_space_regression_for_resource_center_overlap() {
 }
 
 #[test]
+fn bonus_grant_notifications_use_ephemeral_toasts() {
+    App::test((), |mut app| async move {
+        let (_, toast_stack) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            DismissibleToastStack::<WorkspaceAction>::new(Duration::from_millis(1))
+        });
+
+        toast_stack.update(&mut app, |toast_stack, ctx| {
+            add_bonus_grant_toast(toast_stack, "Welcome to Build!".to_string(), ctx);
+        });
+
+        toast_stack.read(&app, |toast_stack, _| {
+            assert!(
+                toast_stack.has_pending_timeout_for_test(),
+                "bonus-grant welcome toast should schedule automatic dismissal"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_theme_chooser_does_not_suppress_tab_bar_traffic_light_padding() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

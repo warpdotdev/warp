@@ -164,6 +164,11 @@ impl<A: Action + Clone> DismissibleToastStack<A> {
     pub fn has_toasts(&self) -> bool {
         !self.toasts.is_empty()
     }
+
+    #[cfg(test)]
+    pub(crate) fn has_pending_timeout_for_test(&self) -> bool {
+        self.toasts.iter().any(|toast| toast.abort_handle.is_some())
+    }
 }
 
 impl<A: Action + Clone> View for DismissibleToastStack<A> {
