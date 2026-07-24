@@ -359,28 +359,36 @@ impl ResponseStream {
                             if me.current_request_id != Some(request_id) {
                                 return;
                             }
-                            if matches!(result, Ok(Ok(GeapRefreshOutcome::Refreshed))) {
-                                // RequestParams snapshots credentials before
-                                // the wait. Re-read only GEAP credentials so
-                                // unrelated API keys remain unchanged.
-                                let fresh_credentials = ApiKeyManager::as_ref(ctx)
-                                    .api_keys_for_request(
-                                        UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx),
-                                        UserWorkspaces::as_ref(ctx)
-                                            .is_aws_bedrock_credentials_enabled(ctx),
-                                        Some(refresh_binding.clone()),
-                                    )
-                                    .and_then(|keys| keys.google_cloud_credentials);
-                                replace_geap_credentials(&mut me.params, fresh_credentials);
-                                Self::spawn_generate(
-                                    request_id,
-                                    me.params.clone(),
-                                    cancellation_rx,
-                                    ctx,
-                                );
-                            } else {
-                                me.surface_geap_refresh_failure(request_id, ctx);
-                            }
+                            let refresh_outcome =
+                                if matches!(result, Ok(Ok(GeapRefreshOutcome::Refreshed))) {
+                                    GeapRefreshDispatch::Refreshed
+                                } else {
+                                    GeapRefreshDispatch::Failed
+                                };
+                            // RequestParams snapshots credentials before the
+                            // wait. Re-read only GEAP credentials so unrelated
+                            // API keys remain unchanged, then route the common
+                            // success/failure dispatch through one method.
+                            let fresh_credentials =
+                                if matches!(refresh_outcome, GeapRefreshDispatch::Refreshed) {
+                                    ApiKeyManager::as_ref(ctx)
+                                        .api_keys_for_request(
+                                            UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx),
+                                            UserWorkspaces::as_ref(ctx)
+                                                .is_aws_bedrock_credentials_enabled(ctx),
+                                            Some(refresh_binding.clone()),
+                                        )
+                                        .and_then(|keys| keys.google_cloud_credentials)
+                                } else {
+                                    None
+                                };
+                            me.dispatch_geap_refresh_result(
+                                request_id,
+                                refresh_outcome,
+                                fresh_credentials,
+                                cancellation_rx,
+                                ctx,
+                            );
                         },
                     );
                     return;
@@ -403,6 +411,28 @@ impl ResponseStream {
             error,
         ))));
         self.on_response_stream_complete(request_id, ctx);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn dispatch_geap_refresh_result(
+        &mut self,
+        request_id: Uuid,
+        outcome: GeapRefreshDispatch,
+        fresh_credentials: Option<maa_api::request::settings::api_keys::GoogleCloudCredentials>,
+        cancellation_rx: oneshot::Receiver<()>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.current_request_id != Some(request_id) {
+            return;
+        }
+        if geap_refresh_dispatch_sends(outcome, fresh_credentials.is_some()) {
+            replace_geap_credentials(&mut self.params, fresh_credentials);
+            Self::spawn_generate(request_id, self.params.clone(), cancellation_rx, ctx);
+        } else {
+            // Refresh failure, timeout, cancellation, or an empty successful
+            // result is terminal: never send the dead credential snapshot.
+            self.surface_geap_refresh_failure(request_id, ctx);
+        }
     }
 
     /// Emits the existing Gemini Enterprise credentials recovery error when a
@@ -753,6 +783,19 @@ impl ResponseStream {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeapRefreshDispatch {
+    Refreshed,
+    Failed,
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn geap_refresh_dispatch_sends(outcome: GeapRefreshDispatch, has_fresh_credentials: bool) -> bool {
+    matches!(outcome, GeapRefreshDispatch::Refreshed) && has_fresh_credentials
+}
+
+#[cfg(not(target_family = "wasm"))]
 fn replace_geap_credentials(
     params: &mut api::RequestParams,
     credentials: Option<maa_api::request::settings::api_keys::GoogleCloudCredentials>,

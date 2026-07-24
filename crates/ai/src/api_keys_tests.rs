@@ -863,8 +863,11 @@ fn begin_expired_geap_refresh_is_single_flight() {
                 2
             );
 
-            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Refreshed);
+            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
             assert!(manager.geap_refresh_waiters.is_none());
+            // A failed outcome is terminal for the current request pair; no
+            // second mint is started by the waiters themselves.
+            assert_eq!(kickoff_count, 1);
         });
     });
 }
