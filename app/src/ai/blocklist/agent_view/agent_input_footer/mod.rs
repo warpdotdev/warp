@@ -2199,10 +2199,19 @@ impl AgentInputFooter {
 
                     let mut stack = Stack::new();
                     stack.add_child(chip);
-                    stack.add_positioned_overlay_child(
+                    // Keep the dot in the normal render layer (not an overlay) so
+                    // overlays like the lightbox scrim correctly paint over it.
+                    //
+                    // The footer chip row is laid out inside a `Wrap`, which clips
+                    // its children to its own bounds. The previous overlay escaped
+                    // that clip; a non-overlay dot must instead stay within the
+                    // chip's bounds, which are themselves inside the clip. So anchor
+                    // the dot just inside the chip's top-right corner (1px inset)
+                    // rather than overhanging above it, which would be clipped.
+                    stack.add_positioned_child(
                         dot,
                         OffsetPositioning::offset_from_parent(
-                            vec2f(3., -3.),
+                            vec2f(0., 1.),
                             ParentOffsetBounds::WindowByPosition,
                             ParentAnchor::TopRight,
                             ChildAnchor::TopRight,
