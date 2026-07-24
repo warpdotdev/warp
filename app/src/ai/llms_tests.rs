@@ -192,6 +192,7 @@ fn endpoint(
         name: name.into(),
         url: url.into(),
         api_key: api_key.into(),
+        schema: Default::default(),
         models,
     }
 }
@@ -534,6 +535,7 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
                     None,
                     Some(custom_model_id.to_string()),
                 )],
+                ai::api_keys::CustomEndpointSchema::default(),
                 ctx,
             );
         });
@@ -702,6 +704,7 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
                     Some("Custom Model".to_string()),
                     Some(custom_model_id.to_string()),
                 )],
+                ai::api_keys::CustomEndpointSchema::default(),
                 ctx,
             );
         });

@@ -2455,6 +2455,7 @@ impl AISettingsPageView {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             } => {
                 if !Self::can_use_custom_inference_controls(ctx) {
@@ -2467,6 +2468,7 @@ impl AISettingsPageView {
                         url.clone(),
                         api_key.clone(),
                         models.clone(),
+                        *schema,
                         ctx,
                     );
                 });
@@ -2494,6 +2496,7 @@ impl AISettingsPageView {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             } => {
                 if !Self::can_use_custom_inference_controls(ctx) {
@@ -2507,6 +2510,7 @@ impl AISettingsPageView {
                         url.clone(),
                         api_key.clone(),
                         models.clone(),
+                        *schema,
                         ctx,
                     );
                 });
@@ -8683,7 +8687,7 @@ impl ApiKeysWidget {
 
         if show_custom_endpoints {
             add_paragraph(vec![FormattedTextFragment::plain_text(
-                "Add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API.",
+                "Add custom endpoints to use third-party models. Custom endpoints must support OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.",
             )]);
         }
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, CustomEndpointSchema};
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
@@ -118,6 +118,7 @@ fn tool_call_result_message(
 
 fn start_recording_tool_call() -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StartRecording(api::message::tool_call::StartRecording {
+        description: String::new(),
         frame_rate: 15,
         limits: None,
         summary: String::new(),
@@ -610,6 +611,7 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
                     Some("Friendly alias".to_string()),
                     Some("config-key".to_string()),
                 )],
+                CustomEndpointSchema::default(),
                 ctx,
             );
         });
@@ -772,6 +774,7 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
                     Some("Resolved custom".to_string()),
                     Some("config-key".to_string()),
                 )],
+                CustomEndpointSchema::default(),
                 ctx,
             );
         });

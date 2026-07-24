@@ -1,4 +1,4 @@
-use ai::api_keys::CustomEndpointModel;
+use ai::api_keys::{CustomEndpointModel, CustomEndpointSchema};
 use pathfinder_geometry::vector::vec2f;
 use warpui::platform::WindowStyle;
 use warpui::scene::Scene;
@@ -13,6 +13,7 @@ fn endpoint_with_models(model_count: usize) -> CustomEndpoint {
         name: "Test endpoint".to_string(),
         url: "https://api.example.com/v1".to_string(),
         api_key: "key".to_string(),
+        schema: CustomEndpointSchema::default(),
         models: (0..model_count)
             .map(|index| CustomEndpointModel {
                 name: format!("model-{index}"),

@@ -6,6 +6,30 @@ fn make_manager(keys: ApiKeys) -> ApiKeyManager {
     make_manager_with_grok(keys, None)
 }
 
+#[test]
+fn custom_model_providers_preserves_configured_schema() {
+    let mut endpoint = endpoint_with_keys(
+        "Anthropic",
+        "https://custom.io",
+        "ep-key",
+        &[("claude", None, "uuid-1")],
+    );
+    endpoint.schema = CustomEndpointSchema::AnthropicMessages;
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint],
+        ..Default::default()
+    });
+
+    let provider = &mgr
+        .custom_model_providers_for_request(true)
+        .expect("configured endpoint should be sent")
+        .providers[0];
+    assert_eq!(
+        provider.schema,
+        CustomEndpointSchema::AnthropicMessages as i32
+    );
+}
+
 fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> ApiKeyManager {
     ApiKeyManager {
         keys,
@@ -101,6 +125,7 @@ fn endpoint_with_keys(
         name: name.into(),
         url: url.into(),
         api_key: api_key.into(),
+        schema: CustomEndpointSchema::default(),
         models: models
             .iter()
             .map(|(n, a, cfg)| CustomEndpointModel {
@@ -164,6 +189,14 @@ fn serde_ignores_unknown_fields() {
     let keys: ApiKeys = serde_json::from_str(json).unwrap();
     assert_eq!(keys.openai, Some("sk-x".into()));
     assert!(keys.custom_endpoints.is_empty());
+}
+#[test]
+fn serde_legacy_endpoint_defaults_to_chat_completions() {
+    let endpoint: CustomEndpoint = serde_json::from_str(
+        r#"{"name":"legacy","url":"https://example.com","api_key":"key","models":[]}"#,
+    )
+    .unwrap();
+    assert_eq!(endpoint.schema, CustomEndpointSchema::OpenaiChatCompletions);
 }
 
 // ── has_any_key ─────────────────────────────────────────────────
@@ -269,6 +302,7 @@ fn custom_model_providers_populates_single_endpoint() {
     assert_eq!(p.models.len(), 1);
     assert_eq!(p.models[0].slug, "big-model");
     assert_eq!(p.models[0].config_key, "uuid-1");
+    assert_eq!(p.schema, CustomEndpointSchema::OpenaiChatCompletions as i32);
 }
 
 #[test]
