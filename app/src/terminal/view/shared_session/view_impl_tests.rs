@@ -842,6 +842,28 @@ fn test_conversation_details_auto_open_policy_defaults_to_open_for_ambient_share
 }
 
 #[test]
+fn test_conversation_details_auto_open_restores_focus_to_session_content() {
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        configure_ambient_details_panel_test(
+            &mut app,
+            &terminal,
+            create_cloud_mode_task_for_user(TEST_USER_UID),
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.maybe_auto_open_conversation_details_panel(ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            assert!(view.is_conversation_details_panel_open);
+            assert!(ctx.is_self_or_child_focused());
+            assert!(!view.conversation_details_panel.is_self_or_child_focused(ctx));
+        });
+    });
+}
+
+#[test]
 fn test_suppressed_conversation_details_auto_open_consumes_initial_open_but_manual_toggle_works() {
     App::test((), |mut app| async move {
         let terminal = terminal_view_for_viewer(&mut app);
