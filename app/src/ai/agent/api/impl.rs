@@ -82,7 +82,7 @@ pub async fn generate_multi_agent_output(
             supports_long_running_commands: true,
             should_preserve_file_content_in_history: true,
             supports_todos_ui: true,
-            supports_linked_code_blocks: FeatureFlag::LinkedCodeBlocks.is_enabled(),
+            supports_linked_code_blocks: true,
             supports_started_child_task_message: true,
             supports_suggest_prompt: true,
             supports_read_image_files: FeatureFlag::ReadImageFiles.is_enabled(),
