@@ -2,10 +2,11 @@ FROM ubuntu:24.04
 
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
-ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:$PATH
+ENV TFENV_ROOT=/usr/local/tfenv
+ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/tfenv/bin:$PATH
 
 # This set of packages is adapted from ./script/bootstrap in warp-internal and warp-server.
-# It doesn't include *everything* (ex. no wgslfmt or gcloud), but is enough to build and test Warp.
+# It doesn't include *everything* (ex. no wgslfmt), but is enough to build and test Warp.
 # Note: currently, only x86_64 builds are supported.
 
 # Install system-level packages. These are needed to build on Linux, and/or to run integration tests.
@@ -20,6 +21,7 @@ RUN set -eux; \
     mesa-vulkan-drivers libegl1 \
     libsqlite3-dev libpq-dev libmysqlclient-dev \
     ca-certificates \
+    openssh-client netcat-openbsd lsof \
     xvfb
 
 # Install rustup. The pinned Rust toolchain is installed below from rust-toolchain.toml.
@@ -78,6 +80,32 @@ RUN set -eux; \
 # Install all dependencies needed to build, run, and test Warp
 COPY ./script ./setup/script
 RUN cd ./setup && ./script/linux/install_test_deps
+
+# Add the Google Cloud SDK repository and install:
+# - The gcloud CLI
+# - The GKE gcloud auth plugin
+# These are mostly used for verifying Terraform changes.
+RUN set -eux; \
+  install -d -m 0755 /usr/share/keyrings; \
+  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg; \
+  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+    > /etc/apt/sources.list.d/google-cloud-sdk.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin; \
+  rm -rf /var/lib/apt/lists/*; \
+  gke-gcloud-auth-plugin --version
+
+# Install Terraform via tfenv. We preinstall the currently-pinned version, but
+# if the version pinned in our repo changes, it will get reinstalled on demand.
+# We should keep this up-to-date to avoid unnecessary reinstalls.
+#
+# tfenv itself is pinned to release tag v3.2.2 for build reproducibility.
+RUN set -eux; \
+  git clone --depth=1 --branch v3.2.2 https://github.com/tfutils/tfenv.git /usr/local/tfenv; \
+  tfenv install 1.15.5; \
+  tfenv use 1.15.5; \
+  terraform version
 
 # Coding Agent CLIs (optional, makes image significantly larger)
 ARG INSTALL_CODING_AGENTS=false
