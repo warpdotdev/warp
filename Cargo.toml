@@ -54,6 +54,7 @@ ipc = { path = "crates/ipc" }
 ipynb_parser = { path = "crates/ipynb_parser" }
 jsonrpc = { path = "crates/jsonrpc" }
 languages = { path = "crates/languages" }
+language_registry = { path = "crates/language_registry" }
 local_control = { path = "crates/local_control" }
 lsp = { path = "crates/lsp" }
 markdown_parser = { path = "crates/markdown_parser" }

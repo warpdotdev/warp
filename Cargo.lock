@@ -7546,10 +7546,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
+name = "language_registry"
+version = "0.0.0"
+
+[[package]]
 name = "languages"
 version = "0.0.0"
 dependencies = [
  "arborium",
+ "language_registry",
  "lazy_static",
  "rust-embed 8.7.2",
  "serde",
@@ -7920,6 +7925,7 @@ dependencies = [
  "instant",
  "itertools 0.14.0",
  "jsonrpc",
+ "language_registry",
  "log",
  "lsp-types",
  "nix 0.26.4",

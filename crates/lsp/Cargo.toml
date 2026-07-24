@@ -23,6 +23,7 @@ futures = { workspace = true }
 globset = { workspace = true }
 itertools.workspace = true
 jsonrpc.workspace = true
+language_registry.workspace = true
 log = { workspace = true }
 lsp-types = "0.97.0"
 node_runtime = { workspace = true }

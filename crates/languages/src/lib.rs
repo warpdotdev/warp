@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use arborium::tree_sitter::{Language as ParserGrammar, Query};
+use language_registry::resolve_parts;
 use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
@@ -131,73 +132,9 @@ fn language_by_filename_parts(
     filename: Option<&str>,
     extension: Option<&str>,
 ) -> Option<Arc<Language>> {
-    // First check for specific filenames that don't use extensions.
-    if let Some(filename) = filename {
-        match filename {
-            // Bash config files
-            ".bashrc" | ".bash_profile" => {
-                return language_by_name("shell");
-            }
-            // ZSH config files
-            ".zshrc" | ".zsh_profile" | ".zprofile" => {
-                return language_by_name("shell");
-            }
-            // Bazel build files
-            "BUILD" | "WORKSPACE" => {
-                return language_by_name("starlark");
-            }
-            // Dockerfiles
-            "Dockerfile" | "Containerfile" | "dockerfile" | "containerfile" => {
-                return language_by_name("dockerfile");
-            }
-            _ => {
-                // Also match Dockerfile variants like Dockerfile.dev, Dockerfile.prod
-                if filename.starts_with("Dockerfile.") || filename.starts_with("Containerfile.") {
-                    return language_by_name("dockerfile");
-                }
-            }
-        }
-    }
-
-    let extension = extension?;
-    match extension {
-        "rs" => language_by_name("rust"),
-        "go" => language_by_name("golang"),
-        "yml" | "yaml" => language_by_name("yaml"),
-        "py" | "py3" | "pyw" | "pyi" => language_by_name("python"),
-        "js" | "cjs" | "mjs" => language_by_name("javascript"),
-        "jsx" => language_by_name("jsx"),
-        "tsx" => language_by_name("tsx"),
-        "ts" | "cts" | "mts" => language_by_name("typescript"),
-        "java" | "groovy" | "gvy" | "gy" | "gsh" => language_by_name("java"),
-        "cpp" | "cxx" | "cc" | "h" | "hh" | "hpp" | "hxx" | "H" | "h++" => language_by_name("cpp"),
-        "sh" | "zsh" | "bash" | "command" => language_by_name("shell"),
-        "cs" => language_by_name("csharp"),
-        "html" | "htm" => language_by_name("html"),
-        "css" => language_by_name("css"),
-        "c" => language_by_name("c"),
-        "json" => language_by_name("json"),
-        "jq" => language_by_name("jq"),
-        "tf" | "hcl" | "tfvars" => language_by_name("hcl"),
-        "lua" => language_by_name("lua"),
-        "nix" => language_by_name("nix"),
-        "rb" => language_by_name("ruby"),
-        "php" | "phtml" => language_by_name("php"),
-        "toml" => language_by_name("toml"),
-        "swift" => language_by_name("swift"),
-        "kt" | "kts" => language_by_name("kotlin"),
-        "scala" | "sbt" | "sc" => language_by_name("scala"),
-        "ps1" | "pwsh" => language_by_name("powershell"),
-        "ex" | "exs" => language_by_name("elixir"),
-        "sql" => language_by_name("sql"),
-        "bzl" | "bazel" => language_by_name("starlark"),
-        "m" | "mm" => language_by_name("objective-c"),
-        "xml" => language_by_name("xml"),
-        "vue" => language_by_name("vue"),
-        "dockerfile" => language_by_name("dockerfile"),
-        "md" | "markdown" => language_by_name("markdown"),
-        _ => None,
-    }
+    resolve_parts(filename, extension, None)
+        .and_then(|entry| entry.grammar)
+        .and_then(language_by_name)
 }
 
 /// Captures the language-specific parser grammar and queries for syntax features like highlighting and

@@ -1,0 +1,9 @@
+[package]
+name = "language_registry"
+edition = "2024"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+description = "Shared, platform-neutral language identity registry for Warp"
+
+[dependencies]

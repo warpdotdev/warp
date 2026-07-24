@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use command::r#async::Command;
+use language_registry::{BuiltInLspLanguage, resolve_built_in_lsp};
 use lsp_types::{
     ClientCapabilities, ClientInfo, DidChangeWatchedFilesClientCapabilities, GotoCapability,
     HoverClientCapabilities, InitializeParams, MarkupKind, PublishDiagnosticsClientCapabilities,
@@ -35,40 +36,41 @@ pub enum LanguageId {
 }
 
 impl LanguageId {
+    /// Resolve only the file types handled by Warp's built-in language servers.
+    ///
+    /// The shared registry intentionally knows more language identities for
+    /// future custom servers; those must not expand built-in server dispatch.
     pub fn from_path(path: &Path) -> Option<Self> {
-        let extn = path.extension()?;
-        match extn.to_str()? {
-            "rs" => Some(Self::Rust),
-            "go" => Some(Self::Go),
-            "py" => Some(Self::Python),
-            "ts" => Some(Self::TypeScript),
-            "tsx" => Some(Self::TypeScriptReact),
-            "js" | "mjs" | "cjs" => Some(Self::JavaScript),
-            "jsx" => Some(Self::JavaScriptReact),
-            "c" | "C" => Some(Self::C),
-            "cc" | "cpp" | "cxx" => Some(Self::Cpp),
-            // NOTE: `.h` files are ambiguous (could be C or C++). We map them to Cpp
-            // because clangd defaults to C++ for `.h` files anyway. When a
-            // compile_commands.json is present, clangd will use the correct language
-            // regardless of the languageId we send.
-            "h" | "H" | "hh" | "hpp" | "hxx" => Some(Self::Cpp),
-            _ => None,
+        match resolve_built_in_lsp(path)? {
+            BuiltInLspLanguage::Rust => Some(Self::Rust),
+            BuiltInLspLanguage::Go => Some(Self::Go),
+            BuiltInLspLanguage::Python => Some(Self::Python),
+            BuiltInLspLanguage::TypeScript => Some(Self::TypeScript),
+            BuiltInLspLanguage::TypeScriptReact => Some(Self::TypeScriptReact),
+            BuiltInLspLanguage::JavaScript => Some(Self::JavaScript),
+            BuiltInLspLanguage::JavaScriptReact => Some(Self::JavaScriptReact),
+            BuiltInLspLanguage::C => Some(Self::C),
+            BuiltInLspLanguage::Cpp => Some(Self::Cpp),
         }
     }
 
     /// Returns the language identifier as used by LSP.
     /// See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocumentItem
     pub(crate) fn lsp_language_identifier(&self) -> &'static str {
+        self.built_in_lsp().language_id()
+    }
+
+    fn built_in_lsp(&self) -> BuiltInLspLanguage {
         match self {
-            LanguageId::Rust => "rust",
-            LanguageId::Go => "go",
-            LanguageId::Python => "python",
-            LanguageId::TypeScript => "typescript",
-            LanguageId::TypeScriptReact => "typescriptreact",
-            LanguageId::JavaScript => "javascript",
-            LanguageId::JavaScriptReact => "javascriptreact",
-            LanguageId::C => "c",
-            LanguageId::Cpp => "cpp",
+            Self::Rust => BuiltInLspLanguage::Rust,
+            Self::Go => BuiltInLspLanguage::Go,
+            Self::Python => BuiltInLspLanguage::Python,
+            Self::TypeScript => BuiltInLspLanguage::TypeScript,
+            Self::TypeScriptReact => BuiltInLspLanguage::TypeScriptReact,
+            Self::JavaScript => BuiltInLspLanguage::JavaScript,
+            Self::JavaScriptReact => BuiltInLspLanguage::JavaScriptReact,
+            Self::C => BuiltInLspLanguage::C,
+            Self::Cpp => BuiltInLspLanguage::Cpp,
         }
     }
 
