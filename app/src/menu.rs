@@ -12,7 +12,7 @@ use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, Border, CacheOption, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult,
-    DropShadow, Element, EventHandler, Flex, Hoverable, Icon, Image, MainAxisAlignment,
+    DropShadow, Element, EventHandler, Expanded, Flex, Hoverable, Icon, Image, MainAxisAlignment,
     MainAxisSize, MouseInBehavior, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds,
     Radius, Rect, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
@@ -1280,7 +1280,12 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 }
                 label_row.add_child(Shrinkable::new(1., content_column.finish()).finish());
             } else {
-                label_row.add_child(label_element);
+                // Keep a clipped label from pushing its right-side label out of bounds.
+                if self.clip_config.is_some() && self.right_side_label.is_some() {
+                    label_row.add_child(Expanded::new(1., label_element).finish());
+                } else {
+                    label_row.add_child(label_element);
+                }
 
                 if self.has_submenu {
                     label_row

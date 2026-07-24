@@ -8,7 +8,7 @@ use warpui::elements::{
     PositioningAxis, Radius, SavePosition, Stack, XAxisAnchor, YAxisAnchor,
 };
 use warpui::presenter::ChildView;
-use warpui::{AppContext, SingletonEntity as _};
+use warpui::{AppContext, SingletonEntity as _, ViewHandle};
 
 use super::common::{
     add_command_xray_overlay, add_input_suggestions_overlays, add_voltron_overlay,
@@ -22,6 +22,7 @@ use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::ai::blocklist::agent_view::shortcuts::{
     AgentShortcutsViewContext, render_agent_shortcuts_view,
 };
+use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::appearance::Appearance;
 use crate::context_chips::spacing::{self};
@@ -30,6 +31,7 @@ use crate::features::FeatureFlag;
 use crate::settings::InputModeSettings;
 use crate::terminal::settings::TerminalSettings;
 use crate::terminal::view::TerminalAction;
+use crate::terminal::view::ambient_agent::HostSelector;
 
 pub(super) const CLOUD_MODE_V2_MAX_WIDTH: f32 = 720.;
 
@@ -569,16 +571,26 @@ impl Input {
         Some(ChildView::new(view).finish())
     }
 
+    /// Returns the composer-only Execution host dropdown when it should be shown.
+    pub(super) fn visible_host_selector(
+        &self,
+        app: &AppContext,
+    ) -> Option<&ViewHandle<HostSelector>> {
+        let host_selector = self.host_selector()?;
+        let should_show = host_selector.as_ref(app).has_default_host()
+            || !ConnectedSelfHostedWorkersModel::as_ref(app)
+                .worker_hosts_excluding(None)
+                .is_empty();
+        should_show.then_some(host_selector)
+    }
+
     fn render_cloud_mode_v2_top_row(&self, app: &AppContext) -> Box<dyn Element> {
         let mut row = Flex::row()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(CLOUD_MODE_V2_TOP_ROW_INNER_GAP);
 
-        // Only show the host selector when a default host is configured.
-        if let Some(host) = self.host_selector()
-            && host.as_ref(app).has_default_host()
-        {
+        if let Some(host) = self.visible_host_selector(app) {
             row.add_child(ChildView::new(host).finish());
         }
         if let Some(harness_selector) = self.harness_selector() {

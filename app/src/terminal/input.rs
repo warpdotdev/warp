@@ -187,6 +187,9 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::connected_self_hosted_workers::{
+    ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -2462,6 +2465,16 @@ impl Input {
                 view_model.clone(),
                 self.menu_positioning_provider.clone(),
                 ctx,
+            );
+            // Re-render when connected workers change so the host selector shows/hides
+            // (it isn't mounted while hidden to drive this itself).
+            ctx.subscribe_to_model(
+                &ConnectedSelfHostedWorkersModel::handle(ctx),
+                |_me, _, event, ctx| {
+                    if matches!(event, ConnectedSelfHostedWorkersEvent::Changed) {
+                        ctx.notify();
+                    }
+                },
             );
             let (auth_secret_selector, auth_secret_ftux_view) = Self::build_auth_secret_selector(
                 view_model.clone(),

@@ -1586,6 +1586,59 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
 }
 
 #[test]
+fn cloud_mode_host_selector_shown_when_connected_workers_present() {
+    // Regression: connected self-hosted workers must surface the host dropdown even
+    // with no default host set.
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+
+        // Fresh cloud-mode composer: a dummy cloud-mode session in `ViewPending`.
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.set_shared_session_status(SharedSessionStatus::ViewPending);
+            model.set_is_dummy_cloud_mode_session(true);
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            input.attach_ambient_agent_view_model(view_model, ctx);
+        });
+
+        // No workspace default host and no connected workers -> the dropdown stays hidden.
+        input.read(&app, |input, ctx| {
+            assert!(
+                input.host_selector().is_some(),
+                "the cloud composer must build the host selector"
+            );
+            assert!(
+                input.visible_host_selector(ctx).is_none(),
+                "host selector must be hidden with no default host and no connected workers"
+            );
+        });
+
+        // A self-hosted worker connects -> the dropdown becomes visible.
+        ConnectedSelfHostedWorkersModel::handle(&app).update(&mut app, |model, ctx| {
+            model.set_workers_for_test(&["oz-k8s-worker"], ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(
+                input.visible_host_selector(ctx).is_some(),
+                "host selector must be shown once a self-hosted worker is connected"
+            );
+        });
+    });
+}
+
+#[test]
 fn send_now_event_submits_through_active_pane_and_preserves_draft() {
     // A queued-prompt "send now" surfaces as a SendNow event on the input. The host should
     // immediately route the removed prompt through the active-pane submission path (here, the
