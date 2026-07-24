@@ -85,7 +85,7 @@ pub async fn generate_multi_agent_output(
             supports_linked_code_blocks: FeatureFlag::LinkedCodeBlocks.is_enabled(),
             supports_started_child_task_message: true,
             supports_suggest_prompt: true,
-            supports_read_image_files: FeatureFlag::ReadImageFiles.is_enabled(),
+            supports_read_image_files: true,
             supports_reasoning_message: true,
             api_keys,
             autonomy_level: params.autonomy_level.into(),
