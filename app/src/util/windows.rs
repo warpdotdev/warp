@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 use std::{env, path};
 
 use anyhow::{Result, anyhow};
@@ -198,14 +198,34 @@ fn microsoft_store_app_path() -> Option<PathBuf> {
     Some(microsoft_store_app_path)
 }
 
+/// Caches whether Kaspersky was detected, computed once per process launch.
+///
+/// See [`is_kaspersky_running`] for why this is cached.
+static KASPERSKY_RUNNING: OnceLock<bool> = OnceLock::new();
+
 /// Determines if Kaspersky is currently running by checking if there is a
 /// process with the name "avp" running.
+///
+/// The result is cached for the lifetime of the process. Antivirus presence
+/// does not meaningfully change during a Warp session, and the underlying
+/// check enumerates the entire process table (see
+/// [`SystemInfo::refresh_all_processes`]) — expensive on Windows. Without this
+/// cache the sweep ran on *every* session bootstrap (every tab/pane/subshell),
+/// which on high-core-count machines could trip the DPC watchdog. Caching
+/// turns it into a single one-time check.
 pub fn is_kaspersky_running(ctx: &mut AppContext) -> bool {
-    SystemInfo::handle(ctx).update(ctx, |system_info, _| {
+    if let Some(cached) = KASPERSKY_RUNNING.get() {
+        return *cached;
+    }
+
+    let running = SystemInfo::handle(ctx).update(ctx, |system_info, _| {
         system_info.refresh_all_processes();
         system_info
             .processes_by_name(KASPERSKY_PROCESS_NAME)
             .next()
             .is_some()
-    })
+    });
+
+    // If another caller raced us, keep the first value that was stored.
+    *KASPERSKY_RUNNING.get_or_init(|| running)
 }
