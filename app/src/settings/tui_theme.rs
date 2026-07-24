@@ -3,8 +3,10 @@ use std::str::FromStr;
 use settings::macros::define_settings_group;
 use settings::{Setting as _, SupportedPlatforms, SyncToCloud};
 use warp_core::ui::theme::{ColorScheme, WarpTheme};
+#[cfg(feature = "tui")]
 use warpui_core::runtime::BackgroundLuminance;
 
+#[cfg(feature = "tui")]
 use crate::themes::default_themes::{dark_theme, light_theme};
 
 /// The color theme selection used by Warp Agent CLI.
@@ -40,6 +42,7 @@ impl TuiTheme {
         }
     }
 
+    #[cfg(feature = "tui")]
     pub fn resolve_for_background(self, background_luminance: BackgroundLuminance) -> WarpTheme {
         match self {
             Self::Auto => match background_luminance {

@@ -1,6 +1,7 @@
 use settings::schema::SettingSchemaEntry;
 use settings::{Setting, SettingSurfaces, SettingsMode, SyncToCloud};
 use settings_value::SettingsValue;
+#[cfg(feature = "tui")]
 use warpui_core::runtime::BackgroundLuminance;
 
 use super::{TuiTheme, TuiThemeSetting};
@@ -14,6 +15,7 @@ fn theme_names_parse_case_insensitively() {
 }
 
 #[test]
+#[cfg(feature = "tui")]
 fn automatic_theme_follows_the_background_luminance() {
     let light = TuiTheme::Auto.resolve_for_background(BackgroundLuminance::Light);
     let dark = TuiTheme::Auto.resolve_for_background(BackgroundLuminance::Dark);
@@ -25,6 +27,7 @@ fn automatic_theme_follows_the_background_luminance() {
 }
 
 #[test]
+#[cfg(feature = "tui")]
 fn explicit_theme_overrides_the_background_luminance() {
     let dark = TuiTheme::Dark.resolve_for_background(BackgroundLuminance::Light);
 
