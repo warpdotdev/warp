@@ -2508,6 +2508,28 @@ impl TerminalModel {
         self.registered_session_ids.insert(session_id);
     }
 
+    /// Updates the active block's working directory, applying the SSH-block
+    /// guard and routing to the block list. Shared by the OSC 7 handler and by
+    /// callers outside the terminal parser (e.g. CLI-agent cwd reporting), so
+    /// the guard and routing live in one place.
+    pub fn set_active_block_working_directory(&mut self, path: String) {
+        // OSC 7 is honor-system: the parser only accepts payloads whose host
+        // matches our local hostname, but a wrapper SSH session streams the
+        // remote shell's bytes through this same Performer, so a remote box
+        // with a coincident hostname could still slip through. Drop the
+        // update entirely while we know we're inside an SSH-launching block.
+        if self.is_ssh_block() {
+            log::debug!("Ignoring CWD update inside SSH session: {path:?}");
+            return;
+        }
+        // Always route to the block list, not through `delegate!` — the
+        // alt-screen handler has no `set_current_working_directory` override,
+        // so a TUI program running on the alt screen (vim, htop, etc.) would
+        // silently swallow updates emitted by tools it launches. The CWD
+        // belongs on the block list regardless of what's currently rendered.
+        self.block_list.set_current_working_directory(path);
+    }
+
     pub fn needs_bracketed_paste(&mut self) -> bool {
         delegate!(self.needs_bracketed_paste())
     }
@@ -2949,22 +2971,7 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn set_current_working_directory(&mut self, path: String) {
-        // OSC 7 is honor-system: the parser only accepts payloads whose host
-        // matches our local hostname, but a wrapper SSH session streams the
-        // remote shell's bytes through this same Performer, so a remote box
-        // with a coincident hostname could still slip through. Drop the
-        // update entirely while we know we're inside an SSH-launching block.
-        if self.is_ssh_block() {
-            log::debug!("Ignoring OSC 7 CWD update inside SSH session: {path:?}");
-            return;
-        }
-        // Always route OSC 7 to the block list, not through `delegate!` —
-        // the alt-screen handler has no `set_current_working_directory`
-        // override, so a TUI program running on the alt screen (vim, htop,
-        // etc.) would silently swallow updates emitted by tools it
-        // launches. The shell's CWD belongs on the block list regardless
-        // of what's currently rendered on screen.
-        self.block_list.set_current_working_directory(path);
+        self.set_active_block_working_directory(path);
     }
 
     fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {

@@ -295,6 +295,75 @@ fn apply_event_preserves_input_session() {
     assert_eq!(session.input_state, input_state);
 }
 
+/// Builds an in-progress Claude session with an optional starting cwd. Used by
+/// the cwd-tracking tests below, which cover the `session_context.cwd` behavior
+/// that `TerminalView::sync_block_pwd_from_cli_agent` reads to update the block
+/// pwd (see GH #10031).
+fn session_with_cwd(cwd: Option<&str>) -> CLIAgentSession {
+    CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            cwd: cwd.map(str::to_string),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        remote_host: None,
+        plugin_version: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    }
+}
+
+fn event_with_cwd(event: CLIAgentEventType, cwd: Option<&str>) -> CLIAgentEvent {
+    CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event,
+        session_id: Some("abc".to_string()),
+        cwd: cwd.map(str::to_string),
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    }
+}
+
+#[test]
+fn apply_event_updates_cwd_from_event() {
+    let mut session = session_with_cwd(Some("/home/proj"));
+    session.apply_event(&event_with_cwd(
+        CLIAgentEventType::PromptSubmit,
+        Some("/home/proj/.claude/worktrees/feature"),
+    ));
+    assert_eq!(
+        session.session_context.cwd.as_deref(),
+        Some("/home/proj/.claude/worktrees/feature"),
+    );
+}
+
+#[test]
+fn apply_event_preserves_cwd_when_event_has_none() {
+    let mut session = session_with_cwd(Some("/home/proj"));
+    // ToolComplete carries no cwd; the existing cwd must survive so the block
+    // doesn't lose its directory between reporting events.
+    session.status = CLIAgentSessionStatus::Blocked { message: None };
+    session.apply_event(&event_with_cwd(CLIAgentEventType::ToolComplete, None));
+    assert_eq!(session.session_context.cwd.as_deref(), Some("/home/proj"));
+}
+
+#[test]
+fn apply_event_records_cwd_when_starting_empty() {
+    let mut session = session_with_cwd(None);
+    session.apply_event(&event_with_cwd(
+        CLIAgentEventType::SessionStart,
+        Some("/home/proj"),
+    ));
+    assert_eq!(session.session_context.cwd.as_deref(), Some("/home/proj"));
+}
+
 #[test]
 fn is_remote_returns_true_when_remote_host_is_set() {
     let session = CLIAgentSession {

@@ -13309,6 +13309,7 @@ impl TerminalView {
                     | CLIAgentSessionsModelEvent::Ended { .. }
             )
         {
+            self.sync_block_pwd_from_cli_agent(ctx);
             self.update_pane_configuration(ctx);
             ctx.notify();
         }
@@ -13414,6 +13415,36 @@ impl TerminalView {
             Some(NotificationAgentVariant::CLIAgent((*agent).into())),
             ctx,
         );
+    }
+
+    /// Mirrors a CLI agent's reported working directory onto the active block's
+    /// pwd. CLI agents (e.g. Claude Code via the claude-code-warp plugin) report
+    /// their cwd in the OSC 777 payload, which lands in
+    /// `CLIAgentSession::session_context.cwd` but never reaches the block. Without
+    /// this bridge, an agent that changes directory mid-session — most commonly
+    /// `claude --worktree`, which relocates into `<project>/.claude/worktrees/…` —
+    /// leaves the block pinned to its launch directory, so the WorkingDirectory
+    /// chip, tab subtitle, git branch, and diff/PR chips all stay stale (#10031).
+    ///
+    /// Routes through `TerminalModel::set_active_block_working_directory`, the
+    /// same path OSC 7 uses: it emits `BlockWorkingDirectoryUpdated` and refreshes
+    /// the downstream chips. Reusing it also inherits the `is_ssh_block()` guard,
+    /// so an agent running inside an SSH-wrapped block won't clobber the remote
+    /// block's pwd. The OSC 7 hostname gate is intentionally *not* applied — the
+    /// agent cwd is already a parsed local path with no `file://host` component to
+    /// validate. We dedupe against the current pwd here before taking the lock.
+    fn sync_block_pwd_from_cli_agent(&self, ctx: &AppContext) {
+        let Some(cwd) = CLIAgentSessionsModel::as_ref(ctx)
+            .session(self.view_id)
+            .and_then(|session| session.session_context.cwd.clone())
+            .filter(|cwd| !cwd.is_empty())
+        else {
+            return;
+        };
+        if self.pwd().as_deref() == Some(cwd.as_str()) {
+            return;
+        }
+        self.model.lock().set_active_block_working_directory(cwd);
     }
 
     /// Handles the initialization of a session within this terminal pane.
