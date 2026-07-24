@@ -1886,14 +1886,14 @@ impl CellLayout {
 
 #[derive(Debug, Clone)]
 pub struct LaidOutTable {
-    pub table: FormattedTable,
+    pub table: Arc<FormattedTable>,
     pub config: TableBlockConfig,
     pub row_heights: Vec<Pixels>,
     pub column_widths: Vec<Pixels>,
     pub total_height: Pixels,
-    pub offset_map: table_offset_map::TableOffsetMap,
+    pub offset_map: Arc<table_offset_map::TableOffsetMap>,
     pub content_length: CharOffset,
-    pub cell_offset_maps: Vec<Vec<table_offset_map::TableCellOffsetMap>>,
+    pub cell_offset_maps: Arc<Vec<Vec<table_offset_map::TableCellOffsetMap>>>,
     pub row_y_offsets: Vec<f32>,
     pub col_x_offsets: Vec<f32>,
     pub cell_text_frames: Vec<Vec<Arc<TextFrame>>>,

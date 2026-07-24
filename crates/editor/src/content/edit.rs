@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -21,7 +22,7 @@ use warpui_core::fonts::Weight;
 use warpui_core::image_cache::ImageType;
 use warpui_core::text::char_slice;
 use warpui_core::text::point::Point;
-use warpui_core::text_layout::{StyleAndFont, TextAlignment};
+use warpui_core::text_layout::{StyleAndFont, TextAlignment, TextFrame};
 use warpui_core::units::{IntoPixels, Pixels};
 use warpui_core::{AppContext, SingletonEntity};
 
@@ -136,6 +137,11 @@ pub fn resolve_asset_source_relative_to_directory(
 const DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
 const MIN_TABLE_CELL_CONTENT_WIDTH_EMS: f32 = 1.0;
 const MAX_TABLE_CELL_CONTENT_WIDTH_PX: f32 = 500.0;
+
+/// Maximum number of body rows rendered for a markdown table. Tables larger than this are truncated
+/// during layout to prevent unbounded memory growth — the full source text is still preserved in
+/// the buffer so that copy/paste and editing are unaffected.
+const MAX_TABLE_BODY_ROWS: usize = 500;
 
 /// Metadata for rendering a temporary block in the render model. Temporary blocks are not selectable or editable.
 #[derive(Debug, Clone, PartialEq)]
@@ -257,6 +263,10 @@ struct LayOutArgs {
 struct TableCellTextLayout {
     paragraph_style: ParagraphStyles,
     text_layout: InlineTextLayoutInput,
+    /// TextFrame from the measurement pass (unconstrained width). Reused in the final pass when
+    /// the cell's natural width fits within the computed column width, avoiding a redundant
+    /// text layout.
+    measure_frame: Arc<TextFrame>,
 }
 
 /// The first table layout pass measures each cell without a column-width constraint so we can
@@ -301,7 +311,7 @@ fn measure_table_cells(
                 text: line.text,
                 style_runs: line.style_runs,
             };
-            let frame = layout.layout_text_with_options(
+            let measure_frame = layout.layout_text_with_options(
                 &text_layout.text,
                 &paragraph_style,
                 &text_layout.style_runs,
@@ -309,7 +319,7 @@ fn measure_table_cells(
                 TextAlignment::Left,
             );
 
-            let cell_width = (frame.max_width() + table_style.cell_padding * 2.0)
+            let cell_width = (measure_frame.max_width() + table_style.cell_padding * 2.0)
                 .into_pixels()
                 .max(minimum_table_cell_width(table_style))
                 .min(maximum_table_cell_width(table_style));
@@ -319,6 +329,7 @@ fn measure_table_cells(
             row_text_layouts.push(TableCellTextLayout {
                 paragraph_style,
                 text_layout,
+                measure_frame,
             });
         }
         cell_text_layouts.push(row_text_layouts);
@@ -1223,9 +1234,10 @@ fn layout_table_block(
     let cached = style_cache
         .or(owned_cache.as_ref())
         .expect("cache is always populated from style or owned fallback");
-    let table = cached.table.clone();
-    let cell_offset_maps = cached.cell_offset_maps.clone();
-    let offset_map = cached.offset_map.clone();
+    // Share via Arc instead of deep-cloning the parsed table data.
+    let table = Arc::clone(&cached.table);
+    let cell_offset_maps = Arc::clone(&cached.cell_offset_maps);
+    let offset_map = Arc::clone(&cached.offset_map);
 
     let table_style = layout.rich_text_styles().table_style;
     let mut header_paragraph_style = layout.paragraph_styles(&text_block.style);
@@ -1239,14 +1251,34 @@ fn layout_table_block(
     body_paragraph_style.line_height_ratio = TABLE_LINE_HEIGHT_RATIO;
     body_paragraph_style.baseline_ratio = TABLE_BASELINE_RATIO;
 
+    // Truncate very large tables to cap memory usage during layout. The header row plus up to
+    // MAX_TABLE_BODY_ROWS body rows are rendered; the full source text is still preserved in the
+    // buffer.
+    let truncated_table;
+    let effective_table: &FormattedTable = if table.rows.len() > MAX_TABLE_BODY_ROWS {
+        log::warn!(
+            "Table has {} rows; truncating to {} for layout",
+            table.rows.len(),
+            MAX_TABLE_BODY_ROWS
+        );
+        truncated_table = FormattedTable {
+            headers: table.headers.clone(),
+            alignments: table.alignments.clone(),
+            rows: table.rows[..MAX_TABLE_BODY_ROWS].to_vec(),
+        };
+        &truncated_table
+    } else {
+        &table
+    };
+
     let (column_widths, cell_text_layouts) = measure_table_cells(
-        &table,
+        effective_table,
         layout,
         &table_style,
         header_paragraph_style,
         body_paragraph_style,
     );
-    let cell_links = table_cell_links(&table);
+    let cell_links = table_cell_links(effective_table);
 
     let mut row_heights = Vec::with_capacity(cell_text_layouts.len());
     let mut cell_text_frames = Vec::with_capacity(cell_text_layouts.len());
@@ -1264,13 +1296,24 @@ fn layout_table_block(
                 .unwrap_or(0.0)
                 - table_style.cell_padding * 2.0)
                 .max(0.0);
-            let frame = layout.layout_text_with_options(
-                &cell.text_layout.text,
-                &cell.paragraph_style,
-                &cell.text_layout.style_runs,
-                cell_content_width,
-                table_column_text_alignment(&table, col_idx),
-            );
+
+            // Reuse the measurement-pass TextFrame when the cell fits within the column width
+            // without wrapping and the column alignment is Left (same as the measurement pass).
+            // This avoids a redundant text layout for cells that don't need re-wrapping.
+            let alignment = table_column_text_alignment(effective_table, col_idx);
+            let frame = if cell.measure_frame.max_width() <= cell_content_width
+                && alignment == TextAlignment::Left
+            {
+                Arc::clone(&cell.measure_frame)
+            } else {
+                layout.layout_text_with_options(
+                    &cell.text_layout.text,
+                    &cell.paragraph_style,
+                    &cell.text_layout.style_runs,
+                    cell_content_width,
+                    alignment,
+                )
+            };
             let cell_layout = CellLayout::from_text_frame(&frame);
             let text_height = cell_layout
                 .line_heights

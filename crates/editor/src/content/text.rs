@@ -88,9 +88,9 @@ pub fn table_cell_offset_maps(
 /// table layout) avoid re-running `table_from_internal_format_with_inline_markdown` and
 /// `table_cell_offset_maps` on every access.
 pub struct TableBlockCache {
-    pub table: FormattedTable,
-    pub cell_offset_maps: Vec<Vec<TableCellOffsetMap>>,
-    pub offset_map: TableOffsetMap,
+    pub table: Arc<FormattedTable>,
+    pub cell_offset_maps: Arc<Vec<Vec<TableCellOffsetMap>>>,
+    pub offset_map: Arc<TableOffsetMap>,
 }
 
 impl TableBlockCache {
@@ -108,9 +108,9 @@ impl TableBlockCache {
             .collect::<Vec<_>>();
         let offset_map = TableOffsetMap::new(cell_lengths);
         Self {
-            table,
-            cell_offset_maps,
-            offset_map,
+            table: Arc::new(table),
+            cell_offset_maps: Arc::new(cell_offset_maps),
+            offset_map: Arc::new(offset_map),
         }
     }
 }
