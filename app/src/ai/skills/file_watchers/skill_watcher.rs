@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
-    get_provider_for_path, home_skills_path, parse_skill, parse_skill_content_at_location,
-    ParsedSkill, SkillProvider, SkillScope, SKILL_PROVIDER_DEFINITIONS,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillScope, get_provider_for_path,
+    home_skills_path, parse_skill, parse_skill_content_at_location,
 };
 use async_channel::Sender;
 use futures::future::BoxFuture;
@@ -24,11 +24,11 @@ use super::utils::{
     read_skills_from_files,
 };
 use crate::ai::remote_context_files::{
-    read_remote_text_file_contents, REMOTE_CONTEXT_MAX_BATCH_BYTES, REMOTE_CONTEXT_MAX_FILE_BYTES,
+    REMOTE_CONTEXT_MAX_BATCH_BYTES, REMOTE_CONTEXT_MAX_FILE_BYTES, read_remote_text_file_contents,
 };
 use crate::warp_managed_paths_watcher::{
-    filter_repository_update_by_prefix, warp_managed_skill_dirs, WarpManagedPathsWatcher,
-    WarpManagedPathsWatcherEvent,
+    WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent, filter_repository_update_by_prefix,
+    warp_managed_skill_dirs,
 };
 
 #[derive(Debug, PartialEq)]

@@ -8,7 +8,7 @@ use settings::{Setting, SupportedPlatforms, SyncToCloud};
 use string_offset::ByteOffset;
 use warpui_core::elements::SmartSelectFn;
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
-use warpui_core::text::words::{is_default_word_boundary, DEFAULT_WORD_BOUNDARY_CHARS};
+use warpui_core::text::words::{DEFAULT_WORD_BOUNDARY_CHARS, is_default_word_boundary};
 
 /// Upper limit for how many characters in either direction we'll search for patterns. Need to
 /// limit this to avoid running regex on absurdly long words

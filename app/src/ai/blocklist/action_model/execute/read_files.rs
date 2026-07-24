@@ -1,20 +1,21 @@
 use std::path::{Path, PathBuf};
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
-    read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,
-    PreprocessActionInput,
+    ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
+    describe_failed_files, read_local_file_context,
 };
 use crate::ai::agent::{
-    AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesRequest, ReadFilesResult,
+    AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesFailedFile,
+    ReadFilesRequest, ReadFilesResult,
 };
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::paths::host_native_absolute_path;
-use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
+use crate::terminal::model::session::active_session::ActiveSession;
 
 pub struct ReadFilesExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -78,7 +79,7 @@ impl ReadFilesExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput {
             action,
             conversation_id,
@@ -169,20 +170,19 @@ impl ReadFilesExecutor {
                         .await
                         .map_err(|e| anyhow::anyhow!("Remote read failed: {e}"))?;
 
-                    if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
-                        let failed = response
-                            .failed_files
-                            .iter()
-                            .map(|f| {
-                                let reason = f
-                                    .error
-                                    .as_ref()
-                                    .map(|e| e.message.as_str())
-                                    .unwrap_or("unknown error");
-                                format!("{}: {reason}", f.path)
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
+                    let failed_files = response
+                        .failed_files
+                        .into_iter()
+                        .map(|f| ReadFilesFailedFile {
+                            path: f.path,
+                            message: f.error.map(|e| e.message).unwrap_or_else(|| {
+                                "File not found or could not be read".to_string()
+                            }),
+                        })
+                        .collect::<Vec<_>>();
+
+                    if !failed_files.is_empty() && response.file_contexts.is_empty() {
+                        let failed = describe_failed_files(&failed_files);
                         return Ok(ReadFilesResult::Error(format!(
                             "Failed to read files: {failed}"
                         )));
@@ -219,6 +219,7 @@ impl ReadFilesExecutor {
 
                     Ok(ReadFilesResult::Success {
                         files: file_contexts,
+                        failed_files,
                     })
                 }),
                 on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
@@ -240,15 +241,21 @@ impl ReadFilesExecutor {
                     None,
                 )
                 .await?;
-                if result.missing_files.is_empty() {
+                if result.failed_files.is_empty() {
                     Ok(ReadFilesResult::Success {
                         files: result.file_contexts,
+                        failed_files: Vec::new(),
                     })
-                } else {
-                    let missing_files = result.missing_files.join(", ");
+                } else if result.file_contexts.is_empty() {
+                    let failed_files = describe_failed_files(&result.failed_files);
                     Ok(ReadFilesResult::Error(format!(
-                        "These files do not exist: {missing_files}"
+                        "Failed to read files: {failed_files}"
                     )))
+                } else {
+                    Ok(ReadFilesResult::Success {
+                        files: result.file_contexts,
+                        failed_files: result.failed_files,
+                    })
                 }
             }),
             on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {

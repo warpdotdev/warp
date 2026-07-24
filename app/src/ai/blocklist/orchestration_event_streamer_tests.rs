@@ -7,12 +7,12 @@ use warpui::App;
 use super::*;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent_events::{
-    agent_event_backoff, agent_event_failures_exceeded_threshold, AgentEventConsumerControlFlow,
-    DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
+    AgentEventConsumerControlFlow, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
+    agent_event_backoff, agent_event_failures_exceeded_threshold,
 };
 use crate::persistence::ModelEvent;
-use crate::server::server_api::ai::MockAIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::MockAIClient;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
@@ -268,8 +268,8 @@ fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
     use warpui::App;
 
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         let history_model =
@@ -330,8 +330,8 @@ fn persist_event_cursor_keeps_the_max_sequence_and_updates_history_model() {
 
     use crate::ai::agent::conversation::{AIConversation, AIConversationId};
     use crate::persistence::ModelEvent;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use crate::test_util::settings::initialize_settings_for_tests;
     use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
@@ -400,8 +400,8 @@ fn wake_ready_does_not_advance_cursor_before_wake_preparation() {
 
     use crate::ai::agent::conversation::AIConversation;
     use crate::ai::agent_events::AgentMessageEventMetadata;
-    use crate::server::server_api::ai::{AIClient, MockAIClient};
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::{AIClient, MockAIClient};
 
     App::test((), |mut app| async move {
         let history_model =
@@ -464,8 +464,8 @@ fn dormant_local_claude_child_uses_task_harness_when_server_metadata_missing() {
     use warpui::App;
 
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         let history_model =
@@ -593,8 +593,8 @@ fn restored_conversations_initialize_v2_streaming_state() {
     use warpui::App;
 
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         let history_model =
@@ -680,8 +680,8 @@ fn finish_restore_fetch_uses_server_cursor_when_sqlite_is_absent() {
     use warpui::App;
 
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         let history_model =
@@ -741,8 +741,8 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
 
     use crate::ai::agent::conversation::{AIConversation, AIConversationId};
     use crate::persistence::ModelEvent;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
     use crate::test_util::settings::initialize_settings_for_tests;
     use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
@@ -956,9 +956,10 @@ fn killed_run_ids_are_bounded() {
             assert_eq!(me.killed_run_ids.len(), MAX_KILLED_RUN_IDS);
             assert!(!me.killed_run_ids.contains("killed-run-0"));
             assert!(me.killed_run_ids.contains("killed-run-1"));
-            assert!(me
-                .killed_run_ids
-                .contains(&format!("killed-run-{MAX_KILLED_RUN_IDS}")));
+            assert!(
+                me.killed_run_ids
+                    .contains(&format!("killed-run-{MAX_KILLED_RUN_IDS}"))
+            );
         });
     });
 }
@@ -974,8 +975,8 @@ fn finish_restore_fetch_no_ops_when_conversation_deleted_mid_flight() {
     use warpui::App;
 
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         let history_model =
@@ -1017,7 +1018,7 @@ fn finish_restore_fetch_no_ops_when_conversation_deleted_mid_flight() {
                 task_id,
                 /* sqlite_cursor */ 0,
                 Ok(make_ambient_task_with_children(vec![
-                    "child-run-1".to_string()
+                    "child-run-1".to_string(),
                 ])),
                 ctx,
             );
@@ -1044,8 +1045,8 @@ fn finish_restore_fetch_err_does_not_resurrect_deleted_conversation() {
     use warpui::App;
 
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         let history_model =
@@ -1110,8 +1111,8 @@ fn on_conversation_removed_prunes_stale_child_run_id_from_parent() {
     use warpui::App;
 
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         let history_model =
@@ -1170,8 +1171,8 @@ fn on_conversation_removed_prunes_killed_child_run_id_from_parent_but_keeps_tomb
     use warpui::App;
 
     use crate::ai::agent::conversation::AIConversation;
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
@@ -1674,8 +1675,8 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
     use warpui::App;
 
     use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
-    use crate::server::server_api::ai::MockAIClient;
     use crate::server::server_api::ServerApiProvider;
+    use crate::server::server_api::ai::MockAIClient;
 
     App::test((), |mut app| async move {
         let history_model =
@@ -1738,7 +1739,7 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
                 task_id,
                 /* sqlite_cursor */ 0,
                 Ok(make_ambient_task_with_children(vec![
-                    "child-run-1".to_string()
+                    "child-run-1".to_string(),
                 ])),
                 ctx,
             );
@@ -2178,7 +2179,7 @@ fn restored_parent_with_children_opens_ancestor_include_self_stream() {
                 task_id,
                 /* sqlite_cursor */ 5,
                 Ok(make_ambient_task_with_children(vec![
-                    "child-run-1".to_string()
+                    "child-run-1".to_string(),
                 ])),
                 ctx,
             );

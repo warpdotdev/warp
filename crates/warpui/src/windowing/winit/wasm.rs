@@ -3,8 +3,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::{self, JsCast};
 use web_sys::{Blob, BlobPropertyBag};
 
-use crate::clipboard::ClipboardContent;
 use crate::Clipboard;
+use crate::clipboard::ClipboardContent;
 
 pub struct WebClipboard {
     inner: web_sys::Clipboard,

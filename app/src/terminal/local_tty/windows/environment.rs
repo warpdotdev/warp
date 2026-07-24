@@ -5,17 +5,17 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use itertools::Itertools;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
-use winreg::enums::{RegType, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+use windows::core::{HSTRING, PCWSTR};
+use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RegType};
 use winreg::types::FromRegValue;
 use winreg::{RegKey, RegValue};
 
 use crate::safe_info;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::focus_env::{FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV};
-use crate::terminal::local_tty::shell::{extra_path_entries, ssh_socket_dir, ShellStarter};
 use crate::terminal::local_tty::PtyOptions;
+use crate::terminal::local_tty::shell::{ShellStarter, extra_path_entries, ssh_socket_dir};
 
 const HONOR_PS1_NAME: &str = "WARP_HONOR_PS1";
 const PROMPT_NODE_VERSION_ENABLED_NAME: &str = "WARP_PROMPT_NODE_VERSION_ENABLED";

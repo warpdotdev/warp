@@ -9,8 +9,8 @@ use ::local_control::protocol::{
 use ::local_control::{ActionKind, ControlError, ErrorCode, TargetScope};
 use warpui::{AppContext, ModelContext, TypedActionView, ViewHandle, WindowId};
 
-use crate::local_control::handlers::metadata::action_metadata_for_name;
 use crate::local_control::LocalControlBridge;
+use crate::local_control::handlers::metadata::action_metadata_for_name;
 use crate::pane_group::{ActivationReason, PaneGroup, PaneGroupAction, PaneId};
 use crate::workspace::{Workspace, WorkspaceAction};
 

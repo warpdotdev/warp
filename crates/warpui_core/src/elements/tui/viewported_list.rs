@@ -9,12 +9,12 @@ use std::cmp::{max, min};
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::selectable::{row_glyphs, row_text, TuiSelectionHandle};
+use super::selectable::{TuiSelectionHandle, row_glyphs, row_text};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
     TuiRowResize, TuiScreenPoint, TuiScreenPosition, TuiScrollableElement, TuiSelectableElement,
-    TuiSelectionSpan, TuiSize,
+    TuiSelectionSpan, TuiSize, TuiStyle,
 };
 use crate::AppContext;
 
@@ -199,7 +199,7 @@ where
             }
         }
         for (origin, size) in selection_rects {
-            toggle_selection_reverse(surface, origin, size);
+            surface.set_style(origin, size, self.selection_style);
         }
     }
 
@@ -401,26 +401,6 @@ fn render_viewport_content(
     buffer
 }
 
-/// Toggles reverse video over selected absolute bounds.
-fn toggle_selection_reverse(
-    surface: &mut TuiPaintSurface<'_>,
-    origin: TuiScreenPosition,
-    size: TuiSize,
-) {
-    for row in 0..size.height {
-        for col in 0..size.width {
-            let Some(cell) = surface.cell_mut(origin.offset(i32::from(col), i32::from(row))) else {
-                continue;
-            };
-            if cell.modifier.contains(super::Modifier::REVERSED) {
-                cell.modifier.remove(super::Modifier::REVERSED);
-            } else {
-                cell.modifier.insert(super::Modifier::REVERSED);
-            }
-        }
-    }
-}
-
 /// A variable-height viewport that delegates content slicing to its source.
 pub struct TuiViewportedList<Content>
 where
@@ -433,6 +413,7 @@ where
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
     vertical_alignment: TuiViewportVerticalAlignment,
+    selection_style: TuiStyle,
     selection_snapshot: RefCell<Option<(TuiResolvedViewport, TuiBuffer)>>,
 }
 
@@ -441,7 +422,7 @@ where
     Content: TuiViewportedElement,
 {
     /// Creates a generalized viewport over `content`.
-    pub fn new(state: TuiViewportedListState, content: Content) -> Self {
+    pub fn new(state: TuiViewportedListState, content: Content, selection_style: TuiStyle) -> Self {
         Self {
             state,
             content,
@@ -450,6 +431,7 @@ where
             size: None,
             origin: None,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
+            selection_style,
             selection_snapshot: RefCell::new(None),
         }
     }

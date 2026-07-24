@@ -9,12 +9,12 @@
 
 use chrono::{DateTime, Local};
 
-use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::AIAgentExchange;
+use crate::ai::agent::conversation::AIConversation;
 use crate::ai::blocklist::SerializedBlockListItem;
+use crate::terminal::TerminalModel;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::view::blocklist_filter::exchanges_for_blocklist;
-use crate::terminal::TerminalModel;
 
 /// One visible restored exchange and its position relative to command blocks.
 pub struct RestoredConversationExchange {

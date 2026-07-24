@@ -14,8 +14,8 @@ use super::history_model::{
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
@@ -498,6 +498,13 @@ pub(crate) fn classify_renderable_error(
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(
                 format!("AWS Bedrock credentials expired or invalid for {model_name}."),
+                PlatformErrorCode::AuthenticationRequired,
+            )),
+        ),
+        RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                "Gemini Enterprise credentials expired or invalid.",
                 PlatformErrorCode::AuthenticationRequired,
             )),
         ),

@@ -14,14 +14,14 @@ use warp_errors::report_error;
 use super::handle::{AnyViewHandle, ReadView, UpdateView, ViewAsRef, ViewHandle, WeakViewHandle};
 use super::{TypedActionView, View};
 use crate::accessibility::AccessibilityContent;
+use crate::r#async::executor::{Background, Foreground};
+use crate::r#async::{SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream};
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
 use crate::fonts::Cache as FontCache;
 use crate::modals::{AlertDialogWithCallbacks, ModalButton, ViewModalCallback};
 use crate::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
 use crate::platform::file_picker::{FilePickerConfiguration, FilePickerError};
 use crate::platform::{Cursor, SaveFilePickerConfiguration, TerminationMode};
-use crate::r#async::executor::{Background, Foreground};
-use crate::r#async::{SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream};
 use crate::windowing::WindowManager;
 use crate::{
     Action, AppContext, Effect, Entity, EntityId, GetSingletonModelHandle, ModelAsRef,
@@ -225,30 +225,30 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         let target_entity = handle.id();
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
-        if let Some(ref mut pending) = self.app.pending_unsubscribes {
-            if pending.entity_id == target_entity {
-                pending
-                    .keys
-                    .insert(SubscriptionKey::View(self.window_id, self.view_id));
+        if let Some(ref mut pending) = self.app.pending_unsubscribes
+            && pending.entity_id == target_entity
+        {
+            pending
+                .keys
+                .insert(SubscriptionKey::View(self.window_id, self.view_id));
 
-                // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
-                if let std::collections::hash_map::Entry::Occupied(mut entry) =
-                    self.app.subscriptions.entry(target_entity)
-                {
-                    entry.get_mut().retain(|subscription| match subscription {
-                        Subscription::FromModel { .. } | Subscription::FromApp { .. } => true,
-                        Subscription::FromView {
-                            window_id, view_id, ..
-                        } => *window_id != self.window_id || *view_id != self.view_id,
-                    });
+            // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.app.subscriptions.entry(target_entity)
+            {
+                entry.get_mut().retain(|subscription| match subscription {
+                    Subscription::FromModel { .. } | Subscription::FromApp { .. } => true,
+                    Subscription::FromView {
+                        window_id, view_id, ..
+                    } => *window_id != self.window_id || *view_id != self.view_id,
+                });
 
-                    if entry.get().is_empty() {
-                        entry.remove();
-                    }
+                if entry.get().is_empty() {
+                    entry.remove();
                 }
-
-                return;
             }
+
+            return;
         }
 
         // Otherwise process immediately.
@@ -272,30 +272,30 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         let target_entity = handle.id();
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
-        if let Some(ref mut pending) = self.app.pending_unsubscribes {
-            if pending.entity_id == target_entity {
-                pending
-                    .keys
-                    .insert(SubscriptionKey::View(self.window_id, self.view_id));
+        if let Some(ref mut pending) = self.app.pending_unsubscribes
+            && pending.entity_id == target_entity
+        {
+            pending
+                .keys
+                .insert(SubscriptionKey::View(self.window_id, self.view_id));
 
-                // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
-                if let std::collections::hash_map::Entry::Occupied(mut entry) =
-                    self.app.subscriptions.entry(target_entity)
-                {
-                    entry.get_mut().retain(|subscription| match subscription {
-                        Subscription::FromModel { .. } | Subscription::FromApp { .. } => true,
-                        Subscription::FromView {
-                            window_id, view_id, ..
-                        } => *window_id != self.window_id || *view_id != self.view_id,
-                    });
+            // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.app.subscriptions.entry(target_entity)
+            {
+                entry.get_mut().retain(|subscription| match subscription {
+                    Subscription::FromModel { .. } | Subscription::FromApp { .. } => true,
+                    Subscription::FromView {
+                        window_id, view_id, ..
+                    } => *window_id != self.window_id || *view_id != self.view_id,
+                });
 
-                    if entry.get().is_empty() {
-                        entry.remove();
-                    }
+                if entry.get().is_empty() {
+                    entry.remove();
                 }
-
-                return;
             }
+
+            return;
         }
 
         // Otherwise process immediately.
@@ -315,9 +315,9 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     pub fn open_file_picker(
         &mut self,
         callback: impl FnOnce(Result<Vec<String>, FilePickerError>, &mut ViewContext<T>)
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
         config: FilePickerConfiguration,
     ) {
         let window_id = self.window_id;
@@ -503,7 +503,11 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     ///
     /// TODO(vorporeal): Determine how best to eliminate this function and move
     ///     the relevant logic into `spawn()`.
-    fn spawn_local<S, F, U>(&mut self, future: S, callback: F) -> impl Future<Output = ()>
+    fn spawn_local<S, F, U>(
+        &mut self,
+        future: S,
+        callback: F,
+    ) -> impl Future<Output = ()> + use<S, F, U, T>
     where
         S: 'static + Future,
         F: 'static + FnOnce(&mut T, S::Output, &mut ViewContext<T>) -> U,

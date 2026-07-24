@@ -1,5 +1,5 @@
 //! The pre-first-interaction "zero state" filling the transcript area: the
-//! Warp Agent title and version, a "What's new" changelog section, and the
+//! Warp Agent CLI title and version, a "What's new" changelog section, and the
 //! session's project context (rules and skills discovered).
 //!
 //! The session view owns visibility: the zero state fills the transcript
@@ -8,35 +8,146 @@
 //! transcript empties out again.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
-use ai::project_context::model::ProjectContextModel;
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use warp::tui_export::{
-    ChangelogModel, ChangelogState, SkillManager, TuiMcpConfigState, TuiMcpManager,
-    TuiMcpServerStatus,
+    ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
+    SkillManager, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
 };
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
-use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
-use warpui_core::AppContext;
+use warpui_core::elements::animation::AnimationClock;
+use warpui_core::elements::tui::{
+    Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiStack, TuiText,
+};
+use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
-use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater};
+use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
+use crate::zero_state_animation::{
+    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent,
+    ZeroStateAnimationElement,
+};
 
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
 
-/// Width cap on the text column so bullets wrap like the mock.
-const LEFT_COLUMN_MAX_COLS: u16 = 48;
+/// Fixed width for the text column. Using a pinned min=max keeps wrapping stable
+/// as content loads asynchronously at startup (changelog, MCP status, project
+/// context) while the animation paints beneath it as a separate stack layer.
+const LEFT_COLUMN_COLS: u16 = 48;
 
-/// Renders the zero state for the transcript area. `cwd` is the session's
-/// working directory for the project section.
-pub(crate) fn render_zero_state(cwd: Option<&str>, app: &AppContext) -> Box<dyn TuiElement> {
-    let builder = TuiUiBuilder::from_app(app);
-    TuiConstrainedBox::new(render_left_column(cwd, &builder, app).finish())
-        .with_max_cols(LEFT_COLUMN_MAX_COLS)
-        .finish()
+// ---------------------------------------------------------------------------
+// TuiZeroStateView
+// ---------------------------------------------------------------------------
+
+/// The zero-state view: displayed when the transcript is empty.
+///
+/// Owns the animation clock so the logo's rotation remains continuous across
+/// view re-renders (e.g. when MCP connects or a changelog loads).
+pub(crate) struct TuiZeroStateView {
+    clock: AnimationClock,
+    animation_config: Arc<ZeroStateAnimationConfig>,
+    active_session: ModelHandle<ActiveSession>,
+}
+
+impl TuiZeroStateView {
+    pub(crate) fn new(
+        active_session: ModelHandle<ActiveSession>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        // Subscribe to events that change what the zero state displays so
+        // this view re-renders independently of its parent.
+        ctx.subscribe_to_model(
+            &ChangelogModel::handle(ctx),
+            |_, _, event: &ChangelogModelEvent, ctx| {
+                if let ChangelogModelEvent::ChangelogRequestComplete { .. } = event {
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.subscribe_to_model(
+            &TuiAutoupdater::handle(ctx),
+            |_, _, event: &TuiAutoupdaterEvent, ctx| {
+                let TuiAutoupdaterEvent::StatusChanged = event;
+                ctx.notify();
+            },
+        );
+        ctx.subscribe_to_model(
+            &ProjectContextModel::handle(ctx),
+            |_, _, event: &ProjectContextModelEvent, ctx| {
+                if let ProjectContextModelEvent::PathIndexed = event {
+                    ctx.notify();
+                }
+            },
+        );
+        ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| {
+            let ActiveSessionEvent::UpdatedPwd = event else {
+                return;
+            };
+            ctx.notify();
+        });
+        let animation_config = ZeroStateAnimationConfig::handle(ctx);
+        let animation_config_snapshot = Arc::new(animation_config.as_ref(ctx).clone());
+        ctx.subscribe_to_model(
+            &animation_config,
+            |view, animation_config, event, ctx| match event {
+                ZeroStateAnimationConfigEvent::Updated => {
+                    view.animation_config = Arc::new(animation_config.as_ref(ctx).clone());
+                    ctx.notify();
+                }
+                ZeroStateAnimationConfigEvent::LoadFailed(_) => {}
+            },
+        );
+
+        Self {
+            clock: AnimationClock::starting_at(Duration::ZERO),
+            animation_config: animation_config_snapshot,
+            active_session,
+        }
+    }
+}
+
+impl Entity for TuiZeroStateView {
+    type Event = ();
+}
+
+impl TuiView for TuiZeroStateView {
+    fn ui_name() -> &'static str {
+        "TuiZeroStateView"
+    }
+
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(ctx);
+        let session = self.active_session.as_ref(ctx);
+        let cwd = session.current_working_directory().cloned().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.to_string_lossy().into_owned())
+        });
+        let text_column =
+            TuiConstrainedBox::new(render_left_column(cwd.as_deref(), &builder, ctx).finish())
+                .with_min_cols(LEFT_COLUMN_COLS)
+                .with_max_cols(LEFT_COLUMN_COLS)
+                .finish();
+        let animation = ZeroStateAnimationElement::new(
+            self.clock,
+            self.animation_config.clone(),
+            WarpLogoStyles {
+                front: builder.accent_text_style(),
+                back: builder.primary_text_style(),
+                side: builder.dim_text_style(),
+                background: builder.muted_text_style(),
+            },
+        )
+        .finish();
+        TuiStack::new().child(animation).child(text_column).finish()
+    }
 }
 
 /// The left text column: title, version, "What's new", and project context.
@@ -47,7 +158,7 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
 
     let mut column = TuiFlex::column()
         .child(
-            TuiText::new("Warp Agent")
+            TuiText::new("Warp Agent CLI")
                 .with_style(title_style)
                 .truncate()
                 .finish(),
@@ -224,10 +335,10 @@ fn render_project_section(
     let mut rule_files: Vec<String> = Vec::new();
     if let Some(rules) = &rules {
         for rule in &rules.active_rules {
-            if let Some(name) = rule.path.file_name() {
-                if !rule_files.iter().any(|file| file == name) {
-                    rule_files.push(name.to_owned());
-                }
+            if let Some(name) = rule.path.file_name()
+                && !rule_files.iter().any(|file| file == name)
+            {
+                rule_files.push(name.to_owned());
             }
         }
     }

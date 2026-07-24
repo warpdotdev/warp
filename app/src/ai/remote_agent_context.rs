@@ -1,10 +1,10 @@
 use ::ai::project_context::model::{ProjectContextModel, ProjectRule};
 use ::ai::skills::{
-    get_provider_for_path, parse_skill_content_at_location, ParsedSkill, SkillProvider, SkillScope,
+    ParsedSkill, SkillProvider, SkillScope, get_provider_for_path, parse_skill_content_at_location,
 };
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use remote_server::proto::{
-    remote_skill_proto, RemoteAgentContextSnapshot, RemoteContextFileProto, RemoteSkillProto,
+    RemoteAgentContextSnapshot, RemoteContextFileProto, RemoteSkillProto, remote_skill_proto,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::safe_warn;

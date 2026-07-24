@@ -1,12 +1,12 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::Utc;
 use session_sharing_protocol::common::SessionId;
 
 use super::{
-    spawn_task, submit_run_followup, AmbientAgentEvent, SessionJoinInfo,
-    MAX_STALE_POLLS_BEFORE_FAILURE,
+    AmbientAgentEvent, MAX_STALE_POLLS_BEFORE_FAILURE, SessionJoinInfo, spawn_task,
+    submit_run_followup,
 };
 use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};

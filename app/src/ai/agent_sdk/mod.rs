@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
-pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHarness};
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
+pub(crate) use driver::harness::{ClaudeHarness, task_env_vars, validate_cli_installed};
 use telemetry::CliTelemetryEvent;
 use tracing::Instrument as _;
 use warp_cli::agent::{
@@ -44,35 +44,35 @@ use warp_server_client::iap::{IapManager, IapManagerEvent};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelSpawner, SingletonEntity};
 
-use crate::ai::agent::api::convert_conversation::{
-    convert_conversation_data_to_ai_conversation, RestorationMode,
-};
 use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::api::convert_conversation::{
+    RestorationMode, convert_conversation_data_to_ai_conversation,
+};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_sdk::driver::harness::{harness_kind, HarnessKind};
+use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
-use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{
-    clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill,
+    ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
 };
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
 
@@ -216,7 +216,7 @@ fn dispatch_command(
             api_key::run(ctx, global_options, api_key_cmd)
         }
         CliCommand::Runner(runner_cmd) => {
-            if !FeatureFlag::CloudAgentRunnerCLICommands.is_enabled() {
+            if !FeatureFlag::CloudAgentRunners.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'runner'"));
             }
             runner::run(ctx, global_options, runner_cmd)
@@ -426,6 +426,7 @@ fn build_merged_config_and_task(
             .or(file_merged.computer_use_enabled),
         harness: harness_override,
         harness_auth_secrets: None,
+        additional_source_repos: None,
     };
 
     let runtime_mcp_specs = match merged_config.mcp_servers.as_ref() {
@@ -522,6 +523,7 @@ fn build_server_side_task(
         computer_use_enabled: args.computer_use.computer_use_override(),
         harness: harness_override,
         harness_auth_secrets: None,
+        additional_source_repos: None,
     };
 
     let skill = resolved_skill.as_ref().map(|s| s.parsed_skill.clone());
@@ -688,8 +690,8 @@ impl AgentDriverRunner {
             // can currently be passed together (the worker server-side appends `--conversation`
             // alongside `--task-id` for Slack/Linear followups); when both are set, the explicit
             // `--conversation` value wins via the merge below.
-            if !has_task_id {
-                if let Some(conversation_id) = args.conversation.as_deref() {
+            if !has_task_id
+                && let Some(conversation_id) = args.conversation.as_deref() {
                     common::fetch_and_validate_conversation_harness(
                         server_api.clone(),
                         conversation_id,
@@ -697,7 +699,6 @@ impl AgentDriverRunner {
                     )
                     .await?;
                 }
-            }
             let resume_conversation_id = args.conversation.clone();
 
             // Build driver options and task, handling task creation or existing task setup.
@@ -807,10 +808,10 @@ impl AgentDriverRunner {
         }
         .await;
 
-        if let Err(ref err) = result {
-            if let Some(task_id) = task_id {
-                driver::report_driver_error(task_id, err, &server_api).await;
-            }
+        if let Err(ref err) = result
+            && let Some(task_id) = task_id
+        {
+            driver::report_driver_error(task_id, err, &server_api).await;
         }
         result
     }
@@ -1046,6 +1047,7 @@ impl AgentDriverRunner {
                     resume: None,
                     cloud_providers: Vec::new(),
                     environment: None,
+                    additional_source_repos: Vec::new(),
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
@@ -1289,32 +1291,37 @@ impl AgentDriverRunner {
                 }
             }
         };
-        let (parent_run_id, task_conversation_id, task_harness, task_harness_model_config) =
-            match task_metadata_result {
-                Ok(Some(task_metadata)) => {
-                    // The task's harness is stored on the snapshot; if absent, it's the default Oz.
-                    let task_harness_config = task_metadata
-                        .agent_config_snapshot
-                        .as_ref()
-                        .and_then(|c| c.harness.as_ref());
-                    let task_harness = task_harness_config
-                        .map(|h| h.harness_type)
-                        .unwrap_or(Harness::Oz);
-                    let task_harness_model_config =
-                        task_harness_config.and_then(|h| h.model_config());
-                    (
-                        task_metadata.parent_run_id,
-                        task_metadata.conversation_id,
-                        Some(task_harness),
-                        task_harness_model_config,
-                    )
-                }
-                Ok(None) => (None, None, None, None),
-                Err(err) => {
-                    log::warn!("Failed to fetch task metadata: {err:#}");
-                    (None, None, None, None)
-                }
-            };
+        let (
+            parent_run_id,
+            task_conversation_id,
+            task_harness,
+            task_harness_model_config,
+            additional_source_repos,
+        ) = match task_metadata_result {
+            Ok(Some(task_metadata)) => {
+                // The task's harness is stored on the snapshot; if absent, it's the default Oz.
+                let agent_config_snapshot = task_metadata.agent_config_snapshot;
+                let task_harness_config = agent_config_snapshot
+                    .as_ref()
+                    .and_then(|c| c.harness.as_ref());
+                let task_harness = task_harness_config
+                    .map(|h| h.harness_type)
+                    .unwrap_or(Harness::Oz);
+                let task_harness_model_config = task_harness_config.and_then(|h| h.model_config());
+                let additional_source_repos = agent_config_snapshot
+                    .and_then(|config| config.additional_source_repos)
+                    .unwrap_or_default();
+                (
+                    task_metadata.parent_run_id,
+                    task_metadata.conversation_id,
+                    Some(task_harness),
+                    task_harness_model_config,
+                    additional_source_repos,
+                )
+            }
+            Ok(None) => (None, None, None, None, Vec::new()),
+            Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
+        };
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
         // extra conversation-metadata roundtrip that would otherwise be needed downstream when the
@@ -1330,6 +1337,7 @@ impl AgentDriverRunner {
 
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;
+        driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
         // CLI flags continue to take precedence so users can still override per-invocation.
         if driver_options.third_party_harness_model_config.is_none() {
@@ -1832,6 +1840,11 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                     }
                 }
             },
+            HarnessSupportCommand::ReportExternalReference(_) => {
+                CliTelemetryEvent::HarnessSupportReportArtifact {
+                    artifact_type: "external_reference",
+                }
+            }
             HarnessSupportCommand::NotifyUser(_) => CliTelemetryEvent::HarnessSupportNotifyUser,
             HarnessSupportCommand::FinishTask(finish_args) => {
                 CliTelemetryEvent::HarnessSupportFinishTask {

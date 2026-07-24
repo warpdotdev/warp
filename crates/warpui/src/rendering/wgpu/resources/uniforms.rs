@@ -3,7 +3,7 @@ use std::mem;
 use pathfinder_geometry::vector::Vector2F;
 use wgpu::{BindGroup, BindGroupLayout, Buffer};
 
-use crate::rendering::wgpu::{shader_types, Resources};
+use crate::rendering::wgpu::{Resources, shader_types};
 
 pub(super) struct Uniforms {
     bind_group_layout: BindGroupLayout,

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use remote_server::proto::{file_context_proto, FileContextProto, ReadFileContextResponse};
+use remote_server::proto::{FileContextProto, ReadFileContextResponse, file_context_proto};
 
 use super::file_contents_from_response;
 

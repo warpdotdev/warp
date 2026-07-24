@@ -1,14 +1,14 @@
 use markdown_parser::{FormattedTable, FormattedTextInline, Hyperlink, TableAlignment};
 use unicode_width::UnicodeWidthStr;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
     TuiParentElement, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
     TuiText,
 };
-use warpui_core::AppContext;
 
 use super::{
-    blank_row, inline_spans, push_span, TuiFixedWidth, TuiMarkdownPalette, TuiMarkdownRule,
+    TuiFixedWidth, TuiMarkdownPalette, TuiMarkdownRule, blank_row, inline_spans, push_span,
 };
 
 const TABLE_COLUMN_GAP: u16 = 3;
@@ -291,10 +291,10 @@ fn inline_visible_width(inline: &FormattedTextInline) -> usize {
             Some(Hyperlink::Action(_)) | None => None,
         };
         if active_url.as_ref().map(|(url, _)| url.as_str()) != fragment_url {
-            if let Some((url, display)) = active_url.take() {
-                if url != display {
-                    width += UnicodeWidthStr::width(format!(" ({url})").as_str());
-                }
+            if let Some((url, display)) = active_url.take()
+                && url != display
+            {
+                width += UnicodeWidthStr::width(format!(" ({url})").as_str());
             }
             if let Some(url) = fragment_url {
                 active_url = Some((url.to_owned(), String::new()));
@@ -304,10 +304,10 @@ fn inline_visible_width(inline: &FormattedTextInline) -> usize {
             display.push_str(&fragment.text);
         }
     }
-    if let Some((url, display)) = active_url {
-        if url != display {
-            width += UnicodeWidthStr::width(format!(" ({url})").as_str());
-        }
+    if let Some((url, display)) = active_url
+        && url != display
+    {
+        width += UnicodeWidthStr::width(format!(" ({url})").as_str());
     }
     width
 }

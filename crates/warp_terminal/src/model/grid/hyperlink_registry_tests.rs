@@ -37,9 +37,10 @@ fn intern_returns_none_past_distinct_entries_cap() {
     // is `pub const`, but we can simulate by interning the cap itself.
     let mut reg = HyperlinkRegistry::new();
     for i in 0..MAX_DISTINCT_ENTRIES {
-        assert!(reg
-            .intern(link(&format!("https://example.com/{i}")))
-            .is_some());
+        assert!(
+            reg.intern(link(&format!("https://example.com/{i}")))
+                .is_some()
+        );
     }
     // Past the cap → None.
     assert!(reg.intern(link("https://overflow.example")).is_none());

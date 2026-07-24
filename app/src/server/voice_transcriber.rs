@@ -20,10 +20,15 @@ impl ServerVoiceTranscriber {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl Transcriber for ServerVoiceTranscriber {
-    async fn transcribe(&self, wav_base64: String) -> Result<String, TranscribeError> {
+    async fn transcribe(
+        &self,
+        wav_base64: String,
+        language: Option<String>,
+    ) -> Result<String, TranscribeError> {
         let request = TranscribeRequest {
             provider: Provider::Wispr,
             audio: Some(wav_base64),
+            language,
             ..Default::default()
         };
         let response = self.server_api.transcribe(&request).await;

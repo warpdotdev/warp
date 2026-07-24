@@ -9,7 +9,7 @@ pub use warp_util::file_type::{
 };
 
 #[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::{settings::EditorChoice, Editor, EditorSettings};
+use crate::util::file::external_editor::{Editor, EditorSettings, settings::EditorChoice};
 
 #[derive(
     Debug,

@@ -7,11 +7,11 @@ use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use rand::RngCore;
 use ring::aead;
-use secret_service::blocking::{Item, SecretService};
 use secret_service::EncryptionType;
+use secret_service::blocking::{Item, SecretService};
 use warp_errors::report_error;
 
 use super::Error;

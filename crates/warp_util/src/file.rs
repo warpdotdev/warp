@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use warp_errors::{register_error, ErrorExt};
+use warp_errors::{ErrorExt, register_error};
 
 #[derive(thiserror::Error, Debug)]
 pub enum FileSaveError {

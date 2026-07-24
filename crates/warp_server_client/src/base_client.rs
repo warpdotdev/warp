@@ -8,6 +8,8 @@ use parking_lot::{Mutex, RwLock};
 use warp_graphql::client::RequestOptions;
 use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::AuthToken;
+#[cfg(feature = "agent_mode_evals")]
+use warp_server_auth::credentials::Credentials;
 
 use crate::auth::{AuthEvent, AuthSession, UserUid};
 
@@ -19,8 +21,6 @@ pub const CLOUD_AGENT_ID_HEADER: &str = "X-Warp-Cloud-Agent-ID";
 
 /// Header used to communicate the source of an agent run.
 pub const AGENT_SOURCE_HEADER: &str = "X-Oz-Api-Source";
-/// Header used to route agent-mode eval requests to a selected eval user.
-pub const EVAL_USER_ID_HEADER: &str = "X-Eval-User-ID";
 
 /// IDs in the staging database that were created specifically for evals.
 ///
@@ -116,8 +116,6 @@ pub struct BaseClient {
     graphql_routing: GraphqlRoutingConfig,
     authenticated_graphql: AuthenticatedGraphqlConfig,
     iap_token_provider: Option<Arc<dyn http_client::iap::IapTokenProvider>>,
-    #[cfg(feature = "agent_mode_evals")]
-    eval_user_id: Option<i32>,
 }
 
 impl BaseClient {
@@ -147,9 +145,16 @@ impl BaseClient {
         };
         #[cfg(feature = "agent_mode_evals")]
         if let Some(eval_user_id) = eval_user_id {
-            authenticated_graphql
-                .headers
-                .insert(EVAL_USER_ID_HEADER.to_string(), eval_user_id.to_string());
+            // Set a deterministic per-user API key so all requests — including
+            // REST endpoints like the SSE event stream — carry a real
+            // Authorization header. The key format mirrors what SeedEvalAPIKeys()
+            // inserts in warp-server at eval startup:
+            // wk-1.<user_id as 64-char zero-padded lowercase hex>.
+            let eval_key = format!("wk-1.{eval_user_id:0>64x}");
+            auth_state.set_credentials(Some(Credentials::ApiKey {
+                key: eval_key,
+                owner_type: None,
+            }));
         }
         let auth_session = Arc::new(AuthSession::new(
             client.clone(),
@@ -167,17 +172,11 @@ impl BaseClient {
             graphql_routing,
             authenticated_graphql,
             iap_token_provider,
-            #[cfg(feature = "agent_mode_evals")]
-            eval_user_id,
         }
     }
 
     /// Returns whether authenticated GraphQL decoration would override BaseClient-owned headers.
     fn is_reserved_authenticated_graphql_header(name: &str) -> bool {
-        #[cfg(feature = "agent_mode_evals")]
-        if name.eq_ignore_ascii_case(EVAL_USER_ID_HEADER) {
-            return true;
-        }
         [
             http::header::AUTHORIZATION.as_str(),
             http::header::CONTENT_TYPE.as_str(),
@@ -211,18 +210,6 @@ impl BaseClient {
 
     pub fn user_id(&self) -> Option<UserUid> {
         self.auth_state.user_id()
-    }
-
-    /// Returns the eval user selected for this client, if eval routing is enabled.
-    pub fn eval_user_id(&self) -> Option<i32> {
-        #[cfg(feature = "agent_mode_evals")]
-        {
-            self.eval_user_id
-        }
-        #[cfg(not(feature = "agent_mode_evals"))]
-        {
-            None
-        }
     }
 
     pub fn access_token_ignoring_validity(&self) -> Option<String> {

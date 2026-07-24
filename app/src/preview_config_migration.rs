@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use warp_core::channel::{Channel, ChannelState};
-use warp_core::paths::{data_dir, WARP_CONFIG_DIR};
+use warp_core::paths::{WARP_CONFIG_DIR, data_dir};
 
 /// Files that should not be symlinked during the Preview config directory
 /// migration. These are intentionally kept separate between Stable and
@@ -64,14 +64,14 @@ pub(crate) fn migrate_config_dir_via_symlinks(old_dir: &Path, new_dir: &Path) {
 
     // Create the new directory. If this fails because it already exists
     // (race with another process), that's fine.
-    if let Err(err) = std::fs::create_dir(new_dir) {
-        if err.kind() != std::io::ErrorKind::AlreadyExists {
-            log::warn!(
-                "Failed to create config directory {}: {err}",
-                new_dir.display()
-            );
-            return;
-        }
+    if let Err(err) = std::fs::create_dir(new_dir)
+        && err.kind() != std::io::ErrorKind::AlreadyExists
+    {
+        log::warn!(
+            "Failed to create config directory {}: {err}",
+            new_dir.display()
+        );
+        return;
     }
 
     let entries = match std::fs::read_dir(old_dir) {

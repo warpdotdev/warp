@@ -7,11 +7,11 @@ use std::time::Duration;
 use instant::Instant;
 use warp_errors::report_error;
 
-use super::{action_log, overlay, TestSetupUtils};
+use super::{TestSetupUtils, action_log, overlay};
+use crate::r#async::Timer;
 use crate::event::{Event, KeyEventDetails};
 use crate::keymap::{Keystroke, PerPlatformKeystroke};
 use crate::platform::{OperatingSystem, Window};
-use crate::r#async::Timer;
 use crate::{App, WindowId};
 
 const MAX_WAKEUPS_PER_SECOND: u64 = 60;
@@ -656,26 +656,24 @@ pub(super) async fn run_step(
                 record_overlay_event_for_event(&event, step_data_map);
                 let dispatch_result =
                     app.update(|ctx| (window.callbacks().event_callback)(event.clone(), ctx));
-                if !dispatch_result.handled {
-                    if let Event::KeyDown {
+                if !dispatch_result.handled
+                    && let Event::KeyDown {
                         chars,
                         is_composing,
                         ..
                     } = event
-                    {
-                        if !is_composing {
-                            // The input system expects a TypedCharacters event to follow keydown
-                            // in order to update the editor's input unless is_composing is set
-                            app.update(|ctx| {
-                                (window.callbacks().event_callback)(
-                                    Event::TypedCharacters {
-                                        chars: chars.clone(),
-                                    },
-                                    ctx,
-                                )
-                            });
-                        }
-                    }
+                    && !is_composing
+                {
+                    // The input system expects a TypedCharacters event to follow keydown
+                    // in order to update the editor's input unless is_composing is set
+                    app.update(|ctx| {
+                        (window.callbacks().event_callback)(
+                            Event::TypedCharacters {
+                                chars: chars.clone(),
+                            },
+                            ctx,
+                        )
+                    });
                 }
             }
             IntegrationTestEvent::WithSavedPosition(_, mouse_event)
@@ -953,11 +951,11 @@ pub(super) async fn run_step(
 
         // We only get this far in the case of a test failure.
         let last_failure = last_failure.expect("last_failure should be set");
-        if let Some(msg) = last_failure.as_failure_message().map(str::to_owned) {
-            if let Some(log) = action_log::get_action_log_mut(step_data_map) {
-                let name = last_assertion_name.unwrap_or("unknown");
-                log.record(format!("Assertion failed: {name}: {msg}"));
-            }
+        if let Some(msg) = last_failure.as_failure_message().map(str::to_owned)
+            && let Some(log) = action_log::get_action_log_mut(step_data_map)
+        {
+            let name = last_assertion_name.unwrap_or("unknown");
+            log.record(format!("Assertion failed: {name}: {msg}"));
         }
         if let Some(pause) = step.pause_on_failure {
             let AssertionOutcome::Failure { message, .. } = &last_failure else {

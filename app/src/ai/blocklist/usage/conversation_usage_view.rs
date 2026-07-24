@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
     Empty, Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
@@ -23,14 +23,14 @@ use crate::ai::blocklist::agent_view::orchestration_pill_bar::{
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::usage::render_context_window_usage_icon;
 use crate::ai::blocklist::usage::rollup::{
-    compute_orchestration_rollup, AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry,
+    AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry, compute_orchestration_rollup,
 };
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
-    token_usage_category_display_name, ContextWindowSegment, ContextWindowSegmentType,
-    ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY, PRIMARY_AGENT_CATEGORY,
+    ContextWindowSegment, ContextWindowSegmentType, FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage,
+    PRIMARY_AGENT_CATEGORY, token_usage_category_display_name,
 };
 use crate::ui_components::blended_colors;
 
@@ -583,62 +583,60 @@ impl ConversationUsageView {
         ));
 
         // Last response time
-        if self.display_mode == DisplayMode::Footer {
-            if let Some(timing) = &self.timing_info {
-                if timing.time_to_first_token_ms != 0
-                    || timing.total_agent_response_time_ms != 0
-                    || timing.wall_to_wall_response_time_ms.is_some()
-                {
-                    // Space between sections
-                    labels.push(
-                        Container::new(Empty::new().finish())
-                            .with_margin_top(12.)
-                            .finish(),
-                    );
-                    values.push(
-                        Container::new(Empty::new().finish())
-                            .with_margin_top(12.)
-                            .finish(),
-                    );
+        if self.display_mode == DisplayMode::Footer
+            && let Some(timing) = &self.timing_info
+            && (timing.time_to_first_token_ms != 0
+                || timing.total_agent_response_time_ms != 0
+                || timing.wall_to_wall_response_time_ms.is_some())
+        {
+            // Space between sections
+            labels.push(
+                Container::new(Empty::new().finish())
+                    .with_margin_top(12.)
+                    .finish(),
+            );
+            values.push(
+                Container::new(Empty::new().finish())
+                    .with_margin_top(12.)
+                    .finish(),
+            );
 
-                    // Section header
-                    labels.push(render_section_header(
-                        "LAST RESPONSE TIME".to_string(),
-                        appearance,
-                    ));
-                    values.push(render_section_header("".to_string(), appearance));
+            // Section header
+            labels.push(render_section_header(
+                "LAST RESPONSE TIME".to_string(),
+                appearance,
+            ));
+            values.push(render_section_header("".to_string(), appearance));
 
-                    labels.push(render_label_text("Time to first token", appearance));
-                    values.push(render_value_text(
-                        format!(
-                            "{:.1} seconds",
-                            timing.time_to_first_token_ms as f64 / 1000.0
-                        ),
-                        appearance,
-                    ));
+            labels.push(render_label_text("Time to first token", appearance));
+            values.push(render_value_text(
+                format!(
+                    "{:.1} seconds",
+                    timing.time_to_first_token_ms as f64 / 1000.0
+                ),
+                appearance,
+            ));
 
-                    labels.push(render_label_text("Total agent response time", appearance));
-                    values.push(render_value_text(
-                        format!(
-                            "{:.1} seconds",
-                            timing.total_agent_response_time_ms as f64 / 1000.0
-                        ),
-                        appearance,
-                    ));
+            labels.push(render_label_text("Total agent response time", appearance));
+            values.push(render_value_text(
+                format!(
+                    "{:.1} seconds",
+                    timing.total_agent_response_time_ms as f64 / 1000.0
+                ),
+                appearance,
+            ));
 
-                    if let Some(wall_ms) = timing.wall_to_wall_response_time_ms {
-                        if wall_ms != 0 {
-                            labels.push(render_label_text(
-                                "Total time (including tool calls)",
-                                appearance,
-                            ));
-                            values.push(render_value_text(
-                                format!("{:.1} seconds", wall_ms as f64 / 1000.0),
-                                appearance,
-                            ));
-                        }
-                    }
-                }
+            if let Some(wall_ms) = timing.wall_to_wall_response_time_ms
+                && wall_ms != 0
+            {
+                labels.push(render_label_text(
+                    "Total time (including tool calls)",
+                    appearance,
+                ));
+                values.push(render_value_text(
+                    format!("{:.1} seconds", wall_ms as f64 / 1000.0),
+                    appearance,
+                ));
             }
         }
 

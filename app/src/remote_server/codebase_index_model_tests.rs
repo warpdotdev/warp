@@ -92,12 +92,16 @@ fn snapshot_replaces_statuses_for_same_host_label() {
         }],
     ));
 
-    assert!(model
-        .status_for_repo(&remote_path_for_host(&new_host, "/old"))
-        .is_none());
-    assert!(model
-        .status_for_repo(&remote_path_for_host(&new_host, "/new"))
-        .is_some());
+    assert!(
+        model
+            .status_for_repo(&remote_path_for_host(&new_host, "/old"))
+            .is_none()
+    );
+    assert!(
+        model
+            .status_for_repo(&remote_path_for_host(&new_host, "/new"))
+            .is_some()
+    );
     assert_eq!(model.entries_for_settings().len(), 1);
 }
 #[test]

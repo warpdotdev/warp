@@ -31,7 +31,7 @@ pub use window::*;
 
 use crate::platform::{self, FullscreenState, WindowBounds, WindowStyle};
 use crate::rendering::OnGPUDeviceSelected;
-use crate::{keymap, Element};
+use crate::{Element, keymap};
 
 /// A unique identifier for a display.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,12 +318,12 @@ where
         let mut ctx = ViewContext::new(app, window_id, view_id);
         View::on_focus(self, focus_ctx, &mut ctx);
         // Send notification to a11y tools that the view gained focus
-        if focus_ctx.is_self_focused() {
-            if let Some(accessibility_contents) = View::accessibility_contents(self, app) {
-                app.platform_delegate.set_accessibility_contents(
-                    accessibility_contents.with_verbosity(app.a11y_verbosity),
-                );
-            }
+        if focus_ctx.is_self_focused()
+            && let Some(accessibility_contents) = View::accessibility_contents(self, app)
+        {
+            app.platform_delegate.set_accessibility_contents(
+                accessibility_contents.with_verbosity(app.a11y_verbosity),
+            );
         }
     }
 

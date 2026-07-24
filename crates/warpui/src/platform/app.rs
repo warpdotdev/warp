@@ -1,7 +1,7 @@
+use warpui_core::r#async::LocalBoxFuture;
 use warpui_core::integration::TestDriver;
 use warpui_core::keymap::{CustomTag, Keystroke};
 pub use warpui_core::platform::app::*;
-use warpui_core::r#async::LocalBoxFuture;
 use warpui_core::{AppContext, AssetProvider};
 
 use super::AsInnerMut;
@@ -58,6 +58,14 @@ impl AppBuilder {
             test_driver,
             custom_tag_to_keystroke_fn: None,
             default_keystroke_trigger_for_custom_actions: None,
+        }
+    }
+
+    /// Allows a headless frontend with microphone functionality to query the
+    /// platform's existing microphone authorization state.
+    pub fn enable_headless_microphone_access_query(&mut self) {
+        if let AppBackend::Headless(inner) = &mut self.inner {
+            inner.enable_microphone_access_query();
         }
     }
 

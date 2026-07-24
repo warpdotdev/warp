@@ -2,11 +2,12 @@ use ai::LLMId;
 use warp_core::send_telemetry_from_ctx;
 use warpui_core::{Entity, ModelContext};
 
+use crate::OnboardingIntention;
 use crate::slides::{
-    AgentAutonomy, AgentDevelopmentSettings, OnboardingModelInfo, ProjectOnboardingSettings,
+    AgentAutonomy, AgentDevelopmentSettings, OfferVariant, OnboardingModelInfo,
+    ProjectOnboardingSettings,
 };
 use crate::telemetry::OnboardingEvent;
-use crate::OnboardingIntention;
 
 /// UI customization settings chosen during the "Customize your UI" onboarding slide.
 #[derive(Clone, Debug)]
@@ -125,6 +126,7 @@ pub(crate) enum OnboardingStep {
     ThirdParty,
     Project,
     ThemePicker,
+    PostAuthOffer,
 }
 
 /// The AI setup selected on the "Choose your AI setup" slide.
@@ -198,6 +200,8 @@ pub(crate) struct OnboardingStateModel {
     ai_access_choice: AiAccessChoice,
     /// Auth / billing state of the user.
     auth_state: OnboardingAuthState,
+    /// Which account-first offer is currently presented after authentication.
+    offer_variant: Option<OfferVariant>,
     /// When set, the "Are you sure you don't want AI?" confirmation modal is
     /// shown; the value records which entry point triggered it.
     no_ai_confirmation: Option<NoAiConfirmationSource>,
@@ -224,12 +228,29 @@ impl OnboardingStateModel {
             ai_setup_choice: AiSetupChoice::default(),
             ai_access_choice: AiAccessChoice::default(),
             auth_state,
+            offer_variant: None,
             no_ai_confirmation: None,
         }
     }
 
     pub(crate) fn auth_state(&self) -> OnboardingAuthState {
         self.auth_state
+    }
+
+    pub(crate) fn offer_variant(&self) -> Option<OfferVariant> {
+        self.offer_variant
+    }
+
+    pub(crate) fn show_post_auth_offer(
+        &mut self,
+        variant: OfferVariant,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.step == OnboardingStep::PostAuthOffer {
+            return;
+        }
+        self.offer_variant = Some(variant);
+        self.set_step(OnboardingStep::PostAuthOffer, ctx);
     }
 
     pub(crate) fn set_auth_state(
@@ -246,7 +267,9 @@ impl OnboardingStateModel {
 
     pub(crate) fn settings(&self) -> SelectedSettings {
         use warp_core::features::FeatureFlag;
-        let ui_customization = if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        let ui_customization = if FeatureFlag::AccountFirstOnboarding.is_enabled()
+            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        {
             Some(self.ui_customization.clone())
         } else {
             None
@@ -665,13 +688,25 @@ impl OnboardingStateModel {
         // If the user is past the agent slide, don't change the agent model from underneath them.
         // When the new settings modes flag is on, ThemePicker comes after the agent slides
         // so it must also be guarded.
-        let is_past_agent_slide = if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        let is_past_agent_slide = if FeatureFlag::AccountFirstOnboarding.is_enabled() {
             matches!(
                 self.step,
-                OnboardingStep::ThirdParty | OnboardingStep::ThemePicker
+                OnboardingStep::Customize
+                    | OnboardingStep::ThemePicker
+                    | OnboardingStep::PostAuthOffer
+            )
+        } else if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+            matches!(
+                self.step,
+                OnboardingStep::ThirdParty
+                    | OnboardingStep::ThemePicker
+                    | OnboardingStep::PostAuthOffer
             )
         } else {
-            matches!(self.step, OnboardingStep::Project)
+            matches!(
+                self.step,
+                OnboardingStep::Project | OnboardingStep::PostAuthOffer
+            )
         };
         if is_past_agent_slide {
             return;
@@ -740,6 +775,19 @@ impl OnboardingStateModel {
     }
 
     fn send_completion_telemetry(&self, ctx: &mut ModelContext<Self>) {
+        if warp_core::features::FeatureFlag::AccountFirstOnboarding.is_enabled() {
+            send_telemetry_from_ctx!(
+                OnboardingEvent::OnboardingSlidesCompleted {
+                    intention: "account_first".to_string(),
+                    model: None,
+                    autonomy: None,
+                    has_project_path: false,
+                    ai_access: None,
+                },
+                ctx
+            );
+            return;
+        }
         let (intention, model, autonomy, ai_access) = match &self.intention {
             OnboardingIntention::Terminal => (self.intention.to_string(), None, None, None),
             OnboardingIntention::AgentDrivenDevelopment => (
@@ -768,6 +816,9 @@ impl OnboardingStateModel {
     }
 
     pub(crate) fn complete(&mut self, ctx: &mut ModelContext<Self>) {
+        if warp_core::features::FeatureFlag::AccountFirstOnboarding.is_enabled() {
+            self.send_account_first_action("next", ctx);
+        }
         self.send_completion_telemetry(ctx);
         ctx.emit(OnboardingStateEvent::Completed);
         ctx.notify();
@@ -775,11 +826,25 @@ impl OnboardingStateModel {
 
     pub(crate) fn back(&mut self, ctx: &mut ModelContext<Self>) {
         use warp_core::features::FeatureFlag;
+        let account_first = FeatureFlag::AccountFirstOnboarding.is_enabled();
         let theme_picker_last = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
         let ai_setup_flow = self.ai_setup_flow_active();
         let agent_intention = matches!(self.intention, OnboardingIntention::AgentDrivenDevelopment);
 
-        let prev = if theme_picker_last {
+        let prev = if account_first {
+            match self.step {
+                OnboardingStep::Intro => None,
+                OnboardingStep::Customize => Some(OnboardingStep::Intro),
+                OnboardingStep::ThemePicker => Some(OnboardingStep::Customize),
+                OnboardingStep::PostAuthOffer => Some(OnboardingStep::ThemePicker),
+                OnboardingStep::Intention
+                | OnboardingStep::AiSetup
+                | OnboardingStep::Agent
+                | OnboardingStep::AiAccess
+                | OnboardingStep::ThirdParty
+                | OnboardingStep::Project => Some(OnboardingStep::Intro),
+            }
+        } else if theme_picker_last {
             match self.step {
                 OnboardingStep::Intro => None,
                 OnboardingStep::Intention => Some(OnboardingStep::Intro),
@@ -805,6 +870,7 @@ impl OnboardingStateModel {
                 OnboardingStep::ThirdParty => Some(OnboardingStep::AiSetup),
                 OnboardingStep::Project => Some(OnboardingStep::ThirdParty),
                 OnboardingStep::ThemePicker => Some(OnboardingStep::Customize),
+                OnboardingStep::PostAuthOffer => None,
             }
         } else {
             match self.step {
@@ -818,10 +884,14 @@ impl OnboardingStateModel {
                 OnboardingStep::ThirdParty => None,
                 OnboardingStep::Agent => Some(OnboardingStep::Intention),
                 OnboardingStep::Project => Some(OnboardingStep::Agent),
+                OnboardingStep::PostAuthOffer => None,
             }
         };
 
         if let Some(prev) = prev {
+            if account_first {
+                self.send_account_first_action("back", ctx);
+            }
             send_telemetry_from_ctx!(OnboardingEvent::SlideNavigatedBack, ctx);
             self.set_step(prev, ctx);
         }
@@ -829,10 +899,13 @@ impl OnboardingStateModel {
 
     pub(crate) fn next(&mut self, ctx: &mut ModelContext<Self>) {
         use warp_core::features::FeatureFlag;
+        let account_first = FeatureFlag::AccountFirstOnboarding.is_enabled();
         let theme_picker_last = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
-
-        let is_last_step = if theme_picker_last {
-            matches!(self.step, OnboardingStep::ThemePicker)
+        let is_last_step = if account_first || theme_picker_last {
+            matches!(
+                self.step,
+                OnboardingStep::ThemePicker | OnboardingStep::PostAuthOffer
+            )
         } else {
             matches!(self.step, OnboardingStep::Project)
         };
@@ -840,7 +913,26 @@ impl OnboardingStateModel {
             send_telemetry_from_ctx!(OnboardingEvent::SlideNavigatedNext, ctx);
         }
 
-        if theme_picker_last {
+        if account_first {
+            if !matches!(
+                self.step,
+                OnboardingStep::Intro | OnboardingStep::PostAuthOffer
+            ) {
+                self.send_account_first_action("next", ctx);
+            }
+            match self.step {
+                OnboardingStep::Intro => self.set_step(OnboardingStep::Customize, ctx),
+                OnboardingStep::Customize => self.set_step(OnboardingStep::ThemePicker, ctx),
+                OnboardingStep::ThemePicker => {}
+                OnboardingStep::PostAuthOffer => {}
+                OnboardingStep::Intention
+                | OnboardingStep::AiSetup
+                | OnboardingStep::Agent
+                | OnboardingStep::AiAccess
+                | OnboardingStep::ThirdParty
+                | OnboardingStep::Project => self.set_step(OnboardingStep::Intro, ctx),
+            }
+        } else if theme_picker_last {
             let ai_setup_flow = self.ai_setup_flow_active();
             match self.step {
                 OnboardingStep::Intro => self.set_step(OnboardingStep::Intention, ctx),
@@ -889,6 +981,7 @@ impl OnboardingStateModel {
                 }
                 OnboardingStep::Project => self.set_step(OnboardingStep::ThemePicker, ctx),
                 OnboardingStep::ThemePicker => {}
+                OnboardingStep::PostAuthOffer => {}
             }
         } else {
             match self.step {
@@ -902,6 +995,7 @@ impl OnboardingStateModel {
                 OnboardingStep::ThirdParty => {}
                 OnboardingStep::Agent => self.set_step(OnboardingStep::Project, ctx),
                 OnboardingStep::Project => {}
+                OnboardingStep::PostAuthOffer => {}
             }
         }
     }
@@ -913,11 +1007,23 @@ impl OnboardingStateModel {
 
         self.step = step;
 
+        let account_first = warp_core::features::FeatureFlag::AccountFirstOnboarding.is_enabled();
         match step {
             OnboardingStep::Intro => {
                 send_telemetry_from_ctx!(
                     OnboardingEvent::SlideViewed {
-                        slide_name: "intro".to_string(),
+                        slide_name: if account_first { "welcome" } else { "intro" }.to_string(),
+                    },
+                    ctx
+                );
+            }
+            OnboardingStep::PostAuthOffer => {
+                let variant = self
+                    .offer_variant
+                    .expect("offer variant is selected before entering the post-auth offer");
+                send_telemetry_from_ctx!(
+                    OnboardingEvent::SlideViewed {
+                        slide_name: variant.slide_name().to_string(),
                     },
                     ctx
                 );
@@ -996,6 +1102,20 @@ impl OnboardingStateModel {
     /// current step, intention, and flow variant.
     pub(crate) fn progress(&self) -> (usize, usize) {
         use warp_core::features::FeatureFlag;
+        if FeatureFlag::AccountFirstOnboarding.is_enabled() {
+            return match self.step {
+                OnboardingStep::Intro
+                | OnboardingStep::Intention
+                | OnboardingStep::AiSetup
+                | OnboardingStep::Agent
+                | OnboardingStep::AiAccess
+                | OnboardingStep::ThirdParty
+                | OnboardingStep::Project => (0, 3),
+                OnboardingStep::Customize => (0, 3),
+                OnboardingStep::ThemePicker => (1, 3),
+                OnboardingStep::PostAuthOffer => (0, 0),
+            };
+        }
 
         let is_terminal = matches!(self.intention, OnboardingIntention::Terminal);
         if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
@@ -1009,6 +1129,7 @@ impl OnboardingStateModel {
                     (2, 4)
                 }
                 OnboardingStep::Project => (3, 4),
+                OnboardingStep::PostAuthOffer => (0, 0),
             };
         }
 
@@ -1041,8 +1162,35 @@ impl OnboardingStateModel {
             // Unreachable in the new flow; keep the legacy position.
             OnboardingStep::Project => 3,
             OnboardingStep::ThemePicker => step_count - 1,
+            OnboardingStep::PostAuthOffer => 0,
         };
         (step_index, step_count)
+    }
+
+    fn send_account_first_action(&self, action: &str, ctx: &mut ModelContext<Self>) {
+        let slide_name = match self.step {
+            OnboardingStep::Intro => "welcome",
+            OnboardingStep::Customize => "customize",
+            OnboardingStep::ThemePicker => "theme_picker",
+            OnboardingStep::Intention => "intention",
+            OnboardingStep::AiSetup => "ai_setup",
+            OnboardingStep::Agent => "agent",
+            OnboardingStep::AiAccess => "ai_access",
+            OnboardingStep::ThirdParty => "third_party",
+            OnboardingStep::Project => "project",
+            OnboardingStep::PostAuthOffer => self
+                .offer_variant
+                .expect("offer variant is selected before entering the post-auth offer")
+                .slide_name(),
+        };
+        send_telemetry_from_ctx!(
+            OnboardingEvent::OnboardingAction {
+                slide_name: slide_name.to_string(),
+                action: action.to_string(),
+                account_class: None,
+            },
+            ctx
+        );
     }
 }
 

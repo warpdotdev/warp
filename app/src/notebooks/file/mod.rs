@@ -32,11 +32,11 @@ use warpui::{
     ViewHandle,
 };
 
-use super::context_menu::{show_rich_editor_context_menu, ContextMenuAction, ContextMenuState};
+use super::context_menu::{ContextMenuAction, ContextMenuState, show_rich_editor_context_menu};
 use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
 use super::link::{NotebookLinks, SessionSource};
 use super::telemetry::NotebookTelemetryAction;
-use super::{styles, NotebookLocation};
+use super::{NotebookLocation, styles};
 use crate::appearance::Appearance;
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
@@ -47,22 +47,22 @@ use crate::notebooks::editor::rich_text_styles;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::pane::view::header::components::{
-    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
-    CenteredHeaderEdgeWidth,
+    CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
+    render_three_column_header,
 };
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::server::telemetry::{NotebookActionEvent, NotebookTelemetryMetadata, TelemetryEvent};
 use crate::settings::FontSettings;
 use crate::terminal::model::session::Session;
 use crate::ui_components::icons::Icon;
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::FileTarget;
 // `renders_in_warp_notebook_viewer` is only consumed by non-wasm views
 // (`code::view` resolves to `view.rs` off-wasm and to `wasm.rs` on-wasm, and the
 // tooltips helper is `local_fs`-gated). Gate the re-export to match, otherwise it
 // is flagged as an unused import on the wasm build where those consumers are absent.
 #[cfg(not(target_family = "wasm"))]
 pub use crate::util::openable_file_type::renders_in_warp_notebook_viewer;
-#[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::FileTarget;
 pub use crate::util::openable_file_type::{is_jupyter_notebook_file, is_markdown_file};
 use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
 use crate::workflows::{WorkflowSource, WorkflowType};
@@ -823,11 +823,11 @@ impl FileNotebookView {
             let Some(path) = self.local_path() else {
                 return;
             };
-            if let Some(active_session) = handle.as_ref(ctx).session(ctx.window_id()) {
-                if active_session.is_local() {
-                    self.set_context(&path, active_session, ctx);
-                    ctx.unsubscribe_to_model(&handle);
-                }
+            if let Some(active_session) = handle.as_ref(ctx).session(ctx.window_id())
+                && active_session.is_local()
+            {
+                self.set_context(&path, active_session, ctx);
+                ctx.unsubscribe_to_model(&handle);
             }
         }
     }
@@ -1141,9 +1141,11 @@ impl BackingView for FileNotebookView {
             .focus_handle
             .as_ref()
             .is_some_and(|h| h.is_maximized(ctx));
-        let mut actions = vec![MenuItemFields::toggle_pane_action(is_maximized)
-            .with_on_select_action(FileNotebookAction::ToggleMaximized)
-            .into_item()];
+        let mut actions = vec![
+            MenuItemFields::toggle_pane_action(is_maximized)
+                .with_on_select_action(FileNotebookAction::ToggleMaximized)
+                .into_item(),
+        ];
 
         if let Some(SourceFile::FileBased { .. }) = self.file_state.source() {
             actions.push(MenuItem::Separator);

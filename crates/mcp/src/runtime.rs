@@ -11,8 +11,8 @@ use std::future::Future;
 use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
 use futures::FutureExt as _;
-use rmcp::transport::ConfigureCommandExt as _;
 use rmcp::ServiceExt as _;
+use rmcp::transport::ConfigureCommandExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
@@ -385,12 +385,11 @@ async fn determine_transport(
 
             // Define a helper function to invoke when we've successfully authenticated.
             let emit_authenticated_notification = async move || {
-                if did_require_login {
-                    if let Some(authenticated_callback) = authenticated_callback {
-                        if let Err(err) = authenticated_callback(server_name).await {
-                            log::warn!("Failed to emit MCP authenticated notification: {err:?}");
-                        }
-                    }
+                if did_require_login
+                    && let Some(authenticated_callback) = authenticated_callback
+                    && let Err(err) = authenticated_callback(server_name).await
+                {
+                    log::warn!("Failed to emit MCP authenticated notification: {err:?}");
                 }
             };
 
@@ -570,10 +569,10 @@ impl<T: rmcp::transport::Transport<R>, R: rmcp::service::ServiceRole> rmcp::tran
         let logger = self.logger.clone();
         async move {
             let result = self.transport.receive().await;
-            if let Some(item) = &result {
-                if let Ok(json) = serde_json::to_string(item) {
-                    logger.log(format!("[info] MCP: Received response: {json}"));
-                }
+            if let Some(item) = &result
+                && let Ok(json) = serde_json::to_string(item)
+            {
+                logger.log(format!("[info] MCP: Received response: {json}"));
             }
             result
         }

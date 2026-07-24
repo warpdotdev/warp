@@ -15,8 +15,8 @@ use warpui::{
 
 use super::section_views::feature_section::FeatureSectionEvent;
 use super::section_views::{
-    SectionViewHandle, BUTTON_PADDING, DETAIL_FONT_SIZE, FOOTER_ICON_SIZE, SCROLLBAR_OFFSET,
-    SCROLLBAR_WIDTH, SECTION_SPACING, SECTION_SPACING_BOTTOM,
+    BUTTON_PADDING, DETAIL_FONT_SIZE, FOOTER_ICON_SIZE, SCROLLBAR_OFFSET, SCROLLBAR_WIDTH,
+    SECTION_SPACING, SECTION_SPACING_BOTTOM, SectionViewHandle,
 };
 use super::sections::sections;
 use super::{

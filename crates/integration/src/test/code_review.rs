@@ -5,21 +5,20 @@ use std::time::Duration;
 use command::blocking::Command;
 use warp::features::FeatureFlag;
 use warp::integration_testing::code_review::{
-    assert_code_review_anchor, assert_code_review_line_text, assert_code_review_loaded,
-    assert_code_review_scroll_region, assert_min_hidden_sections,
+    ScrollRegion, assert_code_review_anchor, assert_code_review_line_text,
+    assert_code_review_loaded, assert_code_review_scroll_region, assert_min_hidden_sections,
     expand_first_hidden_section_and_assert_full_reveal, scroll_code_review_to_deleted_range,
     scroll_code_review_to_footer, scroll_code_review_to_header, scroll_code_review_to_line,
-    ScrollRegion,
 };
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
 use warp::workspace::WorkspaceAction;
 use warpui_core::integration::{AssertionCallback, TestStep};
-use warpui_core::{async_assert, App, WindowId};
+use warpui_core::{App, WindowId, async_assert};
 
 use super::new_builder;
-use crate::util::write_all_rc_files_for_test;
 use crate::Builder;
+use crate::util::write_all_rc_files_for_test;
 
 const TEST_FILE_NAME: &str = "scroll_target.txt";
 const TARGET_LINE_NUMBER: usize = 70;

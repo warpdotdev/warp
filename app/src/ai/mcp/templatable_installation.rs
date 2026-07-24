@@ -63,8 +63,10 @@ impl TemplatableMCPServerInstallation {
         let variable_values_json = match serde_json::to_string(&variable_values) {
             Ok(json) => json,
             Err(err) => {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to serialize variable values for hashing"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to serialize variable values for hashing")
+                );
                 return None;
             }
         };

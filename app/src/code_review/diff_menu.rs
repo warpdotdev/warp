@@ -2,7 +2,7 @@
 //! a filtered list of label-only rows with a left check slot.
 use std::cmp;
 
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use warp_core::ui::theme::Fill;
 use warp_editor::editor::NavigationKey;
 use warpui::color::ColorU;
@@ -16,8 +16,8 @@ use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    id, AppContext, Entity, FocusContext, SingletonEntity as _, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AppContext, Entity, FocusContext, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle, id,
 };
 
 use crate::appearance::Appearance;

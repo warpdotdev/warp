@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 
 use pathfinder_geometry::vector::Vector2F;
-use warp_errors::report_error;
 
 use super::{
     AfterLayoutContext, AppContext, DispatchEventResult, Element, Event, EventContext,
@@ -201,15 +200,14 @@ impl EventHandler {
         position: Vector2F,
         app: &AppContext,
     ) -> bool {
-        if let Some(callback) = callback.as_ref() {
-            if let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap()) {
-                if rect.contains_point(position) {
-                    return match callback.borrow_mut()(ctx, app, position) {
-                        DispatchEventResult::PropagateToParent => false,
-                        DispatchEventResult::StopPropagation => true,
-                    };
-                }
-            }
+        if let Some(callback) = callback.as_ref()
+            && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
+            && rect.contains_point(position)
+        {
+            return match callback.borrow_mut()(ctx, app, position) {
+                DispatchEventResult::PropagateToParent => false,
+                DispatchEventResult::StopPropagation => true,
+            };
         }
         false
     }
@@ -251,9 +249,9 @@ impl Element for EventHandler {
         }
 
         let Some(z_index) = self.child_max_z_index else {
-            report_error!(
-                "Dispatching event on EventHandler element which was never painted",
-                extra: { "event" => ?EventDiscriminants::from(event.raw_event()) }
+            log::error!(
+                "Dispatching event on EventHandler element which was never painted: event={:?}",
+                EventDiscriminants::from(event.raw_event())
             );
             return false;
         };
@@ -345,16 +343,14 @@ impl Element for EventHandler {
                 precise: _,
                 modifiers,
             }) => {
-                if let Some(callback) = self.scroll_wheel.as_ref() {
-                    if let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
-                    {
-                        if rect.contains_point(*position) {
-                            return match callback.borrow_mut()(ctx, app, delta, modifiers) {
-                                DispatchEventResult::PropagateToParent => false,
-                                DispatchEventResult::StopPropagation => true,
-                            };
-                        }
-                    }
+                if let Some(callback) = self.scroll_wheel.as_ref()
+                    && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
+                    && rect.contains_point(*position)
+                {
+                    return match callback.borrow_mut()(ctx, app, delta, modifiers) {
+                        DispatchEventResult::PropagateToParent => false,
+                        DispatchEventResult::StopPropagation => true,
+                    };
                 }
             }
             _ => {}

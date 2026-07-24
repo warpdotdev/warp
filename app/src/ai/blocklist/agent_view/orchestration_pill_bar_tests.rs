@@ -137,8 +137,8 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
     use uuid::Uuid;
     use warpui::App;
 
-    use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
     use crate::ai::blocklist::BlocklistAIHistoryModel;
+    use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
     use crate::persistence::model::{
         AgentConversation, AgentConversationData, AgentConversationRecord,
     };

@@ -6,11 +6,11 @@ use itertools::Itertools as _;
 
 use super::GridHandler;
 use crate::ai::blocklist::block::secret_redaction::find_secrets_in_text_with_levels_using_regex;
-use crate::terminal::model::grid::{grapheme_cursor, Dimensions as _, RespectDisplayedOutput};
+use crate::terminal::model::grid::{Dimensions as _, RespectDisplayedOutput, grapheme_cursor};
 use crate::terminal::model::index::{Direction, Point};
 use crate::terminal::model::secrets::{
-    IsObfuscated, ObfuscateSecrets, Secret, SecretAndHandle, SecretHandle, SecretLevel,
-    SecretsRegex, SECRETS_REGEX,
+    IsObfuscated, ObfuscateSecrets, SECRETS_REGEX, Secret, SecretAndHandle, SecretHandle,
+    SecretLevel, SecretsRegex,
 };
 use crate::terminal::model::terminal_model::RangeInModel;
 

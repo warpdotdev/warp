@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use settings::ToggleableSetting;
 use warp::cmd_or_ctrl_shift;
 use warp::features::FeatureFlag;
@@ -21,11 +21,11 @@ use warp::settings::SelectionSettings;
 use warp_multi_agent_api as api;
 use warpui_core::integration::TestStep;
 use warpui_core::text::SelectionType;
-use warpui_core::{async_assert, Event, SingletonEntity};
+use warpui_core::{Event, SingletonEntity, async_assert};
 
 use super::new_builder;
-use crate::util::skip_if_powershell_core_2303;
 use crate::Builder;
+use crate::util::skip_if_powershell_core_2303;
 
 cfg_if::cfg_if! {
     if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {

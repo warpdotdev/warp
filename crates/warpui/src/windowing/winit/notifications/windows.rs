@@ -1,10 +1,10 @@
 use tauri_winrt_notification::Toast;
 use winit::event_loop::EventLoopProxy;
 
+use crate::WindowId;
 use crate::notification::NotificationSendError;
 use crate::windowing::winit::app::CustomEvent;
 use crate::windowing::winit::notifications::NotificationInfo;
-use crate::WindowId;
 
 pub(super) async fn send_notification(
     notification_info: NotificationInfo,
@@ -45,10 +45,12 @@ pub(super) async fn send_notification(
 }
 
 unsafe fn fetch_windows_app_id() -> Result<String, anyhow::Error> {
-    let app_id_pwstr = windows::Win32::UI::Shell::GetCurrentProcessExplicitAppUserModelID()
-        .map_err(|win_err| {
-            log::warn!("error retrieving Win32 AppUserModel ID: {win_err:?}");
-            anyhow::anyhow!(win_err)
-        })?;
-    Ok(app_id_pwstr.to_string()?)
+    unsafe {
+        let app_id_pwstr = windows::Win32::UI::Shell::GetCurrentProcessExplicitAppUserModelID()
+            .map_err(|win_err| {
+                log::warn!("error retrieving Win32 AppUserModel ID: {win_err:?}");
+                anyhow::anyhow!(win_err)
+            })?;
+        Ok(app_id_pwstr.to_string()?)
+    }
 }

@@ -7,8 +7,8 @@ use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::item::SearchItem;
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
-use crate::terminal::model::block::Block;
 use crate::terminal::TerminalView;
+use crate::terminal::model::block::Block;
 use crate::workspace::ActiveSession;
 
 const MAX_RESULTS: usize = 20;

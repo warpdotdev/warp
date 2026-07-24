@@ -1,10 +1,10 @@
 use futures::FutureExt;
 use winit::event_loop::EventLoopProxy;
 
+use crate::WindowId;
 use crate::notification::NotificationSendError;
 use crate::windowing::winit::app::CustomEvent;
 use crate::windowing::winit::notifications::NotificationInfo;
-use crate::WindowId;
 
 pub(super) async fn send_notification(
     notification_info: NotificationInfo,

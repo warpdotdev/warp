@@ -7,8 +7,9 @@ use itertools::Itertools;
 use warpui::units::Lines;
 use warpui::{AppContext, EntityId};
 
-use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
 use super::FindOptions;
+use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
+use crate::terminal::GridType;
 use crate::terminal::model::block::Block;
 use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
@@ -16,7 +17,6 @@ use crate::terminal::model::blocks::{
 use crate::terminal::model::find::{FindConfig, RegexDFAs};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
-use crate::terminal::GridType;
 use crate::view_components::find::FindDirection;
 
 /// Runs a find operation on the blocklist using the given `options` and returns a
@@ -641,11 +641,7 @@ fn update_matches_for_filtered_block<'a>(
 ) {
     let Some(displayed_rows) = block.displayed_output_row_ranges() else {
         matches.for_each(|find_match| {
-            if let BlockListMatch::CommandBlock(BlockGridMatch {
-                ref mut is_filtered,
-                ..
-            }) = find_match
-            {
+            if let BlockListMatch::CommandBlock(BlockGridMatch { is_filtered, .. }) = find_match {
                 *is_filtered = false;
             }
         });

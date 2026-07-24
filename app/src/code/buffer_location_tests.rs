@@ -1,8 +1,8 @@
 use lsp::LspManagerModel;
 use remote_server::proto::TextEdit;
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use repo_metadata::RepoMetadataModel;
 use warp_files::FileModel;
 use warp_util::content_version::ContentVersion;
 use warp_util::host_id::HostId;
@@ -96,10 +96,12 @@ fn open_server_local_creates_buffer_and_is_server_local() {
         let handle = gbm(&app);
         app.read(|ctx| {
             assert!(handle.as_ref(ctx).is_server_local(file_id));
-            assert!(handle
-                .as_ref(ctx)
-                .sync_clock_for_server_local(file_id)
-                .is_some());
+            assert!(
+                handle
+                    .as_ref(ctx)
+                    .sync_clock_for_server_local(file_id)
+                    .is_some()
+            );
         });
     })
 }
@@ -643,10 +645,10 @@ fn server_push_does_not_echo_back_as_client_edit() {
             let tx = user_edit_tx.clone();
             ctx.subscribe_to_model(&state.buffer, move |_me, _, event, _ctx| {
                 use warp_editor::content::buffer::BufferEvent;
-                if let BufferEvent::ContentChanged { origin, .. } = event {
-                    if origin.from_user() {
-                        let _ = tx.try_send(true);
-                    }
+                if let BufferEvent::ContentChanged { origin, .. } = event
+                    && origin.from_user()
+                {
+                    let _ = tx.try_send(true);
                 }
             });
             state

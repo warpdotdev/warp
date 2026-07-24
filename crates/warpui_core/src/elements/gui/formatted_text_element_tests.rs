@@ -11,9 +11,8 @@ use pathfinder_geometry::vector::vec2f;
 use string_offset::ByteOffset;
 
 use super::{
-    apply_secret_replacements, FormattedTextElement, FrameMouseHandlers,
-    HeadingFontSizeMultipliers, HighlightedHyperlink, HyperlinkSupport, LaidOutTextFrame,
-    SecretRange,
+    FormattedTextElement, FrameMouseHandlers, HeadingFontSizeMultipliers, HighlightedHyperlink,
+    HyperlinkSupport, LaidOutTextFrame, SecretRange, apply_secret_replacements,
 };
 use crate::elements::{Element, PartialClickableElement, Point, SelectableElement, ZIndex};
 use crate::event::DispatchedEvent;
@@ -220,9 +219,11 @@ fn smart_select_returns_none_when_point_is_outside_horizontal_bounds() {
     let element = test_formatted_text_element("hello", 10.0, 20.0);
     let point = vec2f(10.0 + 100.0, 25.0);
 
-    assert!(element
-        .smart_select(point, select_first_character)
-        .is_none());
+    assert!(
+        element
+            .smart_select(point, select_first_character)
+            .is_none()
+    );
 }
 
 const TEST_GLYPH_ADVANCE: f32 = 10.0;

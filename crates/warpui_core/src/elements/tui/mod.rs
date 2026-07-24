@@ -13,8 +13,8 @@
 //!   [`TuiDispatchEventResult`], [`TuiEventDispatchResult`]) threaded through
 //!   [`TuiElement::dispatch_event`]. (The crossterm → warp event *conversion*
 //!   lives with the runtime, in `crate::runtime`.)
-//! - The concrete elements: [`TuiText`], [`TuiFlex`], [`TuiContainer`],
-//!   [`TuiChildView`], and [`TuiEventHandler`].
+//! - The concrete elements: [`TuiText`], [`TuiFlex`], [`TuiStack`],
+//!   [`TuiContainer`], [`TuiChildView`], and [`TuiEventHandler`].
 //! - [`TuiParentElement`]: a trait for multi-child elements, providing
 //!   [`with_child`](TuiParentElement::with_child) /
 //!   [`with_children`](TuiParentElement::with_children) /
@@ -46,6 +46,7 @@ mod scrollable;
 mod selectable;
 mod shimmering_text;
 mod size_constraint_switch;
+mod stack;
 mod text;
 mod text_helpers;
 mod viewported_list;
@@ -73,11 +74,12 @@ pub use scene::{
 };
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use selectable::{
-    point_after_col, TuiRowGlyph, TuiRowResize, TuiSelectable, TuiSelectableElement,
-    TuiSelectionHandle, TuiSelectionSpan,
+    TuiRowGlyph, TuiRowResize, TuiSelectable, TuiSelectableElement, TuiSelectionHandle,
+    TuiSelectionSpan, point_after_col,
 };
 pub use shimmering_text::TuiShimmeringText;
 pub use size_constraint_switch::{TuiSizeConstraintCondition, TuiSizeConstraintSwitch};
+pub use stack::TuiStack;
 pub use text::TuiText;
 pub use text_helpers::{text_width, truncate_with_ellipsis};
 pub use viewported_list::{

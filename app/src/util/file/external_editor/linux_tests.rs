@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use warp_util::path::LineAndColumnArg;
 
-use super::{tokenize_exec, DesktopExecError, EditorMetadata};
+use super::{DesktopExecError, EditorMetadata, tokenize_exec};
 
 #[cfg(test)]
 fn with_files(tag: &str, contents: &str, cb: impl FnOnce(PathBuf, PathBuf) -> anyhow::Result<()>) {

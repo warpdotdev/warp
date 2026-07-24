@@ -26,6 +26,8 @@ pub enum Experiment {
     FreeTierToBuildConversionInterstitialEmail,
     FreeTierToBuildConversionInterstitialOnly,
     LinuxLaunchExperiment,
+    MacosRunnersControl,
+    MacosRunnersExperiment,
     MultiAgentControl,
     MultiAgentExperiment,
     MultiArmReverseAiTrialControl,

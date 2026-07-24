@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{sink, Sink};
+use std::io::{Sink, sink};
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
@@ -17,7 +17,7 @@ use crate::terminal::model::ansi::{self};
 use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::shared_session::ai_agent::decode_agent_response_event;
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
-use crate::terminal::shared_session::{decode_scrollback, SharedSessionStatus};
+use crate::terminal::shared_session::{SharedSessionStatus, decode_scrollback};
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::{TerminalModel, TerminalView};
 
@@ -252,58 +252,53 @@ impl EventLoop {
                         // When a non-agent command starts, clear the loading state and input buffer.
                         // We don't clear for agent commands because the viewer may be typing a
                         // follow-up.
-                        if should_clear_input {
-                            if let Some(view) = self.terminal_view.upgrade(ctx) {
-                                view.update(ctx, |view, ctx| {
-                                    // Skip during cloud setup: clearing on every setup command would
-                                    // wipe a follow-up the viewer is composing. Mirrors the
-                                    // `InputUpdated` guard.
-                                    let skip_clear_during_setup =
-                                        FeatureFlag::CloudModeSetupV2.is_enabled() && {
-                                            let model = view.model.lock();
-                                            is_cloud_agent_pre_first_exchange(
-                                                view.ambient_agent_view_model(),
-                                                view.agent_view_controller(),
-                                                &model,
-                                                ctx,
-                                            )
-                                        };
-                                    if skip_clear_during_setup
-                                        || view.has_queued_command_in_flight(ctx)
-                                    {
-                                        return;
-                                    }
-                                    view.input().update(ctx, |input, ctx| {
-                                        // Restore frozen visual state. Then also reinitialize the
-                                        // buffer here: for shell commands the block transition will
-                                        // reset the CRDT with a new block ID shortly after, so the
-                                        // brief CRDT inconsistency is harmless. This pre-emptive
-                                        // clear gives the viewer an empty buffer while the command
-                                        // runs rather than showing the command text.
-                                        input.unfreeze_agent_input(false, ctx);
-                                        let editor = input.editor().clone();
-                                        editor.update(ctx, |editor, ctx| {
-                                            editor.reinitialize_buffer(None, ctx);
-                                        });
+                        if should_clear_input && let Some(view) = self.terminal_view.upgrade(ctx) {
+                            view.update(ctx, |view, ctx| {
+                                // Skip during cloud setup: clearing on every setup command would
+                                // wipe a follow-up the viewer is composing. Mirrors the
+                                // `InputUpdated` guard.
+                                let skip_clear_during_setup =
+                                    FeatureFlag::CloudModeSetupV2.is_enabled() && {
+                                        let model = view.model.lock();
+                                        is_cloud_agent_pre_first_exchange(
+                                            view.ambient_agent_view_model(),
+                                            view.agent_view_controller(),
+                                            &model,
+                                            ctx,
+                                        )
+                                    };
+                                if skip_clear_during_setup || view.has_queued_command_in_flight(ctx)
+                                {
+                                    return;
+                                }
+                                view.input().update(ctx, |input, ctx| {
+                                    // Restore frozen visual state. Then also reinitialize the
+                                    // buffer here: for shell commands the block transition will
+                                    // reset the CRDT with a new block ID shortly after, so the
+                                    // brief CRDT inconsistency is harmless. This pre-emptive
+                                    // clear gives the viewer an empty buffer while the command
+                                    // runs rather than showing the command text.
+                                    input.unfreeze_agent_input(false, ctx);
+                                    let editor = input.editor().clone();
+                                    editor.update(ctx, |editor, ctx| {
+                                        editor.reinitialize_buffer(None, ctx);
                                     });
                                 });
-                            }
+                            });
                         }
-                        if let Some(ai_metadata) = reconstructed_ai_metadata {
-                            if let Some(view) = self.terminal_view.upgrade(ctx) {
-                                if let Some(action_id) = ai_metadata.requested_command_action_id() {
-                                    view.update(ctx, |view, ctx| {
-                                        view.ai_controller().update(ctx, |controller, ctx| {
-                                            controller
-                                                .mark_action_as_remotely_executing_in_shared_session(
-                                                    action_id,
-                                                    *ai_metadata.conversation_id(),
-                                                    ctx,
-                                                );
-                                        });
-                                    });
-                                }
-                            }
+                        if let Some(ai_metadata) = reconstructed_ai_metadata
+                            && let Some(view) = self.terminal_view.upgrade(ctx)
+                            && let Some(action_id) = ai_metadata.requested_command_action_id()
+                        {
+                            view.update(ctx, |view, ctx| {
+                                view.ai_controller().update(ctx, |controller, ctx| {
+                                    controller.mark_action_as_remotely_executing_in_shared_session(
+                                        action_id,
+                                        *ai_metadata.conversation_id(),
+                                        ctx,
+                                    );
+                                });
+                            });
                         }
                     }
                 }
@@ -403,20 +398,20 @@ impl EventLoop {
                 }
             }
 
-            if Some(self.next_event_no) == self.catching_up_to_event_no {
-                if let Some(view) = self.terminal_view.upgrade(ctx) {
-                    // TODO (suraj): reconsider how we query the role here.
-                    if let Some(presence_manager) =
-                        view.read(ctx, |view, _| view.shared_session_presence_manager())
-                    {
-                        // Role is set to the presence manager's role to stay as up-to-date as possible.
-                        // This avoids a race condition if a viewer gets a new role before catching up,
-                        // by ensuring we're not overwriting the new role.
-                        if let Some(role) = presence_manager.as_ref(ctx).role() {
-                            self.terminal_model.lock().set_shared_session_status(
-                                SharedSessionStatus::ActiveViewer { role },
-                            );
-                        }
+            if Some(self.next_event_no) == self.catching_up_to_event_no
+                && let Some(view) = self.terminal_view.upgrade(ctx)
+            {
+                // TODO (suraj): reconsider how we query the role here.
+                if let Some(presence_manager) =
+                    view.read(ctx, |view, _| view.shared_session_presence_manager())
+                {
+                    // Role is set to the presence manager's role to stay as up-to-date as possible.
+                    // This avoids a race condition if a viewer gets a new role before catching up,
+                    // by ensuring we're not overwriting the new role.
+                    if let Some(role) = presence_manager.as_ref(ctx).role() {
+                        self.terminal_model
+                            .lock()
+                            .set_shared_session_status(SharedSessionStatus::ActiveViewer { role });
                     }
                 }
             }

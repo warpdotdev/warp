@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::in_memory::InMemoryPreferences;
 use super::Error;
+use super::in_memory::InMemoryPreferences;
 
 /// An implementation of the [`UserPreferences`] trait using a file for
 /// persistence.

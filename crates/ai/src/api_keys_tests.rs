@@ -661,9 +661,10 @@ fn api_keys_for_request_serves_previous_geap_token_while_refreshing() {
 fn api_keys_for_request_omits_geap_token_during_first_mint() {
     // The very first mint has nothing to serve yet.
     let mgr = make_manager_with_geap(GeapCredentialsState::Refreshing { previous: None });
-    assert!(mgr
-        .api_keys_for_request(false, false, Some(geap_gate()))
-        .is_none());
+    assert!(
+        mgr.api_keys_for_request(false, false, Some(geap_gate()))
+            .is_none()
+    );
 }
 
 #[test]
@@ -680,9 +681,10 @@ fn api_keys_for_request_omits_geap_token_for_non_loaded_states() {
         },
     ] {
         let mgr = make_manager_with_geap(state);
-        assert!(mgr
-            .api_keys_for_request(false, false, Some(geap_gate()))
-            .is_none());
+        assert!(
+            mgr.api_keys_for_request(false, false, Some(geap_gate()))
+                .is_none()
+        );
     }
 }
 
@@ -712,11 +714,13 @@ fn expired_grok_tokens() -> GrokTokens {
 #[test]
 fn grok_is_expired_semantics() {
     // Past hard expiry.
-    assert!(GrokTokens {
-        expires_at: Some(SystemTime::now() - Duration::from_secs(1)),
-        ..Default::default()
-    }
-    .is_expired());
+    assert!(
+        GrokTokens {
+            expires_at: Some(SystemTime::now() - Duration::from_secs(1)),
+            ..Default::default()
+        }
+        .is_expired()
+    );
     // Still valid, even if near expiry (within the proactive lead window).
     assert!(!grok_tokens("tok", Some(60)).is_expired());
     // Unknown expiry is never considered expired.

@@ -164,14 +164,12 @@ pub struct TabCloseParams {
     pub mode: TabCloseMode,
 }
 
-/// Parameters for `tab.create` and `window.create` shell/profile options.
+/// Parameters for `tab.create` and `window.create`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TabCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_type: Option<TabType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

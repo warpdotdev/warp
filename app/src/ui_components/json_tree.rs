@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use pathfinder_color::ColorU;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ConstrainedBox, CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisSize, MouseState,
     MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,

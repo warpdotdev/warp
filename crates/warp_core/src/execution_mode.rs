@@ -51,6 +51,10 @@ impl AppExecutionMode {
     fn is_app(&self) -> bool {
         matches!(self.mode, ExecutionMode::App | ExecutionMode::Tui)
     }
+    /// Whether Warp is running as the headless terminal UI.
+    pub fn is_tui(&self) -> bool {
+        matches!(self.mode, ExecutionMode::Tui)
+    }
 
     /// Whether Active AI features are allowed in this execution mode.
     ///

@@ -11,9 +11,10 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use rangemap::RangeMap;
 use smallvec::SmallVec;
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 
-use crate::elements::{Fill, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use crate::Scene;
+use crate::elements::{DEFAULT_UI_LINE_HEIGHT_RATIO, Fill};
 use crate::fonts::{
     Cache as FontCache, FamilyId, FontId, GlyphId, Properties, RequestedFallbackFontSource,
     TextLayoutSystem,
@@ -22,7 +23,6 @@ use crate::geometry::rect::RectF;
 use crate::geometry::vector::vec2f;
 use crate::platform::LineStyle;
 use crate::scene::{Border, CornerRadius, Dash, GlyphFade};
-use crate::Scene;
 
 type StyleRun = (Range<usize>, StyleAndFont);
 
@@ -732,14 +732,14 @@ impl TextFrame {
                     );
 
                     let mut soft_wrapped = false;
-                    if let Some(prev_id) = prev_hyperlink_id {
-                        if prev_id == curr_hyperlink_id {
-                            positions
-                                .last_mut()
-                                .expect("Positions should be non-empty")
-                                .push(curr_rectangle);
-                            soft_wrapped = true;
-                        }
+                    if let Some(prev_id) = prev_hyperlink_id
+                        && prev_id == curr_hyperlink_id
+                    {
+                        positions
+                            .last_mut()
+                            .expect("Positions should be non-empty")
+                            .push(curr_rectangle);
+                        soft_wrapped = true;
                     }
 
                     if !soft_wrapped {
@@ -1330,21 +1330,21 @@ impl Line {
         }
 
         // Draw a strikethrough through text if boolean flag is set.
-        if run.styles.show_strikethrough {
-            if let Some(first_glyph) = run.glyphs.first() {
-                let mut strikethrough_origin = origin + first_glyph.position_along_baseline;
-                strikethrough_origin
-                    .set_y(strikethrough_origin.y() - self.font_size / STRIKETHROUGH_FONT_OFFSET);
-                let strikethrough_rect = RectF::new(
-                    strikethrough_origin,
-                    vec2f(run.width, STRIKETHROUGH_THICKNESSS),
-                );
+        if run.styles.show_strikethrough
+            && let Some(first_glyph) = run.glyphs.first()
+        {
+            let mut strikethrough_origin = origin + first_glyph.position_along_baseline;
+            strikethrough_origin
+                .set_y(strikethrough_origin.y() - self.font_size / STRIKETHROUGH_FONT_OFFSET);
+            let strikethrough_rect = RectF::new(
+                strikethrough_origin,
+                vec2f(run.width, STRIKETHROUGH_THICKNESSS),
+            );
 
-                if let Some(clipped_rect) = strikethrough_rect.intersection(visible_bounds) {
-                    scene
-                        .draw_rect_without_hit_recording(clipped_rect)
-                        .with_background(Fill::Solid(glyph_color));
-                }
+            if let Some(clipped_rect) = strikethrough_rect.intersection(visible_bounds) {
+                scene
+                    .draw_rect_without_hit_recording(clipped_rect)
+                    .with_background(Fill::Solid(glyph_color));
             }
         }
     }

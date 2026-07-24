@@ -5,8 +5,8 @@ use itertools::Itertools as _;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warp_graphql::billing::AddonCreditsOption;
 use warp_graphql::error::BudgetExceededError;
 use warpui::elements::{
@@ -560,15 +560,17 @@ impl BuyCreditsBanner {
             .unwrap_or(false);
 
         let make_banner_text = || {
-            let mut banner_text_children = vec![appearance
-                .ui_builder()
-                .paragraph("Out of credits")
-                .with_style(UiComponentStyles {
-                    font_size: Some(14.),
-                    ..Default::default()
-                })
-                .build()
-                .finish()];
+            let mut banner_text_children = vec![
+                appearance
+                    .ui_builder()
+                    .paragraph("Out of credits")
+                    .with_style(UiComponentStyles {
+                        font_size: Some(14.),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            ];
 
             // Show different message based on whether purchase would exceed limit
             if is_at_monthly_limit || would_purchase_exceed_limit {

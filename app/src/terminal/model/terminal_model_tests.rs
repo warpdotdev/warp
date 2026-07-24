@@ -8,11 +8,13 @@ use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_terminal::model::ansi::ClearMode;
 use warpui::r#async::executor::Background;
-use warpui::text::{str_to_byte_vec, SelectionType};
+use warpui::text::{SelectionType, str_to_byte_vec};
 
 use super::*;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::terminal::color;
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::ansi::{CompletionMetadata, Handler, Processor};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::bootstrap::BootstrapStage;
@@ -21,7 +23,6 @@ use crate::terminal::model::image_map::StoredImageMetadata;
 use crate::terminal::model::index::Side;
 use crate::terminal::model::selection::ExpandedSelectionRange;
 use crate::terminal::model::test_utils::block_size;
-use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::shared_session::SharedSessionStatus;
 
 /// Helper function to create a SerializedBlock with default values,
@@ -54,6 +55,58 @@ fn create_default_serialized_block() -> SerializedBlock {
     }
 }
 
+fn report_shell_typeahead(model: &mut TerminalModel, text: &str) {
+    model.input_buffer(InputBufferValue {
+        buffer: text.to_owned(),
+        session_id: None,
+    });
+}
+
+#[test]
+fn take_typeahead_for_input_advances_incremental_typeahead() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("sleep 5", "");
+    model.finish_block();
+
+    report_shell_typeahead(&mut model, "ec");
+    assert_eq!(
+        model.take_typeahead_for_input(),
+        Some(("ec".to_owned(), CharOffset::from(0)))
+    );
+
+    report_shell_typeahead(&mut model, "echo hi");
+    assert_eq!(
+        model.take_typeahead_for_input(),
+        Some(("echo hi".to_owned(), CharOffset::from(2)))
+    );
+}
+
+#[test]
+fn take_typeahead_for_input_ignores_agent_requested_commands() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("sleep 5", "");
+    let action_id: crate::ai::agent::AIAgentActionId = "action".to_owned().into();
+    model
+        .block_list_mut()
+        .active_block_mut()
+        .set_agent_interaction_mode(AgentInteractionMetadata::new_hidden(
+            action_id,
+            AIConversationId::new(),
+        ));
+    model.finish_block();
+    report_shell_typeahead(&mut model, "echo hi");
+
+    assert_eq!(model.take_typeahead_for_input(), None);
+}
+
+#[test]
+fn take_typeahead_for_input_is_none_when_typeahead_is_empty() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("sleep 5", "");
+    model.finish_block();
+
+    assert_eq!(model.take_typeahead_for_input(), None);
+}
 #[test]
 fn cloud_mode_deferred_terminal_model_starts_view_pending() {
     let mut model = TerminalModel::new_for_cloud_mode_shared_session_viewer(
@@ -73,9 +126,11 @@ fn cloud_mode_deferred_terminal_model_starts_view_pending() {
     ));
     assert!(model.shared_session_status().is_viewer());
     assert!(model.is_dummy_cloud_mode_session());
-    assert!(!model
-        .block_list()
-        .is_executing_oz_environment_startup_commands());
+    assert!(
+        !model
+            .block_list()
+            .is_executing_oz_environment_startup_commands()
+    );
 
     let restored_block = SerializedBlock {
         id: BlockId::new(),
@@ -1397,9 +1452,11 @@ fn precmd_with_completion_metadata_recovers_in_band_completion_and_reuses_cached
         terminal.start_in_band_command_execution(),
         StartCommandOutcome::Accepted
     );
-    assert!(terminal
-        .block_list()
-        .is_writing_or_executing_in_band_command());
+    assert!(
+        terminal
+            .block_list()
+            .is_writing_or_executing_in_band_command()
+    );
 
     let next_block_id = BlockId::new();
     terminal.precmd_with_completion_metadata(PrecmdValue {
@@ -1420,9 +1477,11 @@ fn precmd_with_completion_metadata_recovers_in_band_completion_and_reuses_cached
     assert!(completed_block.is_in_band_command_block());
     assert_eq!(completed_block.state(), BlockState::DoneWithExecution);
     assert_eq!(terminal.active_block_id(), &next_block_id);
-    assert!(!terminal
-        .block_list()
-        .is_writing_or_executing_in_band_command());
+    assert!(
+        !terminal
+            .block_list()
+            .is_writing_or_executing_in_band_command()
+    );
     assert_eq!(
         terminal
             .block_list()
@@ -1683,8 +1742,8 @@ fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_are_ignored()
 }
 
 #[test]
-fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_are_ignored_when_recovery_is_disabled(
-) {
+fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_are_ignored_when_recovery_is_disabled()
+ {
     let _recovery_disabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(false);
     let mut terminal = TerminalModel::mock(None, None);
     normal_command_finished_and_precmd(

@@ -7,9 +7,9 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::{
     AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{AmbientAgentViewModelHandleExt, PaneGroup, PaneId};
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
@@ -89,10 +89,10 @@ impl PaneGroup {
         let child_id = child_conversation.id();
 
         // Idempotency guard — see fn doc.
-        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied() {
-            if self.has_pane_id(existing_pane_id) {
-                return;
-            }
+        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied()
+            && self.has_pane_id(existing_pane_id)
+        {
+            return;
         }
 
         let new_pane_id =

@@ -331,14 +331,14 @@ fn init_sentry(user_id: Option<UserUid>, email: Option<String>, ctx: &mut AppCon
             // If the crash recovery process is running, mark any exception as "handled".
             // The crash recovery process will attempt to the handle that crash, if
             // we crash when handling we'll report that as an unhandled event to sentry.
-            if crash_recovery_metadata.is_crash_recovery_process_running {
-                if let Some(mechanism) = exception.mechanism.as_mut() {
-                    if let Some(false) = mechanism.handled {
-                        crash_recovery_metadata.was_unhandled_event();
-                    }
-
-                    mechanism.handled = Some(true);
+            if crash_recovery_metadata.is_crash_recovery_process_running
+                && let Some(mechanism) = exception.mechanism.as_mut()
+            {
+                if let Some(false) = mechanism.handled {
+                    crash_recovery_metadata.was_unhandled_event();
                 }
+
+                mechanism.handled = Some(true);
             }
         }
 
@@ -359,7 +359,7 @@ fn init_sentry(user_id: Option<UserUid>, email: Option<String>, ctx: &mut AppCon
     // Initialize the appropriate native Sentry SDK.
     #[cfg(enable_crash_recovery)]
     {
-        use crate::crash_recovery::{is_crash_recovery_process_running, CrashRecovery};
+        use crate::crash_recovery::{CrashRecovery, is_crash_recovery_process_running};
 
         // If the crash recovery process is running, defer initialization of Sentry native until the
         // crash recovery process is torn down. Unlike Sentry Rust, we can't easily mark events as

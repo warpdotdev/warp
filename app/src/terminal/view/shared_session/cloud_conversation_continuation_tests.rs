@@ -7,6 +7,7 @@ use warp_graphql::object_permissions::AccessLevel;
 use warpui::{App, EntityId, SingletonEntity};
 
 use super::*;
+use crate::FeatureFlag;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIAgentHarness, ServerAIConversationMetadata};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -25,12 +26,11 @@ use crate::cloud_object::{
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::TerminalModel;
+use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
-use crate::FeatureFlag;
 
 const CONVERSATION_TOKEN: &str = "server-conversation-token";
 

@@ -240,6 +240,23 @@ impl Command {
         self
     }
 
+    /// Returns the path to the program configured for this command.
+    #[must_use]
+    pub fn get_program(&self) -> &OsStr {
+        self.inner.get_program()
+    }
+
+    /// Returns the arguments configured for this command.
+    pub fn get_args(&self) -> impl Iterator<Item = &OsStr> {
+        self.inner.get_args()
+    }
+
+    /// Returns the working directory configured for this command.
+    #[must_use]
+    pub fn get_current_dir(&self) -> Option<&Path> {
+        self.inner.get_current_dir()
+    }
+
     /// Configures the standard input (stdin) for the new process.
     ///
     /// # Examples

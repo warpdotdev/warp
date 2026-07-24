@@ -1,5 +1,5 @@
 use warpui::integration::{AssertionCallback, TestStep};
-use warpui::{async_assert, App, SingletonEntity, TypedActionView, WindowId};
+use warpui::{App, SingletonEntity, TypedActionView, WindowId, async_assert};
 
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentVersion};
@@ -73,9 +73,11 @@ pub fn assert_ai_document_overflow_button_position_exists() -> AssertionCallback
         let position_id = ai_document_overflow_button_position_id(app, window_id);
         let presenter = app.presenter(window_id).expect("presenter should exist");
         let presenter = presenter.borrow();
-        async_assert!(presenter
-            .position_cache()
-            .get_position(position_id)
-            .is_some())
+        async_assert!(
+            presenter
+                .position_cache()
+                .get_position(position_id)
+                .is_some()
+        )
     })
 }

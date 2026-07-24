@@ -1,10 +1,10 @@
 //! Unit tests for ambient agent CLI argument mapping and message helpers.
 use chrono::{TimeZone, Utc};
+use warp_cli::SortOrderArg;
 use warp_cli::json_filter::JsonOutput;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, RunSortByArg, RunSourceArg, RunStateArg,
 };
-use warp_cli::SortOrderArg;
 
 use super::*;
 use crate::server::server_api::ai::{ArtifactType, ExecutionLocation, RunSortBy, RunSortOrder};
@@ -183,11 +183,13 @@ fn task_id_from_run_id_ignores_non_task_ids() {
 #[test]
 #[serial_test::serial]
 fn task_id_for_message_send_prefers_sender_run_id() {
-    std::env::set_var(warp_cli::OZ_RUN_ID_ENV, OTHER_TASK_ID);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(warp_cli::OZ_RUN_ID_ENV, OTHER_TASK_ID) };
     let task_id = task_id_for_message_send(TASK_ID)
         .expect("valid task id")
         .expect("task id");
-    std::env::remove_var(warp_cli::OZ_RUN_ID_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(warp_cli::OZ_RUN_ID_ENV) };
 
     assert_eq!(task_id.to_string(), TASK_ID);
 }
@@ -195,11 +197,13 @@ fn task_id_for_message_send_prefers_sender_run_id() {
 #[test]
 #[serial_test::serial]
 fn task_id_for_message_send_falls_back_to_oz_run_id() {
-    std::env::set_var(warp_cli::OZ_RUN_ID_ENV, TASK_ID);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(warp_cli::OZ_RUN_ID_ENV, TASK_ID) };
     let task_id = task_id_for_message_send("local-child-run")
         .expect("valid env task id")
         .expect("task id");
-    std::env::remove_var(warp_cli::OZ_RUN_ID_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(warp_cli::OZ_RUN_ID_ENV) };
 
     assert_eq!(task_id.to_string(), TASK_ID);
 }
@@ -207,9 +211,11 @@ fn task_id_for_message_send_falls_back_to_oz_run_id() {
 #[test]
 #[serial_test::serial]
 fn task_id_from_oz_run_id_env_rejects_invalid_value() {
-    std::env::set_var(warp_cli::OZ_RUN_ID_ENV, "not-a-task-id");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(warp_cli::OZ_RUN_ID_ENV, "not-a-task-id") };
     let err = task_id_from_oz_run_id_env().expect_err("invalid task id");
-    std::env::remove_var(warp_cli::OZ_RUN_ID_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(warp_cli::OZ_RUN_ID_ENV) };
 
     assert!(err.to_string().contains("Invalid OZ_RUN_ID"));
 }

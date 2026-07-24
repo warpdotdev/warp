@@ -4,20 +4,20 @@ use std::ops::{Neg, RangeInclusive};
 use pathfinder_color::ColorU;
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::{AppContext, Element, EntityId, PaintContext};
 
+use super::model::SecretHandle;
 use super::model::ansi::{CursorShape, CursorStyle};
 use super::model::grid::RespectDisplayedOutput;
 use super::model::image_map::StoredImageMetadata;
-use super::model::SecretHandle;
 use crate::settings::EnforceMinimumContrast;
-use crate::terminal::grid_renderer::{render_cursor, render_grid, CellGlyphCache};
+use crate::terminal::grid_renderer::{CellGlyphCache, render_cursor, render_grid};
+use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::blockgrid::{BlockGrid, CursorDisplayPoint};
 use crate::terminal::model::grid::grid_handler::Link;
 use crate::terminal::model::index::Point;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::{color, SizeInfo};
+use crate::terminal::{SizeInfo, color};
 use crate::themes::theme::WarpTheme;
 
 pub struct GridRenderParams {

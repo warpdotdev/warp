@@ -18,15 +18,15 @@ use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
 use warp_core::paths::home_relative_path;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty, Expanded, Flex,
     MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::platform::file_picker::FilePickerError;
 use warpui::platform::FilePickerConfiguration;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::platform::file_picker::FilePickerError;
 use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
@@ -34,12 +34,12 @@ use crate::appearance::Appearance;
 use crate::modal::MODAL_BACKDROP_OPACITY;
 use crate::themes::theme::Blend;
 use crate::ui_components::buttons::icon_button;
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::ui_components::icons::Icon;
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme,
 };
-use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 
 const DIALOG_WIDTH: f32 = 600.;

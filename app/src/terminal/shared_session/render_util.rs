@@ -8,7 +8,7 @@ use warpui::fonts::Weight;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity};
 
-use super::presence_manager::{Participant, MUTED_AVATAR_BORDER_COLOR, MUTED_PARTICIPANT_COLOR};
+use super::presence_manager::{MUTED_AVATAR_BORDER_COLOR, MUTED_PARTICIPANT_COLOR, Participant};
 use crate::appearance::Appearance;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 

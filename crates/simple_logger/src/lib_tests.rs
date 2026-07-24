@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{path_with_suffix, perform_rotation, RotationConfig};
+use super::{RotationConfig, path_with_suffix, perform_rotation};
 
 /// Unique temp directory per test, so parallel cargo nextest runs don't
 /// collide on shared state.

@@ -7,8 +7,8 @@ use crate::appearance::Appearance;
 use crate::pane_group::PaneId;
 use crate::terminal::TerminalView;
 use crate::window_settings::WindowSettings;
-use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::Workspace;
+use crate::workspace::tab_group::TabGroupId;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 /// What composes a pane (i.e. the pane group and the pane itself).
@@ -64,21 +64,13 @@ impl WelcomeTipsViewState {
     }
 
     pub fn close_popup(&mut self) {
-        if let WelcomeTipsViewState::Available {
-            ref mut is_popup_open,
-            ..
-        } = self
-        {
+        if let WelcomeTipsViewState::Available { is_popup_open, .. } = self {
             *is_popup_open = false;
         }
     }
 
     pub fn toggle_popup(&mut self) {
-        if let WelcomeTipsViewState::Available {
-            ref mut is_popup_open,
-            ..
-        } = self
-        {
+        if let WelcomeTipsViewState::Available { is_popup_open, .. } = self {
             *is_popup_open = !*is_popup_open;
         }
     }
@@ -404,11 +396,12 @@ fn get_terminal_background_opacity(window_id: WindowId, app: &AppContext) -> u8 
         .background_opacity
         .effective_opacity(window_id, app);
 
-    if let Some(img) = theme.background_image() {
-        let opacity_ratio = background_opacity as f32 / 100.;
-        // Scale the overlay opacity with the background opacity ratio.
-        (((100 - img.opacity) as f32) * opacity_ratio) as u8
-    } else {
-        background_opacity
+    match theme.background_image() {
+        Some(img) => {
+            let opacity_ratio = background_opacity as f32 / 100.;
+            // Scale the overlay opacity with the background opacity ratio.
+            (((100 - img.opacity) as f32) * opacity_ratio) as u8
+        }
+        _ => background_opacity,
     }
 }

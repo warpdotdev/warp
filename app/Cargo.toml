@@ -2,7 +2,7 @@
 authors = ["Warp Team <dev@warp.dev>"]
 default-run = "warp-oss"
 description = "The cloud-backed terminal for individuals and teams"
-edition = "2021"
+edition = "2024"
 autobins = false
 name = "warp"
 version = "0.1.0"
@@ -308,6 +308,7 @@ wgpu.workspace = true
 app-installation-detection.workspace = true
 async-io.workspace = true
 axum.workspace = true
+build_cache.workspace = true
 cloud_object_persistence.workspace = true
 comfy-table = "7.1.4"
 inquire = "0.9.1"
@@ -466,7 +467,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-tui = ["warpui_core/tui"]
+tui = ["warpui_core/tui", "voice_input"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -480,6 +481,7 @@ agent_mode_debug = []
 agent_mode_primary_xml = []
 agent_mode_pre_plan_xml = []
 agent_onboarding = []
+account_first_onboarding = []
 agent_shared_sessions = []
 ask_user_question = []
 async_find = []
@@ -611,6 +613,7 @@ default = [
     "agent_tips",
     "pluggable_notifications",
     "agent_onboarding",
+    "account_first_onboarding",
     "global_search",
     "cloud_conversations",
     "list_skills",
@@ -621,6 +624,7 @@ default = [
     "cloud_mode_from_local_session",
     "cloud_mode_image_context",
     "agent_mode_computer_use",
+    "background_computer_use",
     "oz_platform_skills",
     "oz_identity_federation",
     "sync_ambient_plans",
@@ -697,6 +701,8 @@ default = [
     "remote_code_review",
     "git_operations_in_code_review",
     "terminal_lifecycle_recovery",
+    "cloud_runners",
+    "cloud_agent_runners",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -733,6 +739,7 @@ nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
 nld_prompt_history_match = []
 msys2_shells = []
+file_backed_execution_profiles = []
 file_retrieval_tools = []
 get_started_tab = []
 code_mode_chip = []
@@ -851,6 +858,7 @@ test-util = [
     "http_client/test-util",
     "warp_core/test-util",
     "ai/test-util",
+    "warp_server_client/test-util",
 ]
 team_workflows = ["team_features_override"]
 terminal_lifecycle_recovery = []
@@ -947,6 +955,7 @@ integration_command = []
 artifact_command = []
 cloud_environments = []
 cloud_runners = []
+cloud_agent_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []

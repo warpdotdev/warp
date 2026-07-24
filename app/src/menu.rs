@@ -5,7 +5,7 @@ use std::{fmt, vec};
 use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::ui::color::blend::Blend;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::assets::asset_cache::AssetSource;
@@ -1285,22 +1285,28 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 if self.has_submenu {
                     label_row
                         .add_child(self.render_right_aligned_chevron(appearance, primary_color));
-                } else if let Some(right_label) =
-                    self.render_right_side_label(appearance, secondary_color.into())
-                {
-                    label_row.add_child(right_label);
-                } else if let Some(key_shortcut) =
-                    self.render_key_shortcut(appearance, secondary_color.into())
-                {
-                    label_row.add_child(key_shortcut);
-                } else if let Some(timestamp) = &self.timestamp {
-                    label_row.add_child(self.render_right_aligned_time_estimation(
-                        timestamp,
-                        font_family,
-                        font_size,
-                        text_background_color,
-                        appearance,
-                    ));
+                } else {
+                    match self.render_right_side_label(appearance, secondary_color.into()) {
+                        Some(right_label) => {
+                            label_row.add_child(right_label);
+                        }
+                        _ => match self.render_key_shortcut(appearance, secondary_color.into()) {
+                            Some(key_shortcut) => {
+                                label_row.add_child(key_shortcut);
+                            }
+                            _ => {
+                                if let Some(timestamp) = &self.timestamp {
+                                    label_row.add_child(self.render_right_aligned_time_estimation(
+                                        timestamp,
+                                        font_family,
+                                        font_size,
+                                        text_background_color,
+                                        appearance,
+                                    ));
+                                }
+                            }
+                        },
+                    }
                 }
 
                 if let Some(right_icon) =
@@ -1342,35 +1348,35 @@ impl<A: Action + Clone> MenuItemFields<A> {
             };
 
             // Render tooltip if present and hovered
-            if let Some(tooltip_text) = &self.tooltip {
-                if state.is_hovered() {
-                    let tooltip_element = appearance
-                        .ui_builder()
-                        .tool_tip(tooltip_text.clone())
-                        .build()
-                        .finish();
-                    let positioning = match self.tooltip_position {
-                        MenuTooltipPosition::Right => OffsetPositioning::offset_from_parent(
-                            vec2f(4., 0.),
-                            ParentOffsetBounds::WindowByPosition,
-                            ParentAnchor::MiddleRight,
-                            ChildAnchor::MiddleLeft,
-                        ),
-                        MenuTooltipPosition::Above => OffsetPositioning::offset_from_parent(
-                            vec2f(0., -4.),
-                            ParentOffsetBounds::WindowByPosition,
-                            ParentAnchor::TopMiddle,
-                            ChildAnchor::BottomMiddle,
-                        ),
-                    };
-                    let mut stack = Stack::new();
-                    stack.add_child(container_element);
-                    // Use add_positioned_child instead of add_positioned_overlay_child
-                    // to prevent the tooltip from intercepting mouse events and causing
-                    // hover state flickering on the parent menu item.
-                    stack.add_positioned_child(tooltip_element, positioning);
-                    return stack.finish();
-                }
+            if let Some(tooltip_text) = &self.tooltip
+                && state.is_hovered()
+            {
+                let tooltip_element = appearance
+                    .ui_builder()
+                    .tool_tip(tooltip_text.clone())
+                    .build()
+                    .finish();
+                let positioning = match self.tooltip_position {
+                    MenuTooltipPosition::Right => OffsetPositioning::offset_from_parent(
+                        vec2f(4., 0.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::MiddleRight,
+                        ChildAnchor::MiddleLeft,
+                    ),
+                    MenuTooltipPosition::Above => OffsetPositioning::offset_from_parent(
+                        vec2f(0., -4.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                };
+                let mut stack = Stack::new();
+                stack.add_child(container_element);
+                // Use add_positioned_child instead of add_positioned_overlay_child
+                // to prevent the tooltip from intercepting mouse events and causing
+                // hover state flickering on the parent menu item.
+                stack.add_positioned_child(tooltip_element, positioning);
+                return stack.finish();
             }
 
             container_element
@@ -1942,13 +1948,12 @@ impl<A: Action + Clone> SubMenu<A> {
         if matches!(
             selection_source,
             MenuSelectionSource::KeyboardOrProgrammatic
-        ) {
-            if let MenuVariant::Scrollable(scroll_state) = &self.menu_variant {
-                scroll_state.scroll_to_position(ScrollTarget {
-                    position_id: Self::save_position_id(self.depth),
-                    mode: ScrollToPositionMode::FullyIntoView,
-                });
-            }
+        ) && let MenuVariant::Scrollable(scroll_state) = &self.menu_variant
+        {
+            scroll_state.scroll_to_position(ScrollTarget {
+                position_id: Self::save_position_id(self.depth),
+                mode: ScrollToPositionMode::FullyIntoView,
+            });
         }
         ctx.emit(Event::ItemSelected);
         ctx.notify();
@@ -2125,42 +2130,44 @@ impl<A: Action + Clone> SubMenu<A> {
         let depth = self.depth;
         match &self.menu_variant {
             MenuVariant::Fixed => {
-                let mut menus = vec![Flex::column()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                    .with_children(self.items.iter().enumerate().map(
-                        |(index, item)| -> Box<dyn Element> {
-                            let is_selected = selected_row == Some(index);
-                            // When the safe zone is active, suppress hover highlighting on
-                            // non-anchor rows so intermediate items don't flash as the
-                            // mouse moves toward the sidecar.
-                            let safe_zone_suppresses_hover =
-                                safe_zone_anchor_row.is_some_and(|anchor| anchor != index);
-                            let submenu_being_shown_for_item =
-                                submenu_being_shown_for_item_index == Some(index);
-                            let item = item.render(
-                                menu_background_color,
-                                depth,
-                                index,
-                                selected_item,
-                                dispatch_item_actions,
-                                is_selected,
-                                ignore_hover_when_covered,
-                                safe_zone_suppresses_hover,
-                                submenu_being_shown_for_item,
-                                appearance,
-                                submenu_width,
-                                app,
-                            );
-                            let item = if is_selected {
-                                let save_position = Self::save_position_id(depth);
-                                SavePosition::new(item, &save_position).finish()
-                            } else {
-                                item
-                            };
-                            Container::new(item).finish()
-                        },
-                    ))
-                    .finish()];
+                let mut menus = vec![
+                    Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_children(self.items.iter().enumerate().map(
+                            |(index, item)| -> Box<dyn Element> {
+                                let is_selected = selected_row == Some(index);
+                                // When the safe zone is active, suppress hover highlighting on
+                                // non-anchor rows so intermediate items don't flash as the
+                                // mouse moves toward the sidecar.
+                                let safe_zone_suppresses_hover =
+                                    safe_zone_anchor_row.is_some_and(|anchor| anchor != index);
+                                let submenu_being_shown_for_item =
+                                    submenu_being_shown_for_item_index == Some(index);
+                                let item = item.render(
+                                    menu_background_color,
+                                    depth,
+                                    index,
+                                    selected_item,
+                                    dispatch_item_actions,
+                                    is_selected,
+                                    ignore_hover_when_covered,
+                                    safe_zone_suppresses_hover,
+                                    submenu_being_shown_for_item,
+                                    appearance,
+                                    submenu_width,
+                                    app,
+                                );
+                                let item = if is_selected {
+                                    let save_position = Self::save_position_id(depth);
+                                    SavePosition::new(item, &save_position).finish()
+                                } else {
+                                    item
+                                };
+                                Container::new(item).finish()
+                            },
+                        ))
+                        .finish(),
+                ];
                 let Some(selected_row) = self.selected_item() else {
                     return menus;
                 };
@@ -2216,20 +2223,22 @@ impl<A: Action + Clone> SubMenu<A> {
                         Container::new(item).finish()
                     }));
 
-                vec![ConstrainedBox::new(
-                    ClippedScrollable::vertical(
-                        scroll_state.clone(),
-                        column_of_items.finish(),
-                        ScrollbarWidth::Auto,
-                        appearance.theme().nonactive_ui_detail().into(),
-                        appearance.theme().active_ui_detail().into(),
-                        warpui::elements::Fill::None,
+                vec![
+                    ConstrainedBox::new(
+                        ClippedScrollable::vertical(
+                            scroll_state.clone(),
+                            column_of_items.finish(),
+                            ScrollbarWidth::Auto,
+                            appearance.theme().nonactive_ui_detail().into(),
+                            appearance.theme().active_ui_detail().into(),
+                            warpui::elements::Fill::None,
+                        )
+                        .with_overlayed_scrollbar()
+                        .finish(),
                     )
-                    .with_overlayed_scrollbar()
+                    .with_max_height(height)
                     .finish(),
-                )
-                .with_max_height(height)
-                .finish()]
+                ]
             }
         }
     }
@@ -2671,13 +2680,13 @@ impl<A: Action + Clone> TypedActionView for Menu<A> {
     }
 
     fn handle_action(&mut self, action: &MenuAction, ctx: &mut ViewContext<Self>) {
-        if let MenuAction::HoverSubmenuLeafNode { position, .. } = action {
-            if let Some(st) = &mut self.safe_triangle {
-                if st.should_suppress_hover(*position) {
-                    return;
-                }
-                st.update_position(*position);
+        if let MenuAction::HoverSubmenuLeafNode { position, .. } = action
+            && let Some(st) = &mut self.safe_triangle
+        {
+            if st.should_suppress_hover(*position) {
+                return;
             }
+            st.update_position(*position);
         }
 
         self.menu

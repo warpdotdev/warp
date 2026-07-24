@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 use string_offset::CharCounter;
+use warp_completer::ParsedTokensSnapshot;
 use warp_completer::signatures::CommandRegistry;
 use warp_completer::util::parse_current_commands_and_tokens;
-use warp_completer::ParsedTokensSnapshot;
 use warp_core::ui::theme::{AnsiColorIdentifier, AnsiColors};
 use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
@@ -22,14 +22,14 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, SetupGuideStep};
 use crate::ai::blocklist::code_block::{
-    render_code_block_plain, CodeBlockOptions, CodeSnippetButtonHandles,
+    CodeBlockOptions, CodeSnippetButtonHandles, render_code_block_plain,
 };
 use crate::appearance::Appearance;
 use crate::completer::SessionAgnosticContext;
 use crate::send_telemetry_from_ctx;
 use crate::view_components::action_button::{ActionButton, SecondaryTheme};
-use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::workflows::WorkflowType;
+use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 
 const DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
 const ENV_DOCS_URL: &str =
@@ -370,16 +370,20 @@ impl CloudSetupGuideView {
             CREATE_SLACK_INTEGRATION_CMD => Some((
                 WorkflowType::Local(
                     Workflow::new("Create Slack Integration", CREATE_SLACK_INTEGRATION_CMD)
-                        .with_arguments(vec![Argument::new("environment_id", ArgumentType::Text)
-                            .with_description("ID of the environment to integrate with")]),
+                        .with_arguments(vec![
+                            Argument::new("environment_id", ArgumentType::Text)
+                                .with_description("ID of the environment to integrate with"),
+                        ]),
                 ),
                 SetupGuideStep::CreateSlackIntegration,
             )),
             CREATE_LINEAR_INTEGRATION_CMD => Some((
                 WorkflowType::Local(
                     Workflow::new("Create Linear Integration", CREATE_LINEAR_INTEGRATION_CMD)
-                        .with_arguments(vec![Argument::new("environment_id", ArgumentType::Text)
-                            .with_description("ID of the environment to integrate with")]),
+                        .with_arguments(vec![
+                            Argument::new("environment_id", ArgumentType::Text)
+                                .with_description("ID of the environment to integrate with"),
+                        ]),
                 ),
                 SetupGuideStep::CreateLinearIntegration,
             )),
@@ -690,16 +694,16 @@ fn tokens_to_highlight_ranges(
     let mut highlights = Vec::new();
 
     // Handle slash commands: if code starts with '/', highlight the command prefix in magenta
-    if code.starts_with('/') {
-        if let Some(space_idx) = code.find(' ') {
-            let color = AnsiColorIdentifier::Magenta.to_ansi_color(terminal_colors);
-            highlights.push(HighlightedRange {
-                highlight: Highlight::new()
-                    .with_text_style(TextStyle::new().with_foreground_color(color.into())),
-                highlight_indices: (0..space_idx).collect(),
-            });
-            return highlights;
-        }
+    if code.starts_with('/')
+        && let Some(space_idx) = code.find(' ')
+    {
+        let color = AnsiColorIdentifier::Magenta.to_ansi_color(terminal_colors);
+        highlights.push(HighlightedRange {
+            highlight: Highlight::new()
+                .with_text_style(TextStyle::new().with_foreground_color(color.into())),
+            highlight_indices: (0..space_idx).collect(),
+        });
+        return highlights;
     }
 
     // Highlight commands in the code block (converting bytes to char indexes as we go).

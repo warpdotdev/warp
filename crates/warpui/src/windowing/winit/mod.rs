@@ -18,6 +18,6 @@ use app::CustomEvent;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use app::WindowingSystem;
 use event_loop::EventLoop;
+use window::Window;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use window::get_os_window_manager_name;
-use window::Window;

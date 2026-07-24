@@ -1,9 +1,9 @@
 //! Module that rasterizes text using `swash`.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use cosmic_text::{CacheKey, CacheKeyFlags};
 use pathfinder_geometry::rect::RectI;
-use pathfinder_geometry::vector::{vec2i, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2i};
 
 use crate::fonts::canvas::{Canvas, RasterFormat};
 use crate::fonts::{FontId, GlyphId, RasterizedGlyph, SubpixelAlignment};

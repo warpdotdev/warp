@@ -32,6 +32,7 @@ fn make_request_with_skills(
             prompt: "do work".to_string(),
             title: "Child agent".to_string(),
             agent_identity_uid: String::new(),
+            model_id: String::new(),
         }],
         plan_id: String::new(),
         harness_auth_secret_name: None,
@@ -75,6 +76,7 @@ fn local_to_cloud_initializes_remote_with_empty_environment() {
         environment_id,
         worker_host,
         computer_use_enabled,
+        ..
     } = state.orchestration_config_state.execution_mode
     else {
         panic!("expected Remote after toggle");
@@ -92,6 +94,7 @@ fn cloud_to_local_drops_environment() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     ));
     state
@@ -121,6 +124,7 @@ fn cloud_without_env_no_longer_disables_accept() {
             environment_id: String::new(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     ));
     assert!(
@@ -141,6 +145,7 @@ fn cloud_with_opencode_disables_accept() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     ));
     let reason = state.orchestration_config_state.accept_disabled_reason();
@@ -179,10 +184,12 @@ fn from_request_sanitizes_disabled_local_harness_to_oz() {
 
     assert_eq!(state.orchestration_config_state.harness_type, "oz");
     assert_eq!(state.orchestration_config_state.model_id, "");
-    assert!(state
-        .orchestration_config_state
-        .accept_disabled_reason()
-        .is_none());
+    assert!(
+        state
+            .orchestration_config_state
+            .accept_disabled_reason()
+            .is_none()
+    );
 }
 
 #[test]
@@ -194,6 +201,7 @@ fn cloud_with_env_and_non_opencode_harness_allows_accept() {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: false,
+                runner_id: String::new(),
             },
         ));
         assert!(
@@ -227,6 +235,7 @@ fn set_environment_id_updates_remote() {
             environment_id: "old".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     ));
     state
@@ -241,6 +250,51 @@ fn set_environment_id_updates_remote() {
 }
 
 #[test]
+fn set_runner_id_updates_remote_and_round_trips() {
+    let mut state = RunAgentsEditState::from_request(&make_request(
+        "oz",
+        RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: false,
+            runner_id: String::new(),
+        },
+    ));
+    state
+        .orchestration_config_state
+        .set_runner_id("runner-9".to_string());
+    let RunAgentsExecutionMode::Remote { runner_id, .. } =
+        &state.orchestration_config_state.execution_mode
+    else {
+        panic!("expected Remote");
+    };
+    assert_eq!(runner_id, "runner-9");
+    // The runner flows back out through to_request unchanged.
+    assert_eq!(
+        state.to_request().execution_mode,
+        RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: false,
+            runner_id: "runner-9".to_string(),
+        }
+    );
+}
+
+#[test]
+fn set_runner_id_no_op_in_local_mode() {
+    let mut state =
+        RunAgentsEditState::from_request(&make_request("oz", RunAgentsExecutionMode::Local));
+    state
+        .orchestration_config_state
+        .set_runner_id("runner-1".to_string());
+    assert!(matches!(
+        state.orchestration_config_state.execution_mode,
+        RunAgentsExecutionMode::Local
+    ));
+}
+
+#[test]
 fn to_request_round_trips_request_fields() {
     let mut req = make_request_with_skills(
         "claude",
@@ -248,6 +302,7 @@ fn to_request_round_trips_request_fields() {
             environment_id: "env-2".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: true,
+            runner_id: String::new(),
         },
         vec![
             SkillReference::BundledSkillId("writing-pr-descriptions".to_string()),
@@ -270,12 +325,13 @@ fn to_request_round_trips_request_fields() {
 }
 
 mod format_terminal_state_tests {
-    use super::super::{format_terminal_state, StatusKind};
+    use super::super::{StatusKind, format_terminal_state};
     use super::*;
 
     fn launched(name: &str, agent_id: &str) -> RunAgentsAgentOutcome {
         RunAgentsAgentOutcome {
             name: name.to_string(),
+            resolved_model_id: String::new(),
             kind: RunAgentsAgentOutcomeKind::Launched {
                 agent_id: agent_id.to_string(),
             },
@@ -285,6 +341,7 @@ mod format_terminal_state_tests {
     fn failed(name: &str, error: &str) -> RunAgentsAgentOutcome {
         RunAgentsAgentOutcome {
             name: name.to_string(),
+            resolved_model_id: String::new(),
             kind: RunAgentsAgentOutcomeKind::Failed {
                 error: error.to_string(),
             },
@@ -420,6 +477,7 @@ mod override_from_approved_config_tests {
             execution_mode: OrchestrationExecutionMode::Remote {
                 environment_id: env.to_string(),
                 worker_host: "warp".to_string(),
+                runner_id: String::new(),
             },
         }
     }
@@ -478,6 +536,7 @@ mod override_from_approved_config_tests {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: true,
+                runner_id: String::new(),
             },
         ));
         state
@@ -500,6 +559,7 @@ mod override_from_approved_config_tests {
                 environment_id: "old-env".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: true,
+                runner_id: String::new(),
             },
         ));
         state
@@ -562,6 +622,7 @@ fn local_to_cloud_idempotent_when_already_remote() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: true,
+            runner_id: String::new(),
         },
     ));
     state

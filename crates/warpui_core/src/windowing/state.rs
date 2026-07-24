@@ -7,8 +7,8 @@ use super::WindowCallbacks;
 use crate::platform::{self, FullscreenState, TerminationMode, WindowFocusBehavior};
 use crate::scene::{CornerRadius, Radius};
 use crate::{
-    geometry, windowing, DisplayId, DisplayIdx, Entity, ModelContext, OptionalPlatformWindow,
-    SingletonEntity, WindowId,
+    DisplayId, DisplayIdx, Entity, ModelContext, OptionalPlatformWindow, SingletonEntity, WindowId,
+    geometry, windowing,
 };
 
 /// Description of the current stage in the lifecycle of the app.

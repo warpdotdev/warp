@@ -117,9 +117,9 @@ fn compute_foreground_color_with_minimum_contrast_random() {
 
     for seed in 0..1000 {
         let mut rng = StdRng::seed_from_u64(seed);
-        let foreground_color = ColorU::from_u32(rng.gen());
+        let foreground_color = ColorU::from_u32(rng.r#gen());
 
-        let background_color = ColorU::from_u32(rng.gen());
+        let background_color = ColorU::from_u32(rng.r#gen());
 
         let suggested_color = foreground_color_with_minimum_contrast(
             foreground_color,

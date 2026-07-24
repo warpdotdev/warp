@@ -52,6 +52,9 @@ impl ManagedSecretManager {
             if !FeatureFlag::WarpManagedSecrets.is_enabled() {
                 return Err(anyhow::anyhow!("This feature is not enabled"));
             }
+
+            value.validate_field_sizes(&name)?;
+
             // We retrieve all upload keys on demand. These should potentially be fetched and stored
             // ahead of time instead.
             let configs = client.get_managed_secret_configs().await?;
@@ -112,6 +115,10 @@ impl ManagedSecretManager {
         async move {
             if !FeatureFlag::WarpManagedSecrets.is_enabled() {
                 return Err(anyhow::anyhow!("This feature is not enabled"));
+            }
+
+            if let Some(v) = &value {
+                v.validate_field_sizes(&name)?;
             }
 
             let encrypted_value = if let Some(value) = value {

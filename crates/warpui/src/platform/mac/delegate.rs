@@ -3,8 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use cocoa::base::{id, nil, BOOL, NO, YES};
-use objc2::{msg_send, MainThreadMarker};
+use cocoa::base::{BOOL, NO, YES, id, nil};
+use objc2::{MainThreadMarker, msg_send};
 use objc2_app_kit::{NSApplication, NSCursor, NSRequestUserAttentionType};
 use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
 use objc2_foundation::NSUInteger;
@@ -19,15 +19,15 @@ use warpui_core::platform::{
     Cursor, FilePickerCallback, FilePickerConfiguration, MicrophoneAccessState,
     SendNotificationErrorCallback, TerminationMode,
 };
-use warpui_core::{platform, ApplicationBundleInfo, WindowId};
+use warpui_core::{ApplicationBundleInfo, WindowId, platform};
 
 use super::app::create_native_platform_modal;
-use super::keycode::{modifier_code, Keycode};
+use super::keycode::{Keycode, modifier_code};
 use super::utils::nsstring_as_str;
-use super::{app, make_nsstring, Clipboard, Window};
+use super::{Clipboard, Window, app, make_nsstring};
 
 // Functions implemented in objC files.
-extern "C" {
+unsafe extern "C" {
     // Requests permissions to send desktop notifications.
     fn requestNotificationPermissions(on_completion_callback: *const c_void);
     // Sends a desktop notification.
@@ -456,7 +456,7 @@ impl platform::Delegate for AppDelegate {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// # Safety
 /// This function is marked unsafe because it retrieves the pointer to the callback
 /// function that we sent down to the Objective-C code.
@@ -465,15 +465,17 @@ pub unsafe extern "C-unwind" fn warp_on_request_notification_permissions_complet
     result_msg: id,
     callback: *mut c_void,
 ) {
-    let outcome =
-        super::notification::request_permissions_outcome_from_native(result_type, result_msg);
-    if let Ok(outcome) = outcome {
-        let callback = Box::from_raw(callback as *mut RequestNotificationPermissionsCallback);
-        callback(outcome);
+    unsafe {
+        let outcome =
+            super::notification::request_permissions_outcome_from_native(result_type, result_msg);
+        if let Ok(outcome) = outcome {
+            let callback = Box::from_raw(callback as *mut RequestNotificationPermissionsCallback);
+            callback(outcome);
+        }
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// # Safety
 /// This function is marked unsafe because it retrieves the pointer to the callback
 /// function that we sent down to the Objective-C code.
@@ -482,10 +484,12 @@ pub unsafe extern "C-unwind" fn warp_on_notification_send_error(
     error_msg: id,
     callback: *mut c_void,
 ) {
-    let notification_error = super::notification::send_error_from_native(error_type, error_msg);
-    if let Ok(notification_error) = notification_error {
-        let callback = Box::from_raw(callback as *mut NotificationSendErrorCallback);
-        callback(notification_error);
+    unsafe {
+        let notification_error = super::notification::send_error_from_native(error_type, error_msg);
+        if let Ok(notification_error) = notification_error {
+            let callback = Box::from_raw(callback as *mut NotificationSendErrorCallback);
+            callback(notification_error);
+        }
     }
 }
 

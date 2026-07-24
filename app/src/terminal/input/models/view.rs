@@ -4,8 +4,8 @@ use std::sync::LazyLock;
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{ChildView, MainAxisSize};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, View, ViewContext,
@@ -352,10 +352,9 @@ impl InlineModelSelectorView {
                     terminal_surface_id: event_terminal_surface_id,
                     ..
                 } = event
+                    && *event_terminal_surface_id == terminal_view_id
                 {
-                    if *event_terminal_surface_id == terminal_view_id {
-                        me.menu_view.update(ctx, |_, ctx| ctx.notify());
-                    }
+                    me.menu_view.update(ctx, |_, ctx| ctx.notify());
                 }
             },
         );
@@ -380,14 +379,12 @@ impl InlineModelSelectorView {
                         menu.select_first_where(|item| item.id == id, ctx)
                     })
                 });
-                if !found_by_id {
-                    if let Some(idx) = selection.index {
-                        let count = me.menu_view.as_ref(ctx).result_count();
-                        if count > 0 {
-                            me.menu_view.update(ctx, |menu, ctx| {
-                                menu.select_idx(idx.min(count - 1), ctx);
-                            });
-                        }
+                if !found_by_id && let Some(idx) = selection.index {
+                    let count = me.menu_view.as_ref(ctx).result_count();
+                    if count > 0 {
+                        me.menu_view.update(ctx, |menu, ctx| {
+                            menu.select_idx(idx.min(count - 1), ctx);
+                        });
                     }
                 }
                 return;

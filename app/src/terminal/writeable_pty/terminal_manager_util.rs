@@ -1,5 +1,5 @@
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use async_channel::Receiver;
 use parking_lot::FairMutex;
@@ -14,9 +14,9 @@ use crate::terminal::writeable_pty::pty_controller::EventLoopSender;
 use crate::terminal::writeable_pty::{
     PtyController, PtyControllerEvent, PtyIntent, PtyIntentEvent, TerminalSurface,
 };
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::{view, TerminalView};
 use crate::terminal::{ModelEventDispatcher, TerminalModel};
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::{TerminalView, view};
 
 /// Wires up bi-directional communication between the PtyController and a terminal surface.
 /// Note that this interaction can't live in the surface itself because the surface must be

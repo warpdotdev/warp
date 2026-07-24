@@ -135,19 +135,18 @@ impl Workspace {
     }
 
     pub fn are_overages_remaining(&self) -> bool {
-        if self.settings.usage_based_pricing_settings.enabled {
-            if let Some(max_spend_cents) = self
+        if self.settings.usage_based_pricing_settings.enabled
+            && let Some(max_spend_cents) = self
                 .settings
                 .usage_based_pricing_settings
                 .max_monthly_spend_cents
-            {
-                if let Some(ai_overages) = &self.billing_metadata.ai_overages {
-                    return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
-                } else {
-                    // If they have the setting enabled but no overages usage so far,
-                    // that means they have no database entry, so they have overages remaining.
-                    return true;
-                }
+        {
+            if let Some(ai_overages) = &self.billing_metadata.ai_overages {
+                return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
+            } else {
+                // If they have the setting enabled but no overages usage so far,
+                // that means they have no database entry, so they have overages remaining.
+                return true;
             }
         }
 
@@ -507,6 +506,26 @@ pub struct BillingMetadata {
     pub ai_overages: Option<AiOverages>,
 }
 
+/// The effective account outcome used to route users after account-first signup.
+///
+/// Paid status and free AI availability are resolved from fresh server-authored
+/// data during post-auth onboarding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FtueAccountClass {
+    Paid,
+    FreeIcp,
+    FreeStandard,
+}
+
+impl FtueAccountClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FtueAccountClass::Paid => "paid",
+            FtueAccountClass::FreeIcp => "free_icp",
+            FtueAccountClass::FreeStandard => "free_standard",
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct BonusGrantsPurchased {
     pub total_credits_purchased: i32,

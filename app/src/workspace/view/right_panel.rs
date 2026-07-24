@@ -9,10 +9,10 @@ use warp_core::ui::Icon;
 use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
-    resizable_state_handle, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
-    CrossAxisAlignment, DragBarSide, Element, Empty, Flex, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, PositionedElementAnchor, Resizable, ResizableStateHandle,
-    Shrinkable, Text,
+    ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
+    Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    PositionedElementAnchor, Resizable, ResizableStateHandle, Shrinkable, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::EditableBinding;
@@ -30,26 +30,26 @@ use crate::code_review::code_review_header::HEADER_BUTTON_PADDING;
 #[cfg(feature = "local_fs")]
 use crate::code_review::code_review_view::CodeReviewAction;
 use crate::code_review::code_review_view::{
-    render_file_navigation_button, CodeReviewCommentDebugState, CodeReviewView,
-    CodeReviewViewEvent, ReviewActionTargetProvider, CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN,
+    CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN, CodeReviewCommentDebugState, CodeReviewView,
+    CodeReviewViewEvent, ReviewActionTargetProvider, render_file_navigation_button,
 };
 use crate::code_review::diff_state::DiffStateModel;
 use crate::code_review::telemetry_event::CodeReviewContextDestination;
 use crate::drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH};
-use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
 use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
+use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
 use crate::pane_group::{
     Event as PaneGroupEvent, PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel,
 };
 use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::MenuPositioning;
 use crate::terminal::resizable_data::{ModalType, ResizableData};
 use crate::terminal::view::TerminalView;
-use crate::terminal::CLIAgent;
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons;
-use crate::util::bindings::{keybinding_name_to_display_string, CustomAction};
+use crate::util::bindings::{CustomAction, keybinding_name_to_display_string};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
 use crate::util::path::{display_name_with_host, display_path_with_host};
@@ -57,8 +57,8 @@ use crate::view_components::action_button::{ActionButton, PaneHeaderTheme};
 #[cfg(feature = "local_fs")]
 use crate::view_components::action_button::{NakedTheme, TooltipAlignment};
 use crate::view_components::{Dropdown, DropdownItem};
-use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
 use crate::workspace::WorkspaceAction;
+use crate::workspace::view::TOGGLE_RIGHT_PANEL_BINDING_NAME;
 
 /// Describes which agent destination is available for sending review comments.
 #[derive(Clone, Debug, PartialEq)]
@@ -276,10 +276,10 @@ impl CodeReviewState {
         self.update_repo_dropdown(ctx);
 
         // Auto-select first repo if we have one and no selection yet
-        if self.selected_repo_path.is_none() {
-            if let Some(first_repo) = self.available_repos.first() {
-                self.set_selected_repo(first_repo.clone(), ctx);
-            }
+        if self.selected_repo_path.is_none()
+            && let Some(first_repo) = self.available_repos.first()
+        {
+            self.set_selected_repo(first_repo.clone(), ctx);
         }
     }
 
@@ -611,10 +611,10 @@ impl RightPanelView {
                     .and_then(|s| s.selected_repo_path.clone());
 
                 // Only close the old view if the selection actually changed.
-                if old_selected != new_selected {
-                    if let Some(old_path) = &old_selected {
-                        self.close_code_review_view(*pane_group_id, old_path, ctx);
-                    }
+                if old_selected != new_selected
+                    && let Some(old_path) = &old_selected
+                {
+                    self.close_code_review_view(*pane_group_id, old_path, ctx);
                 }
 
                 if let Some(path) = &new_selected {
@@ -1615,19 +1615,18 @@ impl RightPanelView {
         };
 
         // Try the focused terminal first.
-        if let Some(tv) = focused_terminal {
-            if is_available(tv) {
-                return Some(tv.clone());
-            }
+        if let Some(tv) = focused_terminal
+            && is_available(tv)
+        {
+            return Some(tv.clone());
         }
 
         // Try the preferred (repo-mapped) terminal next.
-        if let Some(preferred_id) = preferred_terminal_id {
-            if let Some(tv) = terminal_views.iter().find(|tv| tv.id() == preferred_id) {
-                if is_available(tv) {
-                    return Some(tv.clone());
-                }
-            }
+        if let Some(preferred_id) = preferred_terminal_id
+            && let Some(tv) = terminal_views.iter().find(|tv| tv.id() == preferred_id)
+            && is_available(tv)
+        {
+            return Some(tv.clone());
         }
 
         // Fallback: any terminal in the repo that is available.
@@ -1772,16 +1771,14 @@ impl RightPanelView {
                     .is_some()
             };
 
-            if has_review_terminal {
-                if let Some(view) =
+            if has_review_terminal
+                && let Some(view) =
                     self.create_code_review_view(repo_path, diff_state_model, pane_group_id, ctx)
-                {
-                    if is_panel_open {
-                        view.update(ctx, |view, ctx| {
-                            view.on_open(ctx);
-                        });
-                    }
-                }
+                && is_panel_open
+            {
+                view.update(ctx, |view, ctx| {
+                    view.on_open(ctx);
+                });
             }
         }
     }
@@ -1798,20 +1795,19 @@ impl TypedActionView for RightPanelView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             RightPanelAction::ToggleFileSidebar => {
-                if let Some(state) = &self.code_review_state {
-                    if let Some(repo_path) = &state.selected_repo_path {
-                        if let Some(pane_group) = &self.active_pane_group {
-                            let pane_group_id = pane_group.id();
-                            let working_directories_model = self.working_directories_model.clone();
-                            if let Some(code_review_view) = working_directories_model
-                                .as_ref(ctx)
-                                .get_code_review_view(pane_group_id, repo_path)
-                            {
-                                code_review_view.update(ctx, |view, ctx| {
-                                    view.handle_action(&CodeReviewAction::ToggleFileSidebar, ctx);
-                                });
-                            }
-                        }
+                if let Some(state) = &self.code_review_state
+                    && let Some(repo_path) = &state.selected_repo_path
+                    && let Some(pane_group) = &self.active_pane_group
+                {
+                    let pane_group_id = pane_group.id();
+                    let working_directories_model = self.working_directories_model.clone();
+                    if let Some(code_review_view) = working_directories_model
+                        .as_ref(ctx)
+                        .get_code_review_view(pane_group_id, repo_path)
+                    {
+                        code_review_view.update(ctx, |view, ctx| {
+                            view.handle_action(&CodeReviewAction::ToggleFileSidebar, ctx);
+                        });
                     }
                 }
             }

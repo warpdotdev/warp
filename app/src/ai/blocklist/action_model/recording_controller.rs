@@ -1,6 +1,7 @@
 //! Runtime-global state machine for the single per-runtime video recording.
 
 use std::mem;
+use std::time::Duration;
 
 use ai::agent::action_result::StopRecordingResult;
 use futures::channel::oneshot;
@@ -40,8 +41,36 @@ pub(crate) struct ActiveRecording {
     pub(crate) handle: computer_use::RecordingHandle,
     /// When capture went live; action offsets are measured from here.
     pub(crate) started_at: Instant,
-    /// Action groups to burn into the video, in dispatch order.
+    /// The capture frame rate, used by the post-stop smart cut to enforce the
+    /// one-source-frame minimum for instantaneous action groups.
+    pub(crate) frame_rate: u32,
+    /// The surface being recorded, used to resolve pointer-event coordinates
+    /// into capture space for the post-stop burn-in.
+    pub(crate) target: computer_use::Target,
+    /// Recording-scoped pointer session shared with each `UseComputer` call's
+    /// `PointerSink`, persisting the last resolved point and active button across
+    /// calls so a drag split into separate `Down`/`Move`/`Up` calls records its
+    /// release. Reset when a call fails or is cancelled.
+    pub(crate) pointer_session: computer_use::PointerSession,
+    /// Action groups committed to the video, in completion order.
     pub(crate) actions: Vec<computer_use::ActionLogEntry>,
+    /// Short agent-authored title shown in badges (from StartRecording.summary).
+    pub(crate) summary: Option<String>,
+    /// Optional longer description shown in detail views (from StartRecording.description).
+    pub(crate) description: Option<String>,
+    /// The currently in-flight `UseComputer` group, if any. It is committed with
+    /// its finish offset on success or discarded on failure/cancellation.
+    pub(crate) pending_group: Option<PendingActionGroup>,
+}
+
+/// A pending (in-flight) `UseComputer` action group: its start offset and labels
+/// are captured when the call begins, and the entry is committed with its
+/// finish offset only when the call's action sequence returns successfully.
+/// Failed or cancelled calls discard the pending group without committing.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(crate) struct PendingActionGroup {
+    pub(crate) start_offset: Duration,
+    pub(crate) labels: Vec<String>,
 }
 
 enum RecordingState {
@@ -49,7 +78,9 @@ enum RecordingState {
     Starting {
         conversation_id: AIConversationId,
     },
-    Active(ActiveRecording),
+    // Boxed so the `Active` variant (which carries the recording handle and
+    // action log) does not balloon the enum's overall size.
+    Active(Box<ActiveRecording>),
     Finalizing {
         id: String,
         conversation_id: AIConversationId,
@@ -111,11 +142,16 @@ impl RecordingController {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_start(
         &mut self,
         recording_id: String,
         conversation_id: AIConversationId,
         handle: computer_use::RecordingHandle,
+        frame_rate: u32,
+        summary: Option<String>,
+        description: Option<String>,
+        target: computer_use::Target,
     ) {
         if matches!(
             self.state,
@@ -123,29 +159,118 @@ impl RecordingController {
                 conversation_id: owner
             } if owner == conversation_id
         ) {
-            self.state = RecordingState::Active(ActiveRecording {
+            self.state = RecordingState::Active(Box::new(ActiveRecording {
                 id: recording_id,
                 conversation_id,
                 handle,
                 started_at: Instant::now(),
+                frame_rate,
+                target,
+                pointer_session: computer_use::PointerSession::new(),
                 actions: Vec::new(),
+                summary,
+                description,
+                pending_group: None,
+            }));
+        }
+    }
+
+    /// Begins an in-flight `UseComputer` action group for the owning
+    /// conversation, recording the group's start offset and labels. Returns the
+    /// recording's capture start instant, its capture target, and a clone of the
+    /// recording-scoped pointer session so the caller can share it with this
+    /// call's `PointerSink` and a later split-call release can reuse the last
+    /// resolved point. A pointer-only group is begun with empty labels;
+    /// wait-only/no-op calls should not call this. The pending group is
+    /// committed with its finish offset on success ([`commit_action_group`]) or
+    /// discarded on failure ([`discard_action_group`]). Returns `None` (and
+    /// begins nothing) if no recording is active for this conversation.
+    ///
+    /// [`commit_action_group`]: Self::commit_action_group
+    /// [`discard_action_group`]: Self::discard_action_group
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn begin_action_group(
+        &mut self,
+        conversation_id: AIConversationId,
+        labels: Vec<String>,
+    ) -> Option<(Instant, computer_use::Target, computer_use::PointerSession)> {
+        if let RecordingState::Active(recording) = &mut self.state
+            && recording.conversation_id == conversation_id
+        {
+            // If a prior group was never committed or discarded, auto-commit it
+            // with the current clock as its implicit finish offset. This can
+            // happen when a `UseComputer` call completes and `begin_action_group`
+            // is called for the next call before `commit_action_group` fires.
+            if let Some(pending) = recording.pending_group.take() {
+                let implicit_finish = recording.started_at.elapsed().max(pending.start_offset);
+                // Defensive fallback: in the normal flow the executor commits or
+                // discards each group in its completion callback before the next
+                // `begin`, so this rarely fires. The prior group's pointer events
+                // live in that call's own buffer and are not reachable here, so
+                // this path keeps the labels but no pointer geometry.
+                recording.actions.push(computer_use::ActionLogEntry {
+                    offset: pending.start_offset,
+                    finish_offset: implicit_finish,
+                    labels: pending.labels,
+                    pointer_events: Vec::new(),
+                });
+            }
+            let start_offset = recording.started_at.elapsed();
+            recording.pending_group = Some(PendingActionGroup {
+                start_offset,
+                labels,
+            });
+            return Some((
+                recording.started_at,
+                recording.target,
+                recording.pointer_session.clone(),
+            ));
+        }
+        None
+    }
+
+    /// Commits the in-flight action group with its finish offset, derived from
+    /// the capture start instant returned by [`begin_action_group`]. The finish
+    /// is clamped to be no earlier than the start so the segment builder's
+    /// one-frame minimum can apply. No-op if the recording is no longer active
+    /// for this conversation (for example it was finalized while the action was
+    /// in flight), so a late commit from a completed call never lands on the
+    /// wrong recording.
+    ///
+    /// [`begin_action_group`]: Self::begin_action_group
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn commit_action_group(
+        &mut self,
+        conversation_id: AIConversationId,
+        finish_offset: Duration,
+        pointer_events: Vec<computer_use::PointerEvent>,
+    ) {
+        if let RecordingState::Active(recording) = &mut self.state
+            && recording.conversation_id == conversation_id
+            && let Some(pending) = recording.pending_group.take()
+        {
+            let finish_offset = finish_offset.max(pending.start_offset);
+            recording.actions.push(computer_use::ActionLogEntry {
+                offset: pending.start_offset,
+                finish_offset,
+                labels: pending.labels,
+                pointer_events,
             });
         }
     }
 
-    /// Appends an overlay group when the active recording belongs to the
-    /// originating conversation.
+    /// Discards the in-flight action group without committing it (a failed or
+    /// cancelled `UseComputer` call). No-op if the recording is no longer active
+    /// for this conversation.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub fn record_action(&mut self, conversation_id: AIConversationId, labels: Vec<String>) {
-        if !labels.is_empty() {
-            if let RecordingState::Active(recording) = &mut self.state {
-                if recording.conversation_id == conversation_id {
-                    recording.actions.push(computer_use::ActionLogEntry {
-                        offset: recording.started_at.elapsed(),
-                        labels,
-                    });
-                }
-            }
+    pub fn discard_action_group(&mut self, conversation_id: AIConversationId) {
+        if let RecordingState::Active(recording) = &mut self.state
+            && recording.conversation_id == conversation_id
+        {
+            // Reset the pointer session so a later `UseComputer` call cannot
+            // inherit an abandoned press from this failed/cancelled call.
+            recording.pointer_session.clear();
+            recording.pending_group = None;
         }
     }
 
@@ -205,7 +330,7 @@ impl RecordingController {
                     waiters: vec![sender],
                 };
                 FinalizationClaim::Claimed {
-                    recording: Box::new(recording),
+                    recording,
                     result_receiver: receiver,
                 }
             }

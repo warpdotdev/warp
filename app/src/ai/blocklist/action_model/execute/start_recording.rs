@@ -1,8 +1,8 @@
 use std::time::SystemTime;
 
 use ai::agent::action_result::{AIAgentActionResultType, RecordingStarted, StartRecordingResult};
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -36,7 +36,7 @@ impl StartRecordingExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput {
             action,
             conversation_id,
@@ -45,17 +45,14 @@ impl StartRecordingExecutor {
             frame_rate,
             max_duration,
             max_size_bytes,
+            summary,
+            description,
             playback_speed_multiplier,
             window,
-            ..
-        } = &action.action
+        } = action.action.clone()
         else {
             return ActionExecution::InvalidAction;
         };
-        let frame_rate = *frame_rate;
-        let max_duration = *max_duration;
-        let max_size_bytes = *max_size_bytes;
-        let playback_speed_multiplier = *playback_speed_multiplier;
         // Only honor a window target when background computer use is enabled; otherwise fall back
         // to whole-screen capture, keeping behavior byte-identical to the pre-existing path.
         let target = if FeatureFlag::BackgroundComputerUse.is_enabled() {
@@ -88,20 +85,24 @@ impl StartRecordingExecutor {
                     .filter(|&s| s > 1)
                     .map(|s| s as f32)
                     .unwrap_or(defaults.playback_speed_multiplier);
+                let resolved_frame_rate = if frame_rate > 0 {
+                    frame_rate
+                } else {
+                    defaults.frame_rate
+                };
                 let config = computer_use::RecordingConfig {
-                    frame_rate: if frame_rate > 0 {
-                        frame_rate
-                    } else {
-                        defaults.frame_rate
-                    },
+                    frame_rate: resolved_frame_rate,
                     max_duration: max_duration.unwrap_or(defaults.max_duration),
                     max_size_bytes: max_size_bytes.unwrap_or(defaults.max_size_bytes),
                     playback_speed_multiplier,
                     target,
                 };
-                recorder.start(config).await
+                // Carry the resolved frame rate to the completion callback so the
+                // controller can store it for the post-stop smart cut's one-frame
+                // minimum, even though it is not echoed back to the server.
+                (recorder.start(config).await, resolved_frame_rate)
             },
-            move |result, ctx| match result {
+            move |(result, frame_rate), ctx| match result {
                 Ok(handle) => {
                     let recording_id = Uuid::new_v4().to_string();
                     let started_at = SystemTime::now();
@@ -109,7 +110,15 @@ impl StartRecordingExecutor {
                     let height_px = handle.height() as i32;
                     let controller = RecordingController::handle(ctx);
                     controller.update(ctx, |controller, _| {
-                        controller.finish_start(recording_id.clone(), conversation_id, handle);
+                        controller.finish_start(
+                            recording_id.clone(),
+                            conversation_id,
+                            handle,
+                            frame_rate,
+                            summary,
+                            description,
+                            target,
+                        );
                     });
                     #[cfg(not(target_family = "wasm"))]
                     controller.update(ctx, |_controller, ctx| {

@@ -5,14 +5,62 @@
 
 use std::time::Duration;
 
-use crate::{Action, Key, ScrollDirection, TargetedAction};
+use crate::{Action, Key, MouseButton, ScrollDirection, TargetedAction, Vector2I};
 
 /// A group of semantic actions dispatched in one `UseComputer` call.
+///
+/// One entry represents one *successful* `UseComputer` call: `offset` is when
+/// the client began executing the call's action sequence, and `finish_offset`
+/// is when that complete sequence (including any explicit waits and the
+/// requested post-action screenshot) returned. Failed or cancelled calls never
+/// become entries.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ActionLogEntry {
-    /// Time from when capture went live to when this group was dispatched.
+    /// Time from when capture went live to when this group's `UseComputer` call
+    /// began executing on the client.
     pub offset: Duration,
+    /// Time from when capture went live to when this group's complete action
+    /// sequence (and any post-action screenshot) finished.
+    pub finish_offset: Duration,
     pub labels: Vec<String>,
+    /// Resolved pointer events dispatched during this group, in capture-space
+    /// pixels, used to burn in click ripples and drag trails. Empty on paths
+    /// that record no pointer geometry.
+    pub pointer_events: Vec<PointerEvent>,
+}
+
+/// A single resolved pointer event captured at dispatch time.
+///
+/// `point` is a capture-space pixel (full-screen capture: physical root/screen
+/// pixels; window capture: window-local pixels) and `offset` is measured on the
+/// same source/1x timeline as [`ActionLogEntry::offset`].
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PointerEvent {
+    pub offset: Duration,
+    pub kind: PointerEventKind,
+    /// The button for a press/release; `None` for a move.
+    pub button: Option<MouseButton>,
+    pub point: Vector2I,
+}
+
+/// Which pointer primitive a [`PointerEvent`] represents.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum PointerEventKind {
+    Down,
+    Move,
+    Up,
+}
+
+/// Returns true if a `UseComputer` action batch contains at least one real
+/// interaction — any non-`Wait` action (keyboard, typing, pointer, or scroll).
+/// A wait-only or zero-duration no-op batch (for example a screenshot-only
+/// call, which emits a single `Wait(0)`) is not a qualifying action group and is
+/// not committed to the recording timeline. A pointer-only batch still
+/// qualifies (with empty labels) so its on-screen effects are retained.
+pub fn is_meaningful_action_group(actions: &[TargetedAction]) -> bool {
+    actions
+        .iter()
+        .any(|targeted| !matches!(targeted.action, Action::Wait(_)))
 }
 
 enum LabelCandidate {
@@ -164,8 +212,6 @@ fn scroll_label(direction: ScrollDirection) -> &'static str {
 }
 
 #[cfg(any(linux, test))]
-const ACTION_GROUP_DURATION: Duration = Duration::from_millis(1500);
-#[cfg(any(linux, test))]
 const PILL_FONT_SIZE: i32 = 48;
 #[cfg(any(linux, test))]
 const APPROX_GLYPH_WIDTH: i32 = 29;
@@ -175,13 +221,240 @@ const PILL_HORIZONTAL_PADDING: i32 = 32;
 const PILL_GAP: i32 = 24;
 #[cfg(any(linux, test))]
 const PILL_BOTTOM_MARGIN: i32 = 90;
+/// Context margins retained around a real action window before cutting. The
+/// pre-action lead-in is short because those frames are mostly the thinking/
+/// blocked gap the cut removes; the post-action window is longer so the action's
+/// on-screen effect (and its overlay pill) stays visible. Neither is a
+/// transition and neither changes the 1x playback rate inside a segment.
+#[cfg(any(linux, test))]
+const SEGMENT_MARGIN_PRE: Duration = Duration::from_millis(250);
+#[cfg(any(linux, test))]
+const SEGMENT_MARGIN_POST: Duration = Duration::from_millis(1000);
+
+// --- Pointer (click ripple / drag trail) annotation constants ----------------
+/// Shared orange fill/stroke for pointer annotations, as ASS `BBGGRR` (RGB
+/// `[255, 80, 40]`).
+#[cfg(any(linux, test))]
+const POINTER_COLOR_BGR: &str = "2850FF";
+#[cfg(any(linux, test))]
+const CLICK_RING_MIN_RADIUS: f64 = 18.0;
+#[cfg(any(linux, test))]
+const CLICK_RING_MAX_RADIUS: f64 = 36.0;
+#[cfg(any(linux, test))]
+const CLICK_RING_THICKNESS: i32 = 4;
+#[cfg(any(linux, test))]
+const HELD_INDICATOR_RADIUS: f64 = 16.0;
+#[cfg(any(linux, test))]
+const DRAG_ANCHOR_RADIUS: f64 = 10.0;
+#[cfg(any(linux, test))]
+const DRAG_TRAIL_THICKNESS: f64 = 4.0;
+/// The click ripple and the post-release drag-trail fade are expressed directly
+/// as a function of the cut's retained post-action margin
+/// ([`SEGMENT_MARGIN_POST`]): each is that margin minus a small headroom, so it
+/// always ends before the retained footage runs out (and can never be clipped
+/// by the cut, shrinking automatically if the margin is reduced). The headroom
+/// also absorbs ASS centisecond rounding and frame quantization. At the current
+/// 1000 ms margin these evaluate to the design values of 900 ms and 600 ms.
+#[cfg(any(linux, test))]
+const CLICK_RING_TAIL_HEADROOM: Duration = Duration::from_millis(100);
+#[cfg(any(linux, test))]
+const DRAG_FADE_TAIL_HEADROOM: Duration = Duration::from_millis(400);
+
+#[cfg(any(linux, test))]
+fn click_ring_duration() -> Duration {
+    SEGMENT_MARGIN_POST.saturating_sub(CLICK_RING_TAIL_HEADROOM)
+}
+
+#[cfg(any(linux, test))]
+fn drag_trail_fade_duration() -> Duration {
+    SEGMENT_MARGIN_POST.saturating_sub(DRAG_FADE_TAIL_HEADROOM)
+}
+
+/// One retained source segment of the cut recording.
+///
+/// `source_start`/`source_end` describe the half-open interval `[start, end)`
+/// of the 1x source master that is kept; `output_start` is where that interval
+/// begins on the compacted output timeline (segments are concatenated in source
+/// order with all gaps removed).
+#[cfg(any(linux, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeepSegment {
+    pub(crate) source_start: Duration,
+    pub(crate) source_end: Duration,
+    pub(crate) output_start: Duration,
+}
+
+#[cfg(any(linux, test))]
+fn frame_duration(frame_rate: u32) -> Duration {
+    Duration::from_secs_f64(1.0 / frame_rate.max(1) as f64)
+}
+
+/// The clamped source interval for one action group: `[offset, finish_offset]`
+/// clamped to `[0, source_duration]` with a one-source-frame minimum when start
+/// and finish collapse into the same frame (for example an instantaneous call).
+/// Returns `None` when the clamped interval is empty (the group falls entirely
+/// at or beyond `source_duration`).
+#[cfg(any(linux, test))]
+fn group_source_interval(
+    entry: &ActionLogEntry,
+    source_duration: Duration,
+    frame: Duration,
+) -> Option<(Duration, Duration)> {
+    let start = entry.offset.min(source_duration);
+    let mut finish = entry.finish_offset.min(source_duration);
+    if finish < start {
+        finish = start;
+    }
+    if finish - start < frame {
+        finish = start + frame;
+    }
+    let finish = finish.min(source_duration);
+    (finish > start).then_some((start, finish))
+}
+
+/// The source interval over which an entry's overlay pill is shown. Unlike
+/// [`group_source_interval`] (the action window that drives the cut), this
+/// lingers [`SEGMENT_MARGIN_POST`] past `finish_offset` so the pill stays
+/// readable instead of flashing for a single frame on an instantaneous action.
+/// It is bounded by `source_duration` and by the next group's start so pills
+/// never extend past kept frames or overlap. Returns `None` when the interval
+/// is empty.
+#[cfg(any(linux, test))]
+fn overlay_display_interval(
+    entry: &ActionLogEntry,
+    next_offset: Option<Duration>,
+    source_duration: Duration,
+    frame: Duration,
+) -> Option<(Duration, Duration)> {
+    let (start, action_finish) = group_source_interval(entry, source_duration, frame)?;
+    // Reuse the post-action margin as the linger so the pill never outlasts the
+    // footage the cut retained after the action.
+    let mut end = entry
+        .finish_offset
+        .saturating_add(SEGMENT_MARGIN_POST)
+        .min(source_duration)
+        .max(action_finish);
+    if let Some(next_offset) = next_offset {
+        end = end.min(next_offset);
+    }
+    (end > start).then_some((start, end))
+}
+
+/// Builds the ordered retained segments for a post-stop cut.
+///
+/// Each committed action group contributes a `[start, finish]` window (with a
+/// one-frame minimum). Every window is expanded by [`SEGMENT_MARGIN_PRE`] before
+/// its start and [`SEGMENT_MARGIN_POST`] after its finish, then clamped to
+/// `[0, source_duration]`. The expanded windows are then
+/// sorted by source start and merged whenever they overlap or touch (adjacent
+/// windows become one contiguous segment), and each merged segment is assigned
+/// an `output_start` equal to the cumulative duration of the segments before
+/// it. Source gaps between merged segments are removed entirely by the cut.
+#[cfg(any(linux, test))]
+pub(crate) fn build_keep_segments(
+    entries: &[ActionLogEntry],
+    source_duration: Duration,
+    frame_rate: u32,
+) -> Vec<KeepSegment> {
+    let frame = frame_duration(frame_rate);
+
+    let mut windows: Vec<(Duration, Duration)> = entries
+        .iter()
+        .filter_map(|entry| group_source_interval(entry, source_duration, frame))
+        .map(|(start, finish)| {
+            let expanded_start = start.saturating_sub(SEGMENT_MARGIN_PRE);
+            let expanded_end = finish.saturating_add(SEGMENT_MARGIN_POST);
+            (
+                expanded_start.min(source_duration),
+                expanded_end.min(source_duration),
+            )
+        })
+        .collect();
+    windows.sort_by_key(|(start, _)| *start);
+
+    let mut merged: Vec<(Duration, Duration)> = Vec::new();
+    for (start, end) in windows {
+        if let Some(last) = merged.last_mut()
+            && start <= last.1
+        {
+            if end > last.1 {
+                last.1 = end;
+            }
+            continue;
+        }
+        merged.push((start, end));
+    }
+
+    let mut segments = Vec::with_capacity(merged.len());
+    let mut output_cursor = Duration::ZERO;
+    for (start, end) in merged {
+        segments.push(KeepSegment {
+            source_start: start,
+            source_end: end,
+            output_start: output_cursor,
+        });
+        output_cursor += end - start;
+    }
+    segments
+}
+
+/// Remaps a source-timeline interval `[start, end]` onto the compacted output
+/// timeline defined by `segments`.
+///
+/// Returns `None` when the interval is wholly inside a removed gap (no retained
+/// segment overlaps it) or when the remapped interval is empty. Intervals that
+/// touch a cut boundary are clamped to the retained boundary: the start is
+/// clamped up to the first overlapping segment's start, and the end is clamped
+/// down to the last overlapping segment's end. Remapping is done at `Duration`
+/// precision before ASS centisecond formatting.
+#[cfg(any(linux, test))]
+pub(crate) fn remap_source_interval(
+    start: Duration,
+    end: Duration,
+    segments: &[KeepSegment],
+) -> Option<(Duration, Duration)> {
+    if end <= start {
+        return None;
+    }
+    // A segment [ss, se) overlaps [start, end) iff ss < end && se > start.
+    let first = segments
+        .iter()
+        .find(|seg| seg.source_start < end && seg.source_end > start)?;
+    let last = segments
+        .iter()
+        .rev()
+        .find(|seg| seg.source_start < end && seg.source_end > start)?;
+
+    let clamped_start = start.max(first.source_start);
+    let clamped_end = end.min(last.source_end);
+    if clamped_end <= clamped_start {
+        return None;
+    }
+    let out_start = first.output_start + (clamped_start - first.source_start);
+    let out_end = last.output_start + (clamped_end - last.source_start);
+    (out_end > out_start).then_some((out_start, out_end))
+}
 
 /// Builds an ASS subtitle document that renders each entry as a bottom-center
-/// row. Entries are ordered by timecode and each group's end is clamped to the
-/// next group's start.
+/// row on the compacted output timeline. Entries are ordered by source start;
+/// each group's overlay display interval (its action window lingered
+/// `SEGMENT_MARGIN_POST` past `finish_offset`, bounded by the next group's start) is
+/// remapped through the retained segments before timecode formatting, so pills
+/// stay aligned with their actions after the cut and remain readable. Groups
+/// whose remapped interval is empty (for example wholly inside a removed gap)
+/// emit no dialogue. Pointer-only groups with empty labels commit to the
+/// timeline (keeping their segment) but render no pill.
 #[cfg(any(linux, test))]
-pub(crate) fn build_overlay_ass(entries: &[ActionLogEntry], dimensions: (u32, u32)) -> String {
+pub(crate) fn build_overlay_ass(
+    entries: &[ActionLogEntry],
+    dimensions: (u32, u32),
+    source_duration: Duration,
+    frame_rate: u32,
+) -> String {
     let (width, height) = dimensions;
+    let segments = build_keep_segments(entries, source_duration, frame_rate);
+    let frame = frame_duration(frame_rate);
+
     let mut script = String::new();
     script.push_str("[Script Info]\n");
     script.push_str("ScriptType: v4.00+\n");
@@ -200,6 +473,12 @@ pub(crate) fn build_overlay_ass(entries: &[ActionLogEntry], dimensions: (u32, u3
         "Style: Pill,DejaVu Sans Mono,{PILL_FONT_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&HB0000000,\
          -1,0,0,0,100,100,0,0,3,16,0,2,40,40,90,1\n\n",
     ));
+    // Vector-drawing style for pointer annotations: no background box
+    // (BorderStyle 1), top-left origin so `\pos`/`\p` coordinates are absolute.
+    script.push_str(
+        "Style: Cursor,DejaVu Sans Mono,10,&H002850FF,&H000000FF,&H002850FF,&H00000000,\
+         0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n\n",
+    );
     script.push_str("[Events]\n");
     script.push_str(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
@@ -209,16 +488,15 @@ pub(crate) fn build_overlay_ass(entries: &[ActionLogEntry], dimensions: (u32, u3
     ordered.sort_by_key(|entry| entry.offset);
 
     for (index, entry) in ordered.iter().enumerate() {
-        let start = entry.offset;
-        let mut end = entry.offset + ACTION_GROUP_DURATION;
-        if let Some(next) = ordered.get(index + 1)
-            && next.offset < end
-        {
-            end = next.offset;
-        }
-        if end <= start {
+        let next_offset = ordered.get(index + 1).map(|next| next.offset);
+        let (start, finish) =
+            match overlay_display_interval(entry, next_offset, source_duration, frame) {
+                Some(interval) => interval,
+                None => continue,
+            };
+        let Some((out_start, out_end)) = remap_source_interval(start, finish, &segments) else {
             continue;
-        }
+        };
 
         let widths = entry
             .labels
@@ -234,13 +512,20 @@ pub(crate) fn build_overlay_ass(entries: &[ActionLogEntry], dimensions: (u32, u3
             let x = left + pill_width / 2;
             script.push_str(&format!(
                 "Dialogue: 0,{},{},Pill,,0,0,0,,{{\\an2\\pos({x},{y})}}{}\n",
-                format_ass_timecode(start),
-                format_ass_timecode(end),
+                format_ass_timecode(out_start),
+                format_ass_timecode(out_end),
                 escape_ass_text(label),
             ));
             left += pill_width + PILL_GAP;
         }
     }
+
+    // Pointer geometry is drawn in a separate pass so it is unaffected by a
+    // group whose pill interval fell in a removed gap, and layered above pills.
+    // The whole recording's pointer events are flattened into one stream and
+    // classified once, so a drag split across `UseComputer` calls renders one
+    // continuous trail rather than a per-entry held press plus stray moves.
+    append_recording_pointer_dialogues(&mut script, &ordered, &segments, width, height);
     script
 }
 
@@ -269,6 +554,301 @@ fn escape_ass_text(text: &str) -> String {
         .replace('{', "(")
         .replace('}', ")")
         .replace(['\n', '\r'], " ")
+}
+
+/// A pointer gesture reconstructed from an entry's ordered pointer events.
+#[cfg(any(linux, test))]
+enum PointerGesture {
+    /// A press + release with no intervening move: rendered as one ring.
+    Click { offset: Duration, point: Vector2I },
+    /// A press + one-or-more moves + release (a drag), or a lone held press
+    /// (a single point with no release): rendered as a trail/anchor/held dot,
+    /// never a ring.
+    Drag {
+        points: Vec<(Duration, Vector2I)>,
+        release: Option<Duration>,
+    },
+}
+
+/// Groups an ordered pointer-event stream into clicks and drags. A press with
+/// no intervening move but a release is a click; a press with at least one move
+/// is a drag; a press with neither a move nor a release renders as a held
+/// indicator (a drag with a single point and no release). A release closes the
+/// gesture only when its button matches the press, so an unmatched release (a
+/// different button, or a release with no prior press) is ignored; a new press
+/// while a button is held closes the prior incomplete gesture deterministically.
+/// This enforces the drag-vs-click exclusivity invariant: a drag never emits a
+/// click ring.
+///
+/// The stream is recording-level — every committed entry's `pointer_events`
+/// concatenated and stable-sorted by offset (see [`append_recording_pointer_dialogues`])
+/// — so a drag split across multiple `UseComputer` calls (`Down` in one call,
+/// `Move`s in others, `Up` in a later call) is reconstructed into a single
+/// gesture rather than a per-entry held press plus stray moves.
+#[cfg(any(linux, test))]
+fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
+    let mut gestures = Vec::new();
+    let mut i = 0;
+    while i < events.len() {
+        if events[i].kind != PointerEventKind::Down {
+            // A stray move/up with no owning press carries no drawable gesture.
+            i += 1;
+            continue;
+        }
+        let down = &events[i];
+        let down_button = down.button;
+        let mut points = vec![(down.offset, down.point)];
+        let mut moved = false;
+        let mut release = None;
+        let mut j = i + 1;
+        while j < events.len() {
+            match events[j].kind {
+                PointerEventKind::Move => {
+                    moved = true;
+                    points.push((events[j].offset, events[j].point));
+                    j += 1;
+                }
+                PointerEventKind::Up => {
+                    // Only a release whose button matches the press closes the
+                    // gesture; an unmatched release is ignored (no drawable
+                    // gesture) and scanning continues for a matching one.
+                    if events[j].button == down_button {
+                        release = Some(events[j].offset);
+                        if moved {
+                            points.push((events[j].offset, events[j].point));
+                        }
+                        j += 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                // A new press closes the prior incomplete gesture: it renders as
+                // a held drag (no release) and classification restarts at the
+                // new press.
+                PointerEventKind::Down => break,
+            }
+        }
+        match (moved, release) {
+            (true, _) => gestures.push(PointerGesture::Drag { points, release }),
+            (false, Some(offset)) => gestures.push(PointerGesture::Click {
+                offset,
+                point: down.point,
+            }),
+            (false, None) => gestures.push(PointerGesture::Drag {
+                points,
+                release: None,
+            }),
+        }
+        i = j;
+    }
+    gestures
+}
+
+/// Emits the ASS vector dialogues for the whole recording's pointer gestures.
+/// Every committed entry's `pointer_events` are concatenated in source order
+/// and stable-sorted by event offset into one recording-level stream, then
+/// classified once (see [`classify_pointer_gestures`]). Each gesture is remapped
+/// through the retained segments onto the compacted output timeline. Sorting is
+/// stable so equal-offset events keep their insertion (dispatch) order, which
+/// preserves a `Down` before its same-offset `Up` and a call-A event before a
+/// call-B event at the same timestamp. A drag that arrives as one `UseComputer`
+/// call and one split across `Down`/`Move`/`Up` calls therefore produce the same
+/// single trail/anchor/held indicator.
+#[cfg(any(linux, test))]
+fn append_recording_pointer_dialogues(
+    script: &mut String,
+    entries: &[&ActionLogEntry],
+    segments: &[KeepSegment],
+    width: u32,
+    height: u32,
+) {
+    let mut stream: Vec<PointerEvent> = Vec::new();
+    for entry in entries {
+        stream.extend_from_slice(&entry.pointer_events);
+    }
+    // `sort_by_key` is stable: equal offsets keep dispatch (insertion) order.
+    stream.sort_by_key(|event| event.offset);
+
+    for gesture in classify_pointer_gestures(&stream) {
+        match gesture {
+            PointerGesture::Click { offset, point } => {
+                append_click_ring(script, offset, point, segments, width, height);
+            }
+            PointerGesture::Drag { points, release } => {
+                append_drag(script, &points, release, segments, width, height);
+            }
+        }
+    }
+}
+
+/// An expanding, fading orange ring centered on the click: a transparent-fill
+/// circle whose orange outline scales from the min to the max radius and fades
+/// to clear over the (cut-remapped) ring duration.
+///
+/// The circle path is centered on the ASS drawing origin (0, 0); with `\an7`
+/// (top-left alignment) libass places that drawing origin exactly at `\pos`, so
+/// the ring is centered on the captured cursor and scales symmetrically about
+/// it. `\an5` would shift the drawing origin by half the path's bounding box
+/// (about one radius), rendering the ring above-left of the click point.
+#[cfg(any(linux, test))]
+fn append_click_ring(
+    script: &mut String,
+    offset: Duration,
+    point: Vector2I,
+    segments: &[KeepSegment],
+    width: u32,
+    height: u32,
+) {
+    let duration = click_ring_duration();
+    let Some((out_start, out_end)) = remap_source_interval(offset, offset + duration, segments)
+    else {
+        return;
+    };
+    let (cx, cy) = clamp_point(point, width, height);
+    let dur_ms = (out_end - out_start).as_millis();
+    let start_scale = ((CLICK_RING_MIN_RADIUS / CLICK_RING_MAX_RADIUS) * 100.0).round() as i32;
+    let path = ass_circle_path(CLICK_RING_MAX_RADIUS);
+    script.push_str(&format!(
+        "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+         {{\\an7\\pos({cx},{cy})\\clip(0,0,{width},{height})\\1a&HFF&\
+         \\3c&H{POINTER_COLOR_BGR}&\\3a&H00&\\bord{CLICK_RING_THICKNESS}\
+         \\fscx{start_scale}\\fscy{start_scale}\
+         \\t(0,{dur_ms},\\fscx100\\fscy100\\3a&HFF&)\\p1}}{path}{{\\p0}}\n",
+        start = format_ass_timecode(out_start),
+        end = format_ass_timecode(out_end),
+    ));
+}
+
+/// A drag's trail (a stroked polyline), start anchor, and held indicator (a dot
+/// that moves along the path). On release the trail and anchor fade over the
+/// (capped) fade duration; a held press with no release stays through the end of
+/// its retained window.
+#[cfg(any(linux, test))]
+fn append_drag(
+    script: &mut String,
+    points: &[(Duration, Vector2I)],
+    release: Option<Duration>,
+    segments: &[KeepSegment],
+    width: u32,
+    height: u32,
+) {
+    let Some(&(start_off, _)) = points.first() else {
+        return;
+    };
+    let last_off = points[points.len() - 1].0;
+    let fade = drag_trail_fade_duration();
+    let vis_end = match release {
+        Some(r) => r + fade,
+        // Held with no release: keep it visible for the longest animation tail
+        // (the ring duration), which stays within the retained post-action footage.
+        None => last_off + click_ring_duration(),
+    };
+    let clamped: Vec<(i32, i32)> = points
+        .iter()
+        .map(|(_, point)| clamp_point(*point, width, height))
+        .collect();
+    let (anchor_x, anchor_y) = clamped[0];
+    let (last_x, last_y) = clamped[clamped.len() - 1];
+
+    // Trail + anchor, shown from press through the end of the release fade.
+    if let Some((out_start, out_end)) = remap_source_interval(start_off, vis_end, segments) {
+        let dur_ms = (out_end - out_start).as_millis();
+        let fade_tag = if release.is_some() {
+            let fade_from = dur_ms.saturating_sub(fade.as_millis());
+            format!("\\t({fade_from},{dur_ms},\\1a&HFF&)")
+        } else {
+            String::new()
+        };
+        if clamped.len() >= 2 {
+            let quads = ass_trail_quads(&clamped);
+            script.push_str(&format!(
+                "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+                 {{\\an7\\pos(0,0)\\clip(0,0,{width},{height})\
+                 \\1c&H{POINTER_COLOR_BGR}&\\1a&H73&\\bord0{fade_tag}\\p1}}{quads}{{\\p0}}\n",
+                start = format_ass_timecode(out_start),
+                end = format_ass_timecode(out_end),
+            ));
+        }
+        let anchor = ass_circle_path(DRAG_ANCHOR_RADIUS);
+        script.push_str(&format!(
+            "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+             {{\\an7\\pos({anchor_x},{anchor_y})\\clip(0,0,{width},{height})\
+             \\1c&H{POINTER_COLOR_BGR}&\\1a&H87&\\bord0{fade_tag}\\p1}}{anchor}{{\\p0}}\n",
+            start = format_ass_timecode(out_start),
+            end = format_ass_timecode(out_end),
+        ));
+    }
+
+    // Held indicator: a filled dot moving from the press to the release point
+    // while the button is held. Disappears at release (no fade). `\an7` centers
+    // the dot on the moving point (see [`append_click_ring`]).
+    let held_end = release.unwrap_or(vis_end);
+    if let Some((out_start, out_end)) = remap_source_interval(start_off, held_end, segments) {
+        let dur_ms = (out_end - out_start).as_millis();
+        let held = ass_circle_path(HELD_INDICATOR_RADIUS);
+        script.push_str(&format!(
+            "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+             {{\\an7\\move({anchor_x},{anchor_y},{last_x},{last_y},0,{dur_ms})\
+             \\clip(0,0,{width},{height})\\1c&H{POINTER_COLOR_BGR}&\\1a&H4B&\\bord0\\p1}}{held}{{\\p0}}\n",
+            start = format_ass_timecode(out_start),
+            end = format_ass_timecode(out_end),
+        ));
+    }
+}
+
+/// Clamps a capture-space point into the video frame so a drawing can never
+/// address outside `[0,width) x [0,height)`.
+#[cfg(any(linux, test))]
+fn clamp_point(point: Vector2I, width: u32, height: u32) -> (i32, i32) {
+    let max_x = width.saturating_sub(1) as i32;
+    let max_y = height.saturating_sub(1) as i32;
+    (point.x().clamp(0, max_x), point.y().clamp(0, max_y))
+}
+
+/// A closed circle of radius `r` centered at the drawing origin, as ASS `\p`
+/// drawing commands (four cubic beziers, kappa approximation).
+#[cfg(any(linux, test))]
+fn ass_circle_path(r: f64) -> String {
+    let k = (r * 0.552_284_7).round() as i64;
+    let r = r.round() as i64;
+    format!(
+        "m {r} 0 b {r} {k} {k} {r} 0 {r} b -{k} {r} -{r} {k} -{r} 0 \
+         b -{r} -{k} -{k} -{r} 0 -{r} b {k} -{r} {r} -{k} {r} 0"
+    )
+}
+
+/// A stroked polyline through `points`, as one filled quad per segment so the
+/// line has an even width and no spurious closing edge.
+#[cfg(any(linux, test))]
+fn ass_trail_quads(points: &[(i32, i32)]) -> String {
+    let half = DRAG_TRAIL_THICKNESS / 2.0;
+    let mut path = String::new();
+    for pair in points.windows(2) {
+        let (x0, y0) = (pair[0].0 as f64, pair[0].1 as f64);
+        let (x1, y1) = (pair[1].0 as f64, pair[1].1 as f64);
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < f64::EPSILON {
+            continue;
+        }
+        let (px, py) = (-dy / len * half, dx / len * half);
+        let round = |v: f64| v.round() as i64;
+        if !path.is_empty() {
+            path.push(' ');
+        }
+        path.push_str(&format!(
+            "m {} {} l {} {} l {} {} l {} {}",
+            round(x0 + px),
+            round(y0 + py),
+            round(x1 + px),
+            round(y1 + py),
+            round(x1 - px),
+            round(y1 - py),
+            round(x0 - px),
+            round(y0 - py),
+        ));
+    }
+    path
 }
 
 #[cfg(test)]

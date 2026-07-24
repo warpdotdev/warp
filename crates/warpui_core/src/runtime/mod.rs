@@ -22,7 +22,7 @@
 //! implementation.
 
 use std::cell::{Cell, RefCell};
-use std::io::{self, stdout, Stdout, Write};
+use std::io::{self, Stdout, Write, stdout};
 use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
@@ -37,22 +37,22 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
+use crate::r#async::executor::ForegroundTask;
+use crate::r#async::{Timer, block_on};
 use crate::elements::tui::{TuiEvent, TuiEventContext, TuiPoint, TuiRect, TuiSize};
 use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
-use crate::r#async::executor::ForegroundTask;
-use crate::r#async::{block_on, Timer};
 use crate::{App, AppContext, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
 mod renderer;
 mod terminal_probe;
 
-pub use event_conversion::crossterm_event_to_tui_event;
 use event_conversion::ClickTracker;
+pub use event_conversion::crossterm_event_to_tui_event;
 pub use renderer::TuiFrameRenderer;
 pub use terminal_probe::{
-    probe_terminal_colors, BackgroundLuminance, ProbedRgb, ProbedTerminalColors,
+    BackgroundLuminance, ProbedRgb, ProbedTerminalColors, probe_terminal_colors,
 };
 use warp_errors::report_error;
 

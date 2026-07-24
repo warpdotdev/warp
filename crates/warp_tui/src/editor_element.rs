@@ -29,11 +29,13 @@ use warp_editor::render::model::{
     CharCellTemporaryBlock, DisplayLattice, DisplayRow, DisplayRowKind,
 };
 use warpui_core::elements::tui::{
-    Modifier, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex, TuiGridPoint,
-    TuiLayoutContext, TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiParentElement,
-    TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex, TuiGridPoint, TuiLayoutContext,
+    TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, ModelHandle};
+
+use crate::tui_builder::TuiUiBuilder;
 
 /// Display columns between the line-number column and the row content.
 const GUTTER_GAP: u16 = 2;
@@ -51,7 +53,7 @@ pub enum TuiEditorAction {
     InsertChar(char),
     /// Insert one complete paste payload (only emitted when the element is
     /// [`editable`](TuiEditorElement::editable)).
-    InsertText(String),
+    PasteText(String),
     /// Place the cursor / begin a character selection at `offset` (single click).
     SelectionStartAt { offset: CharOffset },
     /// Extend the active selection's head to `offset` (shift-click).
@@ -72,6 +74,9 @@ pub enum TuiEditorAction {
 /// Handler receiving the element's [`TuiEditorAction`]s during event dispatch.
 type TuiEditorActionHandler = Rc<dyn for<'a> Fn(TuiEditorAction, &mut TuiEventContext<'a>)>;
 
+/// Resolves the placeholder ghost text (and its style) from fresh app state.
+type PlaceholderGhostTextProvider = Rc<dyn Fn(&AppContext) -> Option<(String, TuiStyle)>>;
+
 /// Whole-row styles by row kind, plus per-line overrides — all consumer
 /// policy. Gutter cells take their row's style.
 #[derive(Debug, Clone, Default)]
@@ -85,7 +90,7 @@ pub(crate) struct TuiEditorStyles {
     /// Whole-line overrides by 0-based logical line index; first match wins.
     pub line_overrides: Vec<(Range<usize>, TuiStyle)>,
     /// Character-range style overlays over buffer rows. Applied after the
-    /// row's base style and before selection reversal.
+    /// row's base style and before selection.
     pub text_overrides: Vec<(Range<CharOffset>, TuiStyle)>,
 }
 
@@ -125,7 +130,16 @@ pub(crate) struct TuiEditorElement {
     hide_trailing_empty_line: bool,
     styles: TuiEditorStyles,
     trailing_ghost_text: Option<(String, TuiStyle)>,
+    /// Resolves the empty-buffer placeholder hint against fresh app state
+    /// during every layout pass; see [`Self::with_placeholder_ghost_text`].
+    placeholder_ghost_text_provider: Option<PlaceholderGhostTextProvider>,
+    /// The provider's most recent resolution, refreshed in [`Self::build`].
+    placeholder_ghost_text: Option<(String, TuiStyle)>,
     on_action: Option<TuiEditorActionHandler>,
+
+    /// Solid selection highlight: fg = terminal background, bg = theme
+    /// foreground. Computed once at construction from the active theme.
+    selection_style: TuiStyle,
 
     // ── Built during layout ─────────────────────────────────────────────────
     column: TuiFlex,
@@ -190,7 +204,10 @@ impl TuiEditorElement {
             hide_trailing_empty_line: false,
             styles: TuiEditorStyles::default(),
             trailing_ghost_text: None,
+            placeholder_ghost_text_provider: None,
+            placeholder_ghost_text: None,
             on_action: None,
+            selection_style: TuiUiBuilder::from_app(app).selection_style(),
             column: TuiFlex::column(),
             gutter_cols: 0,
             selected_spans: Vec::new(),
@@ -251,6 +268,44 @@ impl TuiEditorElement {
         self
     }
 
+    /// Ghost text painted while the buffer is empty — placeholder-style
+    /// guidance (e.g. mode-dependent keybinding hints). Painted starting one
+    /// cell after the cursor so the terminal's block cursor never obscures
+    /// the first glyph (matching the design's cursor·gap·hint layout).
+    /// Rendered under the same conditions as trailing ghost text (editable,
+    /// focused, cursor visible); a configured trailing ghost text takes
+    /// precedence when both are set.
+    ///
+    /// `provider` is re-evaluated against fresh app state during every layout
+    /// pass — the element may stay cached across frames while the state the
+    /// hint depends on (e.g. transcript emptiness) changes without this
+    /// view being invalidated, so the content must never be snapshotted at
+    /// construction time.
+    pub(crate) fn with_placeholder_ghost_text(
+        mut self,
+        provider: impl Fn(&AppContext) -> Option<(String, TuiStyle)> + 'static,
+    ) -> Self {
+        self.placeholder_ghost_text_provider = Some(Rc::new(provider));
+        self
+    }
+
+    /// The ghost text to paint this frame and the column offset from the
+    /// cursor to start painting at: the trailing ghost text when set
+    /// (contextual hints like slash-command arguments outrank passive
+    /// placeholders) painted at the cursor, else the placeholder one cell
+    /// after the cursor while the buffer is empty.
+    fn active_ghost_text(&self) -> Option<(&str, TuiStyle, u16)> {
+        if let Some((text, style)) = &self.trailing_ghost_text {
+            return Some((text, *style, 0));
+        }
+        if self.text.is_empty()
+            && let Some((text, style)) = &self.placeholder_ghost_text
+        {
+            return Some((text, *style, 1));
+        }
+        None
+    }
+
     /// Elide the buffer's final empty line (buffers whose text ends with a
     /// newline have one). Diff bodies set this so a file's conventional
     /// trailing newline doesn't render as a blank numbered row; the input must
@@ -294,6 +349,11 @@ impl TuiEditorElement {
     /// Builds the visible rows, cursor position, and selection spans at
     /// `full_width`, storing them for `render`/`cursor_position`.
     fn build(&mut self, full_width: u16, app: &AppContext) {
+        // Placeholder hints depend on app state that changes without this
+        // element's view being invalidated; re-resolve them every layout.
+        if let Some(provider) = &self.placeholder_ghost_text_provider {
+            self.placeholder_ghost_text = provider(app);
+        }
         let render_state = self.model.as_ref(app).render_state().clone();
         let render_state = render_state.as_ref(app);
         let Some(char_cell) = render_state.char_cell() else {
@@ -686,7 +746,7 @@ impl TuiElement for TuiEditorElement {
             return;
         };
         self.column.render(origin, surface, ctx);
-        if let Some((text, style)) = &self.trailing_ghost_text {
+        if let Some((text, style, cursor_gap)) = self.active_ghost_text() {
             let cursor_at_end =
                 self.cursor_offset.as_usize().saturating_sub(1) == self.text.chars().count();
             if cursor_at_end
@@ -694,7 +754,7 @@ impl TuiElement for TuiEditorElement {
                 && self.cursor_col < size.width
                 && self.cursor_row_in_view < size.height
             {
-                let mut col = self.cursor_col;
+                let mut col = self.cursor_col.saturating_add(cursor_gap);
                 for char in text.chars() {
                     if col >= size.width {
                         break;
@@ -703,7 +763,7 @@ impl TuiElement for TuiEditorElement {
                         origin.offset(i32::from(col), i32::from(self.cursor_row_in_view));
                     if let Some(cell) = surface.cell_mut(position) {
                         cell.set_char(char);
-                        cell.set_style(*style);
+                        cell.set_style(style);
                     }
                     col += 1;
                 }
@@ -720,14 +780,14 @@ impl TuiElement for TuiEditorElement {
             }
         }
         if !self.selected_spans.is_empty() {
-            let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
+            let selection_style = self.selection_style;
             for &(row_in_view, start_col, end_col) in &self.selected_spans {
                 let width = end_col.saturating_sub(start_col);
                 if row_in_view < size.height && width > 0 {
                     surface.set_style(
                         origin.offset(i32::from(start_col), i32::from(row_in_view)),
                         TuiSize::new(width.min(size.width.saturating_sub(start_col)), 1),
-                        reversed,
+                        selection_style,
                     );
                 }
             }
@@ -788,15 +848,17 @@ impl TuiElement for TuiEditorElement {
                     // (consumer keybindings) before the element pass ever sees the
                     // key. Only printable-character insertion stays element-level —
                     // text insertion is not a keybinding, matching the GUI.
-                    if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
-                        if let Some(char) = chars.chars().next() {
-                            handler(TuiEditorAction::InsertChar(char), event_ctx);
-                            return true;
-                        }
+                    if !keystroke.ctrl
+                        && !keystroke.alt
+                        && !chars.is_empty()
+                        && let Some(char) = chars.chars().next()
+                    {
+                        handler(TuiEditorAction::InsertChar(char), event_ctx);
+                        return true;
                     }
                 }
                 TuiEvent::Paste { text } => {
-                    handler(TuiEditorAction::InsertText(text.clone()), event_ctx);
+                    handler(TuiEditorAction::PasteText(text.clone()), event_ctx);
                     return true;
                 }
                 TuiEvent::ScrollWheel { .. }

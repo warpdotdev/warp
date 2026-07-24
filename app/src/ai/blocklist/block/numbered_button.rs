@@ -1,9 +1,9 @@
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex, FormattedTextElement,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Border, Container, CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Expanded,
+    Flex, FormattedTextElement, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
+    Text,
 };
 use warpui::ui_components::button::{Button, ButtonVariant};
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
@@ -147,10 +147,8 @@ pub(super) fn build_text_button_content(
     let font_size = appearance.monospace_font_size();
     let text_color = theme.foreground().into();
 
-    let label_element = if let (true, Ok(formatted_text)) =
-        (use_markdown, markdown_parser::parse_markdown(text_label))
-    {
-        FormattedTextElement::new(
+    let label_element = match (use_markdown, markdown_parser::parse_markdown(text_label)) {
+        (true, Ok(formatted_text)) => FormattedTextElement::new(
             formatted_text,
             font_size,
             appearance.ui_font_family(),
@@ -160,16 +158,15 @@ pub(super) fn build_text_button_content(
         )
         .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO)
         .disable_mouse_interaction()
-        .finish()
-    } else {
-        Text::new(
+        .finish(),
+        _ => Text::new(
             text_label.to_string(),
             appearance.ui_font_family(),
             font_size,
         )
         .soft_wrap(true)
         .with_color(text_color)
-        .finish()
+        .finish(),
     };
 
     if !recommended {

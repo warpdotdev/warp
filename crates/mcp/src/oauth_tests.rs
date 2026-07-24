@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use axum::Router;
 use axum::extract::{Json, State};
 use axum::routing::{get, post};
-use axum::Router;
 use rmcp::transport::auth::OAuthTokenResponse;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
@@ -70,10 +70,12 @@ async fn loopback_callback_accepts_matching_state() {
         }
         CallbackResult::Error { error } => panic!("unexpected callback error: {error:?}"),
     }
-    assert!(callback
-        .await
-        .expect("callback task should join")
-        .contains("200 OK"));
+    assert!(
+        callback
+            .await
+            .expect("callback task should join")
+            .contains("200 OK")
+    );
 }
 
 #[tokio::test]
@@ -91,10 +93,12 @@ async fn loopback_callback_rejects_mismatched_state() {
         .await
         .expect_err("mismatched callback should fail");
     assert!(error.to_string().contains("state did not match"));
-    assert!(callback
-        .await
-        .expect("callback task should join")
-        .contains("400 Bad Request"));
+    assert!(
+        callback
+            .await
+            .expect("callback task should join")
+            .contains("400 Bad Request")
+    );
 }
 
 #[derive(Clone, Default)]

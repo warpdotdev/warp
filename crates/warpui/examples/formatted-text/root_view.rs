@@ -1,6 +1,6 @@
 //! A UI sample demonstrating how the SelectableArea element can be used.
 
-use markdown_parser::{parse_markdown, FormattedTextFragment, FormattedTextLine};
+use markdown_parser::{FormattedTextFragment, FormattedTextLine, parse_markdown};
 use warpui::color::ColorU;
 use warpui::elements::{
     Align, ChildView, ConstrainedBox, Flex, FormattedTextElement, HeadingFontSizeMultipliers,

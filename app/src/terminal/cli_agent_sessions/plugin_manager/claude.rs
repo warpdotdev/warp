@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{
-    compare_versions, run_cli_command_logged, CliAgentPluginManager, PluginInstallError,
-    PluginInstructionStep, PluginInstructions,
+    CliAgentPluginManager, PluginInstallError, PluginInstructionStep, PluginInstructions,
+    compare_versions, run_cli_command_logged,
 };
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
@@ -209,30 +209,28 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     }
 }
 
-static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
-    PluginInstructions {
-        title: "Install Warp Plugin for Claude Code",
-        subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
-        steps: &[
-            PluginInstructionStep {
-                description: "Add the Warp plugin marketplace repository",
-                command: "claude plugin marketplace add warpdotdev/claude-code-warp",
-                executable: true,
-                link: None,
-            },
-            PluginInstructionStep {
-                description: "Install the Warp plugin",
-                command: "claude plugin install warp@claude-code-warp",
-                executable: true,
-                link: None,
-            },
-        ],
-        post_install_notes: &[
-            "Restart Claude Code to activate the plugin.",
-            "There are some known issues with Claude Code's plugin system. \
+static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title: "Install Warp Plugin for Claude Code",
+    subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
+    steps: &[
+        PluginInstructionStep {
+            description: "Add the Warp plugin marketplace repository",
+            command: "claude plugin marketplace add warpdotdev/claude-code-warp",
+            executable: true,
+            link: None,
+        },
+        PluginInstructionStep {
+            description: "Install the Warp plugin",
+            command: "claude plugin install warp@claude-code-warp",
+            executable: true,
+            link: None,
+        },
+    ],
+    post_install_notes: &[
+        "Restart Claude Code to activate the plugin.",
+        "There are some known issues with Claude Code's plugin system. \
              If the plugin is not found after step 1, you can try manually adding an \"extraKnownMarketplaces\" entry to ~/.claude/settings.json.",
-        ],
-    }
+    ],
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
@@ -354,10 +352,10 @@ fn is_local_marketplace_path(source: &str) -> bool {
 /// worker to a per-task dir), falling back to `~/.claude`. Must match where
 /// `claude plugin install` writes, else install/verify checks read the wrong dir.
 fn claude_home_dir() -> io::Result<PathBuf> {
-    if let Ok(dir) = env::var("CLAUDE_CONFIG_DIR") {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+    if let Ok(dir) = env::var("CLAUDE_CONFIG_DIR")
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
     }
     dirs::home_dir()
         .map(|home| home.join(".claude"))

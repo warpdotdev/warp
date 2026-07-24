@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use fuzzy_match::FuzzyMatchResult;
 use warpui::{AppContext, Entity, SingletonEntity};
 
-use super::search_item::ConversationSearchItem;
 use super::ConversationContextItem;
+use super::search_item::ConversationSearchItem;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
@@ -28,16 +28,16 @@ impl ConversationDataSource {
 
         // Source 1: local + historical conversations (excludes ambient agent conversations).
         for nav in ConversationNavigationData::all_conversations(app) {
-            if let Some(token) = &nav.server_conversation_token {
-                if !seen_tokens.contains(token.as_str()) {
-                    let token_str = token.as_str().to_string();
-                    seen_tokens.insert(token_str.clone());
-                    items.push(ConversationContextItem {
-                        title: nav.title,
-                        server_conversation_token: token_str,
-                        last_updated: nav.last_updated.to_utc(),
-                    });
-                }
+            if let Some(token) = &nav.server_conversation_token
+                && !seen_tokens.contains(token.as_str())
+            {
+                let token_str = token.as_str().to_string();
+                seen_tokens.insert(token_str.clone());
+                items.push(ConversationContextItem {
+                    title: nav.title,
+                    server_conversation_token: token_str,
+                    last_updated: nav.last_updated.to_utc(),
+                });
             }
         }
 
@@ -45,14 +45,14 @@ impl ConversationDataSource {
         // corresponding task, so this covers all cloud conversations.
         let agent_model = AgentConversationsModel::as_ref(app);
         for task in agent_model.tasks_iter() {
-            if let Some(conv_id) = &task.conversation_id {
-                if seen_tokens.insert(conv_id.clone()) {
-                    items.push(ConversationContextItem {
-                        title: task.title.clone(),
-                        server_conversation_token: conv_id.clone(),
-                        last_updated: task.updated_at,
-                    });
-                }
+            if let Some(conv_id) = &task.conversation_id
+                && seen_tokens.insert(conv_id.clone())
+            {
+                items.push(ConversationContextItem {
+                    title: task.title.clone(),
+                    server_conversation_token: conv_id.clone(),
+                    last_updated: task.updated_at,
+                });
             }
         }
 

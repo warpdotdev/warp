@@ -3,6 +3,7 @@ pub mod commands;
 
 use bitflags::bitflags;
 pub use commands::SlashCommandId;
+use settings::SettingsMode;
 
 bitflags! {
     /// Specifies the requirements for a slash command to be available.
@@ -43,6 +44,103 @@ bitflags! {
         /// is enabled. Commands that require this bit are hidden everywhere except the V2
         /// cloud-mode composing input.
         const CLOUD_MODE_V2_COMPOSER = 1 << 10;
+    }
+}
+/// Stable identity for a static slash command.
+///
+/// Front-ends dispatch on this value instead of matching command-name strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SlashCommandKind {
+    Agent,
+    CloudAgent,
+    AddMcp,
+    AutoApprove,
+    Mcp,
+    ViewLogs,
+    Voice,
+    NaturalLanguageDetection,
+    Exit,
+    Logout,
+    Version,
+    CreateEnvironment,
+    CreateDockerSandbox,
+    CreateNewProject,
+    EditSkill,
+    InvokeSkill,
+    AddPrompt,
+    AddRule,
+    Edit,
+    RenameTab,
+    RenameConversation,
+    SetTabColor,
+    Fork,
+    MoveToCloud,
+    OpenCodeReview,
+    Index,
+    Init,
+    OpenProjectRules,
+    OpenMcpServers,
+    OpenSettingsFile,
+    Changelog,
+    Feedback,
+    OpenRepo,
+    OpenRules,
+    New,
+    Model,
+    Host,
+    Harness,
+    Environment,
+    Profile,
+    Plan,
+    Orchestrate,
+    Compact,
+    CompactAnd,
+    Queue,
+    ForkAndCompact,
+    ForkFrom,
+    ContinueLocally,
+    Usage,
+    RemoteControl,
+    Cost,
+    Conversations,
+    Prompts,
+    Rewind,
+    ExportToClipboard,
+    ExportToFile,
+}
+
+/// The application surfaces on which a static slash command is implemented.
+///
+/// This field is required on every [`StaticCommand`] so new commands must explicitly declare
+/// whether they are GUI-only, TUI-only, or shared by both front-ends. GUI-capable variants also
+/// require the icon path used to render the command in GUI menus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashCommandSurfaces {
+    GuiOnly { icon_path: &'static str },
+    TuiOnly,
+    GuiAndTui { icon_path: &'static str },
+}
+
+impl SlashCommandSurfaces {
+    pub fn supports_gui(self) -> bool {
+        matches!(self, Self::GuiOnly { .. } | Self::GuiAndTui { .. })
+    }
+
+    pub fn supports_tui(self) -> bool {
+        matches!(self, Self::TuiOnly | Self::GuiAndTui { .. })
+    }
+
+    pub fn gui_icon_path(self) -> Option<&'static str> {
+        match self {
+            Self::GuiOnly { icon_path } | Self::GuiAndTui { icon_path } => Some(icon_path),
+            Self::TuiOnly => None,
+        }
+    }
+    pub fn includes(self, settings_mode: SettingsMode) -> bool {
+        match settings_mode {
+            SettingsMode::Gui => self.supports_gui(),
+            SettingsMode::Tui => self.supports_tui(),
+        }
     }
 }
 
@@ -89,9 +187,10 @@ impl Argument {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticCommand {
+    pub kind: SlashCommandKind,
     pub name: &'static str,
     pub description: &'static str,
-    pub icon_path: &'static str,
+    pub supported_surfaces: SlashCommandSurfaces,
     /// Specifies the requirements for this command to be available. See [`Availability`].
     pub availability: Availability,
     /// Whether this command requires AI mode when executed.
@@ -106,6 +205,17 @@ pub struct SlashCommandArgumentHint {
 }
 
 impl StaticCommand {
+    pub fn supports_gui(&self) -> bool {
+        self.supported_surfaces.supports_gui()
+    }
+
+    pub fn supports_tui(&self) -> bool {
+        self.supported_surfaces.supports_tui()
+    }
+    pub fn supports_surface(&self, settings_mode: SettingsMode) -> bool {
+        self.supported_surfaces.includes(settings_mode)
+    }
+
     pub fn matches_filter(&self, filter_text: &str) -> bool {
         if filter_text.is_empty() {
             return true;

@@ -15,14 +15,14 @@ use warpui::presenter::ChildView;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle};
 
-use crate::ai::llms::{should_show_key_icon_for_model, LLMPreferences};
+use crate::ai::llms::{LLMPreferences, should_show_key_icon_for_model};
 use crate::ai::{AIRequestUsageModel, BuyCreditsBannerDisplayState};
 use crate::appearance::Appearance;
 use crate::settings::{AISettings, InputSettings};
 use crate::terminal::buy_credits_banner::BuyCreditsBanner;
 use crate::terminal::input::{Input, InputAction, InputSuggestionsMode, MenuPositioning};
 use crate::terminal::model::TerminalModel;
-use crate::terminal::view::{TerminalAction, PADDING_LEFT};
+use crate::terminal::view::{PADDING_LEFT, TerminalAction};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 

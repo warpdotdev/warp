@@ -8,12 +8,12 @@
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use futures::future::BoxFuture;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use http::Uri;
+use rmcp::RoleClient;
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
 use rmcp::transport::Transport;
-use rmcp::RoleClient;
 use sse_stream::{Error as SseError, Sse};
 use thiserror::Error;
 
@@ -55,8 +55,8 @@ pub trait SseClient: Clone + Send + Sync + 'static {
         last_event_id: Option<String>,
         auth_token: Option<String>,
     ) -> impl std::future::Future<Output = Result<BoxedSseResponse, SseTransportError<Self::Error>>>
-           + Send
-           + '_;
+    + Send
+    + '_;
 }
 
 /// Helper that refreshes the POST endpoint whenever the server emits

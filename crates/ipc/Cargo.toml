@@ -1,6 +1,6 @@
 [package]
 authors = ["Warp Team <dev@warp.dev>"]
-edition = "2021"
+edition = "2024"
 name = "ipc"
 version = "0.1.0"
 publish.workspace = true

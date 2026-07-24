@@ -1,4 +1,4 @@
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::builder::AnimatedButtonOptions;
 use warpui::elements::{
@@ -28,7 +28,7 @@ use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
 use crate::util::links;
-use crate::workspace::{WorkspaceAction, PANEL_HEADER_HEIGHT};
+use crate::workspace::{PANEL_HEADER_HEIGHT, WorkspaceAction};
 
 // Footer icons
 const DOCS_SVG_PATH: &str = "bundled/svg/gitbook-logo.svg";

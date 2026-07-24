@@ -5,27 +5,27 @@ use cloud_object_client::MockObjectClient;
 use settings::manager::SettingsManager;
 use warpui::{App, SingletonEntity};
 
+use crate::NetworkStatus;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerNotebook, ServerPermissions};
-use crate::notebooks::manager::NotebookManager;
 use crate::notebooks::CloudNotebookModel;
+use crate::notebooks::manager::NotebookManager;
 use crate::search::ai_context_menu::notebooks::data_source::NotebookDataSource;
 use crate::search::data_source::Query;
 use crate::search::mixer::SyncDataSource;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::AISettings;
 use crate::system::SystemStats;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::NetworkStatus;
 
 fn mock_server_notebook_with_revision(id: i64, title: &str, revision: Revision) -> ServerNotebook {
     ServerNotebook::new(

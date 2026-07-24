@@ -1,15 +1,15 @@
 //! Close handlers for local-control window, tab, and pane actions.
 use ::local_control::protocol::{TabCloseMode, TabCloseParams, TabTarget};
 use ::local_control::{Action, ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope};
-use warpui::platform::TerminationMode;
 use warpui::ModelContext;
+use warpui::platform::TerminationMode;
 
+use crate::local_control::LocalControlBridge;
 use crate::local_control::handlers::ack;
 use crate::local_control::resolver::{
     reject_target_families, tab_index_from_target, target_pane_group, target_pane_id,
     target_window_id_for_target, target_workspace,
 };
-use crate::local_control::LocalControlBridge;
 use crate::workspace::view::OpenDialogSource;
 
 fn tab_close_mode(action: &Action) -> Result<TabCloseMode, ControlError> {

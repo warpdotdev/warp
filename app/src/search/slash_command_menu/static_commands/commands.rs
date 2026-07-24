@@ -5,15 +5,18 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 
-use super::Availability;
-use crate::search::slash_command_menu::static_commands::Argument;
+use super::{Availability, SlashCommandKind, SlashCommandSurfaces};
 use crate::search::slash_command_menu::StaticCommand;
+use crate::search::slash_command_menu::static_commands::Argument;
 use crate::ui_components::color_dot;
 
 pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/agent",
     description: "Start a new conversation",
-    icon_path: "bundled/svg/oz.svg",
+    kind: SlashCommandKind::Agent,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/oz.svg",
+    },
     availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
@@ -22,7 +25,10 @@ pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub static CLOUD_AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/cloud-agent",
     description: "Start a new cloud agent conversation",
-    icon_path: "bundled/svg/oz-cloud.svg",
+    kind: SlashCommandKind::CloudAgent,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/oz-cloud.svg",
+    },
     availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
@@ -31,8 +37,24 @@ pub static CLOUD_AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
 pub const ADD_MCP: StaticCommand = StaticCommand {
     name: "/add-mcp",
     description: "Add a new MCP server via the MCP settings page",
-    icon_path: "bundled/svg/dataflow.svg",
+    kind: SlashCommandKind::AddMcp,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/dataflow.svg",
+    },
     availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const AUTO_APPROVE: StaticCommand = StaticCommand {
+    name: "/auto-approve",
+    description: "Toggle auto approve",
+    kind: SlashCommandKind::AutoApprove,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AGENT_VIEW
+        .union(Availability::ACTIVE_CONVERSATION)
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: None,
 };
@@ -40,7 +62,39 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
 pub const MCP: StaticCommand = StaticCommand {
     name: "/mcp",
     description: "View and manage MCP servers",
-    icon_path: "bundled/svg/dataflow.svg",
+    kind: SlashCommandKind::Mcp,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const VIEW_LOGS: StaticCommand = StaticCommand {
+    name: "/view-logs",
+    description: "Bundle your logs into a zip archive",
+    kind: SlashCommandKind::ViewLogs,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+/// Starts the headless TUI voice-input session.
+pub const VOICE: StaticCommand = StaticCommand {
+    name: "/voice",
+    description: "Start voice input (Ctrl-S)",
+    kind: SlashCommandKind::Voice,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
+    name: "/natural-language-detection",
+    description: "Toggle natural language detection",
+    kind: SlashCommandKind::NaturalLanguageDetection,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -49,7 +103,28 @@ pub const MCP: StaticCommand = StaticCommand {
 pub const EXIT: StaticCommand = StaticCommand {
     name: "/exit",
     description: "Exit Warp",
-    icon_path: "bundled/svg/log-out-01.svg",
+    kind: SlashCommandKind::Exit,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const VERSION: StaticCommand = StaticCommand {
+    name: "/version",
+    description: "Show the Warp version",
+    kind: SlashCommandKind::Version,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const LOGOUT: StaticCommand = StaticCommand {
+    name: "/logout",
+    description: "Log out of Warp",
+    kind: SlashCommandKind::Logout,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: None,
@@ -58,7 +133,10 @@ pub const EXIT: StaticCommand = StaticCommand {
 pub static CREATE_ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-environment",
     description: "Create an Oz environment (Docker image + repos) via guided setup",
-    icon_path: "bundled/svg/dataflow.svg",
+    kind: SlashCommandKind::CreateEnvironment,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/dataflow.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: Some(
@@ -71,7 +149,10 @@ pub static CREATE_ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| Static
 pub const CREATE_DOCKER_SANDBOX: StaticCommand = StaticCommand {
     name: "/docker-sandbox",
     description: "Create a new docker sandbox terminal session",
-    icon_path: "bundled/svg/docker.svg",
+    kind: SlashCommandKind::CreateDockerSandbox,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/docker.svg",
+    },
     availability: Availability::LOCAL.union(Availability::AI_ENABLED),
     auto_enter_ai_mode: false,
     argument: None,
@@ -80,7 +161,10 @@ pub const CREATE_DOCKER_SANDBOX: StaticCommand = StaticCommand {
 pub static CREATE_NEW_PROJECT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-new-project",
     description: "Have Oz walk you through creating a new coding project",
-    icon_path: "bundled/svg/plus.svg",
+    kind: SlashCommandKind::CreateNewProject,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/plus.svg",
+    },
     availability: Availability::LOCAL | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: Some(Argument::required().with_hint_text("<describe what you want to build>")),
@@ -89,7 +173,10 @@ pub static CREATE_NEW_PROJECT: LazyLock<StaticCommand> = LazyLock::new(|| Static
 pub static EDIT_SKILL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/open-skill",
     description: "Open a skill's markdown file in Warp's built-in editor",
-    icon_path: "bundled/svg/file-code-02.svg",
+    kind: SlashCommandKind::EditSkill,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/file-code-02.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -98,7 +185,10 @@ pub static EDIT_SKILL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand 
 pub static INVOKE_SKILL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/skills",
     description: "Invoke a skill",
-    icon_path: "bundled/svg/stars-01.svg",
+    kind: SlashCommandKind::InvokeSkill,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/stars-01.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -107,10 +197,13 @@ pub static INVOKE_SKILL: LazyLock<StaticCommand> = LazyLock::new(|| StaticComman
 pub static ADD_PROMPT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/add-prompt",
     description: "Add new Agent prompt",
-    icon_path: if FeatureFlag::AgentView.is_enabled() {
-        "bundled/svg/prompt.svg"
-    } else {
-        "bundled/svg/agentmode.svg"
+    kind: SlashCommandKind::AddPrompt,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: if FeatureFlag::AgentView.is_enabled() {
+            "bundled/svg/prompt.svg"
+        } else {
+            "bundled/svg/agentmode.svg"
+        },
     },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
@@ -120,7 +213,10 @@ pub static ADD_PROMPT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand 
 pub const ADD_RULE: StaticCommand = StaticCommand {
     name: "/add-rule",
     description: "Add a new global rule for the agent",
-    icon_path: "bundled/svg/book-open.svg",
+    kind: SlashCommandKind::AddRule,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/book-open.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -129,7 +225,10 @@ pub const ADD_RULE: StaticCommand = StaticCommand {
 pub static EDIT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/open-file",
     description: "Open a file in Warp's code editor",
-    icon_path: "bundled/svg/file-code-02.svg",
+    kind: SlashCommandKind::Edit,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/file-code-02.svg",
+    },
     availability: Availability::LOCAL,
     auto_enter_ai_mode: false,
     argument: Some(
@@ -140,7 +239,10 @@ pub static EDIT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub static RENAME_TAB: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/rename-tab",
     description: "Rename the current tab",
-    icon_path: "bundled/svg/pencil-line.svg",
+    kind: SlashCommandKind::RenameTab,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/pencil-line.svg",
+    },
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: Some(Argument::required().with_hint_text("<tab name>")),
@@ -149,7 +251,10 @@ pub static RENAME_TAB: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand 
 pub static RENAME_CONVERSATION: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/rename-conversation",
     description: "Rename the current conversation",
-    icon_path: "bundled/svg/pencil-line.svg",
+    kind: SlashCommandKind::RenameConversation,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/pencil-line.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::AI_ENABLED,
@@ -170,7 +275,10 @@ static SET_TAB_COLOR_HINT: LazyLock<String> = LazyLock::new(|| {
 pub static SET_TAB_COLOR: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/set-tab-color",
     description: "Set the color of the current tab",
-    icon_path: "bundled/svg/ellipse.svg",
+    kind: SlashCommandKind::SetTabColor,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/ellipse.svg",
+    },
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: Some(Argument::required().with_hint_text(SET_TAB_COLOR_HINT.as_str())),
@@ -181,7 +289,10 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
     StaticCommand {
         name: "/fork",
         description: "Fork the current conversation in a new pane or a new tab",
-        icon_path: "bundled/svg/arrow-split.svg",
+        kind: SlashCommandKind::Fork,
+        supported_surfaces: SlashCommandSurfaces::GuiOnly {
+            icon_path: "bundled/svg/arrow-split.svg",
+        },
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
             | Availability::NO_LRC_CONTROL
@@ -194,7 +305,10 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
 pub static MOVE_TO_CLOUD: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/handoff",
     description: "Hand off this conversation to a cloud agent",
-    icon_path: "bundled/svg/upload-cloud-01.svg",
+    kind: SlashCommandKind::MoveToCloud,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/upload-cloud-01.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::AI_ENABLED
@@ -210,7 +324,10 @@ pub static MOVE_TO_CLOUD: LazyLock<StaticCommand> = LazyLock::new(|| StaticComma
 pub const OPEN_CODE_REVIEW: StaticCommand = StaticCommand {
     name: "/open-code-review",
     description: "Open code review",
-    icon_path: "bundled/svg/diff.svg",
+    kind: SlashCommandKind::OpenCodeReview,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/diff.svg",
+    },
     availability: Availability::REPOSITORY,
     auto_enter_ai_mode: false,
     argument: None,
@@ -219,7 +336,10 @@ pub const OPEN_CODE_REVIEW: StaticCommand = StaticCommand {
 pub const INDEX: StaticCommand = StaticCommand {
     name: "/index",
     description: "Index this codebase",
-    icon_path: "bundled/svg/find-all.svg",
+    kind: SlashCommandKind::Index,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/find-all.svg",
+    },
     availability: Availability::REPOSITORY
         .union(Availability::CODEBASE_CONTEXT)
         .union(Availability::AI_ENABLED),
@@ -230,7 +350,10 @@ pub const INDEX: StaticCommand = StaticCommand {
 pub const INIT: StaticCommand = StaticCommand {
     name: "/init",
     description: "Index this codebase and generate an AGENTS.md file",
-    icon_path: "bundled/svg/warp-2.svg",
+    kind: SlashCommandKind::Init,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/warp-2.svg",
+    },
     availability: Availability::REPOSITORY
         .union(Availability::AGENT_VIEW)
         .union(Availability::AI_ENABLED),
@@ -241,7 +364,10 @@ pub const INIT: StaticCommand = StaticCommand {
 pub const OPEN_PROJECT_RULES: StaticCommand = StaticCommand {
     name: "/open-project-rules",
     description: "Open the project rules file (AGENTS.md)",
-    icon_path: "bundled/svg/file-code-02.svg",
+    kind: SlashCommandKind::OpenProjectRules,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/file-code-02.svg",
+    },
     availability: Availability::REPOSITORY.union(Availability::AI_ENABLED),
     auto_enter_ai_mode: false,
     argument: None,
@@ -250,7 +376,10 @@ pub const OPEN_PROJECT_RULES: StaticCommand = StaticCommand {
 pub const OPEN_MCP_SERVERS: StaticCommand = StaticCommand {
     name: "/open-mcp-servers",
     description: "Open MCP servers",
-    icon_path: "bundled/svg/dataflow.svg",
+    kind: SlashCommandKind::OpenMcpServers,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/dataflow.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -259,7 +388,10 @@ pub const OPEN_MCP_SERVERS: StaticCommand = StaticCommand {
 pub const OPEN_SETTINGS_FILE: StaticCommand = StaticCommand {
     name: "/open-settings-file",
     description: "Open settings file (TOML)",
-    icon_path: "bundled/svg/file-code-02.svg",
+    kind: SlashCommandKind::OpenSettingsFile,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/file-code-02.svg",
+    },
     availability: Availability::LOCAL,
     auto_enter_ai_mode: false,
     argument: None,
@@ -268,7 +400,10 @@ pub const OPEN_SETTINGS_FILE: StaticCommand = StaticCommand {
 pub const CHANGELOG: StaticCommand = StaticCommand {
     name: "/changelog",
     description: "Open the latest changelog",
-    icon_path: "bundled/svg/book-open.svg",
+    kind: SlashCommandKind::Changelog,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/book-open.svg",
+    },
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: None,
@@ -280,7 +415,10 @@ pub const CHANGELOG: StaticCommand = StaticCommand {
 pub static FEEDBACK: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/feedback",
     description: "Send feedback",
-    icon_path: "bundled/svg/feedback.svg",
+    kind: SlashCommandKind::Feedback,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/feedback.svg",
+    },
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
@@ -289,7 +427,10 @@ pub static FEEDBACK: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub const OPEN_REPO: StaticCommand = StaticCommand {
     name: "/open-repo",
     description: "Switch to another indexed repository",
-    icon_path: "bundled/svg/folder.svg",
+    kind: SlashCommandKind::OpenRepo,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/folder.svg",
+    },
     availability: Availability::LOCAL.union(Availability::AI_ENABLED),
     auto_enter_ai_mode: false,
     argument: None,
@@ -298,7 +439,10 @@ pub const OPEN_REPO: StaticCommand = StaticCommand {
 pub const OPEN_RULES: StaticCommand = StaticCommand {
     name: "/open-rules",
     description: "View all of your global and project rules",
-    icon_path: "bundled/svg/book-open.svg",
+    kind: SlashCommandKind::OpenRules,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/book-open.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -307,7 +451,10 @@ pub const OPEN_RULES: StaticCommand = StaticCommand {
 pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/new",
     description: "Start a new conversation (alias for /agent)",
-    icon_path: "bundled/svg/new-conversation.svg",
+    kind: SlashCommandKind::New,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/new-conversation.svg",
+    },
     availability: Availability::NO_LRC_CONTROL
         | Availability::AI_ENABLED
         | Availability::NOT_CLOUD_AGENT,
@@ -318,7 +465,10 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/model",
     description: "Switch the base agent model",
-    icon_path: "bundled/svg/oz.svg",
+    kind: SlashCommandKind::Model,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/oz.svg",
+    },
     availability: Availability::AGENT_VIEW | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: None,
@@ -327,7 +477,10 @@ pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/host",
     description: "Switch the cloud agent execution host",
-    icon_path: "bundled/svg/oz-cloud.svg",
+    kind: SlashCommandKind::Host,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/oz-cloud.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
         | Availability::CLOUD_MODE_V2_COMPOSER,
@@ -338,7 +491,10 @@ pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub static HARNESS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/harness",
     description: "Switch the cloud agent harness",
-    icon_path: "bundled/svg/oz.svg",
+    kind: SlashCommandKind::Harness,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/oz.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
         | Availability::CLOUD_MODE_V2_COMPOSER,
@@ -349,7 +505,10 @@ pub static HARNESS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub static ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/environment",
     description: "Switch the cloud agent environment",
-    icon_path: "bundled/svg/globe-04.svg",
+    kind: SlashCommandKind::Environment,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/globe-04.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
         | Availability::CLOUD_MODE_V2_COMPOSER,
@@ -360,7 +519,10 @@ pub static ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
 pub static PROFILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/profile",
     description: "Switch the active execution profile",
-    icon_path: "bundled/svg/psychology.svg",
+    kind: SlashCommandKind::Profile,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/psychology.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
         | Availability::NOT_CLOUD_AGENT,
@@ -373,7 +535,10 @@ pub const PLAN_NAME: &str = "/plan";
 pub static PLAN: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: PLAN_NAME,
     description: "Prompt the agent to do some research and create a plan for a task",
-    icon_path: "bundled/svg/file-06.svg",
+    kind: SlashCommandKind::Plan,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/file-06.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text("<describe your task>")),
@@ -384,7 +549,10 @@ pub const ORCHESTRATE_NAME: &str = "/orchestrate";
 pub static ORCHESTRATE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: ORCHESTRATE_NAME,
     description: "Break a task into subtasks and run them in parallel with multiple agents",
-    icon_path: "bundled/svg/oz.svg",
+    kind: SlashCommandKind::Orchestrate,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/oz.svg",
+    },
     availability: Availability::LOCAL | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text("<describe your task>")),
@@ -402,7 +570,10 @@ pub fn strip_command_prefix(query: &str, name: &str) -> Option<String> {
 pub static COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/compact",
     description: "Free up context by summarizing convo history",
-    icon_path: "bundled/svg/collapse_content.svg",
+    kind: SlashCommandKind::Compact,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/collapse_content.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
@@ -417,7 +588,10 @@ pub static COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub static COMPACT_AND: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/compact-and",
     description: "Compact conversation and then send a follow-up prompt",
-    icon_path: "bundled/svg/collapse_content.svg",
+    kind: SlashCommandKind::CompactAnd,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/collapse_content.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
@@ -430,7 +604,10 @@ pub static COMPACT_AND: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
 pub static QUEUE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/queue",
     description: "Queue a prompt to send after the agent finishes responding",
-    icon_path: "bundled/svg/clock-plus.svg",
+    kind: SlashCommandKind::Queue,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/clock-plus.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::AI_ENABLED
@@ -444,7 +621,10 @@ pub static FORK_AND_COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| {
     StaticCommand {
         name: "/fork-and-compact",
         description: "Fork current conversation and compact it in the forked copy",
-        icon_path: "bundled/svg/fork_and_compact.svg",
+        kind: SlashCommandKind::ForkAndCompact,
+        supported_surfaces: SlashCommandSurfaces::GuiOnly {
+            icon_path: "bundled/svg/fork_and_compact.svg",
+        },
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
             | Availability::NO_LRC_CONTROL
@@ -458,7 +638,10 @@ pub static FORK_AND_COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| {
 pub const FORK_FROM: StaticCommand = StaticCommand {
     name: "/fork-from",
     description: "Fork conversation from a specific query",
-    icon_path: "bundled/svg/arrow-split.svg",
+    kind: SlashCommandKind::ForkFrom,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/arrow-split.svg",
+    },
     availability: Availability::AGENT_VIEW
         .union(Availability::NO_LRC_CONTROL)
         .union(Availability::AI_ENABLED)
@@ -472,7 +655,10 @@ pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
     StaticCommand {
         name: "/continue-locally",
         description: "Continue this cloud conversation locally",
-        icon_path: "bundled/svg/arrow-split.svg",
+        kind: SlashCommandKind::ContinueLocally,
+        supported_surfaces: SlashCommandSurfaces::GuiOnly {
+            icon_path: "bundled/svg/arrow-split.svg",
+        },
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
             | Availability::AI_ENABLED
@@ -485,7 +671,10 @@ pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
 pub const USAGE: StaticCommand = StaticCommand {
     name: "/usage",
     description: "Open billing and usage settings",
-    icon_path: "bundled/svg/bar-chart-04.svg",
+    kind: SlashCommandKind::Usage,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/bar-chart-04.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -494,7 +683,10 @@ pub const USAGE: StaticCommand = StaticCommand {
 pub const REMOTE_CONTROL: StaticCommand = StaticCommand {
     name: "/remote-control",
     description: "Start remote control for this session",
-    icon_path: "bundled/svg/phone-01.svg",
+    kind: SlashCommandKind::RemoteControl,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/phone-01.svg",
+    },
     availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: None,
@@ -503,7 +695,10 @@ pub const REMOTE_CONTROL: StaticCommand = StaticCommand {
 pub const COST: StaticCommand = StaticCommand {
     name: "/cost",
     description: "Toggle credit usage details",
-    icon_path: "bundled/svg/bar-chart-04.svg",
+    kind: SlashCommandKind::Cost,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/bar-chart-04.svg",
+    },
     availability: Availability::AGENT_VIEW
         .union(Availability::AI_ENABLED)
         .union(Availability::NOT_CLOUD_AGENT),
@@ -514,7 +709,10 @@ pub const COST: StaticCommand = StaticCommand {
 pub const CONVERSATIONS: StaticCommand = StaticCommand {
     name: "/conversations",
     description: "Open conversation history",
-    icon_path: "bundled/svg/conversation.svg",
+    kind: SlashCommandKind::Conversations,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/conversation.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -523,7 +721,10 @@ pub const CONVERSATIONS: StaticCommand = StaticCommand {
 pub static PROMPTS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/prompts",
     description: "Search saved prompts",
-    icon_path: "bundled/svg/prompt.svg",
+    kind: SlashCommandKind::Prompts,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/prompt.svg",
+    },
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
@@ -532,7 +733,10 @@ pub static PROMPTS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub const REWIND: StaticCommand = StaticCommand {
     name: "/rewind",
     description: "Rewind to a previous point in the conversation",
-    icon_path: "bundled/svg/clock-rewind.svg",
+    kind: SlashCommandKind::Rewind,
+    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        icon_path: "bundled/svg/clock-rewind.svg",
+    },
     availability: Availability::AGENT_VIEW
         .union(Availability::AI_ENABLED)
         .union(Availability::NOT_CLOUD_AGENT),
@@ -543,7 +747,10 @@ pub const REWIND: StaticCommand = StaticCommand {
 pub const EXPORT_TO_CLIPBOARD: StaticCommand = StaticCommand {
     name: "/export-to-clipboard",
     description: "Export current conversation to clipboard in markdown format",
-    icon_path: "bundled/svg/copy.svg",
+    kind: SlashCommandKind::ExportToClipboard,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/copy.svg",
+    },
     availability: Availability::AGENT_VIEW
         .union(Availability::AI_ENABLED)
         .union(Availability::NOT_CLOUD_AGENT),
@@ -554,7 +761,10 @@ pub const EXPORT_TO_CLIPBOARD: StaticCommand = StaticCommand {
 pub static EXPORT_TO_FILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/export-to-file",
     description: "Export current conversation to a markdown file",
-    icon_path: "bundled/svg/download-01.svg",
+    kind: SlashCommandKind::ExportToFile,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/download-01.svg",
+    },
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
         | Availability::NOT_CLOUD_AGENT,
@@ -593,7 +803,7 @@ impl Default for Registry {
 impl Registry {
     pub fn new() -> Self {
         let mut commands = HashMap::new();
-        for command in all_commands().into_iter() {
+        for command in all_commands(settings::settings_mode()) {
             debug_assert!(
                 !command
                     .availability
@@ -631,15 +841,19 @@ impl Registry {
     }
 }
 
-fn all_commands() -> Vec<StaticCommand> {
+fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
     let mut commands = vec![
         ADD_MCP,
         ADD_PROMPT.clone(),
         ADD_RULE,
+        AUTO_APPROVE,
         COST,
+        EXIT,
         FEEDBACK.clone(),
         INDEX,
         INIT,
+        LOGOUT,
+        MCP,
         OPEN_PROJECT_RULES,
         OPEN_MCP_SERVERS,
         OPEN_RULES,
@@ -649,18 +863,18 @@ fn all_commands() -> Vec<StaticCommand> {
         RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
+        NATURAL_LANGUAGE_DETECTION,
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
         MODEL.clone(),
+        VERSION,
+        VIEW_LOGS,
+        VOICE,
     ];
 
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
         commands.push(CREATE_DOCKER_SANDBOX);
-    }
-    if settings::settings_mode() == settings::SettingsMode::Tui {
-        commands.push(MCP);
-        commands.push(EXIT);
     }
 
     if FeatureFlag::CreatingSharedSessions.is_enabled()
@@ -752,6 +966,7 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(HARNESS.clone());
         commands.push(ENVIRONMENT.clone());
     }
+    commands.retain(|command| command.supports_surface(settings_mode));
 
     commands
 }

@@ -18,16 +18,16 @@ use super::{
     TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiPresentationContext,
     TuiScreenPoint, TuiScreenPosition, TuiScrollableElement, TuiSize, TuiViewMapContext, TuiZIndex,
 };
+use crate::AppContext;
 use crate::elements::SmartSelectFn;
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{SelectionDirection, SelectionType, TextBuffer};
-use crate::AppContext;
 
 mod cells;
 mod state;
 
+pub use cells::{TuiRowGlyph, TuiSelectionSpan, point_after_col};
 pub(crate) use cells::{cell_span, row_glyphs, row_text};
-pub use cells::{point_after_col, TuiRowGlyph, TuiSelectionSpan};
 pub use state::TuiSelectionHandle;
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;

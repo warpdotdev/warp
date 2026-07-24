@@ -6,7 +6,7 @@ use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::window::save_active_window_id;
 
-use super::{new_builder, Builder};
+use super::{Builder, new_builder};
 
 /// Test creating a rule
 pub fn test_rule_creation() -> Builder {

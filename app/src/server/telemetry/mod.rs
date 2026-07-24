@@ -26,12 +26,12 @@ use warp_core::channel::RudderStackDestination;
 use warp_errors::report_error;
 use warpui::telemetry::Event;
 
+use crate::ChannelState;
 use crate::auth::UserUid;
 use crate::features::FeatureFlag;
 use crate::server::telemetry::context::AttachContext;
 use crate::server::telemetry_ext::TelemetryExt;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::ChannelState;
 
 /// Filename for file where telemetry events are written on app quit.
 const RUDDER_TELEMETRY_EVENTS_FILE_NAME: &str = "rudder_telemetry_events.json";
@@ -271,11 +271,11 @@ impl TelemetryApi {
             #[cfg(not(target_family = "wasm"))]
             if let Err(error) = &result {
                 for cause in error.chain() {
-                    if let Some(err) = cause.downcast_ref::<reqwest::Error>() {
-                        if err.is_connect() {
-                            log::warn!("Failed to send telemetry event: {error}");
-                            return Ok(());
-                        }
+                    if let Some(err) = cause.downcast_ref::<reqwest::Error>()
+                        && err.is_connect()
+                    {
+                        log::warn!("Failed to send telemetry event: {error}");
+                        return Ok(());
                     }
                 }
             }
@@ -364,11 +364,11 @@ impl TelemetryApi {
                 // against `is_connect` and not the whole loop.
                 #[cfg(not(target_family = "wasm"))]
                 for cause in e.chain() {
-                    if let Some(err) = cause.downcast_ref::<reqwest::Error>() {
-                        if err.is_connect() {
-                            log::warn!("Failed to send event to RudderStack: {e}");
-                            return Ok(());
-                        }
+                    if let Some(err) = cause.downcast_ref::<reqwest::Error>()
+                        && err.is_connect()
+                    {
+                        log::warn!("Failed to send event to RudderStack: {e}");
+                        return Ok(());
                     }
                 }
                 return Err(e);

@@ -20,14 +20,14 @@ use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use async_channel::{Receiver, Sender};
 use async_compat::Compat;
 use async_trait::async_trait;
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use futures_util::stream::AbortHandle;
-use http::header::{HeaderValue, AUTHORIZATION};
+use http::header::{AUTHORIZATION, HeaderValue};
 use instant::Instant;
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use warp_managed_secrets::client::{IdentityTokenOptions, ManagedSecretsClient, TaskIdentityToken};
@@ -74,7 +74,8 @@ impl AuthContext {
         let token =
             std::env::var(CLOUD_AGENT_OTLP_TOKEN).context("Cloud-agent OTLP token is missing")?;
         // Remove the bootstrap secret as soon as it is owned so child processes cannot inherit it.
-        std::env::remove_var(CLOUD_AGENT_OTLP_TOKEN);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(CLOUD_AGENT_OTLP_TOKEN) };
         let token = token.trim().to_owned();
         anyhow::ensure!(!token.is_empty(), "Cloud-agent OTLP token is empty");
 

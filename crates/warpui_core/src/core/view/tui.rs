@@ -10,7 +10,7 @@ use std::any::Any;
 
 use super::{BlurContext, FocusContext, ViewContext};
 use crate::elements::tui::TuiElement;
-use crate::{keymap, AppContext, Entity, EntityId, WindowId};
+use crate::{AppContext, Entity, EntityId, WindowId, keymap};
 
 /// An interactive, renderable TUI component. The TUI counterpart of
 /// [`View`](crate::View); registered with

@@ -17,13 +17,13 @@ use warpui::text::SelectionType;
 use warpui::units::Lines;
 
 use super::index::{Direction, VisibleRow};
+use crate::terminal::Vector2F;
+use crate::terminal::model::GridStorage;
 use crate::terminal::model::ansi::CursorShape;
 use crate::terminal::model::cell::Flags;
-use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::index::{Point, Side};
-use crate::terminal::model::GridStorage;
-use crate::terminal::Vector2F;
 
 /// A Point and side within that point.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -484,22 +484,21 @@ impl Selection {
         selection: &SemanticSelection,
         is_reversed: bool,
     ) -> SelectionRange {
-        if start == end {
-            if let Some(matching) = grid_handler.bracket_search(start) {
-                if (matching.row == start.row && matching.col < start.col)
-                    || (matching.row > start.row)
-                {
-                    start = matching;
-                } else {
-                    end = matching;
-                }
-
-                return SelectionRange {
-                    start,
-                    end,
-                    is_reversed,
-                };
+        if start == end
+            && let Some(matching) = grid_handler.bracket_search(start)
+        {
+            if (matching.row == start.row && matching.col < start.col) || (matching.row > start.row)
+            {
+                start = matching;
+            } else {
+                end = matching;
             }
+
+            return SelectionRange {
+                start,
+                end,
+                is_reversed,
+            };
         }
 
         // first, get the bounds for normal, non-smart-selection

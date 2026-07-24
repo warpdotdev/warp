@@ -3,6 +3,7 @@ use std::sync::Arc;
 use ai::api_keys::ApiKeyManager;
 use anyhow::Context as _;
 use chrono::{DateTime, Local, Utc};
+use futures::channel::oneshot::{self, Receiver};
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
@@ -11,15 +12,15 @@ pub use warp_graphql::billing::BonusGrantType;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::ai::agent::conversation::AIConversationId;
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
 use crate::server::server_api::ai::AIClient;
 use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
-use crate::BlocklistAIHistoryModel;
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
 pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
@@ -248,25 +249,49 @@ impl AIRequestUsageModel {
         self.last_update_time
     }
 
-    /// Spawns a task to refresh the latest AI request usage and bonus grants, fetching from the server.
-    pub fn refresh_request_usage_async(&mut self, ctx: &mut ModelContext<Self>) {
+    /// Refreshes the latest AI request usage and bonus grants from the server.
+    ///
+    /// The receiver resolves to the freshly fetched base request limit. It
+    /// resolves to `None` if the user is logged out or the request fails, so
+    /// callers making entitlement decisions do not fall back to cached data.
+    pub fn refresh_request_usage(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Receiver<Option<usize>> {
+        let (sender, receiver) = oneshot::channel();
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
-            return;
+            let _ = sender.send(None);
+            return receiver;
         }
 
         let ai_client = self.ai_client.clone();
+        let mut sender = Some(sender);
         ctx.spawn(
             async move { ai_client.get_request_limit_info().await },
-            |model, result, ctx| match result {
-                Ok(usage_info) => {
-                    model.bonus_grants = usage_info.bonus_grants;
-                    model.update_request_limit_info(usage_info.request_limit_info, ctx);
-                }
-                Err(e) => {
-                    log::warn!("Failed to retrieve initial request limit info: {e:#}");
+            move |model, result, ctx| {
+                let request_limit = match result {
+                    Ok(usage_info) => {
+                        let request_limit = usage_info.request_limit_info.limit;
+                        model.bonus_grants = usage_info.bonus_grants;
+                        model.update_request_limit_info(usage_info.request_limit_info, ctx);
+                        Some(request_limit)
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to retrieve request limit info: {e:#}");
+                        None
+                    }
+                };
+                if let Some(sender) = sender.take() {
+                    let _ = sender.send(request_limit);
                 }
             },
         );
+        receiver
+    }
+
+    /// Spawns a task to refresh the latest AI request usage and bonus grants.
+    pub fn refresh_request_usage_async(&mut self, ctx: &mut ModelContext<Self>) {
+        drop(self.refresh_request_usage(ctx));
     }
 
     pub fn update_request_limit_info(

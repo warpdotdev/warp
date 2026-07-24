@@ -9,8 +9,8 @@ use warp_errors::report_if_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::ServerExperiment;
-use crate::persistence::ModelEvent;
 use crate::GlobalResourceHandlesProvider;
+use crate::persistence::ModelEvent;
 
 /// A global model for maintaining server-side experiment state.
 pub struct ServerExperiments {
@@ -72,9 +72,11 @@ impl ServerExperiments {
             let event = ModelEvent::SaveExperiments {
                 experiments: self.latest.iter().copied().collect(),
             };
-            report_if_error!(model_event_sender
-                .send(event)
-                .context("Unable to save experiments to sqlite"));
+            report_if_error!(
+                model_event_sender
+                    .send(event)
+                    .context("Unable to save experiments to sqlite")
+            );
         }
     }
 }

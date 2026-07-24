@@ -3,12 +3,13 @@ use std::sync::Arc;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::user_input::UserInput;
-use warpui::elements::new_scrollable::ScrollableAppearance;
 use warpui::elements::ScrollbarWidth;
+use warpui::elements::new_scrollable::ScrollableAppearance;
 use warpui::platform::WindowStyle;
 use warpui::{App, TypedActionView, ViewHandle, WindowId};
 
 use super::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
+use crate::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::keys::NotebookKeybindings;
@@ -17,10 +18,9 @@ use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
-use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ActiveSession;
+use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::AuthStateProvider;
 
 fn initialize_editor(app: &mut App) -> (WindowId, ViewHandle<CodeEditorView>) {
     initialize_settings_for_tests(app);

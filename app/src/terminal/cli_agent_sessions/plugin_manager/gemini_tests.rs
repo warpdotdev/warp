@@ -1,8 +1,8 @@
 use std::fs;
 
 use super::{
-    check_installed, compare_versions, installed_version, CliAgentPluginManager,
-    GeminiPluginManager, MINIMUM_PLUGIN_VERSION,
+    CliAgentPluginManager, GeminiPluginManager, MINIMUM_PLUGIN_VERSION, check_installed,
+    compare_versions, installed_version,
 };
 
 #[test]

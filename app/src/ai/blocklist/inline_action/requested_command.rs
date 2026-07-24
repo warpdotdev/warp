@@ -9,8 +9,8 @@ use parking_lot::FairMutex;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
@@ -31,8 +31,9 @@ use warpui::{
 use super::inline_action_icons::{self, icon_size};
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::{
-    icons, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentActionType,
+    AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentActionType,
     AIAgentCitation, AIAgentOutputMessageType, CallMCPToolResult, RequestCommandOutputResult,
+    icons,
 };
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::block::cli_controller::{
@@ -40,13 +41,13 @@ use crate::ai::blocklist::block::cli_controller::{
 };
 use crate::ai::blocklist::block::view_impl::output::action_icon;
 use crate::ai::blocklist::block::view_impl::{
-    render_autonomy_checkbox_setting_speedbump_footer, render_citation, render_citation_chips,
     CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
+    render_autonomy_checkbox_setting_speedbump_footer, render_citation, render_citation_chips,
 };
 use crate::ai::blocklist::block::{AIBlockAction, AutonomySettingSpeedbump};
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    ExpandedConfig, HeaderConfig, InteractionMode, RightClickConfig,
-    INLINE_ACTION_HORIZONTAL_PADDING,
+    ExpandedConfig, HeaderConfig, INLINE_ACTION_HORIZONTAL_PADDING, InteractionMode,
+    RightClickConfig,
 };
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::{
@@ -58,19 +59,19 @@ use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEd
 use crate::editor::InteractionState;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::settings::InputModeSettings;
+use crate::terminal::TerminalModel;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::model::block::Block;
-use crate::terminal::TerminalModel;
 use crate::ui_components::blended_colors;
 use crate::ui_components::json_tree::{
-    render_json_tree, CopyJsonFn, JsonTreeColors, JsonTreeState, PathSegment, ToggleFn,
-    ToggleStringFn, TREE_FONT_SIZE,
+    CopyJsonFn, JsonTreeColors, JsonTreeState, PathSegment, TREE_FONT_SIZE, ToggleFn,
+    ToggleStringFn, render_json_tree,
 };
 use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
 use crate::view_components::compactible_action_button::{
-    CompactibleActionButton, RenderCompactibleActionButton, LARGE_SIZE_SWITCH_THRESHOLD,
-    MEDIUM_SIZE_SWITCH_THRESHOLD, SMALL_SIZE_SWITCH_THRESHOLD,
+    CompactibleActionButton, LARGE_SIZE_SWITCH_THRESHOLD, MEDIUM_SIZE_SWITCH_THRESHOLD,
+    RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 
@@ -545,11 +546,9 @@ impl RequestedCommandView {
                         conversation_id: event_conversation_id,
                         ..
                     } = event
-                    {
-                        if *event_conversation_id == conversation_id {
+                        && *event_conversation_id == conversation_id {
                             ctx.notify();
                         }
-                    }
                 },
             );
         }
@@ -1024,10 +1023,10 @@ impl RequestedCommandView {
         if !is_view_only {
             return;
         }
-        if let Some(command) = action_result.result.command_str() {
-            if !command.is_empty() {
-                self.command_text = command.to_string();
-            }
+        if let Some(command) = action_result.result.command_str()
+            && !command.is_empty()
+        {
+            self.command_text = command.to_string();
         }
     }
 
@@ -1093,10 +1092,10 @@ impl RequestedCommandView {
     /// Returns the currently selected text.
     pub fn selected_text(&self, ctx: &AppContext) -> Option<String> {
         // Check MCP content selection first, then fall back to editor selection.
-        if let Ok(mcp_selection) = self.mcp_content_selected_text.read() {
-            if mcp_selection.is_some() {
-                return mcp_selection.clone();
-            }
+        if let Ok(mcp_selection) = self.mcp_content_selected_text.read()
+            && mcp_selection.is_some()
+        {
+            return mcp_selection.clone();
         }
         self.editor
             .as_ref()
@@ -1106,12 +1105,17 @@ impl RequestedCommandView {
     pub fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
         // Clear MCP content selection if it exists, else fall back to editor selection.
         self.mcp_content_selection_handle.clear();
-        if let Ok(mut mcp_selection) = self.mcp_content_selected_text.write() {
-            *mcp_selection = None;
-        } else if let Some(editor) = &self.editor {
-            editor.update(ctx, |editor, ctx| {
-                editor.clear_selection(ctx);
-            });
+        match self.mcp_content_selected_text.write() {
+            Ok(mut mcp_selection) => {
+                *mcp_selection = None;
+            }
+            _ => {
+                if let Some(editor) = &self.editor {
+                    editor.update(ctx, |editor, ctx| {
+                        editor.clear_selection(ctx);
+                    });
+                }
+            }
         }
     }
 
@@ -1930,26 +1934,24 @@ impl View for RequestedCommandView {
             );
         }
 
-        if self.mcp_context_menu_open {
-            if let Some(anchor_id) = &self.mcp_context_menu_anchor_id {
-                root_stack.add_positioned_child(
-                    Dismiss::new(ChildView::new(&self.mcp_context_menu).finish())
-                        .on_dismiss(|ctx, _app| {
-                            ctx.dispatch_typed_action(
-                                RequestedCommandViewAction::CloseMcpContextMenu,
-                            );
-                        })
-                        .prevent_interaction_with_other_elements()
-                        .finish(),
-                    OffsetPositioning::offset_from_save_position_element(
-                        anchor_id.as_str(),
-                        vec2f(0., 0.),
-                        PositionedElementOffsetBounds::WindowByPosition,
-                        PositionedElementAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                );
-            }
+        if self.mcp_context_menu_open
+            && let Some(anchor_id) = &self.mcp_context_menu_anchor_id
+        {
+            root_stack.add_positioned_child(
+                Dismiss::new(ChildView::new(&self.mcp_context_menu).finish())
+                    .on_dismiss(|ctx, _app| {
+                        ctx.dispatch_typed_action(RequestedCommandViewAction::CloseMcpContextMenu);
+                    })
+                    .prevent_interaction_with_other_elements()
+                    .finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    anchor_id.as_str(),
+                    vec2f(0., 0.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
         }
 
         root_stack.finish()

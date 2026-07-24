@@ -30,9 +30,11 @@ mod privacy;
 mod same_line_prompt_block;
 mod scroll;
 mod select;
+mod shared_object_limit_banner;
 mod ssh;
 mod theme;
 mod tui_autoupdate;
+mod tui_zero_state;
 mod vim_banner;
 
 #[cfg(test)]
@@ -64,9 +66,11 @@ pub use privacy::*;
 pub use same_line_prompt_block::*;
 pub use scroll::*;
 pub use select::*;
+pub use shared_object_limit_banner::*;
 pub use ssh::*;
 pub use theme::*;
 pub use tui_autoupdate::*;
+pub use tui_zero_state::*;
 pub use vim_banner::*;
 use warp_core::user_preferences::GetUserPreferences as _;
 
@@ -127,7 +131,7 @@ use lazy_static::lazy_static;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;

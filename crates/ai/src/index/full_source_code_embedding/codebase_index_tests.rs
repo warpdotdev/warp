@@ -13,8 +13,8 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui_core::{App, SingletonEntity};
 
 use super::{
-    CodebaseIndex, CodebaseIndexTimeStampMetadata, ServerSyncResult, TreeSourceSyncState,
-    DEFAULT_INCREMENAL_SYNC_FLUSH_INTERVAL,
+    CodebaseIndex, CodebaseIndexTimeStampMetadata, DEFAULT_INCREMENAL_SYNC_FLUSH_INTERVAL,
+    ServerSyncResult, TreeSourceSyncState,
 };
 use crate::index::full_source_code_embedding::changed_files::ChangedFiles;
 use crate::index::full_source_code_embedding::codebase_index::MAX_DEPTH;

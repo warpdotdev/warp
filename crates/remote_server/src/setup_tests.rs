@@ -163,31 +163,39 @@ fn state_is_ready() {
 
 #[test]
 fn state_is_failed() {
-    assert!(RemoteServerSetupState::Failed {
-        error: "test".into()
-    }
-    .is_failed());
+    assert!(
+        RemoteServerSetupState::Failed {
+            error: "test".into()
+        }
+        .is_failed()
+    );
     assert!(!RemoteServerSetupState::Ready.is_failed());
 }
 
 #[test]
 fn state_is_terminal() {
     assert!(RemoteServerSetupState::Ready.is_terminal());
-    assert!(RemoteServerSetupState::Failed {
-        error: "test".into()
-    }
-    .is_terminal());
-    assert!(RemoteServerSetupState::Unsupported {
-        reason: UnsupportedReason::NonGlibc {
-            name: "musl".into()
+    assert!(
+        RemoteServerSetupState::Failed {
+            error: "test".into()
         }
-    }
-    .is_terminal());
+        .is_terminal()
+    );
+    assert!(
+        RemoteServerSetupState::Unsupported {
+            reason: UnsupportedReason::NonGlibc {
+                name: "musl".into()
+            }
+        }
+        .is_terminal()
+    );
     assert!(!RemoteServerSetupState::Checking.is_terminal());
-    assert!(!RemoteServerSetupState::Installing {
-        progress_percent: None,
-    }
-    .is_terminal());
+    assert!(
+        !RemoteServerSetupState::Installing {
+            progress_percent: None,
+        }
+        .is_terminal()
+    );
     assert!(!RemoteServerSetupState::Updating.is_terminal());
     assert!(!RemoteServerSetupState::Initializing.is_terminal());
 }
@@ -366,9 +374,11 @@ fn install_script_installs_binary_and_global_resources() {
     assert!(fs::metadata(&binary).unwrap().is_file());
     assert!(fs::metadata(&resources).unwrap().is_dir());
     assert_eq!(fs::read_to_string(&skill_md).unwrap(), "test skill");
-    assert!(std::path::Path::new(&resources)
-        .join("bundled/skills/test-skill/oz-decoy.sh")
-        .is_file());
+    assert!(
+        std::path::Path::new(&resources)
+            .join("bundled/skills/test-skill/oz-decoy.sh")
+            .is_file()
+    );
 
     let check_output = Command::new("bash")
         .arg("-c")
@@ -384,9 +394,11 @@ fn install_script_installs_binary_and_global_resources() {
     let second_tarball = make_test_tarball(&test_root, "second", "updated skill", false);
     run_install_script(&second_tarball, &fake_home);
     assert_eq!(fs::read_to_string(&skill_md).unwrap(), "updated skill");
-    assert!(!std::path::Path::new(&resources)
-        .join("bundled/skills/test-skill/oz-decoy.sh")
-        .exists());
+    assert!(
+        !std::path::Path::new(&resources)
+            .join("bundled/skills/test-skill/oz-decoy.sh")
+            .exists()
+    );
 
     // Removal deletes the binary but leaves the global resources for the
     // next install to overwrite.

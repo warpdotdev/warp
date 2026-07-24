@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use chrono::Utc;
 use warp_multi_agent_api as api;
 
-use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
 };
@@ -243,74 +243,6 @@ fn test_convert_tool_call_result_to_input_upload_artifact_missing_result_is_erro
             other => panic!("Expected upload-artifact error result, got {other:?}"),
         },
         other => panic!("Expected action-result input, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_convert_tool_call_result_to_input_start_agent_v2_results() {
-    let task_id = crate::ai::agent::task::TaskId::new("task".to_string());
-
-    let cases = [
-        (
-            "success",
-            Some(api::start_agent_v2_result::Result::Success(
-                api::start_agent_v2_result::Success {
-                    agent_id: "agent-123".to_string(),
-                },
-            )),
-        ),
-        (
-            "error",
-            Some(api::start_agent_v2_result::Result::Error(
-                api::start_agent_v2_result::Error {
-                    error: "child failed".to_string(),
-                },
-            )),
-        ),
-        ("cancelled", None),
-    ];
-
-    for (name, result) in cases {
-        let mut document_versions = HashMap::new();
-        let tool_call_result = api::message::ToolCallResult {
-            tool_call_id: format!("tool_call_{name}"),
-            context: None,
-            result: Some(api::message::tool_call_result::Result::StartAgentV2(
-                api::StartAgentV2Result { result },
-            )),
-        };
-
-        let input = convert_tool_call_result_to_input(
-            &task_id,
-            &tool_call_result,
-            &HashMap::new(),
-            &mut document_versions,
-        )
-        .unwrap();
-
-        match input {
-            AIAgentInput::ActionResult { result, .. } => match result.result {
-                crate::ai::agent::AIAgentActionResultType::StartAgent(
-                    crate::ai::agent::StartAgentResult::Success { agent_id, version },
-                ) if name == "success" => {
-                    assert_eq!(agent_id, "agent-123");
-                    assert_eq!(version, ai::agent::action_result::StartAgentVersion::V2);
-                }
-                crate::ai::agent::AIAgentActionResultType::StartAgent(
-                    crate::ai::agent::StartAgentResult::Error { error, version },
-                ) if name == "error" => {
-                    assert_eq!(error, "child failed");
-                    assert_eq!(version, ai::agent::action_result::StartAgentVersion::V2);
-                }
-                crate::ai::agent::AIAgentActionResultType::StartAgent(
-                    crate::ai::agent::StartAgentResult::Cancelled { version },
-                ) if name == "cancelled" => {
-                    assert_eq!(version, ai::agent::action_result::StartAgentVersion::V2);
-                }
-                other => panic!("Unexpected start-agent-v2 result for {name}: {other:?}"),
-            },
-            other => panic!("Expected action-result input for {name}, got {other:?}"),
-        }
     }
 }
 
@@ -886,19 +818,18 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
     let mut found_successful = 0;
 
     for input in &second_exchange.input {
-        if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input {
-            if let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
+        if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input
+            && let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
                 &result.result
-            {
-                match command_result {
-                    crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
-                        found_cancelled = true;
-                    }
-                    crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {
-                        found_successful += 1;
-                    }
-                    _ => {}
+        {
+            match command_result {
+                crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
+                    found_cancelled = true;
                 }
+                crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {
+                    found_successful += 1;
+                }
+                _ => {}
             }
         }
     }

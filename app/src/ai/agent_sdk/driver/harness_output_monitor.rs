@@ -8,8 +8,8 @@ use std::time::Duration;
 use regex::escape;
 use warpui::ModelSpawner;
 
-use super::terminal::BlockOutputMatch;
 use super::AgentDriver;
+use super::terminal::BlockOutputMatch;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionStatus;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::find::RegexDFAs;

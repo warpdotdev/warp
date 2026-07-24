@@ -7,9 +7,9 @@ use std::time::Duration;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::Local;
 use fuzzy_match::FuzzyMatchResult;
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
-use repo_metadata::RepoMetadataModel;
 use session_sharing_protocol::common::Role;
 use smol_str::SmolStr;
 use unindent::Unindent;
@@ -29,6 +29,7 @@ use watcher::HomeDirectoryWatcher;
 use workflows::workflow::{Argument, ArgumentType, Workflow};
 
 use super::*;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
@@ -47,9 +48,8 @@ use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::changelog_model::ChangelogModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::context_chips::prompt::Prompt;
@@ -73,6 +73,7 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 #[cfg(windows)]
 use crate::system::SystemInfo;
 use crate::system::SystemStats;
+use crate::terminal::TerminalView;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::block_list_viewport::ScrollPosition;
 use crate::terminal::cli_agent_sessions::{
@@ -90,7 +91,7 @@ use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::local_tty::shell::ShellStarter;
 use crate::terminal::model::ansi::{Handler, PromptMetadata};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::model::blocks::{insert_block, BlockListPoint};
+use crate::terminal::model::blocks::{BlockListPoint, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Side;
 use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
@@ -102,7 +103,6 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
-use crate::terminal::TerminalView;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -111,8 +111,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    experiments, AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
-    ReferralThemeStatus,
+    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
+    ReferralThemeStatus, experiments,
 };
 
 #[test]
@@ -204,6 +204,18 @@ fn renders_fixed_prompt_chip_command_without_interpolation() {
 
 pub fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
+
+    // NLD is now opt-in by default (`ai_autodetection_enabled_internal` defaults to false).
+    // These tests exercise the natural-language-detection-on code paths (buffer-driven slash
+    // command detection, auto-detection input mode), so explicitly re-enable it here to preserve
+    // the pre-opt-in test behavior. The opt-in default itself is covered by
+    // `ai_autodetection_defaults_to_opt_in` in `settings/ai_tests.rs`.
+    crate::settings::AISettings::handle(app).update(app, |settings, ctx| {
+        settings
+            .ai_autodetection_enabled_internal
+            .set_value(true, ctx)
+            .unwrap();
+    });
 
     // Make sure we set up all necessary custom action bindings.
     app.update(init);
@@ -2937,11 +2949,13 @@ fn test_tab_completion_with_cursor_movement() {
             input
                 .input_suggestions
                 .read(&app, |input_suggestions, _ctx| {
-                    assert!(input_suggestions
-                        .items()
-                        .iter()
-                        .map(|item| item.text())
-                        .eq(["add", "audit", "autoclean",]))
+                    assert!(
+                        input_suggestions
+                            .items()
+                            .iter()
+                            .map(|item| item.text())
+                            .eq(["add", "audit", "autoclean",])
+                    )
                 });
         });
 
@@ -2954,11 +2968,13 @@ fn test_tab_completion_with_cursor_movement() {
             input
                 .input_suggestions
                 .read(&app, |input_suggestions, _ctx| {
-                    assert!(input_suggestions
-                        .items()
-                        .iter()
-                        .map(|item| item.text())
-                        .eq(["audit", "autoclean",]))
+                    assert!(
+                        input_suggestions
+                            .items()
+                            .iter()
+                            .map(|item| item.text())
+                            .eq(["audit", "autoclean",])
+                    )
                 });
 
             assert!(matches!(
@@ -2978,11 +2994,13 @@ fn test_tab_completion_with_cursor_movement() {
             input
                 .input_suggestions
                 .read(&app, |input_suggestions, _ctx| {
-                    assert!(input_suggestions
-                        .items()
-                        .iter()
-                        .map(|item| item.text())
-                        .eq(["add", "audit", "autoclean",]))
+                    assert!(
+                        input_suggestions
+                            .items()
+                            .iter()
+                            .map(|item| item.text())
+                            .eq(["add", "audit", "autoclean",])
+                    )
                 });
 
             assert!(matches!(
@@ -3779,11 +3797,13 @@ fn test_tab_completion_hides_autosuggestion() {
             ));
 
             // Autosuggestion should be closed.
-            assert!(input
-                .editor
-                .as_ref(ctx)
-                .current_autosuggestion_text()
-                .is_none());
+            assert!(
+                input
+                    .editor
+                    .as_ref(ctx)
+                    .current_autosuggestion_text()
+                    .is_none()
+            );
         });
     });
 }
@@ -3821,11 +3841,13 @@ fn test_completions_while_typing_doesnt_hide_autosuggestion() {
 
         // Autosuggestion should be active.
         input.read(&app, |input, ctx| {
-            assert!(input
-                .editor
-                .as_ref(ctx)
-                .current_autosuggestion_text()
-                .is_some());
+            assert!(
+                input
+                    .editor
+                    .as_ref(ctx)
+                    .current_autosuggestion_text()
+                    .is_some()
+            );
         });
 
         input.update(&mut app, |input, ctx| {
@@ -3848,11 +3870,13 @@ fn test_completions_while_typing_doesnt_hide_autosuggestion() {
                 InputSuggestionsMode::CompletionSuggestions { .. }
             ));
 
-            assert!(input
-                .editor
-                .as_ref(ctx)
-                .current_autosuggestion_text()
-                .is_some());
+            assert!(
+                input
+                    .editor
+                    .as_ref(ctx)
+                    .current_autosuggestion_text()
+                    .is_some()
+            );
         });
     });
 }
@@ -5815,13 +5839,18 @@ fn test_workflow_view_does_not_panic() {
             Workflow::new("Test Workflow", "echo \"Hello World\""),
             Workflow::new("Test Workflow with Description", "echo \"Hello World\"")
                 .with_description("This is a test workflow that prints Hello World!".into()),
-            Workflow::new("Test Workflow with Args", "echo \"Hello {{person}}\"")
-                .with_arguments(vec![Argument::new("person", ArgumentType::Text)
-                    .with_description("The person you want to say hello to".to_string())]),
+            Workflow::new("Test Workflow with Args", "echo \"Hello {{person}}\"").with_arguments(
+                vec![
+                    Argument::new("person", ArgumentType::Text)
+                        .with_description("The person you want to say hello to".to_string()),
+                ],
+            ),
             Workflow::new("test", "echo \"Hello {{person}}\"")
                 .with_description("This is a test workflow that prints Hello {{person}}!".into())
-                .with_arguments(vec![Argument::new("person", ArgumentType::Text)
-                    .with_description("The person you want to say hello to".to_string())]),
+                .with_arguments(vec![
+                    Argument::new("person", ArgumentType::Text)
+                        .with_description("The person you want to say hello to".to_string()),
+                ]),
         ];
 
         for workflow in workflows {
@@ -6829,6 +6858,126 @@ fn test_tab_completions_menu_for_classic_completions_with_files() {
 }
 
 #[test]
+fn test_classic_tab_completions_close_after_user_backspace() {
+    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let editor = input.read(&app, |input, _| input.editor().clone());
+
+        app.update(|ctx| {
+            InputSettings::handle(ctx).update(ctx, |setting, ctx| {
+                setting
+                    .classic_completions_mode
+                    .toggle_and_save_value(ctx)
+                    .expect("Able to turn on classic completions");
+            })
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("cd Do", ctx);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.input_tab(ctx);
+            input.handle_completion_suggestions_results(
+                build_suggestion_results(
+                    vec![file_suggestion("Downloads"), file_suggestion("Documents")],
+                    (3, 5),
+                    MatchStrategy::CaseInsensitive,
+                ),
+                CompletionsTrigger::Keybinding,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+            // Cycle to apply a candidate into the buffer. This is a system-applied
+            // edit, which must keep the result set alive.
+            input.input_tab(ctx);
+        });
+
+        // The user now backspaces all the way past the original completion query
+        // (`cd Do`). Once the buffer no longer starts with the original query, the
+        // stale result set must be discarded and the menu closed.
+        while input.read(&app, |input, ctx| input.buffer_text(ctx).len()) > "cd ".len() {
+            editor.update(&mut app, |editor, ctx| editor.backspace(ctx));
+        }
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "cd ");
+            // A closed menu is represented by `InputSuggestionsMode::Closed`; a closed
+            // menu is never rendered, so its stale result set is no longer shown. This
+            // mirrors the existing (non-classic) backspace-past-boundary behavior.
+            assert!(
+                matches!(
+                    input.suggestions_mode_model.as_ref(ctx).mode(),
+                    InputSuggestionsMode::Closed
+                ),
+                "completion menu should close after the user backspaces past the query"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_classic_tab_completions_keep_menu_open_while_cycling() {
+    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        app.update(|ctx| {
+            InputSettings::handle(ctx).update(ctx, |setting, ctx| {
+                setting
+                    .classic_completions_mode
+                    .toggle_and_save_value(ctx)
+                    .expect("Able to turn on classic completions");
+            })
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("cd Do", ctx);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.input_tab(ctx);
+            input.handle_completion_suggestions_results(
+                build_suggestion_results(
+                    vec![file_suggestion("Downloads"), file_suggestion("Documents")],
+                    (3, 5),
+                    MatchStrategy::CaseInsensitive,
+                ),
+                CompletionsTrigger::Keybinding,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+            // Cycling rewrites the buffer to each candidate in turn. These are
+            // system-applied edits and must keep the menu open even though the
+            // buffer no longer matches the original query.
+            input.input_tab(ctx);
+            input.input_tab(ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(
+                matches!(
+                    input.suggestions_mode_model.as_ref(ctx).mode(),
+                    InputSuggestionsMode::CompletionSuggestions { .. }
+                ),
+                "completion menu should stay open while cycling candidates"
+            );
+            assert!(
+                !input.input_suggestions.as_ref(ctx).items().is_empty(),
+                "result set should be preserved while cycling candidates"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_vim_escape_with_history_menu() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -7375,7 +7524,7 @@ fn run_input_mode_prefix_test(udi_enabled: bool, input_type: InputType) {
 }
 
 macro_rules! input_mode_prefix_tests {
-    ($($name:ident: ($udi_enabled:literal, $input_mode:expr),)*) => {
+    ($($name:ident: ($udi_enabled:literal, $input_mode:expr_2021),)*) => {
         $(
             #[test]
             fn $name() {
@@ -8659,9 +8808,9 @@ fn test_custom_terminal_page_scroll_binding_applies_when_prompt_is_focused() {
         app.update(|ctx| {
             ctx.set_custom_trigger(
                 "terminal:scroll_up_one_page".to_owned(),
-                warpui::keymap::Trigger::Keystrokes(
-                    vec![Keystroke::parse("shift-pageup").unwrap()],
-                ),
+                warpui::keymap::Trigger::Keystrokes(vec![
+                    Keystroke::parse("shift-pageup").unwrap(),
+                ]),
             );
         });
 

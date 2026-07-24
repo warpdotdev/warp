@@ -9,7 +9,7 @@ pub use self::handle::*;
 pub use self::tui::*;
 use super::EntityId;
 use crate::accessibility::{AccessibilityContent, ActionAccessibilityContent};
-use crate::{keymap, Action, AppContext, CursorInfo, Element, Entity};
+use crate::{Action, AppContext, CursorInfo, Element, Entity, keymap};
 
 pub enum FocusContext {
     SelfFocused,

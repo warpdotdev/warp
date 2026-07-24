@@ -1,15 +1,15 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use warpui::{App, SingletonEntity};
 
 use super::{AuthManager, AuthManagerEvent};
+use crate::ServerApiProvider;
 use crate::auth::auth_view_modal::AuthRedirectPayload;
 use crate::auth::credentials::{Credentials, RefreshToken};
 use crate::auth::user::{FirebaseAuthTokens, TEST_USER_UID};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::server::server_api::auth::UserAuthenticationError;
-use crate::ServerApiProvider;
 
 fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());

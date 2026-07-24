@@ -455,6 +455,8 @@ message GitGenerateCommitMessageResponse {
 message RepositoryInfo {
   string name = 1;
   optional string owner = 2;
+  // The repository host (e.g. "github.com"), parsed from the repo URL.
+  optional string host = 3;
 }
 
 // Mirrors GitStatusMetadata in Rust (code_review/git_repo_model/mod.rs).

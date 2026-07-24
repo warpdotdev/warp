@@ -8,9 +8,9 @@ use futures::{AsyncRead, AsyncWrite};
 use warpui_core::r#async::executor::{Background, BackgroundTask};
 
 use super::protocol::{
-    receive_message, send_message, ConnectionAddress, ProtocolError, Request, Response,
+    ConnectionAddress, ProtocolError, Request, Response, receive_message, send_message,
 };
-use super::service::{service_id, Service, ServiceId};
+use super::service::{Service, ServiceId, service_id};
 use crate::platform::server::{ConnectionImpl, ConnectionListenerImpl};
 use crate::service::ServiceImpl;
 

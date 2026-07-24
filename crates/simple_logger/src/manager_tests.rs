@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use warpui_core::r#async::executor::Background;
 
 use super::LogManager;
-use crate::{path_with_suffix, RotationConfig};
+use crate::{RotationConfig, path_with_suffix};
 
 fn temp_path(name: &str) -> PathBuf {
     static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
@@ -148,11 +148,7 @@ fn simple_logger_with_rotation_rolls_active_file_over_when_threshold_exceeded() 
     // should exist with the rolled-over contents.
     let rotated = path_with_suffix(&log_path, 1);
     wait_for(2000, "rotated `.1` to appear", || {
-        if rotated.exists() {
-            Some(())
-        } else {
-            None
-        }
+        if rotated.exists() { Some(()) } else { None }
     });
 
     assert!(

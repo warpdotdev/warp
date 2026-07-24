@@ -19,7 +19,7 @@ pub use async_tungstenite::tungstenite;
 pub use async_tungstenite::tungstenite::client::IntoClientRequest;
 #[cfg(not(target_family = "wasm"))]
 use async_tungstenite::tungstenite::http::HeaderValue;
-use futures_util::{future, SinkExt, TryStreamExt};
+use futures_util::{SinkExt, TryStreamExt, future};
 #[cfg(not(target_family = "wasm"))]
 use itertools::Itertools;
 use thiserror::Error;

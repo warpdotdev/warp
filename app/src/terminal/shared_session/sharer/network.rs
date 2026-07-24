@@ -50,12 +50,12 @@ use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::server_api::ServerApiProvider;
 #[cfg(not(any(test, feature = "integration_tests")))]
 use crate::server::telemetry::telemetry_context;
+use crate::terminal::TerminalModel;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::{
-    connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
-    SharedSessionSource, SELECTION_THROTTLE_PERIOD,
+    EventNumber, SELECTION_THROTTLE_PERIOD, SharedSessionScrollbackType, SharedSessionSource,
+    connect_endpoint, max_session_size,
 };
-use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
 
 /// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server.
@@ -83,7 +83,7 @@ const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
 .with_jitter(0.2);
 
 macro_rules! sharer_info {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         log::info!(
             "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
@@ -95,7 +95,7 @@ macro_rules! sharer_info {
 }
 
 macro_rules! sharer_warn {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         log::warn!(
             "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
@@ -107,7 +107,7 @@ macro_rules! sharer_warn {
 }
 
 macro_rules! sharer_error {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         warp_errors::report_error!(
             anyhow::anyhow!("{}", format_args!($($arg)+)),
@@ -734,10 +734,10 @@ impl Network {
         update: UniversalDeveloperInputContextUpdate,
     ) {
         // Skip update if nothing would change
-        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context {
-            if !update.changes_cached_context(cached) {
-                return;
-            }
+        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context
+            && !update.changes_cached_context(cached)
+        {
+            return;
         }
 
         sharer_info!(
@@ -1660,13 +1660,13 @@ impl Network {
                 .insert(event.event_no, event.clone());
         }
 
-        if let Stage::StartedSuccessfully { .. } = self.stage {
-            if let Err(e) = self.ws_proxy_tx.try_send(message) {
-                sharer_warn!(
-                    self,
-                    "Failed to send message over ws_proxy channel in session sharer: {e}"
-                );
-            }
+        if let Stage::StartedSuccessfully { .. } = self.stage
+            && let Err(e) = self.ws_proxy_tx.try_send(message)
+        {
+            sharer_warn!(
+                self,
+                "Failed to send message over ws_proxy channel in session sharer: {e}"
+            );
         }
     }
 

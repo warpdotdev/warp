@@ -1,5 +1,5 @@
 use super::{
-    aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types, BarSegment,
+    BarSegment, aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
 };
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,

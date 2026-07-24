@@ -14,7 +14,7 @@ use std::ops::{AddAssign, Range};
 use std::rc::Rc;
 use std::str;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 #[cfg(test)]
@@ -24,7 +24,7 @@ use string_offset::{ByteOffset, CharOffset};
 use sum_tree::{self, Cursor, FilterCursor, SeekBias, SumTree};
 use time::{Global, Lamport};
 use undo::{LocalUndoStack, UndoHistory};
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use warpui::color::ColorU;
 use warpui::text::point::Point;
 use warpui::text::words::is_default_word_boundary;
@@ -1326,10 +1326,10 @@ impl Buffer {
     pub(super) fn undo(&mut self, ctx: &mut ModelContext<Self>) {
         self.start_undo_redo_batch();
 
-        if let Some((ops, selections)) = self.local_undo_stack.undo() {
-            if let Err(e) = self.local_undo_or_redo(ops, selections) {
-                log::warn!("Failed to perform local undo: {e}");
-            }
+        if let Some((ops, selections)) = self.local_undo_stack.undo()
+            && let Err(e) = self.local_undo_or_redo(ops, selections)
+        {
+            log::warn!("Failed to perform local undo: {e}");
         }
 
         self.end_batch(ctx);
@@ -1338,10 +1338,10 @@ impl Buffer {
     pub(super) fn redo(&mut self, ctx: &mut ModelContext<Self>) {
         self.start_undo_redo_batch();
 
-        if let Some((ops, selections)) = self.local_undo_stack.redo() {
-            if let Err(e) = self.local_undo_or_redo(ops, selections) {
-                log::warn!("Failed to perform local redo: {e}");
-            }
+        if let Some((ops, selections)) = self.local_undo_stack.redo()
+            && let Err(e) = self.local_undo_or_redo(ops, selections)
+        {
+            log::warn!("Failed to perform local redo: {e}");
         }
 
         self.end_batch(ctx);
@@ -2276,10 +2276,10 @@ impl Buffer {
                 // If the range we are currently evaluating starts after the end of the fragment
                 // that the cursor is parked at, we should seek to the next splice's start range
                 // and push all the fragments in between into the new tree (they are untouched).
-                if let Some(cur_range) = cur_range.as_ref() {
-                    if cur_range.start > chars_to_fragment_end {
-                        new_fragments.push_tree(cursor.slice(&cur_range.start, SeekBias::Right));
-                    }
+                if let Some(cur_range) = cur_range.as_ref()
+                    && cur_range.start > chars_to_fragment_end
+                {
+                    new_fragments.push_tree(cursor.slice(&cur_range.start, SeekBias::Right));
                 }
             }
         }
@@ -2478,10 +2478,10 @@ impl Buffer {
                 // If the range we are currently evaluating starts after the end of the fragment
                 // that the cursor is parked at, we should seek to the next splice's start range
                 // and push all the fragments in between into the new tree.
-                if let Some(cur_range) = cur_range.as_ref() {
-                    if cur_range.start > chars_to_fragment_end {
-                        new_fragments.push_tree(cursor.slice(&cur_range.start, SeekBias::Right));
-                    }
+                if let Some(cur_range) = cur_range.as_ref()
+                    && cur_range.start > chars_to_fragment_end
+                {
+                    new_fragments.push_tree(cursor.slice(&cur_range.start, SeekBias::Right));
                 }
             }
         }

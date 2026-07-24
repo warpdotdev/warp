@@ -3,18 +3,18 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 use super::{
     AfterLayoutContext, AppContext, Axis, Element, Event, EventContext, Fill, LayoutContext,
     PaintContext, Point, SizeConstraint, Vector2FExt, ZIndex,
 };
+use crate::ClipBounds;
 use crate::elements::F32Ext;
 use crate::event::{DispatchedEvent, ModifiersState};
 pub use crate::scene::CornerRadius;
 use crate::scene::Radius;
 use crate::units::{IntoPixels, Pixels};
-use crate::ClipBounds;
 
 pub const LEFT_PADDING: f32 = 2.;
 const RIGHT_PADDING: f32 = 2.;
@@ -645,11 +645,7 @@ impl Element for Scrollable {
                     ctx.notify();
                 }
 
-                if mouse_in {
-                    true
-                } else {
-                    handled
-                }
+                if mouse_in { true } else { handled }
             }
             Event::ScrollWheel {
                 position,

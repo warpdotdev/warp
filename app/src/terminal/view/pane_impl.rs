@@ -22,29 +22,29 @@ use super::{Event, PaneConfiguration, TerminalAction, TerminalViewState, Viewer}
 use crate::ai::agent::conversation::{
     AIConversation, ConversationStatus, ServerAIConversationMetadata,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::parent_conversation_navigation_card;
 use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
 use crate::drive::sharing::ShareableObject;
 use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent, PaneGroupFocusState};
-use crate::pane_group::pane::view::header::components::{
-    header_edge_min_width, render_pane_header_buttons, render_pane_header_title_text,
-    render_three_column_header, CenteredHeaderEdgeWidth,
-};
-use crate::pane_group::pane::view::header::{render_pane_header_draggable, PANE_HEADER_HEIGHT};
 use crate::pane_group::pane::view::PaneHeaderAction;
-use crate::pane_group::pane::{view, PaneStack};
+use crate::pane_group::pane::view::header::components::{
+    CenteredHeaderEdgeWidth, header_edge_min_width, render_pane_header_buttons,
+    render_pane_header_title_text, render_three_column_header,
+};
+use crate::pane_group::pane::view::header::{PANE_HEADER_HEIGHT, render_pane_header_draggable};
+use crate::pane_group::pane::{PaneStack, view};
 use crate::pane_group::{BackingView, SplitPaneState, TOGGLE_MAXIMIZE_PANE_BINDING_NAME};
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shared_session::participant_avatar_view::render_participants_and_role_elements;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
-use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::{TerminalManager, TerminalView};
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::icon_button_with_color;
@@ -183,12 +183,11 @@ impl TerminalView {
         }
         let exchange_count = conversation.exchange_count();
         // If there's only one exchange, make sure it's completed (not still streaming)
-        if exchange_count == 1 {
-            if let Some(latest_exchange) = conversation.latest_exchange() {
-                if latest_exchange.output_status.is_streaming() {
-                    return None;
-                }
-            }
+        if exchange_count == 1
+            && let Some(latest_exchange) = conversation.latest_exchange()
+            && latest_exchange.output_status.is_streaming()
+        {
+            return None;
         }
 
         // Return the ShareableObject with the conversation ID

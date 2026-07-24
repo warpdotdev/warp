@@ -1,11 +1,11 @@
 use chrono::Utc;
 
 use super::{
-    api_key_table_min_non_resizable_columns_width, compute_api_key_name_column_max_width,
-    APIKeyProperties, ApiKeyScope, API_KEY_KEY_COLUMN_WIDTH, API_KEY_NAME_COLUMN_MIN_WIDTH,
-    API_KEY_TABLE_LAYOUT_SAFETY_PADDING, API_KEY_TABLE_MIN_SCOPE_COLUMN_WIDTH,
+    API_KEY_KEY_COLUMN_WIDTH, API_KEY_NAME_COLUMN_MIN_WIDTH, API_KEY_TABLE_LAYOUT_SAFETY_PADDING,
+    API_KEY_TABLE_MIN_SCOPE_COLUMN_WIDTH, APIKeyProperties, ApiKeyScope,
     SETTINGS_PAGE_HORIZONTAL_PADDING, SETTINGS_PAGE_MAX_CONTENT_WIDTH,
     SETTINGS_SECTION_BORDER_WIDTH, SETTINGS_SIDEBAR_WIDTH_DEFAULT,
+    api_key_table_min_non_resizable_columns_width, compute_api_key_name_column_max_width,
 };
 
 fn table_width_chrome() -> f32 {

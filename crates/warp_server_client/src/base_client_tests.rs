@@ -9,8 +9,6 @@ use super::{
     AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER, GraphqlRoutingConfig,
     HeaderOverride,
 };
-#[cfg(feature = "agent_mode_evals")]
-use super::{EVAL_USER_ID_HEADER, EVAL_USER_IDS};
 
 struct StaticIapTokenProvider;
 
@@ -58,26 +56,6 @@ fn iap_proxy_auth_header_uses_configured_provider() {
             http_client::iap::IAP_PROXY_AUTH_HEADER,
             "Bearer iap-token".to_string()
         ))
-    );
-}
-
-#[cfg(feature = "agent_mode_evals")]
-#[test]
-fn eval_user_id_is_selected_once_and_used_for_authenticated_graphql() {
-    let client = client();
-    let eval_user_id = client.eval_user_id().unwrap();
-
-    assert!(EVAL_USER_IDS.contains(&eval_user_id));
-
-    let options = block_on(client.graphql_request_options(None)).unwrap();
-    let eval_user_id = eval_user_id.to_string();
-    assert_eq!(
-        options.headers.get(EVAL_USER_ID_HEADER).map(String::as_str),
-        Some(eval_user_id.as_str())
-    );
-    assert_eq!(
-        client.eval_user_id().map(|id| id.to_string()),
-        Some(eval_user_id)
     );
 }
 
@@ -201,16 +179,6 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
             .headers
             .contains_key(&CLOUD_AGENT_ID_HEADER.to_ascii_lowercase())
     );
-    #[cfg(feature = "agent_mode_evals")]
-    {
-        let eval_user_id = client.eval_user_id().unwrap().to_string();
-        assert!(!options.headers.contains_key("x-eval-user-id"));
-        assert_eq!(
-            options.headers.get(EVAL_USER_ID_HEADER).map(String::as_str),
-            Some(eval_user_id.as_str())
-        );
-    }
-    #[cfg(not(feature = "agent_mode_evals"))]
     assert_eq!(
         options.headers.get("x-eval-user-id").map(String::as_str),
         Some("1234")

@@ -14,7 +14,7 @@ use warp::integration_testing::view_getters::workspace_view;
 use warpui_core::async_assert;
 use warpui_core::integration::TestStep;
 
-use super::{new_builder, Builder};
+use super::{Builder, new_builder};
 
 /// Helper: returns the path to the TOML settings file.
 fn toml_file_path() -> std::path::PathBuf {

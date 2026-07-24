@@ -1,19 +1,20 @@
 use std::path::PathBuf;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
-use ai::agent::action_result::StartAgentVersion;
 use ai::skills::SkillReference;
 use settings::Setting;
+use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{App, SingletonEntity};
 
 use super::{
+    CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
-    user_avatar_info_for_conversation_creator, CollapsibleElementState, CollapsibleExpansionState,
-    UserAvatarInfo,
+    recording_artifact_view_url, user_avatar_info_for_conversation_creator,
 };
 use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::{
     compose_run_agents_child_prompt, run_agents_to_start_agent_mode,
 };
@@ -98,43 +99,33 @@ fn orchestration_send_message_starts_collapsed() {
 }
 
 #[test]
-fn orchestration_start_agent_prompt_stays_expanded_for_all_message_modes() {
-    for display_mode in [
-        OrchestrationMessageDisplayMode::ShowAndCollapse,
-        OrchestrationMessageDisplayMode::AlwaysCollapse,
-        OrchestrationMessageDisplayMode::AlwaysShow,
-    ] {
-        let state = default_collapsible_state_for_orchestration_action(
-            &AIAgentActionType::StartAgent {
-                version: StartAgentVersion::V1,
-                name: "child-agent".to_string(),
-                prompt: "Investigate".to_string(),
-                execution_mode: StartAgentExecutionMode::local_harness("claude-code".to_string()),
-                lifecycle_subscription: None,
-            },
-            display_mode,
+fn non_orchestration_actions_do_not_get_collapsible_state_defaults() {
+    assert!(
+        default_collapsible_state_for_orchestration_action(
+            &AIAgentActionType::OpenCodeReview,
+            OrchestrationMessageDisplayMode::AlwaysCollapse,
         )
-        .expect("start-agent actions should get a collapsible state");
-
-        assert!(matches!(
-            state.expansion_state,
-            CollapsibleExpansionState::Expanded {
-                is_finished: false,
-                scroll_pinned_to_bottom: true
-            }
-        ));
-    }
+        .is_none()
+    );
 }
 
 #[test]
-fn non_orchestration_actions_do_not_get_collapsible_state_defaults() {
-    assert!(default_collapsible_state_for_orchestration_action(
-        &AIAgentActionType::OpenCodeReview,
-        OrchestrationMessageDisplayMode::AlwaysCollapse,
-    )
-    .is_none());
+fn recording_artifact_view_url_uses_configured_oz_origin() {
+    let task_id: AmbientAgentTaskId = "00000000-0000-0000-0000-000000000123".parse().unwrap();
+
+    assert_eq!(
+        recording_artifact_view_url(Some(task_id), "recording-123"),
+        Some(format!(
+            "{}/runs/{task_id}?artifact=recording-123",
+            ChannelState::oz_root_url()
+        ))
+    );
 }
 
+#[test]
+fn recording_artifact_view_url_requires_task_id() {
+    assert_eq!(recording_artifact_view_url(None, "recording-123"), None);
+}
 #[test]
 fn orchestration_show_and_collapse_starts_sent_messages_expanded() {
     let state = default_collapsible_state_for_orchestration_action(
@@ -381,6 +372,7 @@ fn agent_cfg() -> RunAgentsAgentRunConfig {
         prompt: "do X".to_string(),
         title: "Child".to_string(),
         agent_identity_uid: String::new(),
+        model_id: String::new(),
     }
 }
 
@@ -397,6 +389,7 @@ fn remote_arm_propagates_skills_into_skill_references() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: true,
+            runner_id: String::new(),
         },
         "oz",
         "auto",
@@ -414,6 +407,7 @@ fn remote_arm_propagates_skills_into_skill_references() {
         computer_use_enabled,
         title,
         auth_secret_name,
+        runner_id: _,
         agent_identity_uid,
     } = mode
     else {
@@ -439,6 +433,7 @@ fn remote_arm_propagates_agent_identity_uid() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "oz",
         "auto",
@@ -473,6 +468,7 @@ fn remote_arm_with_empty_skills_propagates_empty_vec() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "claude",
         "auto",
@@ -497,6 +493,7 @@ fn remote_arm_rejects_opencode() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "opencode",
         "auto",
@@ -549,6 +546,7 @@ fn remote_arm_propagates_claude_auth_secret_into_mode() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "claude",
         "auto",
@@ -573,6 +571,7 @@ fn remote_arm_filters_whitespace_auth_secret_name_to_none() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
         "codex",
         "auto",

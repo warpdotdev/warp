@@ -30,15 +30,15 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use super::SettingsSection;
 use super::admin_actions::AdminActions;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 use super::settings_page::{
-    build_sub_header, render_body_item, render_customer_type_badge, render_info_icon,
-    AdditionalInfo, HEADER_PADDING,
+    AdditionalInfo, HEADER_PADDING, build_sub_header, render_body_item, render_customer_type_badge,
+    render_info_icon,
 };
-use super::SettingsSection;
 use crate::ai::AIRequestUsageModel;
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::auth::auth_state::AuthState;
@@ -54,16 +54,16 @@ use crate::settings_view::settings_page::TOGGLE_BUTTON_RIGHT_PADDING;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::ui_components::menu_button::{icon_button_with_context_menu, MenuDirection};
+use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_menu};
 use crate::ui_components::tab_selector::{self, SettingsTab};
-use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::view_components::ToastFlavor;
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{CustomerType, Workspace};
-use crate::{send_telemetry_from_ctx, WorkspaceAction};
+use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const HEADER_FONT_SIZE: f32 = 16.;
 const OVERAGE_USAGE_LINK_TEXT: &str = "View details on overage usage";
@@ -79,23 +79,19 @@ const SORT_MENU_ITEM_DISPLAY_NAME_Z_A_LABEL: &str = "Z to A";
 const SORT_MENU_ITEM_REQUEST_USAGE_ASCENDING_LABEL: &str = "Usage ascending";
 const SORT_MENU_ITEM_REQUEST_USAGE_DESCENDING_LABEL: &str = "Usage descending";
 
-const AUTO_RELOAD_EXCEED_LIMIT_WARNING_STRING: &str =
-    "Auto reload is disabled, as the next reload would exceed your monthly spend limit. Increase your limit to use auto reload.";
+const AUTO_RELOAD_EXCEED_LIMIT_WARNING_STRING: &str = "Auto reload is disabled, as the next reload would exceed your monthly spend limit. Increase your limit to use auto reload.";
 const AUTO_RELOAD_DELINQUENT_WARNING_STRING: &str =
     "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
-const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str =
-    "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
+const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
 
 const OVERVIEW_TAB_TEXT: &str = "Overview";
 const USAGE_HISTORY_TAB_TEXT: &str = "Usage History";
 
 const ENTERPRISE_USAGE_CALLOUT_HEADER: &str = "Usage reporting is currently limited";
-const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_PREFIX: &str =
-    "Enterprise credit usage isn't fully available in this view yet. For the most accurate spend tracking, ";
+const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_PREFIX: &str = "Enterprise credit usage isn't fully available in this view yet. For the most accurate spend tracking, ";
 const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_LINK: &str = "visit the admin panel";
 const ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_SUFFIX: &str = ".";
-const ENTERPRISE_USAGE_CALLOUT_BODY_NON_ADMIN: &str =
-    "Enterprise credit usage isn't fully available in this view yet. Contact a team admin for detailed usage reporting.";
+const ENTERPRISE_USAGE_CALLOUT_BODY_NON_ADMIN: &str = "Enterprise credit usage isn't fully available in this view yet. Contact a team admin for detailed usage reporting.";
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
@@ -926,25 +922,21 @@ impl TypedActionView for BillingAndUsagePageView {
                     let team_uid = user_workspaces.current_team_uid();
                     if let Some((workspace, team_uid)) =
                         user_workspaces.current_workspace().zip(team_uid)
-                    {
-                        if workspace
+                        && workspace
                             .settings
                             .addon_credits_settings
                             .auto_reload_enabled
-                        {
-                            if let Some(option) = self
-                                .addon_credits_options
-                                .get(self.selected_addon_denomination)
-                            {
-                                user_workspaces.update_addon_credits_settings(
-                                    team_uid,
-                                    None,
-                                    None,
-                                    Some(option.credits),
-                                    ctx,
-                                );
-                            }
-                        }
+                        && let Some(option) = self
+                            .addon_credits_options
+                            .get(self.selected_addon_denomination)
+                    {
+                        user_workspaces.update_addon_credits_settings(
+                            team_uid,
+                            None,
+                            None,
+                            Some(option.credits),
+                            ctx,
+                        );
                     }
                 });
                 ctx.notify();
@@ -2247,9 +2239,10 @@ impl BillingAndUsagePageView {
         let show_alert = workspace_is_delinquent_due_to_payment_issue
             || matches!(divisor, Some(Divisor::Limit(limit)) if used >= limit);
 
-        if let Some(info) = prorated_request_limits_info {
-            if info.is_request_limit_prorated {
-                row.add_child(render_info_icon(
+        if let Some(info) = prorated_request_limits_info
+            && info.is_request_limit_prorated
+        {
+            row.add_child(render_info_icon(
                 appearance,
                 AdditionalInfo::<BillingAndUsagePageAction> {
                     mouse_state: info.mouse_state,
@@ -2261,7 +2254,6 @@ impl BillingAndUsagePageView {
                     },
                 },
             ))
-            }
         }
 
         if show_alert {
@@ -2911,20 +2903,19 @@ impl BillingAndUsagePageView {
 
         // For enterprise plan users with base limit = 0, show a limited usage reporting callout
         // as this is not applicable to them
-        if let Some(t) = team {
-            if t.billing_metadata.customer_type == CustomerType::Enterprise
-                && t.billing_metadata
-                    .tier
-                    .warp_ai_policy
-                    .is_some_and(|p| p.limit == 0)
-            {
-                usage.add_child(self.render_enterprise_usage_card(
-                    t.uid,
-                    has_admin_permissions,
-                    appearance,
-                ));
-                return usage.finish();
-            }
+        if let Some(t) = team
+            && t.billing_metadata.customer_type == CustomerType::Enterprise
+            && t.billing_metadata
+                .tier
+                .warp_ai_policy
+                .is_some_and(|p| p.limit == 0)
+        {
+            usage.add_child(self.render_enterprise_usage_card(
+                t.uid,
+                has_admin_permissions,
+                appearance,
+            ));
+            return usage.finish();
         }
 
         // Show a summed "Team total" row first.
@@ -3227,27 +3218,27 @@ impl BillingAndUsagePageView {
         );
 
         let workspaces = UserWorkspaces::as_ref(app);
-        if let Some(team) = workspaces.current_team() {
-            if team.billing_metadata.is_usage_based_pricing_toggleable() {
-                let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
+        if let Some(team) = workspaces.current_team()
+            && team.billing_metadata.is_usage_based_pricing_toggleable()
+        {
+            let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
 
-                let enabled = self
-                    .usage_based_pricing_toggle_override
-                    .unwrap_or(usage_based_pricing_settings.enabled);
+            let enabled = self
+                .usage_based_pricing_toggle_override
+                .unwrap_or(usage_based_pricing_settings.enabled);
 
-                usage.add_child(
-                    Container::new(self.render_usage_based_pricing_section(
-                        enabled,
-                        team,
-                        appearance,
-                        app,
-                        has_admin_permissions,
-                        self.usage_based_pricing_toggle_loading,
-                    ))
-                    .with_margin_bottom(16.)
-                    .finish(),
-                );
-            }
+            usage.add_child(
+                Container::new(self.render_usage_based_pricing_section(
+                    enabled,
+                    team,
+                    appearance,
+                    app,
+                    has_admin_permissions,
+                    self.usage_based_pricing_toggle_loading,
+                ))
+                .with_margin_bottom(16.)
+                .finish(),
+            );
         }
 
         usage.finish()

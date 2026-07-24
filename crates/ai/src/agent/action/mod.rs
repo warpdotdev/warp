@@ -18,10 +18,10 @@ use crate::agent::action_result::{
     InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
     ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
     RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
-    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, StartRecordingResult,
-    StopRecordingResult, SuggestNewConversationResult, SuggestPromptResult,
-    TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
-    WaitForEventsResult, WriteToLongRunningShellCommandResult,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult,
+    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
+    UploadArtifactResult, UseComputerResult, WaitForEventsResult,
+    WriteToLongRunningShellCommandResult,
 };
 use crate::agent::{AIAgentCitation, FileLocations};
 use crate::diff_validation::ParsedDiff;
@@ -140,7 +140,8 @@ pub enum AIAgentActionType {
     /// AI requested to start recording a video of the computer-use session.
     /// Capture configuration (frame rate, limits, speed) is server-owned and
     /// arrives on the tool call; the client applies it. `frame_rate` of 0 means
-    /// unset. `summary` is an agent-authored, human-facing title.
+    /// unset. `summary` is a short agent-authored title shown in badges.
+    /// `description` is an optional longer description shown in detail views.
     /// `playback_speed_multiplier` is the integer speed factor from the proto
     /// (e.g. 4 = 4×). `None` or a value ≤ 1 means real-time (use client default).
     StartRecording {
@@ -148,6 +149,7 @@ pub enum AIAgentActionType {
         max_duration: Option<Duration>,
         max_size_bytes: Option<u64>,
         summary: Option<String>,
+        description: Option<String>,
         playback_speed_multiplier: Option<u32>,
         /// The surface to record. `None` records the whole screen; a `Window`
         /// target records just that window via native ffmpeg `x11grab
@@ -156,9 +158,12 @@ pub enum AIAgentActionType {
         window: Option<computer_use::Target>,
     },
 
-    /// AI requested to stop an in-progress recording and publish the video.
+    /// AI requested to stop an in-progress recording. When `should_persist` is
+    /// false the recording is discarded instead of uploaded; an unset proto
+    /// field defaults to `true` (persist).
     StopRecording {
         recording_id: String,
+        should_persist: bool,
     },
 
     // AI requested to read a skill.
@@ -166,16 +171,6 @@ pub enum AIAgentActionType {
 
     FetchConversation {
         conversation_id: String,
-    },
-    // TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 action support once
-    // old preview orchestration history no longer needs parse/display/result compatibility.
-    // Linear issue: QUALITY-788.
-    StartAgent {
-        version: StartAgentVersion,
-        name: String,
-        prompt: String,
-        execution_mode: StartAgentExecutionMode,
-        lifecycle_subscription: Option<Vec<LifecycleEventType>>,
     },
 
     SendMessageToAgent {
@@ -240,6 +235,11 @@ pub enum RunAgentsExecutionMode {
         environment_id: String,
         worker_host: String,
         computer_use_enabled: bool,
+        /// Runner UID selecting the children's compute config (docker
+        /// image, instance shape, setup commands). Empty means "no
+        /// override" — fall back to the environment's default runner then
+        /// system defaults.
+        runner_id: String,
     },
 }
 
@@ -259,6 +259,10 @@ pub struct RunAgentsAgentRunConfig {
     /// meaningful for factory agents dispatching sibling factory agents;
     /// requires remote execution and is enforced server-side at dispatch.
     pub agent_identity_uid: String,
+    /// Optional model override for this specific child agent. When non-empty,
+    /// overrides the batch-level `model_id` for this child only. When empty,
+    /// the child inherits the batch-level model.
+    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -286,43 +290,16 @@ pub enum StartAgentExecutionMode {
         /// `None` means no client-side secret was selected — the remote
         /// environment falls back to its own ambient credentials.
         auth_secret_name: Option<String>,
+        /// Runner UID selecting the child's compute config. Empty means
+        /// "no override" — resolved at dispatch via the environment's
+        /// default runner then system defaults.
+        runner_id: String,
         /// UID of the named agent (service account) the remote child run
         /// should execute as. `None` means the child runs as the caller.
         agent_identity_uid: Option<String>,
     },
 }
 
-impl StartAgentExecutionMode {
-    /// Constructs a local execution mode using the legacy v1 default harness.
-    pub fn local_with_defaults() -> Self {
-        Self::Local {
-            harness_type: None,
-            model_id: None,
-        }
-    }
-    /// Constructs a local execution mode for a specific third-party harness.
-    pub fn local_harness(harness_type: String) -> Self {
-        Self::Local {
-            harness_type: Some(harness_type),
-            model_id: None,
-        }
-    }
-    /// Constructs a remote execution mode using the legacy v1 defaults for
-    /// fields that were added later in StartAgentV2.
-    pub fn remote_with_defaults(environment_id: String) -> Self {
-        Self::Remote {
-            environment_id,
-            skill_references: Vec::new(),
-            model_id: String::new(),
-            computer_use_enabled: false,
-            worker_host: String::new(),
-            harness_type: String::new(),
-            title: String::new(),
-            auth_secret_name: None,
-            agent_identity_uid: None,
-        }
-    }
-}
 impl AIAgentActionType {
     pub fn is_request_command_output(&self) -> bool {
         matches!(self, Self::RequestCommandOutput { .. })
@@ -418,11 +395,6 @@ impl AIAgentActionType {
             Self::FetchConversation { .. } => {
                 AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled)
             }
-            Self::StartAgent { version, .. } => {
-                AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                    version: *version,
-                })
-            }
             Self::SendMessageToAgent { .. } => {
                 AIAgentActionResultType::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             }
@@ -477,7 +449,6 @@ impl AIAgentActionType {
             Self::StopRecording { .. } => "Stop recording".to_string(),
             Self::ReadSkill(_) => "Read skill".to_string(),
             Self::FetchConversation { .. } => "Fetch conversation".to_string(),
-            Self::StartAgent { name, .. } => format!("Start agent: {name}"),
             Self::SendMessageToAgent { subject, .. } => format!("Send message: {subject}"),
             Self::TransferShellCommandControlToUser { .. } => {
                 "Transfer shell command control to user".to_string()
@@ -640,17 +611,20 @@ impl Display for AIAgentActionType {
             AIAgentActionType::StartRecording { .. } => {
                 write!(f, "StartRecording")
             }
-            AIAgentActionType::StopRecording { recording_id } => {
-                write!(f, "StopRecording: {recording_id}")
+            AIAgentActionType::StopRecording {
+                recording_id,
+                should_persist,
+            } => {
+                write!(
+                    f,
+                    "StopRecording: {recording_id} (persist: {should_persist})"
+                )
             }
             AIAgentActionType::ReadSkill(req) => {
                 write!(f, "ReadSkill: {}", req.skill)
             }
             AIAgentActionType::FetchConversation { conversation_id } => {
                 write!(f, "FetchConversation: {conversation_id}")
-            }
-            AIAgentActionType::StartAgent { name, .. } => {
-                write!(f, "StartAgent: {name}")
             }
             AIAgentActionType::SendMessageToAgent {
                 addresses, subject, ..

@@ -2,12 +2,12 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::TuiHoverable;
+use crate::elements::MouseStateHandle;
 use crate::elements::tui::test_support::{dispatch_presented_event, with_event_context};
 use crate::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiPoint, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiText,
 };
-use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
 use crate::{App, AppContext};

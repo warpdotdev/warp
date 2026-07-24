@@ -557,10 +557,10 @@ where
     pub fn toggle_expanded(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_expanded = !self.is_expanded;
         if self.is_expanded {
-            if self.match_menu_width_to_top_bar {
-                if let Some(bounds) = ctx.element_position_by_id(self.top_bar_label()) {
-                    self.set_menu_width(bounds.width(), ctx);
-                }
+            if self.match_menu_width_to_top_bar
+                && let Some(bounds) = ctx.element_position_by_id(self.top_bar_label())
+            {
+                self.set_menu_width(bounds.width(), ctx);
             }
             ctx.focus(&self.dropdown);
             ctx.emit(DropdownEvent::ToggleExpanded);

@@ -2,13 +2,13 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use command::r#async::Command;
 use itertools::Itertools as _;
 
 use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
-use crate::env_vars::{serialize_variables_for_shell, EnvVarValue};
+use crate::env_vars::{EnvVarValue, serialize_variables_for_shell};
 use crate::safe_warn;
 use crate::terminal::shell::{Shell, ShellType};
 

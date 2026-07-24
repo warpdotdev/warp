@@ -509,9 +509,11 @@ fn test_get_exact_or_next_displayed_row_empty() {
         row_translation_map: BiMap::new().into(),
     };
 
-    assert!(displayed_output
-        .get_exact_or_next_displayed_row(5)
-        .is_none());
+    assert!(
+        displayed_output
+            .get_exact_or_next_displayed_row(5)
+            .is_none()
+    );
 }
 
 #[test]

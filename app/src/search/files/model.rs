@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fuzzy_match::{
-    contains_wildcards, match_indices_case_insensitive, match_wildcard_pattern_case_insensitive,
-    FuzzyMatchResult,
+    FuzzyMatchResult, contains_wildcards, match_indices_case_insensitive,
+    match_wildcard_pattern_case_insensitive,
 };
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -117,7 +117,7 @@ impl FileSearchModel {
 
         match working_dir {
             // Local session: read the filesystem directly.
-            Some(LocalOrRemotePath::Local(ref local_path)) => {
+            Some(LocalOrRemotePath::Local(local_path)) => {
                 let current_dir: &Path = local_path.as_path();
                 let current_dir_string = current_dir.to_string_lossy().to_string();
 
@@ -146,7 +146,7 @@ impl FileSearchModel {
             }
             // Remote session: query repo metadata (populated by the remote
             // server's NavigatedToDirectory lazy-load).
-            Some(LocalOrRemotePath::Remote(ref remote_path)) => {
+            Some(LocalOrRemotePath::Remote(remote_path)) => {
                 let id = RepositoryIdentifier::Remote(remote_path.clone());
                 let repo_metadata = RepoMetadataModel::as_ref(app);
                 // Truncated results (capped at the repo metadata budget) are
@@ -599,20 +599,20 @@ impl FileSearchModel {
         if !query_path.is_absolute() {
             return None;
         }
-        if let Some(root) = repo_root {
-            if let Ok(rel) = query_path.strip_prefix(root) {
-                let s = rel.to_string_lossy().to_string();
-                if !s.is_empty() {
-                    return Some(s);
-                }
+        if let Some(root) = repo_root
+            && let Ok(rel) = query_path.strip_prefix(root)
+        {
+            let s = rel.to_string_lossy().to_string();
+            if !s.is_empty() {
+                return Some(s);
             }
         }
-        if let Some(cwd) = working_dir {
-            if let Ok(rel) = query_path.strip_prefix(cwd) {
-                let s = rel.to_string_lossy().to_string();
-                if !s.is_empty() {
-                    return Some(s);
-                }
+        if let Some(cwd) = working_dir
+            && let Ok(rel) = query_path.strip_prefix(cwd)
+        {
+            let s = rel.to_string_lossy().to_string();
+            if !s.is_empty() {
+                return Some(s);
             }
         }
         None

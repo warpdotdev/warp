@@ -1,7 +1,7 @@
 // The code in this file is adapted from the alacritty_terminal crate under the
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
-use std::cmp::{max, PartialEq};
+use std::cmp::{PartialEq, max};
 use std::mem;
 use std::ops::{Index, IndexMut};
 

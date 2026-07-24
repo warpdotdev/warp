@@ -5,14 +5,15 @@ use std::path::PathBuf;
 use futures::stream::AbortHandle;
 
 use super::{
-    parse_mcp_config_file, substitute_env_vars, FileMCPConfigDiagnosticKind,
-    FileMCPConfigParseOutcome, FileMCPWatcher,
+    FileMCPConfigDiagnosticKind, FileMCPConfigParseOutcome, FileMCPWatcher, parse_mcp_config_file,
+    substitute_env_vars,
 };
 use crate::ai::mcp::MCPProvider;
 
 fn cleanup_env_vars(vars: &[&str]) {
     for var in vars {
-        env::remove_var(var);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var(var) };
     }
 }
 
@@ -41,9 +42,12 @@ fn test_substitute_env_vars_success() {
     let test_vars = ["FOO", "BAZ", "REPEATED"];
 
     // Setup environment variables
-    env::set_var("FOO", "bar");
-    env::set_var("BAZ", "qux");
-    env::set_var("REPEATED", "value");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { env::set_var("FOO", "bar") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { env::set_var("BAZ", "qux") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { env::set_var("REPEATED", "value") };
 
     // Test 1: Single variable substitution
     let input = r#"{"key": "${FOO}"}"#;
@@ -77,7 +81,8 @@ fn test_substitute_env_vars_success() {
 fn test_substitute_env_vars_missing_or_empty() {
     // Test 1: Missing variable
     // Ensure MISSING_VAR is not set
-    env::remove_var("MISSING_VAR");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { env::remove_var("MISSING_VAR") };
 
     let input = r#"{"key": "${MISSING_VAR}"}"#;
     let result = substitute_env_vars(input);
@@ -88,7 +93,8 @@ fn test_substitute_env_vars_missing_or_empty() {
     );
 
     // Test 2: Empty variable
-    env::set_var("EMPTY_VAR", "");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { env::set_var("EMPTY_VAR", "") };
 
     let input = r#"{"key": "${EMPTY_VAR}"}"#;
     let result = substitute_env_vars(input);
@@ -120,7 +126,8 @@ async fn parse_outcomes_distinguish_missing_invalid_and_valid_configs() {
         _ => panic!("invalid JSON should produce a parse diagnostic"),
     }
 
-    std::env::remove_var("WARP_MCP_TEST_MISSING");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WARP_MCP_TEST_MISSING") };
     std::fs::write(
         &path,
         r#"{"mcpServers":{"test":{"command":"${WARP_MCP_TEST_MISSING}"}}}"#,

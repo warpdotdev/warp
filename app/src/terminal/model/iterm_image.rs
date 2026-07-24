@@ -32,7 +32,7 @@ pub struct ITermImageMetadata {
 impl Default for ITermImageMetadata {
     fn default() -> Self {
         Self {
-            id: rand::thread_rng().gen(),
+            id: rand::thread_rng().r#gen(),
             desired_width: None,
             desired_height: None,
             preserve_aspect_ratio: true,

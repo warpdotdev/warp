@@ -10,7 +10,7 @@ use warp_errors::report_error;
 use warp_util::path::ShellFamily;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::terminal::ssh::util::{parse_interactive_ssh_command, SshWarpifyCommand};
+use crate::terminal::ssh::util::{SshWarpifyCommand, parse_interactive_ssh_command};
 
 // Cannot directly use Vec<Regex> here b/c Regex doesn't impl Eq, Serialize, and Deserialize.
 maybe_define_setting!(AddedSubshellCommands, group: WarpifySettings, {

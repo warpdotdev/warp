@@ -13,7 +13,7 @@ use warpui::{
     ViewHandle,
 };
 
-use super::{is_delete_allowed, style, AIFact, CloudAIFact, CloudAIFactModel};
+use super::{AIFact, CloudAIFact, CloudAIFactModel, is_delete_allowed, style};
 use crate::ai::facts::AIMemory;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -372,10 +372,10 @@ impl View for RuleEditorView {
             .with_child(self.render_header(appearance))
             .with_child(self.render_form(appearance));
 
-        if let Some(ai_fact) = &self.ai_fact {
-            if is_delete_allowed(ai_fact.clone(), app) {
-                col.add_child(ChildView::new(&self.delete_button).finish());
-            }
+        if let Some(ai_fact) = &self.ai_fact
+            && is_delete_allowed(ai_fact.clone(), app)
+        {
+            col.add_child(ChildView::new(&self.delete_button).finish());
         }
         col.finish()
     }

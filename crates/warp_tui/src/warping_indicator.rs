@@ -16,12 +16,12 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use warp::tui_export::format_credits;
+use warpui_core::AppContext;
 use warpui_core::elements::animation::{AnimationClock, Keyframe, KeyframeTimeline};
 use warpui_core::elements::shimmer_math::ShimmerConfig;
 use warpui_core::elements::tui::{
     Modifier, TuiAnimated, TuiElement, TuiFlex, TuiShimmeringText, TuiStyle, TuiText,
 };
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 
@@ -80,9 +80,10 @@ pub(crate) fn render_spinner(clock: AnimationClock, style: TuiStyle) -> Box<dyn 
 }
 /// Renders the animated progress row for an exchange that has been running
 /// for `elapsed`.
-pub(crate) fn render_warping_indicator(
+pub(crate) fn render_warping_indicator_row(
     label: impl Into<String>,
     elapsed: Duration,
+    auto_approve_control: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
@@ -117,6 +118,16 @@ pub(crate) fn render_warping_indicator(
         .child(label.finish())
         .child(TuiText::new(" ").truncate().finish())
         .child(counter.finish())
+        .flex_child(TuiText::new("").truncate().finish())
+        .child(auto_approve_control)
+        .child(
+            TuiText::from_spans([
+                ("  Ctrl + C".to_owned(), builder.primary_text_style()),
+                (" to stop".to_owned(), builder.muted_text_style()),
+            ])
+            .truncate()
+            .finish(),
+        )
         .finish()
 }
 

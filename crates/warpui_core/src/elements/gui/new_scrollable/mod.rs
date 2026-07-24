@@ -7,13 +7,13 @@ pub(crate) mod util;
 pub use dual_axis_config::*;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 pub use single_axis_config::*;
 
 use self::util::adjust_scroll_delta_with_sensitivity_config;
 use super::{
-    scrollbar_size, Axis, ClippedScrollStateHandle, CornerRadius, F32Ext, Fill, Point, Radius,
-    ScrollData, ScrollbarWidth, SelectableElement, SelectionFragment, ZIndex,
+    Axis, ClippedScrollStateHandle, CornerRadius, F32Ext, Fill, Point, Radius, ScrollData,
+    ScrollbarWidth, SelectableElement, SelectionFragment, ZIndex, scrollbar_size,
 };
 use crate::elements::Vector2FExt;
 use crate::event::{DispatchedEvent, ModifiersState};

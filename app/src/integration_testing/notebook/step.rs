@@ -4,7 +4,7 @@ use string_offset::CharOffset;
 use warp_editor::model::CoreEditorModel;
 use warpui::integration::TestStep;
 use warpui::windowing::WindowManager;
-use warpui::{async_assert, App, SingletonEntity, ViewHandle, WindowId};
+use warpui::{App, SingletonEntity, ViewHandle, WindowId, async_assert};
 
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, Space};

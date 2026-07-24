@@ -13,6 +13,7 @@ use warp_editor::editor::NavigationKey;
 use warp_editor::model::{CoreEditorModel, RichTextEditorModel};
 use warp_errors::{report_error, report_if_error};
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Clipped, ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, Empty,
@@ -21,7 +22,6 @@ use warpui::elements::{
 };
 use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::presenter::ChildView;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
@@ -34,15 +34,15 @@ use super::active_notebook_data::{
     ActiveNotebook, ActiveNotebookData, ActiveNotebookDataEvent, Mode, SavingStatus, TrashStatus,
 };
 use super::context_menu::{
-    show_rich_editor_context_menu, show_text_editor_context_menu, ContextMenuAction,
-    ContextMenuState,
+    ContextMenuAction, ContextMenuState, show_rich_editor_context_menu,
+    show_text_editor_context_menu,
 };
-use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
 use super::editor::NotebookWorkflow;
+use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
 use super::link::{NotebookLinks, SessionSource};
 use super::manager::NotebookManager;
 use super::telemetry::NotebookTelemetryAction;
-use super::{styles, CloudNotebookModel, NotebookId, NotebookLocation};
+use super::{CloudNotebookModel, NotebookId, NotebookLocation, styles};
 use crate::ai::blocklist::secret_redaction::find_secrets_in_text;
 use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::appearance::Appearance;
@@ -62,9 +62,9 @@ use crate::editor::{
 use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
+use crate::notebooks::CloudNotebook;
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
-use crate::notebooks::CloudNotebook;
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
@@ -78,8 +78,8 @@ use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
 use crate::settings::{
-    decrease_notebook_font_size, increase_notebook_font_size, FontSettings,
-    FontSettingsChangedEvent, NotebookFontSize,
+    FontSettings, FontSettingsChangedEvent, NotebookFontSize, decrease_notebook_font_size,
+    increase_notebook_font_size,
 };
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::throttle::throttle;
@@ -103,8 +103,7 @@ const EDIT_BUTTON_MARGIN: f32 = 6.;
 const HEADER_MARGIN: f32 = 15.;
 const BANNER_VERTICAL_MARGIN: f32 = 10.;
 
-const CONFLICT_RESOLUTION_MESSAGE: &str =
-    "This notebook could not be saved because changes were made while you were editing. Please copy your work and refresh.";
+const CONFLICT_RESOLUTION_MESSAGE: &str = "This notebook could not be saved because changes were made while you were editing. Please copy your work and refresh.";
 const REFRESH_BUTTON_TEXT: &str = "Refresh";
 
 const FEATURE_NOT_AVAILABLE_MESSAGE: &str = "This notebook could not be saved to the server because the feature is temporarily unavailable. The changes are saved locally. Please retry later.";
@@ -761,11 +760,11 @@ impl NotebookView {
                 }
             }
             CloudModelEvent::ObjectMoved { type_and_id, .. } => {
-                if self.as_active_notebook_id(type_and_id, ctx).is_some() {
-                    if let Some(space) = self.active_notebook_data.as_ref(ctx).space(ctx) {
-                        self.input
-                            .update(ctx, |editor, ctx| editor.set_space(space, ctx));
-                    }
+                if self.as_active_notebook_id(type_and_id, ctx).is_some()
+                    && let Some(space) = self.active_notebook_data.as_ref(ctx).space(ctx)
+                {
+                    self.input
+                        .update(ctx, |editor, ctx| editor.set_space(space, ctx));
                 }
             }
             CloudModelEvent::ObjectCreated { type_and_id, .. } => {
@@ -928,10 +927,11 @@ impl NotebookView {
     /// Enqueue a save of the notebook's content.
     fn enqueue_content_update(&mut self, ctx: &mut ViewContext<Self>) {
         self.content_is_dirty = true;
-        report_if_error!(self
-            .save_tx
-            .try_send(NotebookUpdateRequestDebounceArg {})
-            .context("Error enqueuing content save"));
+        report_if_error!(
+            self.save_tx
+                .try_send(NotebookUpdateRequestDebounceArg {})
+                .context("Error enqueuing content save")
+        );
         self.active_notebook_data.update(ctx, |data, ctx| {
             // Mark the notebook as saving as soon as there are changes to be saved. It won't be
             // marked as Saved until we get a response from the server.
@@ -944,10 +944,11 @@ impl NotebookView {
     /// Enqueue a save of the notebook's title.
     fn enqueue_title_update(&mut self) {
         self.title_is_dirty = true;
-        report_if_error!(self
-            .save_tx
-            .try_send(NotebookUpdateRequestDebounceArg {})
-            .context("Error enqueuing title save"));
+        report_if_error!(
+            self.save_tx
+                .try_send(NotebookUpdateRequestDebounceArg {})
+                .context("Error enqueuing title save")
+        );
     }
 
     fn handle_input_editor_event(&mut self, event: &EditorViewEvent, ctx: &mut ViewContext<Self>) {
@@ -1186,9 +1187,11 @@ impl NotebookView {
 
     fn apply_font_size_to_setting(&mut self, new_font_size: f32, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(font_settings
-                .notebook_font_size
-                .set_value(new_font_size, ctx))
+            report_if_error!(
+                font_settings
+                    .notebook_font_size
+                    .set_value(new_font_size, ctx)
+            )
         });
     }
 
@@ -1428,17 +1431,15 @@ impl NotebookView {
                 .user_app_installation_detected
                 .value()
                 == UserAppInstallStatus::Detected
+            && let Some(link) = self.notebook_link(ctx)
+            && let Ok(url) = Url::parse(&link)
         {
-            if let Some(link) = self.notebook_link(ctx) {
-                if let Ok(url) = Url::parse(&link) {
-                    menu_items.push(
-                        MenuItemFields::new("Open on Desktop")
-                            .with_on_select_action(NotebookAction::OpenLinkOnDesktop(url))
-                            .with_icon(icons::Icon::Laptop)
-                            .into_item(),
-                    );
-                }
-            }
+            menu_items.push(
+                MenuItemFields::new("Open on Desktop")
+                    .with_on_select_action(NotebookAction::OpenLinkOnDesktop(url))
+                    .with_icon(icons::Icon::Laptop)
+                    .into_item(),
+            );
         }
 
         // Add "Duplicate" to menu

@@ -27,14 +27,20 @@ fn main() -> Result<()> {
 
     match parsed_version_to_roll_out.cmp(&parsed_current_version) {
         std::cmp::Ordering::Less => {
-            println!("Current version ({current_version}) is newer than the version to roll out ({version_to_roll_out})");
+            println!(
+                "Current version ({current_version}) is newer than the version to roll out ({version_to_roll_out})"
+            );
             exit(1);
         }
         std::cmp::Ordering::Equal => {
-            println!("Version to rollout ({version_to_roll_out}) is equal to the current version ({current_version})");
+            println!(
+                "Version to rollout ({version_to_roll_out}) is equal to the current version ({current_version})"
+            );
         }
         std::cmp::Ordering::Greater => {
-            println!("Version to rollout ({version_to_roll_out}) is newer than the current version ({current_version})");
+            println!(
+                "Version to rollout ({version_to_roll_out}) is newer than the current version ({current_version})"
+            );
         }
     }
 

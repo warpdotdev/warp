@@ -7,15 +7,15 @@ use crate::ai::agent::conversation::{
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::{
-    conversation_output_status_from_conversation, AmbientAgentTask, AmbientAgentTaskId,
-    AmbientConversationStatus,
+    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
+    conversation_output_status_from_conversation,
 };
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, ServerGuestSubject};
 use crate::drive::sharing::SharingAccessLevel;
-use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::terminal::TerminalModel;
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,19 +113,18 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
         .map(|token| ServerConversationToken::new(token.to_string()));
     let history_model = BlocklistAIHistoryModel::as_ref(app);
 
-    if let Some(conversation_token) = conversation_token.as_ref() {
-        if let Some(metadata) =
+    if let Some(conversation_token) = conversation_token.as_ref()
+        && let Some(metadata) =
             history_model.get_server_conversation_metadata_by_server_token(conversation_token)
-        {
-            return continuation_ui_state_for_harness_and_access(
-                metadata.harness,
-                conversation_access(metadata, app),
-                terminal_view_id,
-                Some(conversation_token),
-                task_id,
-                history_model,
-            );
-        }
+    {
+        return continuation_ui_state_for_harness_and_access(
+            metadata.harness,
+            conversation_access(metadata, app),
+            terminal_view_id,
+            Some(conversation_token),
+            task_id,
+            history_model,
+        );
     }
 
     let access = task_creator_access(&task, app);

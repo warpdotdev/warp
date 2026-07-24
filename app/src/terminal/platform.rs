@@ -13,7 +13,7 @@ mod mac {
     use std::ffi::{CStr, CString};
     use std::{env, str};
 
-    use libc::{setlocale, LC_ALL, LC_CTYPE};
+    use libc::{LC_ALL, LC_CTYPE, setlocale};
     use objc2::runtime::NSObjectProtocol;
     use objc2::sel;
     use objc2_foundation::NSLocale;
@@ -52,13 +52,15 @@ mod mac {
             // Set the LANG variable to suggest (but not require) use of the
             // given locale.  This avoids errors when ssh-ing into a remote
             // machine which doesn't have the given locale available.
-            env::set_var("LANG", system_locale);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { env::set_var("LANG", system_locale) };
         } else {
             // Use fallback locale.
             log::debug!("Using fallback locale ({FALLBACK_LOCALE}) for LC_CTYPE");
 
             // When using a fallback, only set LC_CTYPE.
-            env::set_var("LC_CTYPE", FALLBACK_LOCALE);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { env::set_var("LC_CTYPE", FALLBACK_LOCALE) };
         }
     }
 

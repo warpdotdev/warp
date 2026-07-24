@@ -13,8 +13,8 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use futures::future::BoxFuture;
 use futures::FutureExt as _;
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use warp_core::SessionId;
 use warpui::{AppContext, SingletonEntity as _};

@@ -4,23 +4,23 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::FairMutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde::Serialize;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warp_errors::report_error;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::browser::escape_html_attribute;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    try_rect_with_z, Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Dismiss, Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    ParentElement, Point, Radius, SavePosition, ScrollData, ScrollStateHandle, Scrollable,
-    ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text,
+    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element,
+    Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Point, Radius,
+    SavePosition, ScrollData, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth,
+    Shrinkable, Stack, Text, try_rect_with_z,
 };
 use warpui::event::{DispatchedEvent, ModifiersState};
 use warpui::fonts::{FamilyId, Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
-use warpui::r#async::SpawnedFutureHandle;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::radio_buttons::{
@@ -48,12 +48,12 @@ use crate::settings::{
     AISettings, EnforceMinimumContrast, FontSettings, FontSettingsChangedEvent, PrivacySettings,
 };
 use crate::settings_view::SettingsSection;
-use crate::terminal::grid_renderer::{self};
-use crate::terminal::ligature_settings::{should_use_ligature_rendering, LigatureSettings};
-use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::TerminalModel;
+use crate::terminal::grid_renderer::{self};
+use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
+use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::themes::theme::WarpTheme;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::CustomAction;
@@ -204,10 +204,9 @@ impl ShareBlockModal {
             if matches!(
                 event,
                 EditorEvent::Paste | EditorEvent::Edited(EditOrigin::UserTyped)
-            ) {
-                if let Some(handle) = me.title_generation_future_handle.take() {
-                    handle.abort();
-                }
+            ) && let Some(handle) = me.title_generation_future_handle.take()
+            {
+                handle.abort();
             }
             ctx.notify();
         });
@@ -690,11 +689,11 @@ impl ShareBlockModal {
                     .set_width(200.),
             )
             .with_text_and_icon_label(text_and_icon);
-        if let ShareRequestState::Pending(pending_share_type) = self.request_state {
-            if pending_share_type != share_type {
-                // Disable the share button that wasn't selected while request is pending.
-                button = button.disabled();
-            }
+        if let ShareRequestState::Pending(pending_share_type) = self.request_state
+            && pending_share_type != share_type
+        {
+            // Disable the share button that wasn't selected while request is pending.
+            button = button.disabled();
         }
 
         button
@@ -1301,14 +1300,14 @@ impl SingleBlock {
         if self.show_prompt {
             // If we're rendering Warp prompt (above the command).
             if !block.honor_ps1() {
-                if let Some(native_prompt_text) = self.native_prompt_text.as_mut() {
-                    if self.scroll_top - padding_top_rendered <= Lines::zero() {
-                        native_prompt_text.paint(
-                            grid_origin + vec2f(size_info.padding_x_px().as_f32(), 0.),
-                            ctx,
-                            app,
-                        );
-                    }
+                if let Some(native_prompt_text) = self.native_prompt_text.as_mut()
+                    && self.scroll_top - padding_top_rendered <= Lines::zero()
+                {
+                    native_prompt_text.paint(
+                        grid_origin + vec2f(size_info.padding_x_px().as_f32(), 0.),
+                        ctx,
+                        app,
+                    );
                 }
                 // The height of the native prompt will always be 1.
                 let hidden_prompt_rows_above =
@@ -1534,15 +1533,14 @@ impl Element for SingleBlock {
             precise,
             modifiers: ModifiersState { ctrl: false, .. },
         }) = event.at_z_index(self.z_index().unwrap(), ctx)
+            && self.rect().unwrap().contains_point(*position)
         {
-            if self.rect().unwrap().contains_point(*position) {
-                if *precise {
-                    self.scroll_by_pixels(delta.y().into_pixels(), ctx);
-                } else {
-                    self.scroll_by_lines(delta.y().into_lines(), ctx);
-                }
-                return true;
+            if *precise {
+                self.scroll_by_pixels(delta.y().into_pixels(), ctx);
+            } else {
+                self.scroll_by_lines(delta.y().into_lines(), ctx);
             }
+            return true;
         }
         false
     }

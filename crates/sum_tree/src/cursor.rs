@@ -680,14 +680,14 @@ where
                                 }
                             }
 
-                            if let SeekAggregate::Slice(slice) = aggregate {
-                                if !slice_items.is_empty() {
-                                    slice.push_tree(SumTree(Arc::new(Node::Leaf {
-                                        summary: slice_items_summary.unwrap(),
-                                        items: slice_items,
-                                        item_summaries: slice_item_summaries,
-                                    })));
-                                }
+                            if let SeekAggregate::Slice(slice) = aggregate
+                                && !slice_items.is_empty()
+                            {
+                                slice.push_tree(SumTree(Arc::new(Node::Leaf {
+                                    summary: slice_items_summary.unwrap(),
+                                    items: slice_items,
+                                    item_summaries: slice_item_summaries,
+                                })));
                             }
                         }
                     }
@@ -858,14 +858,14 @@ where
                             }
                         }
 
-                        if let SeekAggregate::Slice(slice) = aggregate {
-                            if !slice_items.is_empty() {
-                                slice.push_tree(SumTree(Arc::new(Node::Leaf {
-                                    summary: slice_items_summary.unwrap(),
-                                    items: slice_items,
-                                    item_summaries: slice_item_summaries,
-                                })));
-                            }
+                        if let SeekAggregate::Slice(slice) = aggregate
+                            && !slice_items.is_empty()
+                        {
+                            slice.push_tree(SumTree(Arc::new(Node::Leaf {
+                                summary: slice_items_summary.unwrap(),
+                                items: slice_items,
+                                item_summaries: slice_item_summaries,
+                            })));
                         }
                     }
                 };

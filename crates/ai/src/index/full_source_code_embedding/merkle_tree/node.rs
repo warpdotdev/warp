@@ -17,11 +17,11 @@ use super::hash::MerkleHash;
 use super::serialized_tree::{SerializedFilesystemInfo, SerializedMerkleNode};
 use super::tree::UpdateFileResult;
 use super::{ContentHash, DirEntryOrFragment, NodeHash};
+use crate::index::full_source_code_embedding::Error;
 use crate::index::full_source_code_embedding::chunker::chunk_code;
 use crate::index::full_source_code_embedding::fragment_metadata::{
     FragmentMetadata, LeafToFragmentMetadataUpdates,
 };
-use crate::index::full_source_code_embedding::Error;
 use crate::index::{DirectoryEntry, Entry, FileMetadata, THREADPOOL};
 
 /// ID that uniquely identifies a node in the merkle tree. It contains the node type
@@ -488,17 +488,17 @@ impl MerkleNode {
                 dir_paths.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
 
                 for dir_path in dir_paths {
-                    if let Some(parent_path) = dir_path.parent() {
-                        if let Some(child_dir) = created_dirs.remove(&dir_path) {
-                            // Skip if parent is the root directory
-                            if parent_path != absolute_path {
-                                if let Some(parent_dir) = created_dirs.get_mut(parent_path) {
-                                    // Now we have the completed child directory with all its children
-                                    parent_dir.children.push(Entry::Directory(child_dir));
-                                }
-                            } else {
-                                entries_to_create.push(Entry::Directory(child_dir));
+                    if let Some(parent_path) = dir_path.parent()
+                        && let Some(child_dir) = created_dirs.remove(&dir_path)
+                    {
+                        // Skip if parent is the root directory
+                        if parent_path != absolute_path {
+                            if let Some(parent_dir) = created_dirs.get_mut(parent_path) {
+                                // Now we have the completed child directory with all its children
+                                parent_dir.children.push(Entry::Directory(child_dir));
                             }
+                        } else {
+                            entries_to_create.push(Entry::Directory(child_dir));
                         }
                     }
                 }

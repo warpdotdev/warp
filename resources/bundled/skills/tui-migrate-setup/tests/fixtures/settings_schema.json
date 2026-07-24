@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "agent": {
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "command_policy": {
+              "type": "string",
+              "x-warp-surfaces": ["gui", "tui"]
+            },
+            "file_allowlist": {
+              "type": "array",
+              "items": {"type": "string"},
+              "x-warp-surfaces": ["tui", "gui"]
+            },
+            "gui_internal": {
+              "type": "string",
+              "x-warp-surfaces": ["gui"]
+            },
+            "tui_internal": {
+              "type": "string",
+              "x-warp-surfaces": ["tui"]
+            }
+          }
+        }
+      }
+    },
+    "appearance": {
+      "type": "object",
+      "properties": {
+        "theme": {
+          "type": "string",
+          "x-warp-surfaces": ["gui"]
+        }
+      }
+    }
+  }
+}

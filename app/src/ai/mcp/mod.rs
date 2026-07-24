@@ -12,8 +12,8 @@ use strum_macros::EnumIter;
 #[cfg(not(target_family = "wasm"))]
 pub use templatable_manager::McpIntegration;
 pub use templatable_manager::TemplatableMCPServerManager;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::model::json_model::JsonModel;
@@ -21,9 +21,9 @@ use crate::cloud_object::{
     CloudObjectUuid, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
     Revision,
 };
-use crate::drive::items::mcp_server::WarpDriveMCPServer;
-use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::items::mcp_server::WarpDriveMCPServer;
 #[cfg(not(target_family = "wasm"))]
 use crate::persistence::model::MCPEnvironmentVariables;
 use crate::server::ids::SyncId;
@@ -291,12 +291,11 @@ fn find_server_map(
 
     let pointers = ["/mcp/servers", "/servers", "/mcpServers"];
     for pointer in pointers.into_iter() {
-        if let Some(value) = config.pointer(pointer) {
-            if let Ok(servers) =
+        if let Some(value) = config.pointer(pointer)
+            && let Ok(servers) =
                 serde_json::from_value::<HashMap<String, JSONMCPServer>>(value.clone())
-            {
-                return Ok(servers);
-            }
+        {
+            return Ok(servers);
         }
     }
     serde_json::from_value::<HashMap<String, JSONMCPServer>>(config)
