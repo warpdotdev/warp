@@ -255,6 +255,14 @@ pub struct ApiKeyManager {
     grok_secure_storage_write_version: u64,
 }
 
+pub struct CustomEndpointParams {
+    pub name: String,
+    pub url: String,
+    pub api_key: String,
+    pub models: Vec<(String, Option<String>, Option<String>)>,
+    pub schema: CustomEndpointSchema,
+}
+
 impl ApiKeyManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let keys = Self::load_keys_from_secure_storage(ctx);
@@ -337,13 +345,16 @@ impl ApiKeyManager {
 
     pub fn add_custom_endpoint(
         &mut self,
-        name: String,
-        url: String,
-        api_key: String,
-        models: Vec<(String, Option<String>, Option<String>)>,
-        schema: CustomEndpointSchema,
+        params: CustomEndpointParams,
         ctx: &mut ModelContext<Self>,
     ) {
+        let CustomEndpointParams {
+            name,
+            url,
+            api_key,
+            models,
+            schema,
+        } = params;
         self.keys.custom_endpoints.push(CustomEndpoint {
             name,
             url,
@@ -367,16 +378,19 @@ impl ApiKeyManager {
     pub fn save_custom_endpoint(
         &mut self,
         index: usize,
-        name: String,
-        url: String,
-        api_key: String,
-        models: Vec<(String, Option<String>, Option<String>)>,
-        schema: CustomEndpointSchema,
+        params: CustomEndpointParams,
         ctx: &mut ModelContext<Self>,
     ) {
         if index >= self.keys.custom_endpoints.len() {
             return;
         }
+        let CustomEndpointParams {
+            name,
+            url,
+            api_key,
+            models,
+            schema,
+        } = params;
         self.keys.custom_endpoints[index] = CustomEndpoint {
             name,
             url,

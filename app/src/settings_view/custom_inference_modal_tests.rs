@@ -303,6 +303,43 @@ fn prefill_resets_form_scroll_position() {
 }
 
 #[test]
+fn selecting_schema_is_reflected_in_saved_schema() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let (_window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            CustomEndpointModal::new(None, None, ctx)
+        });
+
+        modal.update(&mut app, |modal, ctx| {
+            // Before any selection, save() would persist the default schema.
+            assert_eq!(modal.selected_schema(ctx), CustomEndpointSchema::default());
+
+            // Simulate the user picking a different schema. Selecting by index
+            // mirrors the runtime click path (menu emits ItemSelected, which the
+            // dropdown mirrors into its selected item). AnthropicMessages is the
+            // third item.
+            modal.schema_dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_index(2, ctx);
+            });
+
+            // The dropdown's mirrored selection carries the concrete action even
+            // though the popup is rendered externally.
+            assert_eq!(
+                modal.schema_dropdown.as_ref(ctx).selected_action(),
+                Some(CustomEndpointModalAction::SetSchema(
+                    CustomEndpointSchema::AnthropicMessages
+                )),
+            );
+            assert_eq!(
+                modal.selected_schema(ctx),
+                CustomEndpointSchema::AnthropicMessages,
+                "schema chosen in the dropdown should be what save() persists"
+            );
+        });
+    })
+}
+
+#[test]
 fn validate_url_accepts_https_with_host() {
     assert!(validate_url("https://api.example.com/v1").is_ok());
     assert!(validate_url("https://example.com").is_ok());

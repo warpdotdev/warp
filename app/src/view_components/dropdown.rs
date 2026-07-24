@@ -148,6 +148,11 @@ pub struct Dropdown<A: DropdownItemAction = ()> {
     /// confirmation card pickers.
     use_overlay_layer: bool,
     match_menu_width_to_top_bar: bool,
+    /// When true, the Dropdown skips rendering the open menu popup internally.
+    /// Callers must use `render_menu_as_overlay` to obtain the popup element and
+    /// positioning, then attach it directly to an outer Stack as a positioned
+    /// overlay child so the popup paints on top of all sibling content.
+    render_popup_externally: bool,
     // The menu stores erased `DropdownAction`s internally, but the public API remains generic over
     // the caller's concrete item action type (`set_items`, `set_selected_by_action`, etc.).
     _item_action_type: PhantomData<A>,
@@ -300,8 +305,42 @@ where
             top_bar_height: TOP_MENU_BAR_HEIGHT,
             use_overlay_layer: true,
             match_menu_width_to_top_bar: false,
+            render_popup_externally: false,
             _item_action_type: PhantomData,
         }
+    }
+
+    /// When `render_popup_externally` is true, the dropdown skips its
+    /// internal popup rendering even when expanded. Callers must use
+    /// [`Self::render_menu_as_overlay`] to obtain the popup and attach it
+    /// to an outer [`Stack`] as a positioned overlay child, ensuring the
+    /// popup paints on top of all subsequent sibling form content.
+    pub fn set_render_popup_externally(&mut self, value: bool, ctx: &mut ViewContext<Self>) {
+        self.render_popup_externally = value;
+        ctx.notify();
+    }
+
+    /// Returns the open menu element and its positioning for external
+    /// rendering, or `None` when the dropdown is closed or
+    /// `render_popup_externally` is not set.
+    pub fn render_menu_as_overlay(&self) -> Option<(Box<dyn Element>, OffsetPositioning)> {
+        if !self.is_expanded || !self.render_popup_externally {
+            return None;
+        }
+        let mut menu: Box<dyn Element> = ChildView::new(&self.dropdown).finish();
+        if self.use_drop_shadow {
+            menu = Container::new(menu)
+                .with_drop_shadow(DropShadow::default())
+                .finish();
+        }
+        let positioning = OffsetPositioning::offset_from_save_position_element(
+            self.top_bar_label(),
+            vec2f(0., 0.),
+            PositionedElementOffsetBounds::WindowByPosition,
+            self.element_anchor,
+            self.child_anchor,
+        );
+        Some((menu, positioning))
     }
 
     /// Controls whether the open menu is rendered in an `Overlay`
@@ -511,6 +550,29 @@ where
         ctx.notify();
     }
 
+    /// Returns a clone of the concrete item action for the currently selected
+    /// item, if any.
+    ///
+    /// This reads the dropdown's mirrored selection state (kept current via
+    /// menu events), so it is reliable even when the popup is rendered
+    /// externally via [`Self::set_render_popup_externally`], where the
+    /// selection action does not bubble through this view's own element
+    /// subtree to fire the item action.
+    pub fn selected_action(&self) -> Option<A>
+    where
+        A: Clone,
+    {
+        let DropdownAction::SelectActionAndClose(action) =
+            self.selected_item.as_ref()?.item_on_select_action()?
+        else {
+            return None;
+        };
+        // Deref the `Box<dyn DropdownItemAction>` to the inner trait object
+        // before `as_any`: the blanket `Action` impl also covers `Box<_>`, so
+        // calling `as_any` on the box would downcast the box, not the action.
+        (**action).as_any().downcast_ref::<A>().cloned()
+    }
+
     pub fn set_top_bar_max_width(&mut self, max_width: f32) {
         self.top_bar_max_width = max_width;
     }
@@ -702,7 +764,8 @@ where
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let mut dropdown_stack = Stack::new().with_child(self.render_top_bar(appearance));
-        if self.is_expanded {
+        // Skip internal popup rendering when an outer Stack is handling it.
+        if self.is_expanded && !self.render_popup_externally {
             let mut menu = ChildView::new(&self.dropdown).finish();
             if self.use_drop_shadow {
                 menu = Container::new(menu)

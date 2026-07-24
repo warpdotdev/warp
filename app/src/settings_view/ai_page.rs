@@ -1,4 +1,4 @@
-use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys, CustomEndpointParams};
 #[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
@@ -2464,11 +2464,13 @@ impl AISettingsPageView {
                 }
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.add_custom_endpoint(
-                        name.clone(),
-                        url.clone(),
-                        api_key.clone(),
-                        models.clone(),
-                        *schema,
+                        CustomEndpointParams {
+                            name: name.clone(),
+                            url: url.clone(),
+                            api_key: api_key.clone(),
+                            models: models.clone(),
+                            schema: *schema,
+                        },
                         ctx,
                     );
                 });
@@ -2506,11 +2508,13 @@ impl AISettingsPageView {
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.save_custom_endpoint(
                         *index,
-                        name.clone(),
-                        url.clone(),
-                        api_key.clone(),
-                        models.clone(),
-                        *schema,
+                        CustomEndpointParams {
+                            name: name.clone(),
+                            url: url.clone(),
+                            api_key: api_key.clone(),
+                            models: models.clone(),
+                            schema: *schema,
+                        },
                         ctx,
                     );
                 });
