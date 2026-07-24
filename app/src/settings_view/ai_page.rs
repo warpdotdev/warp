@@ -26,6 +26,7 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::{ContextPredicate, Keystroke};
 use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::slider::SliderStateHandle;
@@ -8840,13 +8841,18 @@ impl ApiKeysWidget {
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
+            .with_clip(ClipConfig::ellipsis())
             .with_style(Properties::default().weight(Weight::Semibold))
             .with_color(text_color.into())
             .finish();
 
             let left = Flex::column()
                 .with_spacing(8.)
-                .with_child(endpoint_name)
+                .with_child(
+                    ConstrainedBox::new(endpoint_name)
+                        .with_max_width(320.)
+                        .finish(),
+                )
                 .with_child(chips)
                 .finish();
 

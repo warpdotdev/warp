@@ -1,8 +1,10 @@
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildView, Container, CornerRadius, Dismiss, Empty, Flex, ParentElement, Radius, Text,
+    Border, ChildView, ConstrainedBox, Container, CornerRadius, Dismiss, Empty, Flex,
+    ParentElement, Radius, Text,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
@@ -106,6 +108,7 @@ impl View for RemoveCustomEndpointConfirmationDialog {
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
+        .with_clip(ClipConfig::ellipsis())
         .with_style(Properties::default().weight(Weight::Semibold))
         .with_color(theme.active_ui_text_color().into())
         .finish();
@@ -119,7 +122,11 @@ impl View for RemoveCustomEndpointConfirmationDialog {
         let endpoint_card = Container::new(
             Flex::column()
                 .with_spacing(8.)
-                .with_child(endpoint_title)
+                .with_child(
+                    ConstrainedBox::new(endpoint_title)
+                        .with_max_width(360.)
+                        .finish(),
+                )
                 .with_child(chips)
                 .finish(),
         )
