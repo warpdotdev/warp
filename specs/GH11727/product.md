@@ -33,21 +33,31 @@ notification/session status wiring.
 - Cloud orchestration `Harness::Grok` / ambient spawn of Grok Build on workers.
 - Treating the install alias `agent` as Grok Build (that basename is Cursor CLI).
 - Changing Grok Build itself or shipping a Grok binary inside Warp.
-- Docs site / marketing pages outside this repository (may follow separately).
-- Hosted marketplace package (`grok plugin install …`); file-based hooks install
-  is the interim until Warp publishes one.
+- Docs site / marketing pages outside this repository (including the public
+  “supported third-party CLI agents” list called out on #11727 — follow-up in
+  warpdotdev/docs or equivalent).
+- Hosted marketplace package under `~/.grok/installed-plugins/` /
+  `grok plugin install …`; file-based hooks install under `$GROK_HOME/hooks` is
+  the interim until Warp publishes one.
 
 ## Branding
 
-- Use the official **Grok logomark** (not corporate mark, not wordmark, not
-  full lockup) for circular agent avatars, per
-  [Grok / SpaceXAI brand guidelines](https://x.ai/legal/brand-guidelines) and
-  https://data.x.ai/logos/xAI_Grok_Assets.zip (assets still published under
-  these URLs).
-- Ship **one monochrome SVG** at `app/assets/bundled/svg/grok.svg` with
-  `fill="#FF0000"` (Warp’s icon red-channel mask). Warp tints it at paint time
-  for light/dark UI — dual light/dark asset files are not needed (same as Claude
-  / Codex).
+Aligned with [#11727](https://github.com/warpdotdev/warp/issues/11727) community
+guidance (official package filenames; logomark only):
+
+- Use the official **Grok logomark** (not corporate mark, not wordmark, not full
+  lockup; not X/Twitter bird; not Oz branding; no custom mascot), per
+  [brand guidelines](https://x.ai/legal/brand-guidelines) and
+  https://data.x.ai/logos/xAI_Grok_Assets.zip.
+- Canonical package files for avatars: `Grok_Logomark_Light.svg` /
+  `Grok_Logomark_Dark.svg` (issue recommendation for dark/light UI).
+- **Warp adaptation:** ship **one** monochrome SVG at
+  `app/assets/bundled/svg/grok.svg` with `fill="#FF0000"` (icon red-channel
+  alpha mask). Warp tints the mark at paint time for light/dark chrome — the
+  same pipeline as Claude / Codex / OpenAI. Dual on-disk light/dark files would
+  not match how Warp’s `Icon` system works and would break tinting. Geometry
+  comes from the official logomark; only fill is converted to the mask color
+  and the paths are padded into the existing circular avatar frame.
 
 ## Behavior invariants
 
