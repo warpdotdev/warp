@@ -583,6 +583,13 @@ pub enum WorkspaceAction {
         page: SettingsSection,
         widget_id: &'static str,
     },
+    /// Scroll the vertical tabs panel so the active tab is visible.
+    ///
+    /// Dispatched (typically deferred) after programmatically adding and
+    /// activating a tab so the panel reliably scrolls the new active tab into
+    /// view once it has been laid out, even when the activation's immediate
+    /// scroll request was consumed before the new tab was rendered.
+    ScrollVerticalTabsToActiveTab,
     /// Navigate to an existing AI conversation, focusing on its terminal view.
     ///
     /// If the conversation is not in an open pane, restore it based on the layout setting or override.
@@ -1087,6 +1094,7 @@ impl WorkspaceAction {
             | ToggleVerticalTabsShowPrLink
             | ToggleVerticalTabsShowDiffStats
             | ToggleVerticalTabsShowDetailsOnHover
+            | ScrollVerticalTabsToActiveTab
             | ToggleWelcomeTips
             | CopyTextToClipboard(_)
             | CopyCurrentPath

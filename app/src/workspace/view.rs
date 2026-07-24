@@ -4343,6 +4343,14 @@ impl Workspace {
 
         self.tabs.push(TabData::new(new_pane_group));
         self.activate_tab_internal(self.tab_count() - 1, ctx);
+
+        // Joining a shared session frequently brings a background window to the
+        // foreground, and that window-show repaint can consume the activation's
+        // scroll-to-active-tab request before the new tab has been laid out into
+        // the vertical tabs panel, leaving the active tab scrolled out of view.
+        // Re-issue the scroll on a later turn, once the new tab is part of the
+        // rendered panel.
+        ctx.dispatch_typed_action_deferred(WorkspaceAction::ScrollVerticalTabsToActiveTab);
     }
 
     /// Opens a cloud conversation by server token.
@@ -5380,6 +5388,19 @@ impl Workspace {
         }
     }
 
+    /// Scrolls the vertical tabs panel so the active tab is visible, when the
+    /// panel is open and in use. Safe to call repeatedly: it's a no-op when the
+    /// active tab is already fully in view.
+    fn scroll_vertical_tabs_to_active_tab(&self, ctx: &AppContext) {
+        if self.vertical_tabs_panel_open
+            && FeatureFlag::VerticalTabs.is_enabled()
+            && *TabSettings::as_ref(ctx).use_vertical_tabs
+        {
+            self.vertical_tabs_panel
+                .scroll_to_tab(self.active_tab_index);
+        }
+    }
+
     /// Change the active tab index. This must be used instead of setting `self.active_tab_index`
     /// directly, as it updates related state.
     pub(crate) fn set_active_tab_index(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
@@ -5404,12 +5425,7 @@ impl Workspace {
             self.tab_mru_order.retain(|id| *id != pane_group_id);
             self.tab_mru_order.insert(0, pane_group_id);
         }
-        if self.vertical_tabs_panel_open
-            && FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(ctx).use_vertical_tabs
-        {
-            self.vertical_tabs_panel.scroll_to_tab(index);
-        }
+        self.scroll_vertical_tabs_to_active_tab(ctx);
 
         if self.left_panel_visibility_across_tabs_enabled(ctx) {
             self.reconcile_left_panel_open_for_active_tab(ctx);
@@ -25422,6 +25438,9 @@ impl TypedActionView for Workspace {
                     settings.scroll_to_settings_widget(*page, widget_id, ctx);
                 });
                 ctx.notify();
+            }
+            ScrollVerticalTabsToActiveTab => {
+                self.scroll_vertical_tabs_to_active_tab(ctx);
             }
             OpenFileInNewTab {
                 full_path,
