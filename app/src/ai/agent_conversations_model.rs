@@ -1096,6 +1096,7 @@ impl AgentConversationsModel {
                 } else if let RequestState::RequestFailed(e) = result {
                     model.initial_load_state = InitialConversationLoadState::CloudFailed;
                     model.update_polling_state(ctx);
+                    ctx.emit(AgentConversationsModelEvent::ConversationsLoaded);
                     report_error!(e);
                 }
             },
