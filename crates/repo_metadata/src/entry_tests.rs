@@ -28,8 +28,11 @@ fn test_git_path_filtering_allowlist() {
         "/home/user/project/README.md"
     )));
 
-    // .git directory itself should be ignored
-    assert!(should_ignore_git_path(Path::new("/home/user/project/.git")));
+    // The .git marker itself must be emitted so deletion and move events can
+    // invalidate repository metadata.
+    assert!(!should_ignore_git_path(Path::new(
+        "/home/user/project/.git"
+    )));
 
     // Allowlisted: commit-related files are NOT ignored
     assert!(!should_ignore_git_path(Path::new(

@@ -21,3 +21,25 @@ pub fn assert_working_dir_is_present(tab_index: usize) -> AssertionCallback {
         })
     })
 }
+
+/// Assertion that the Git branch prompt chip either has a value or is absent.
+pub fn assert_git_branch_prompt_chip_presence(
+    tab_index: usize,
+    should_be_present: bool,
+) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view = single_terminal_view_for_tab(app, window_id, tab_index);
+        terminal_view.read(app, |view, ctx| {
+            let prompt = view.current_prompt();
+            prompt.read(ctx, |prompt, ctx| {
+                let is_present = prompt
+                    .latest_chip_value(&ContextChipKind::ShellGitBranch, ctx)
+                    .is_some();
+                async_assert!(
+                    is_present == should_be_present,
+                    "Git branch prompt chip presence mismatch: expected={should_be_present}, actual={is_present}"
+                )
+            })
+        })
+    })
+}

@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::future::Future;
 use std::pin::Pin;
@@ -453,6 +454,70 @@ fn test_is_git_internal_path() {
     // Non-git files should not be detected
     assert!(!is_git_internal_path(Path::new("/repo/src/main.rs")));
     assert!(!is_git_internal_path(Path::new("/repo/README.md")));
+}
+
+#[test]
+fn test_deleted_git_marker_invalidates_repository_metadata() {
+    VirtualFS::test(
+        "deleted_git_marker_invalidates_repository",
+        |dirs, mut vfs| {
+            stub_git_repository(&mut vfs, "repo");
+
+            let repo_path = dirs.tests().join("repo");
+            let git_marker_path = repo_path.join(".git");
+            App::test((), |mut app| async move {
+                let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+                let repo_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(
+                            StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                            ctx,
+                        )
+                    })
+                    .unwrap();
+
+                let created_update = watcher_handle.update(&mut app, |watcher, ctx| {
+                    let mut repo_updates = HashMap::new();
+                    let mut repos_to_refresh_tracked_remote_ref = HashSet::new();
+                    watcher.record_git_internal_path_update(
+                        &git_marker_path,
+                        false,
+                        &mut repo_updates,
+                        &mut repos_to_refresh_tracked_remote_ref,
+                        ctx,
+                    );
+                    repo_updates.remove(&repo_handle)
+                });
+                assert!(
+                    created_update.is_none(),
+                    "creating .git should not invalidate repository metadata"
+                );
+
+                fs::remove_dir_all(&git_marker_path).expect("failed to remove .git directory");
+
+                let update = watcher_handle.update(&mut app, |watcher, ctx| {
+                    let affected = watcher.find_repos_for_git_event(&git_marker_path, ctx);
+                    assert_eq!(affected, vec![repo_handle.clone()]);
+
+                    let mut repo_updates = HashMap::new();
+                    let mut repos_to_refresh_tracked_remote_ref = HashSet::new();
+                    watcher.record_git_internal_path_update(
+                        &git_marker_path,
+                        true,
+                        &mut repo_updates,
+                        &mut repos_to_refresh_tracked_remote_ref,
+                        ctx,
+                    );
+                    repo_updates.remove(&repo_handle)
+                });
+
+                assert!(
+                    update.is_some_and(|update| update.commit_updated),
+                    "deleting .git should invalidate cached repository metadata"
+                );
+            });
+        },
+    );
 }
 
 #[test]

@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
+use command::blocking::Command;
+use settings::Setting as _;
 use warp::features::FeatureFlag;
 use warp::integration_testing::clipboard::write_to_clipboard;
+use warp::integration_testing::context_chips::assert_git_branch_prompt_chip_presence;
 use warp::integration_testing::input::{
     AutosuggestionState, assert_autosuggestion_state, input_contains_string, input_is_empty,
     latest_buffer_operations_are_empty, open_inline_model_selector_from_chip,
@@ -17,6 +22,7 @@ use warp::integration_testing::terminal::{
 use warp::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab,
 };
+use warp::terminal::session_settings::HonorPS1;
 use warp::terminal::shell::ShellType;
 use warpui_core::integration::TestStep;
 use warpui_core::{Event, async_assert_eq};
@@ -318,5 +324,100 @@ pub fn test_git_prompt_chips() -> Builder {
                         })
                     })
             }),
+        )
+}
+
+/// Checks that deleting a repository's `.git` marker clears the Git branch
+/// prompt chip in the existing pane.
+pub fn test_deleting_git_marker_clears_git_branch_prompt_chip() -> Builder {
+    new_builder()
+        .use_tmp_filesystem_for_test_root_directory()
+        .with_user_defaults(HashMap::from([
+            (HonorPS1::storage_key().to_owned(), false.to_string()),
+            (String::from("SavedPrompt"), String::from("Default")),
+        ]))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Create a dirty Git repository outside the shell")
+                .with_action(|app, window_id, _| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    let repo_path = terminal_view
+                        .read(app, |terminal_view, _| terminal_view.pwd())
+                        .map(PathBuf::from)
+                        .expect("terminal should have a working directory")
+                        .join("repo");
+                    std::fs::create_dir(&repo_path)
+                        .expect("must be able to create the repository directory");
+                    assert!(
+                        Command::new("git")
+                            .args(["init", "-b", "main"])
+                            .current_dir(&repo_path)
+                            .status()
+                            .expect("git init should run")
+                            .success(),
+                        "git init should succeed"
+                    );
+                    std::fs::write(repo_path.join("file"), "initial\n")
+                        .expect("must be able to create the tracked file");
+                    assert!(
+                        Command::new("git")
+                            .args(["add", "file"])
+                            .current_dir(&repo_path)
+                            .status()
+                            .expect("git add should run")
+                            .success(),
+                        "git add should succeed"
+                    );
+                    assert!(
+                        Command::new("git")
+                            .args([
+                                "-c",
+                                "user.email=test@test.com",
+                                "-c",
+                                "user.name=Git TestUser",
+                                "commit",
+                                "-m",
+                                "initial",
+                            ])
+                            .current_dir(&repo_path)
+                            .status()
+                            .expect("git commit should run")
+                            .success(),
+                        "git commit should succeed"
+                    );
+                    std::fs::write(repo_path.join("file"), "initial\nchange\n")
+                        .expect("must be able to modify the tracked file");
+                }),
+        )
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "cd repo".into(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Git branch prompt chip should be populated")
+                .set_timeout(Duration::from_secs(15))
+                .add_named_assertion(
+                    "Git branch prompt chip has a value",
+                    assert_git_branch_prompt_chip_presence(0, true),
+                ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Git branch prompt chip should be cleared")
+                .with_action(|app, window_id, _| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    let repo_path = terminal_view
+                        .read(app, |terminal_view, _| terminal_view.pwd())
+                        .map(PathBuf::from)
+                        .expect("terminal should have a working directory");
+                    std::fs::rename(repo_path.join(".git"), repo_path.join(".git-disabled"))
+                        .expect("must be able to move the .git marker");
+                })
+                .set_timeout(Duration::from_secs(15))
+                .add_named_assertion(
+                    "Git branch prompt chip is absent",
+                    assert_git_branch_prompt_chip_presence(0, false),
+                ),
         )
 }

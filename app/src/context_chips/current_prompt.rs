@@ -160,6 +160,11 @@ pub struct CurrentPrompt {
     /// When set, branch, branch status, and diff stats are populated from
     /// `GitRepoStatusModel` filesystem events.
     git_repo_status: Option<WeakModelHandle<GitRepoStatusModel>>,
+    /// Whether the current git status model has produced metadata. This keeps
+    /// transient initial `None` values from clearing shell-provided branch
+    /// information while still allowing a later `Some` -> `None` transition
+    /// to invalidate stale git chips.
+    git_repo_metadata_available: bool,
 
     /// When set, the `GithubPullRequest` chip value is populated from
     /// `GitHubRepoModel` for the current repository.
@@ -234,6 +239,7 @@ impl CurrentPrompt {
             same_line_prompt_enabled: prompt.as_ref(ctx).same_line_prompt_enabled(),
             separator: prompt.as_ref(ctx).separator(),
             git_repo_status: None,
+            git_repo_metadata_available: false,
             github_repo_model: None,
         }
     }
@@ -1395,25 +1401,23 @@ impl CurrentPrompt {
         handle: Option<WeakModelHandle<GitRepoStatusModel>>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let had_git_repo_metadata = self.git_repo_metadata_available;
+
         // Unsubscribe from the previous model, if any.
         if let Some(old_weak) = self.git_repo_status.take()
             && let Some(old_strong) = old_weak.upgrade(ctx)
         {
             ctx.unsubscribe_from_model(&old_strong);
         }
+        self.git_repo_metadata_available = false;
 
         // Repo detached, clear git chips that require repository metadata.
         if handle.is_none() {
-            for chip_kind in [
-                ContextChipKind::GitDiffStats,
-                ContextChipKind::GitBranchStatus,
-            ] {
-                if let Some(state) = self.states.get_mut(&chip_kind) {
-                    state.clear_abort_handlers();
-                    state.clear_cache();
-                }
+            if had_git_repo_metadata {
+                self.clear_git_repo_metadata();
+            } else {
+                self.clear_git_status_chips();
             }
-            let _ = self.update_tx.try_send(());
             return;
         }
 
@@ -1490,8 +1494,13 @@ impl CurrentPrompt {
             .and_then(|h| h.as_ref(ctx).metadata(ctx).cloned());
 
         let Some(metadata) = metadata else {
+            if self.git_repo_metadata_available {
+                self.git_repo_metadata_available = false;
+                self.clear_git_repo_metadata();
+            }
             return;
         };
+        self.git_repo_metadata_available = true;
 
         // Update ShellGitBranch.
         let new_branch = ChipValue::Text(metadata.current_branch_name.clone());
@@ -1532,6 +1541,31 @@ impl CurrentPrompt {
         if current_diff_stats.as_ref() != Some(&new_diff_stats) {
             self.update_chip_value(&ContextChipKind::GitDiffStats, Some(new_diff_stats));
         }
+    }
+
+    fn clear_git_repo_metadata(&mut self) {
+        self.clear_git_chips(&[
+            ContextChipKind::ShellGitBranch,
+            ContextChipKind::GitBranchStatus,
+            ContextChipKind::GitDiffStats,
+        ]);
+    }
+
+    fn clear_git_status_chips(&mut self) {
+        self.clear_git_chips(&[
+            ContextChipKind::GitBranchStatus,
+            ContextChipKind::GitDiffStats,
+        ]);
+    }
+
+    fn clear_git_chips(&mut self, chip_kinds: &[ContextChipKind]) {
+        for chip_kind in chip_kinds {
+            if let Some(state) = self.states.get_mut(chip_kind) {
+                state.clear_abort_handlers();
+                state.clear_cache();
+            }
+        }
+        let _ = self.update_tx.try_send(());
     }
 
     /// Reads PR info from the per-repo `GitHubRepoModel` and updates the

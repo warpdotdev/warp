@@ -143,6 +143,7 @@ integration_tests! {
     test_inline_model_selector_restores_prompt_on_dismissal,
     test_inline_model_selector_restores_prompt_on_model_selection,
     test_inline_model_selector_restores_prompt_on_chip_toggle_close,
+    test_deleting_git_marker_clears_git_branch_prompt_chip,
     test_paste_and_type_characters_before_bootstrap,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_anchor_preserved_when_inserting_above,

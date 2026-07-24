@@ -711,6 +711,157 @@ fn test_git_status_change_updates_branch_status_chip_value() {
 
 #[cfg(feature = "local_fs")]
 #[test]
+fn test_initial_missing_git_status_metadata_preserves_shell_branch() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [ContextChipKind::ShellGitBranch],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        let repo_handle = watcher_handle.update(&mut app, |watcher, ctx| {
+            watcher
+                .add_directory(
+                    warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                        temp_dir.path(),
+                    )
+                    .unwrap(),
+                    ctx,
+                )
+                .unwrap()
+        });
+        let git_status = app
+            .add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repo_handle, None, ctx));
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |cp, ctx| {
+            cp.set_git_repo_status(Some(git_status.downgrade()), ctx);
+            cp.update_states_with_new_context(ctx);
+            cp.update_chip_value(
+                &ContextChipKind::ShellGitBranch,
+                Some(crate::context_chips::ChipValue::Text("main".to_string())),
+            );
+        });
+
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(None, ctx);
+        });
+        current_prompt.update(&mut app, |cp, ctx| {
+            cp.set_git_repo_status(None, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                current_prompt
+                    .as_ref(ctx)
+                    .latest_chip_value(&ContextChipKind::ShellGitBranch),
+                Some(&crate::context_chips::ChipValue::Text("main".to_string())),
+                "Initial missing metadata should not clear the shell-provided branch"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_git_status_metadata_removal_clears_git_chips() {
+    App::test((), |mut app| async move {
+        let git_chip_kinds = [
+            ContextChipKind::ShellGitBranch,
+            ContextChipKind::GitBranchStatus,
+            ContextChipKind::GitDiffStats,
+        ];
+        let prompt_git_chip_kinds = git_chip_kinds.clone();
+        app.add_singleton_model(move |_| {
+            Prompt::mock_with(prompt_git_chip_kinds, false, WarpPromptSeparator::None)
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        let repo_handle = watcher_handle.update(&mut app, |watcher, ctx| {
+            watcher
+                .add_directory(
+                    warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                        temp_dir.path(),
+                    )
+                    .unwrap(),
+                    ctx,
+                )
+                .unwrap()
+        });
+        let git_status = app
+            .add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repo_handle, None, ctx));
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |cp, ctx| {
+            cp.set_git_repo_status(Some(git_status.downgrade()), ctx);
+            cp.update_states_with_new_context(ctx);
+        });
+
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(Some(git_status_metadata("main")), ctx);
+        });
+
+        app.read(|ctx| {
+            for chip_kind in &git_chip_kinds {
+                assert!(
+                    current_prompt
+                        .as_ref(ctx)
+                        .latest_chip_value(chip_kind)
+                        .is_some(),
+                    "{chip_kind:?} should be populated while git metadata is available"
+                );
+            }
+        });
+
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(None, ctx);
+        });
+
+        app.read(|ctx| {
+            for chip_kind in &git_chip_kinds {
+                assert!(
+                    current_prompt
+                        .as_ref(ctx)
+                        .latest_chip_value(chip_kind)
+                        .is_none(),
+                    "{chip_kind:?} should be cleared when git metadata is unavailable"
+                );
+            }
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
 fn test_git_status_pr_info_updates_github_pr_chip_value() {
     let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
     App::test((), |mut app| async move {
