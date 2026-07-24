@@ -19,6 +19,21 @@ fn enter_visual_mode(motion_type: MotionType) -> VimFSA {
     fsa
 }
 
+/// Like [`enter_normal_mode`] but with the code-editor-only `<`/`>` indent/dedent operators
+/// enabled, matching the VimModel configuration used by the code editor (as opposed to the
+/// terminal command-input editor, which leaves them disabled).
+fn enter_normal_mode_with_indent() -> VimFSA {
+    let mut fsa = enter_normal_mode();
+    fsa.indent_operators_enabled = true;
+    fsa
+}
+
+fn enter_visual_mode_with_indent(motion_type: MotionType) -> VimFSA {
+    let mut fsa = enter_normal_mode_with_indent();
+    fsa.mode = VimMode::Visual(motion_type);
+    fsa
+}
+
 fn assert_navigate_jump_to_line(event: &VimEvent, expected_line: u32) {
     match &event.event_type {
         VimEventType::Navigate(VimMotion::JumpToLine(line)) => {
@@ -366,7 +381,7 @@ fn test_operator_pending_d1gg_deletes_to_line_1() {
 
 #[test]
 fn test_normal_mode_double_greater_indents_line() {
-    let mut fsa = enter_normal_mode();
+    let mut fsa = enter_normal_mode_with_indent();
     let events = type_chars(&mut fsa, ">>");
     assert_eq!(events.len(), 1, ">> should produce exactly one event");
     assert_operation_line(&events[0], VimOperator::Indent);
@@ -376,7 +391,7 @@ fn test_normal_mode_double_greater_indents_line() {
 
 #[test]
 fn test_normal_mode_double_less_dedents_line() {
-    let mut fsa = enter_normal_mode();
+    let mut fsa = enter_normal_mode_with_indent();
     let events = type_chars(&mut fsa, "<<");
     assert_eq!(events.len(), 1, "<< should produce exactly one event");
     assert_operation_line(&events[0], VimOperator::Dedent);
@@ -386,7 +401,7 @@ fn test_normal_mode_double_less_dedents_line() {
 
 #[test]
 fn test_normal_mode_greater_with_down_motion_is_linewise() {
-    let mut fsa = enter_normal_mode();
+    let mut fsa = enter_normal_mode_with_indent();
     let events = type_chars(&mut fsa, ">j");
     assert_eq!(events.len(), 1, ">j should produce exactly one event");
     assert_operation_motion(
@@ -400,7 +415,7 @@ fn test_normal_mode_greater_with_down_motion_is_linewise() {
 
 #[test]
 fn test_normal_mode_greater_with_word_motion_is_charwise() {
-    let mut fsa = enter_normal_mode();
+    let mut fsa = enter_normal_mode_with_indent();
     let events = type_chars(&mut fsa, ">w");
     assert_eq!(events.len(), 1, ">w should produce exactly one event");
     assert_operation_motion(
@@ -418,7 +433,7 @@ fn test_normal_mode_greater_with_word_motion_is_charwise() {
 
 #[test]
 fn test_normal_mode_greater_to_last_line_is_linewise() {
-    let mut fsa = enter_normal_mode();
+    let mut fsa = enter_normal_mode_with_indent();
     let events = type_chars(&mut fsa, ">G");
     assert_eq!(events.len(), 1, ">G should produce exactly one event");
     assert_operation_motion(
@@ -432,7 +447,7 @@ fn test_normal_mode_greater_to_last_line_is_linewise() {
 
 #[test]
 fn test_normal_mode_counted_double_greater_indents_count_lines() {
-    let mut fsa = enter_normal_mode();
+    let mut fsa = enter_normal_mode_with_indent();
     let events = type_chars(&mut fsa, "2>>");
     assert_eq!(events.len(), 1, "2>> should produce exactly one event");
     assert_operation_line(&events[0], VimOperator::Indent);
@@ -442,7 +457,7 @@ fn test_normal_mode_counted_double_greater_indents_count_lines() {
 
 #[test]
 fn test_normal_mode_counted_greater_with_motion_multiplies_count() {
-    let mut fsa = enter_normal_mode();
+    let mut fsa = enter_normal_mode_with_indent();
     let events = type_chars(&mut fsa, "3>j");
     assert_eq!(events.len(), 1, "3>j should produce exactly one event");
     assert_operation_motion(
@@ -457,7 +472,7 @@ fn test_normal_mode_counted_greater_with_motion_multiplies_count() {
 
 #[test]
 fn test_visual_linewise_greater_emits_visual_indent_operator() {
-    let mut fsa = enter_visual_mode(MotionType::Linewise);
+    let mut fsa = enter_visual_mode_with_indent(MotionType::Linewise);
     let events = type_chars(&mut fsa, ">");
     assert_eq!(
         events.len(),
@@ -470,7 +485,7 @@ fn test_visual_linewise_greater_emits_visual_indent_operator() {
 
 #[test]
 fn test_visual_charwise_less_emits_visual_dedent_operator() {
-    let mut fsa = enter_visual_mode(MotionType::Charwise);
+    let mut fsa = enter_visual_mode_with_indent(MotionType::Charwise);
     let events = type_chars(&mut fsa, "<");
     assert_eq!(
         events.len(),
@@ -479,4 +494,93 @@ fn test_visual_charwise_less_emits_visual_dedent_operator() {
     );
     assert_visual_operator(&events[0], VimOperator::Dedent, MotionType::Charwise);
     assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_double_greater_is_dot_repeatable() {
+    let mut fsa = enter_normal_mode_with_indent();
+    let events = type_chars(&mut fsa, ">>");
+    assert_eq!(events.len(), 1, ">> should produce exactly one event");
+    assert_operation_line(&events[0], VimOperator::Indent);
+
+    // `.` replays the last indent operation recorded by the dot-repeat machinery.
+    let repeat_events = type_chars(&mut fsa, ".");
+    assert_eq!(
+        repeat_events.len(),
+        1,
+        ". should replay the indent operation"
+    );
+    assert_operation_line(&repeat_events[0], VimOperator::Indent);
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_double_less_is_dot_repeatable() {
+    let mut fsa = enter_normal_mode_with_indent();
+    let events = type_chars(&mut fsa, "<<");
+    assert_eq!(events.len(), 1, "<< should produce exactly one event");
+    assert_operation_line(&events[0], VimOperator::Dedent);
+
+    // `.` replays the last dedent operation recorded by the dot-repeat machinery.
+    let repeat_events = type_chars(&mut fsa, ".");
+    assert_eq!(
+        repeat_events.len(),
+        1,
+        ". should replay the dedent operation"
+    );
+    assert_operation_line(&repeat_events[0], VimOperator::Dedent);
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_indent_operators_disabled_greater_alone_is_noop() {
+    // With indent operators disabled (the terminal command-input editor's configuration), `>` is a
+    // true no-op and does not enter operator-pending mode.
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, ">");
+    assert!(
+        events.is_empty(),
+        "> alone should be a no-op when indent operators are disabled"
+    );
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_indent_operators_disabled_double_greater_is_noop() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, ">>");
+    assert!(
+        events.is_empty(),
+        ">> should be a no-op when indent operators are disabled"
+    );
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_indent_operators_disabled_does_not_consume_following_motion() {
+    // When disabled, `>` does not swallow the next keystroke as an indent operand: `>j` just moves
+    // down, matching the terminal command-input editor's pre-indent-operator behavior.
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, ">j");
+    assert_eq!(
+        events.len(),
+        1,
+        ">j should produce only the j navigation when indent operators are disabled"
+    );
+    assert!(matches!(
+        events[0].event_type,
+        VimEventType::Navigate(VimMotion::Character(CharacterMotion::Down))
+    ));
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_indent_operators_disabled_visual_greater_stays_visual() {
+    let mut fsa = enter_visual_mode(MotionType::Linewise);
+    let events = type_chars(&mut fsa, ">");
+    assert!(
+        events.is_empty(),
+        "> in visual mode should be a no-op when indent operators are disabled"
+    );
+    assert_eq!(fsa.mode, VimMode::Visual(MotionType::Linewise));
 }

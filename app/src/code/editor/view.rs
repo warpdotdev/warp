@@ -356,7 +356,13 @@ impl CodeEditorView {
         // If feature flag is enabled, enable vim mode.
         let supports_vim_mode = FeatureFlag::VimCodeEditor.is_enabled();
 
-        let vim_model = ctx.add_model(|_| VimModel::new());
+        let vim_model = ctx.add_model(|_| {
+            let mut vim_model = VimModel::new();
+            // `<`/`>` (indent/dedent) are code-editor-only operators. The terminal command-input
+            // editor's VimModel leaves them disabled so `<`/`>` stay true no-ops there.
+            vim_model.enable_indent_operators();
+            vim_model
+        });
         ctx.subscribe_to_model(&vim_model, Self::handle_vim_event);
 
         // Ensure CodeEditorView starts in Normal mode when Vim keybindings are enabled.

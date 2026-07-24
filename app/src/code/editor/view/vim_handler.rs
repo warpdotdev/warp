@@ -198,8 +198,12 @@ impl VimHandler for CodeEditorView {
                             VimMotion::Paragraph(direction) => {
                                 model.vim_move_by_paragraph(operand_count, direction, true, ctx);
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline =
-                                        !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
+                                    let include_newline = !matches!(
+                                        *operator,
+                                        VimOperator::Change
+                                            | VimOperator::Indent
+                                            | VimOperator::Dedent
+                                    );
                                     model.vim_extend_selection_linewise(include_newline, ctx);
                                 }
                             }
@@ -207,7 +211,12 @@ impl VimHandler for CodeEditorView {
                                 model.vim_select_to_buffer_end(ctx);
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
-                                        !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent),
+                                        !matches!(
+                                            *operator,
+                                            VimOperator::Change
+                                                | VimOperator::Indent
+                                                | VimOperator::Dedent
+                                        ),
                                         ctx,
                                     );
                                 }
@@ -216,7 +225,12 @@ impl VimHandler for CodeEditorView {
                                 model.vim_select_to_buffer_start(ctx);
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
-                                        !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent),
+                                        !matches!(
+                                            *operator,
+                                            VimOperator::Change
+                                                | VimOperator::Indent
+                                                | VimOperator::Dedent
+                                        ),
                                         ctx,
                                     );
                                 }
@@ -256,8 +270,12 @@ impl VimHandler for CodeEditorView {
                                 );
 
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline =
-                                        !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
+                                    let include_newline = !matches!(
+                                        *operator,
+                                        VimOperator::Change
+                                            | VimOperator::Indent
+                                            | VimOperator::Dedent
+                                    );
                                     model.vim_extend_selection_linewise(include_newline, ctx);
                                 }
                             }
@@ -541,8 +559,10 @@ impl VimHandler for CodeEditorView {
         self.model.update(ctx, |model, ctx| {
             // Compute the visual selection. Indent/dedent exclude the trailing newline so the
             // shift primitive does not advance onto the next line.
-            let include_newline =
-                !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
+            let include_newline = !matches!(
+                *operator,
+                VimOperator::Change | VimOperator::Indent | VimOperator::Dedent
+            );
             model.vim_visual_selection_range(motion_type, include_newline, ctx);
 
             if matches!(

@@ -52,6 +52,11 @@ pub struct VimFSA {
     register: char,
     /// Holds the last [`VimEvent`] where [`VimEventType::for_dot_repeat`] returns `Some`.
     dot_repeat_event: Option<VimEvent>,
+    /// Whether the `<` (dedent) and `>` (indent) operators are recognized. These are
+    /// code-editor-only operators (see [`VimOperator::Indent`]/[`VimOperator::Dedent`]); the
+    /// terminal command-input editor leaves this disabled so `<`/`>` stay true no-ops there
+    /// instead of entering operator-pending mode and consuming the following keystroke.
+    indent_operators_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -621,7 +626,10 @@ impl VimEventType {
             | VimEventType::JoinLine
             | VimEventType::DeleteForward => Some(self.clone()),
             VimEventType::Operation { operator, .. }
-                if *operator == VimOperator::Change || *operator == VimOperator::Delete =>
+                if *operator == VimOperator::Change
+                    || *operator == VimOperator::Delete
+                    || *operator == VimOperator::Indent
+                    || *operator == VimOperator::Dedent =>
             {
                 Some(self.clone())
             }
@@ -729,9 +737,10 @@ impl VimFSA {
             pending_visual_object: None,
             last_find_motion: None,
             // When doing an operation that reads/writes to a register, the default (unnamed) register
-            // is called ".
+            // is called ".".
             register: '"',
             dot_repeat_event: None,
+            indent_operators_enabled: false,
         }
     }
 
@@ -968,8 +977,14 @@ impl VimFSA {
                     },
                 ),
                 'r' => self.change_mode(VimMode::Replace.into()),
-                'g' | 'd' | 'c' | 'y' | 'z' | 'f' | 'F' | 't' | 'T' | '[' | ']' | '"' | '<'
-                | '>' => {
+                'g' | 'd' | 'c' | 'y' | 'z' | 'f' | 'F' | 't' | 'T' | '[' | ']' | '"' => {
+                    self.pending_action = Some(PendingAction::from(c));
+                    return None;
+                }
+                // `<`/`>` (indent/dedent) are code-editor-only operators. When disabled (e.g. the
+                // terminal command-input editor), they fall through to the catch-all no-op below so
+                // typing `<`/`>` does not enter operator-pending mode or consume the next keystroke.
+                '<' | '>' if self.indent_operators_enabled => {
                     self.pending_action = Some(PendingAction::from(c));
                     return None;
                 }
@@ -1516,7 +1531,14 @@ impl VimFSA {
                     return None;
                 }
             }
-            'd' | 'D' | 'y' | 'Y' | 'x' | 'X' | '~' | 'u' | 'U' | '<' | '>' => {
+            'd' | 'D' | 'y' | 'Y' | 'x' | 'X' | '~' | 'u' | 'U' => {
+                let event_type = self.create_visual_operator(c, motion_type);
+                self.mode = VimMode::Normal;
+                event_type
+            }
+            // `<`/`>` (indent/dedent) are code-editor-only visual operators. When disabled they
+            // fall through to the catch-all no-op below, preserving terminal visual-mode behavior.
+            '<' | '>' if self.indent_operators_enabled => {
                 let event_type = self.create_visual_operator(c, motion_type);
                 self.mode = VimMode::Normal;
                 event_type
@@ -1837,6 +1859,13 @@ pub struct VimModel {
 impl VimModel {
     pub fn new() -> Self {
         Self { fsa: VimFSA::new() }
+    }
+
+    /// Enable the code-editor-only `<`/`>` (indent/dedent) operators on this FSA. The terminal
+    /// command-input editor never calls this, so `<`/`>` remain true no-ops there instead of
+    /// entering operator-pending mode and consuming the following keystroke.
+    pub fn enable_indent_operators(&mut self) {
+        self.fsa.indent_operators_enabled = true;
     }
 
     pub fn state(&self) -> VimState<'_> {

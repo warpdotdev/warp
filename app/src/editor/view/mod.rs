@@ -2409,8 +2409,10 @@ impl VimHandler for EditorView {
                 // Commenting is not enabled for the EditorView.
             }
             VimOperator::Indent | VimOperator::Dedent => {
-                // Indent/dedent operators are code-editor-only and are not enabled for the
-                // terminal command-input editor, so this is a deliberate no-op here.
+                // Indent/dedent operators are code-editor-only. The shared VimFSA does not
+                // recognize `<`/`>` as operators for this terminal editor (they are left disabled
+                // on its VimModel), so this arm is never reached in practice; it exists only to
+                // keep the match exhaustive.
             }
         }
     }
@@ -2754,8 +2756,10 @@ impl VimHandler for EditorView {
                 // Commenting is not enabled for the EditorView.
             }
             VimOperator::Indent | VimOperator::Dedent => {
-                // Indent/dedent operators are code-editor-only and are not enabled for the
-                // terminal command-input editor, so this is a deliberate no-op here.
+                // Indent/dedent operators are code-editor-only. The shared VimFSA does not
+                // recognize `<`/`>` as operators for this terminal editor (they are left disabled
+                // on its VimModel), so this arm is never reached in practice; it exists only to
+                // keep the match exhaustive.
             }
         }
     }
