@@ -34,7 +34,6 @@ cfg_aliases.workspace = true
 [features]
 plugin_host = []
 integration_tests = []
-api_key_authentication = []
 
 
 [dev-dependencies]
