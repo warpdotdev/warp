@@ -28,6 +28,28 @@ pub enum KittyAction {
         delete_placements_only: bool,
         deletion_type: DeletionType,
     },
+    AnimationFrame(AnimationFrame),
+    AnimationControl(AnimationControl),
+    FrameComposition(FrameComposition),
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct AnimationFrame {
+    pub image: KittyImage,
+    pub image_id: u32,
+    pub frame_gap_ms: u32,
+    pub frame_index: Option<u32>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct AnimationControl {
+    pub image_id: u32,
+    pub command: u32,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FrameComposition {
+    pub image_id: u32,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -130,8 +152,14 @@ impl TryFrom<KittyMessage> for KittyImage {
             }
         };
 
+        let mut metadata = KittyImageMetadata::from(message.control_data);
+        metadata.frames.push(AnimationFrameData {
+            data: decoded_data.clone(),
+            gap_ms: 0,
+        });
+
         Ok(Self {
-            metadata: KittyImageMetadata::from(message.control_data),
+            metadata,
             data: decoded_data,
         })
     }
@@ -411,9 +439,67 @@ impl TryFrom<KittyMessage> for KittyAction {
                     delete_placements_only: message.control_data.delete_placements_only,
                 })
             }
+            KittyPlacementAction::AnimationFrame => {
+                let mut action = AnimationFrame {
+                    image_id: message
+                        .control_data
+                        .image_id
+                        .unwrap_or(rand::thread_rng().gen()),
+                    frame_gap_ms: if message.control_data.z_index >= 0 {
+                        message.control_data.z_index as u32
+                    } else {
+                        0
+                    },
+                    frame_index: message.control_data.rows,
+                    image: KittyImage::try_from(message)?,
+                };
+
+                if action.image.metadata.pixel_data_format == KittyPixelDataFormat::Png {
+                    action.image = set_kitty_png_size(action.image)?;
+                } else {
+                    action.image = set_kitty_rgb_headers(action.image)?;
+                }
+
+                Ok(KittyAction::AnimationFrame(action))
+            }
+            KittyPlacementAction::AnimationControl => {
+                let id = match message.control_data.image_id {
+                    Some(id) => id,
+                    None => return Err(InvalidControlData::IdMissing.into()),
+                };
+
+                Ok(KittyAction::AnimationControl(AnimationControl {
+                    image_id: id,
+                    command: message.control_data.width,
+                }))
+            }
+            KittyPlacementAction::FrameComposition => {
+                let id = match message.control_data.image_id {
+                    Some(id) => id,
+                    None => return Err(InvalidControlData::IdMissing.into()),
+                };
+
+                Ok(KittyAction::FrameComposition(FrameComposition {
+                    image_id: id,
+                }))
+            }
             KittyPlacementAction::Unknown => Err(InvalidKittyAction::UnsupportedAction.into()),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct AnimationFrameData {
+    pub data: Vec<u8>,
+    pub gap_ms: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnimationState {
+    #[default]
+    Stopped,
+    Playing,
+    Paused,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -421,6 +507,9 @@ pub struct KittyImageMetadata {
     pub pixel_data_format: KittyPixelDataFormat,
     pub transmission_medium: KittyTransmissionMedium,
     pub image_size: Vector2F,
+    pub frames: Vec<AnimationFrameData>,
+    pub current_frame: usize,
+    pub animation_state: AnimationState,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -476,6 +565,7 @@ impl From<KittyControlData> for KittyImageMetadata {
             pixel_data_format: control_data.pixel_data_format,
             image_size: Vector2F::new(control_data.width as f32, control_data.height as f32),
             transmission_medium: control_data.transmission_medium,
+            ..Default::default()
         }
     }
 }
@@ -506,6 +596,9 @@ pub enum KittyPlacementAction {
     DisplayStoredImage,
     QuerySupport,
     Delete,
+    AnimationFrame,
+    AnimationControl,
+    FrameComposition,
     Unknown,
 }
 
@@ -665,6 +758,9 @@ fn parse_kitty_control_data(control_data: &[u8]) -> KittyControlData {
                     b"p" => KittyPlacementAction::DisplayStoredImage,
                     b"q" => KittyPlacementAction::QuerySupport,
                     b"d" => KittyPlacementAction::Delete,
+                    b"f" => KittyPlacementAction::AnimationFrame,
+                    b"a" => KittyPlacementAction::AnimationControl,
+                    b"c" => KittyPlacementAction::FrameComposition,
                     _ => KittyPlacementAction::Unknown,
                 }
             }

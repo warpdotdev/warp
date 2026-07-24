@@ -62,6 +62,7 @@ fn test_kitty_image_metadata() -> KittyImageMetadata {
         pixel_data_format: KittyPixelDataFormat::Rgba32Bit,
         transmission_medium: KittyTransmissionMedium::Direct,
         image_size: Vector2F::new(10.0, 10.0),
+        ..Default::default()
     }
 }
 

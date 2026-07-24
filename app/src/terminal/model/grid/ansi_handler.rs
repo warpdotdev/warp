@@ -42,7 +42,7 @@ use crate::terminal::model::image_map::{ImagePlacementData, ImageType, StoredIma
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::{ITermImage, ITermImageDimensionUnit};
 use crate::terminal::model::kitty::{
-    CursorMovementPolicy, KittyAction, KittyError, KittyResponse, StorageError,
+    CursorMovementPolicy, KittyAction, KittyError, KittyResponse, StorageError, AnimationFrameData, DeletionType,
 };
 use crate::terminal::model::selection::ScrollDelta;
 use crate::terminal::{ClipboardType, SizeInfo};
@@ -105,6 +105,7 @@ pub(super) struct State {
     /// `push` appends the new mode; `pop` truncates and restores
     /// the previous entry as the active mode.
     pub keyboard_mode_stack: BoundedVecDeque<KeyboardModes>,
+    pub(super) animation_cancellations: HashMap<u32, Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl State {
@@ -142,6 +143,7 @@ impl State {
             pane_size: size_info.pane_size_px(),
             keyboard_mode: KeyboardModes::NO_MODE,
             keyboard_mode_stack: BoundedVecDeque::new(super::KEYBOARD_MODE_STACK_MAX_DEPTH),
+            animation_cancellations: HashMap::new(),
         }
     }
 }
@@ -1993,7 +1995,92 @@ impl GridHandler {
                 });
             }
             KittyAction::QuerySupport(_) => {}
-            KittyAction::Delete { .. } => {}
+            KittyAction::Delete {
+                deletion_type,
+                delete_placements_only: _,
+            } => {
+                match deletion_type {
+                    DeletionType::DeleteAll => {
+                        for (_, cancelled) in self.ansi_handler_state.animation_cancellations.drain() {
+                            cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                    DeletionType::DeleteById(delete_by_id) => {
+                        if let Some(cancelled) = self.ansi_handler_state.animation_cancellations.remove(&delete_by_id.image_id) {
+                            cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+            KittyAction::AnimationFrame(action) => {
+                let metadata = match metadata.get_mut(&action.image_id) {
+                    Some(StoredImageMetadata::Kitty(metadata)) => metadata,
+                    Some(_) | None => {
+                        return Err(StorageError::UnknownId {
+                            id: action.image_id,
+                        }
+                        .into())
+                    }
+                };
+
+                metadata.frames.push(AnimationFrameData {
+                    data: action.image.data,
+                    gap_ms: action.frame_gap_ms,
+                });
+            }
+            KittyAction::AnimationControl(action) => {
+                if action.command == 1 {
+                    if let Some(cancelled) = self.ansi_handler_state.animation_cancellations.remove(&action.image_id) {
+                        cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                } else if action.command == 2 || action.command == 3 {
+                    if let Some(cancelled) = self.ansi_handler_state.animation_cancellations.insert(
+                        action.image_id,
+                        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    ) {
+                        cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+
+                    if let Some(StoredImageMetadata::Kitty(metadata)) = metadata.get(&action.image_id) {
+                        let frames = metadata.frames.clone();
+                        if !frames.is_empty() {
+                            let cancelled = self.ansi_handler_state.animation_cancellations.get(&action.image_id).cloned().unwrap();
+                            let event_proxy = self.ansi_handler_state.event_proxy.clone();
+                            let image_id = action.image_id;
+                            let loop_animation = action.command == 3;
+
+                            tokio::spawn(async move {
+                                let mut frame_index = 0;
+                                loop {
+                                    if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+                                        break;
+                                    }
+
+                                    let frame = &frames[frame_index];
+                                    event_proxy.send_terminal_event(Event::ImageReceived {
+                                        image_id,
+                                        image_data: frame.data.clone(),
+                                        image_protocol: ImageProtocol::Kitty,
+                                    });
+
+                                    let gap_ms = if frame.gap_ms > 0 { frame.gap_ms } else { 100 };
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(gap_ms as u64)).await;
+
+                                    frame_index += 1;
+                                    if frame_index >= frames.len() {
+                                        if loop_animation {
+                                            frame_index = 0;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            KittyAction::FrameComposition(_) => {}
         }
 
         Ok(())
