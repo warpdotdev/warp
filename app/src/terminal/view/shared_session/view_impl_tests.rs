@@ -28,6 +28,7 @@ use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::context_chips::prompt_type::PromptType;
 use crate::editor::InteractionState;
+use crate::pane_group::BackingView;
 use crate::server::ids::ServerId;
 use crate::terminal::TerminalView;
 use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
@@ -40,6 +41,87 @@ use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_rou
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::{FeatureFlag, assert_lines_approx_eq};
+
+fn assert_copy_link_menu_visibility(
+    terminal: &ViewHandle<TerminalView>,
+    app: &App,
+    is_visible: bool,
+) {
+    terminal.read(app, |view, ctx| {
+        let model = view.model.lock();
+        assert_eq!(
+            view.copyable_shared_session_id(model.shared_session_status(), ctx)
+                .is_some(),
+            is_visible,
+            "unexpected copyable shared-session ID availability"
+        );
+        let items = view.session_sharing_context_menu_items(&model, false, ctx);
+        assert_eq!(
+            items.iter().any(|item| {
+                item.fields()
+                    .is_some_and(|fields| fields.label() == "Copy session sharing link")
+            }),
+            is_visible,
+            "unexpected right-click copy-link visibility"
+        );
+    });
+
+    terminal.read(app, |view, ctx| {
+        let items = view.pane_header_overflow_menu_items(ctx);
+        assert_eq!(
+            items.iter().any(|item| {
+                item.fields()
+                    .is_some_and(|fields| fields.label() == "Copy link")
+            }),
+            is_visible,
+            "unexpected pane-header copy-link visibility"
+        );
+    });
+}
+
+#[test]
+fn test_copy_link_menus_require_active_or_ended_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, _ctx| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::SharePending);
+        });
+        assert_copy_link_menu_visibility(&terminal, &app, false);
+
+        terminal.update(&mut app, |view, ctx| {
+            let window_id = ctx.window_id();
+            Manager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.started_share(terminal.downgrade(), SessionId::new(), window_id, ctx);
+            });
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ActiveSharer);
+        });
+        assert_copy_link_menu_visibility(&terminal, &app, true);
+
+        Manager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.stopped_share(terminal.id(), ctx);
+        });
+        terminal.update(&mut app, |view, _ctx| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::FinishedViewer);
+        });
+        assert_copy_link_menu_visibility(&terminal, &app, true);
+
+        terminal.update(&mut app, |view, _ctx| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::SharePending);
+        });
+        assert_copy_link_menu_visibility(&terminal, &app, false);
+    })
+}
 
 #[test]
 fn test_prompt_context_menu_items_shared_session_viewer_no_edit_prompt() {

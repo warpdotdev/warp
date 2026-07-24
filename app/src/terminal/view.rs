@@ -16699,9 +16699,11 @@ impl TerminalView {
                             .block_at(tail_block_index)
                             .is_none_or(|b| b.is_restored());
 
-                    items.extend(
-                        self.session_sharing_context_menu_items(&model, is_share_session_disabled),
-                    );
+                    items.extend(self.session_sharing_context_menu_items(
+                        &model,
+                        is_share_session_disabled,
+                        ctx,
+                    ));
                 }
 
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
@@ -16909,7 +16911,7 @@ impl TerminalView {
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
                 {
-                    items.extend(self.session_sharing_context_menu_items(&model, false));
+                    items.extend(self.session_sharing_context_menu_items(&model, false, ctx));
                 }
 
                 items
@@ -17380,7 +17382,7 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            items.extend(self.session_sharing_context_menu_items(&model, false));
+            items.extend(self.session_sharing_context_menu_items(&model, false, ctx));
         }
 
         // Section 2: AI Command Search, Ask Warp AI
@@ -17618,7 +17620,7 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            menu_items.extend(self.session_sharing_context_menu_items(&model, false));
+            menu_items.extend(self.session_sharing_context_menu_items(&model, false, ctx));
         }
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
