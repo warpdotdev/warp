@@ -603,8 +603,8 @@ impl Pty {
             .context("error preparing signal handling")?;
 
         let (PtySpawnResult { pid, leader_fd }, pty_handle) = PtySpawner::handle(ctx)
-            .update(ctx, |pty_spawner, ctx| {
-                pty_spawner.spawn_pty(options, is_crash_reporting_enabled, ctx)
+            .update(ctx, |pty_spawner, _| {
+                pty_spawner.spawn_pty(options, is_crash_reporting_enabled)
             })?;
 
         log::info!(
