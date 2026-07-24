@@ -1609,7 +1609,6 @@ fn completed_conversation_summary_renders_collapsed_in_message_order() {
                     rich_text("before"),
                     TuiAIBlockSection::Summarization {
                         message_id: MessageId::new("summary-1".to_owned()),
-                        finished: true,
                         body: rich_body("condensed context"),
                     },
                     rich_text("after"),
@@ -1651,6 +1650,43 @@ fn expanded_conversation_summary_shows_its_body() {
                 .expect("conversation summary header rendered");
             assert_eq!(rendered[header + 1], "");
             assert_eq!(rendered[header + 2], "condensed context");
+        });
+    });
+}
+
+#[test]
+fn streaming_conversation_summary_renders_collapsed_by_default() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                // `finished_duration: None` models a summary that is still
+                // streaming. This previously auto-expanded (its collapse
+                // default was derived from "not finished"), jittering the
+                // transcript as it later flipped to collapsed on completion.
+                // It now stays collapsed by default until the user expands it.
+                status: complete_output_messages(vec![summarization_message(
+                    "summary-1",
+                    None,
+                    SummarizationType::ConversationSummary,
+                    "condensed context",
+                )]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["Conversation summarized ▸"]
+            );
+            // The body stays hidden until the user manually expands the section.
+            assert!(
+                !render_block_lines_including_blank(block, 40, app_ctx)
+                    .iter()
+                    .any(|line| line.contains("condensed context"))
+            );
         });
     });
 }
