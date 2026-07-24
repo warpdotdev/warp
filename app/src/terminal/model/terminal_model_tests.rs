@@ -2137,6 +2137,53 @@ fn sharer_rejects_dcs_hook_with_unregistered_session_id() {
         None
     );
 }
+#[test]
+fn out_of_order_precmd_pty_hook_cannot_restore_cursor_outside_finished_header_grid() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.start_command_execution();
+    let active_block_id = terminal.active_block_id().clone();
+
+    // Move to the second row, save the cursor, then move back to the first row.
+    terminal.process_bytes(&b"\x1b[2;1H\x1b7\x1b[1;1H"[..]);
+    let preexec = hex_encoded_json_dcs(
+        r#"{
+                "hook": "Preexec",
+                "value": {
+                    "command": "exit",
+                    "session_id": 123
+                }
+            }"#,
+    );
+    terminal.process_bytes(preexec.as_slice());
+    assert!(terminal.block_list().active_block().is_command_finished());
+
+    // A registered, out-of-order precmd hook is accepted for the same active block and parses its
+    // PS1 into the already-finished header grid.
+    let precmd = hex_encoded_json_dcs(
+        r#"{
+                "hook": "Precmd",
+                "value": {
+                    "ps1": "\u001b8",
+                    "ps1_is_encoded": false,
+                    "honor_ps1": true,
+                    "session_id": 123
+                }
+            }"#,
+    );
+    terminal.process_bytes(precmd.as_slice());
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert!(terminal.block_list().active_block().is_command_finished());
+
+    terminal.exit(ExitReason::ShellProcessExited);
+
+    let grid = terminal
+        .block_list()
+        .active_block()
+        .prompt_and_command_grid()
+        .grid_handler();
+    assert!(grid.grid_storage().cursor().point.row.0 < grid.visible_rows());
+    assert!(grid.grid_storage().saved_cursor.point.row.0 < grid.visible_rows());
+}
 
 #[test]
 fn test_synchronized_output_sharing_session() {

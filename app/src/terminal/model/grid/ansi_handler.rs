@@ -738,6 +738,8 @@ impl ansi::Handler for GridHandler {
     fn restore_cursor_position(&mut self) {
         log::trace!("Restoring cursor position");
 
+        // A saved cursor can outlive a geometry change, so validate it before restoring.
+        self.grid.clamp_cursors_to_visible_region();
         let saved_cursor = self.grid.saved_cursor.clone();
         self.update_cursor(|cursor| {
             *cursor = saved_cursor;
