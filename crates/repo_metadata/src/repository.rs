@@ -287,16 +287,16 @@ impl Repository {
     fn enqueue_remote_ref_update(&mut self, ctx: &mut ModelContext<Self>) {
         let repository_handle = ctx.handle();
         let subscriber_ids = self.get_subscriber_ids();
-        let update = RepositoryUpdate {
+        let update = Arc::new(RepositoryUpdate {
             remote_ref_updated: true,
             ..Default::default()
-        };
+        });
         self.task_queue.update(ctx, |queue, ctx| {
             for subscriber_id in subscriber_ids {
                 queue.enqueue_incremental_update(
                     repository_handle.clone(),
                     subscriber_id,
-                    update.clone(),
+                    Arc::clone(&update),
                     ctx,
                 );
             }
