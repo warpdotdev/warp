@@ -403,9 +403,6 @@ pub enum FeatureFlag {
     /// Enables the ability to undo closed panes.
     UndoClosedPanes,
 
-    /// Enables revert button for diff hunks in the gutter.
-    RevertDiffHunk,
-
     /// Enables saving code review pane changes
     CodeReviewSaveChanges,
 
