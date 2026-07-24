@@ -651,6 +651,7 @@ default = [
     "inline_repo_menu",
     "kitty_keyboard_protocol",
     "inline_menu_headers",
+    "restore_prompt_on_inline_model_selector_search",
     "github_pr_prompt_chip",
     "conversations_as_context",
     "markdown_tables",
