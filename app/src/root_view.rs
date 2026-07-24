@@ -699,6 +699,63 @@ pub fn create_transferred_window(
     new_window_id
 }
 
+/// Creates a new window with every tab in a transferred tab group.
+pub fn create_transferred_group_window(
+    mut transferred_group: crate::workspace::view::TransferredTabGroup,
+    source_window_id: WindowId,
+    window_size: Vector2F,
+    window_position: Vector2F,
+    is_tab_drag_preview: bool,
+    ctx: &mut AppContext,
+) -> Option<WindowId> {
+    if transferred_group.tabs.is_empty() {
+        return None;
+    }
+
+    let first_tab = transferred_group.tabs.remove(0);
+    let new_window_id = create_transferred_window(
+        first_tab,
+        source_window_id,
+        window_size,
+        window_position,
+        is_tab_drag_preview,
+        ctx,
+    );
+
+    match WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx) {
+        Some(new_workspace) => {
+            for transferred_tab in &transferred_group.tabs {
+                let pane_group_id = transferred_tab.pane_group.id();
+                ctx.transfer_view_tree_to_window(pane_group_id, source_window_id, new_window_id);
+            }
+            new_workspace.update(ctx, move |workspace, ctx| {
+                let group_id = transferred_group.group.id;
+                workspace
+                    .tab_groups
+                    .insert(group_id, transferred_group.group);
+                if let Some(tab) = workspace.tabs.first_mut() {
+                    tab.group_id = Some(group_id);
+                }
+                for transferred_tab in transferred_group.tabs {
+                    workspace.insert_transferred_tab_at_index_internal(
+                        transferred_tab,
+                        workspace.tabs.len(),
+                        Some(group_id),
+                        false,
+                        false,
+                        ctx,
+                    );
+                }
+            });
+            Some(new_window_id)
+        }
+        None => {
+            log::warn!("Failed to find workspace in newly created group window {new_window_id:?}");
+            Some(new_window_id)
+        }
+    }
+}
+
 #[cfg(feature = "crash_reporting")]
 fn on_gpu_driver_selected_callback() -> Option<Box<OnGPUDeviceSelected>> {
     Some(Box::new(|gpu_device_info| {

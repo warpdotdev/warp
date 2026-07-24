@@ -490,7 +490,7 @@ use crate::workspace::bonus_grant_notification_model::BonusGrantNotificationEven
 #[cfg(target_os = "macos")]
 use crate::workspace::cli_install;
 use crate::workspace::cross_window_tab_drag::{
-    AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
+    AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState, HandoffPayload,
 };
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
@@ -983,6 +983,13 @@ pub struct TransferredTab {
     pub right_panel_open: bool,
     pub is_right_panel_maximized: bool,
     pub draggable_state: DraggableState,
+}
+
+/// Snapshot of a contiguous tab group used to move the group between
+/// workspaces/windows while preserving group metadata and member tab state.
+pub struct TransferredTabGroup {
+    pub group: TabGroup,
+    pub tabs: Vec<TransferredTab>,
 }
 #[cfg(not(target_family = "wasm"))]
 struct ThirdPartyLocalContinuationLaunch {
@@ -19980,11 +19987,15 @@ impl Workspace {
             .on_drop(move |ctx, _, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
             })
-            .with_drag_axis(DragAxis::HorizontalOnly)
             // Yield to a nested per-tab `Draggable` when it claims the mouse-down
             // so dragging a member tab fires `DragTab`, not group drag.
-            .with_defer_to_handled_child_mouse_down()
-            .finish();
+            .with_defer_to_handled_child_mouse_down();
+        let positioned_container = if FeatureFlag::DragTabsToWindows.is_enabled() {
+            positioned_container
+        } else {
+            positioned_container.with_drag_axis(DragAxis::HorizontalOnly)
+        }
+        .finish();
 
         let positioned_container =
             SavePosition::new(positioned_container, &htab_group_position_id(group_id)).finish();
@@ -20307,6 +20318,20 @@ impl Workspace {
             .build()
             .finish()
         }
+    }
+
+    pub(crate) fn render_transfer_payload_for_drag_ghost(
+        &self,
+        source_group_id: Option<TabGroupId>,
+        was_vertical: bool,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_index = source_group_id
+            .and_then(|group_id| {
+                group_member_index_range(&self.tabs, group_id).map(|(first, _)| first)
+            })
+            .unwrap_or(0);
+        self.render_tab_for_drag_ghost(tab_index, was_vertical, ctx)
     }
 
     fn render_agent_management_view_button(
@@ -24530,6 +24555,11 @@ impl TypedActionView for Workspace {
             }
             DropGroup => {
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTabGroup, ctx);
+                if CrossWindowTabDrag::as_ref(ctx).is_active() {
+                    let drop_result =
+                        CrossWindowTabDrag::handle(ctx).update(ctx, |drag, ctx| drag.on_drop(ctx));
+                    self.handle_drop_result(drop_result, ctx);
+                }
                 ctx.notify();
             }
             OpenWarpDrive => {
@@ -27792,6 +27822,19 @@ impl Workspace {
         self.tab_transfer_info_at_index(index, ctx)
     }
 
+    pub fn get_tab_group_transfer_info_for_attach(
+        &self,
+        group_id: TabGroupId,
+        ctx: &AppContext,
+    ) -> Option<TransferredTabGroup> {
+        let group = self.tab_groups.get(&group_id)?.clone();
+        let (first, last) = group_member_index_range(&self.tabs, group_id)?;
+        let tabs = (first..=last)
+            .map(|index| self.tab_transfer_info_at_index(index, ctx))
+            .collect::<Option<Vec<_>>>()?;
+        Some(TransferredTabGroup { group, tabs })
+    }
+
     /// Prepares this workspace for having a pane group transferred out by
     /// suppressing pane-detach on close and unsubscribing from the view.
     /// The suppress flag is **not** auto-restored; callers that keep the
@@ -27804,6 +27847,17 @@ impl Workspace {
     ) {
         self.set_suppress_detach_panes_on_window_close(true);
         ctx.unsubscribe_to_view(pane_group);
+    }
+
+    pub fn prepare_for_transferred_tab_group_attach(
+        &mut self,
+        transferred_group: &TransferredTabGroup,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.set_suppress_detach_panes_on_window_close(true);
+        for transferred_tab in &transferred_group.tabs {
+            ctx.unsubscribe_to_view(&transferred_tab.pane_group);
+        }
     }
 
     /// Suppresses pane-detach and closes this window with
@@ -27821,6 +27875,25 @@ impl Workspace {
         insertion_index: usize,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.insert_transferred_tab_at_index_internal(
+            transferred_tab,
+            insertion_index,
+            None,
+            false,
+            true,
+            ctx,
+        );
+    }
+
+    pub(crate) fn insert_transferred_tab_at_index_internal(
+        &mut self,
+        transferred_tab: TransferredTab,
+        insertion_index: usize,
+        group_id: Option<TabGroupId>,
+        pinned: bool,
+        clamp_index: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> usize {
         let TransferredTab {
             pane_group,
             color,
@@ -27831,18 +27904,74 @@ impl Workspace {
             me.handle_file_tree_event(pane_group, event, ctx)
         });
 
-        let index = insertion_index.min(self.tabs.len());
-        // Safety net to ensure the tab lands after all pinned items.
-        let index = self.clamp_to_unpinned_region(&self.tabs, index);
-        // Never split a group: a drop that resolves to the middle of a group's
-        // run is pushed past the group's last member instead.
-        let index = self.clamp_past_group(index);
+        let mut index = insertion_index.min(self.tabs.len());
+        if clamp_index {
+            // Safety net to ensure the tab lands after all pinned items.
+            index = self.clamp_to_unpinned_region(&self.tabs, index);
+            // Never split a group: a drop that resolves to the middle of a group's
+            // run is pushed past the group's last member instead.
+            index = self.clamp_past_group(index);
+        }
         let mut tab_data = TabData::new(pane_group);
         tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
         tab_data.draggable_state = draggable_state;
+        tab_data.group_id = group_id;
+        tab_data.pinned = pinned;
         self.tabs.insert(index, tab_data);
         self.activate_tab_internal(index, ctx);
         ctx.notify();
+        index
+    }
+
+    pub(crate) fn insert_transferred_tab_group_at_index(
+        &mut self,
+        mut transferred_group: TransferredTabGroup,
+        insertion_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let group_id = transferred_group.group.id;
+        let group_pinned = transferred_group.group.pinned;
+        transferred_group.group.draggable_state = DraggableState::default();
+        self.tab_groups.insert(group_id, transferred_group.group);
+
+        let mut index = insertion_index.min(self.tabs.len());
+        index = if group_pinned {
+            index.min(self.pinned_boundary_index(&self.tabs))
+        } else {
+            self.clamp_to_unpinned_region(&self.tabs, index)
+        };
+        index = self.clamp_past_group(index);
+
+        let first_inserted = index;
+        for (offset, transferred_tab) in transferred_group.tabs.into_iter().enumerate() {
+            self.insert_transferred_tab_at_index_internal(
+                transferred_tab,
+                first_inserted + offset,
+                Some(group_id),
+                false,
+                false,
+                ctx,
+            );
+        }
+        self.activate_tab_internal(first_inserted, ctx);
+        ctx.notify();
+    }
+
+    pub(crate) fn remove_transferred_source_tabs(
+        &mut self,
+        transferred_tab_index: usize,
+        transferred_tab_count: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let end = transferred_tab_index
+            .saturating_add(transferred_tab_count)
+            .min(self.tabs.len());
+        for index in (transferred_tab_index..end).rev() {
+            if let Some(tab) = self.tabs.get(index) {
+                ctx.unsubscribe_to_view(&tab.pane_group);
+            }
+            self.remove_tab_without_undo(index, ctx);
+        }
     }
 
     /// If an insertion at `index` would land strictly inside a group's
@@ -28199,11 +28328,15 @@ impl Workspace {
                 CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
                     drag.mark_source_placeholder_consumed();
                 });
-                self.insert_transferred_tab_at_index(
-                    info.transferred_tab,
-                    info.insertion_index,
-                    ctx,
-                );
+                match info.payload {
+                    HandoffPayload::Tab(transferred_tab) => {
+                        self.insert_transferred_tab_at_index(
+                            transferred_tab,
+                            info.insertion_index,
+                            ctx,
+                        );
+                    }
+                }
                 self.current_workspace_state.is_tab_being_dragged = true;
                 self.focus_active_tab(ctx);
             }
@@ -28451,12 +28584,15 @@ impl Workspace {
                     drag.begin_multi_tab_drag(
                         source_window_id,
                         current_index,
+                        1,
                         initial_drag_center_offset,
                         window_size,
                         last_known_target_tab_origin_in_window,
                         preview_window_id,
                         was_vertical_layout,
                         source_element_size,
+                        None,
+                        false,
                     );
                 });
             }
@@ -28619,41 +28755,51 @@ impl Workspace {
             }
             DropResult::CloseSourceWindow {
                 transferred_tab_index,
+                transferred_tab_count,
             } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
+                let end = transferred_tab_index
+                    .saturating_add(transferred_tab_count)
+                    .min(self.tabs.len());
+                for index in transferred_tab_index..end {
+                    if let Some(tab) = self.tabs.get(index) {
+                        ctx.unsubscribe_to_view(&tab.pane_group);
+                    }
                 }
                 self.close_window_for_content_transfer(ctx);
             }
             DropResult::RemoveSourceTab {
                 transferred_tab_index,
+                transferred_tab_count,
             } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
-                } else {
+                if transferred_tab_index >= self.tabs.len() {
                     log::warn!(
                         "tab_drag: handle_drop_result RemoveSourceTab stale index={transferred_tab_index} tabs_len={} (skipping remove)",
                         self.tabs.len()
                     );
-                }
-                if transferred_tab_index < self.tabs.len() {
-                    self.remove_tab_without_undo(transferred_tab_index, ctx);
+                } else {
+                    self.remove_transferred_source_tabs(
+                        transferred_tab_index,
+                        transferred_tab_count,
+                        ctx,
+                    );
                 }
             }
             DropResult::RemoveSourceTabAndClosePreview {
                 transferred_tab_index,
+                transferred_tab_count,
                 preview_window_id,
             } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
-                } else {
+                if transferred_tab_index >= self.tabs.len() {
                     log::warn!(
                         "tab_drag: handle_drop_result RemoveSourceTabAndClosePreview stale index={transferred_tab_index} tabs_len={} (skipping remove)",
                         self.tabs.len()
                     );
-                }
-                if transferred_tab_index < self.tabs.len() {
-                    self.remove_tab_without_undo(transferred_tab_index, ctx);
+                } else {
+                    self.remove_transferred_source_tabs(
+                        transferred_tab_index,
+                        transferred_tab_count,
+                        ctx,
+                    );
                 }
                 ctx.windows()
                     .close_window(preview_window_id, TerminationMode::ContentTransferred);
@@ -28999,9 +29145,114 @@ impl Workspace {
         cursor_position: Vector2F,
         ctx: &mut ViewContext<Self>,
     ) {
+        const DETACH_SENSITIVITY: f32 = 10.0;
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
             return;
         };
+        let drag_center = position.center();
+        let rects = tab_bar_rects_for_window(ctx.window_id(), ctx);
+        let is_drag_outside_tab_bar = if rects.is_empty() {
+            let drag_y = position.min_y();
+            !(-DETACH_SENSITIVITY..=TAB_BAR_HEIGHT + DETACH_SENSITIVITY).contains(&drag_y)
+        } else {
+            rects.into_iter().all(|rect| {
+                let is_vertical = rect.height() > rect.width();
+                if is_vertical {
+                    drag_center.x() < rect.min_x() - DETACH_SENSITIVITY
+                        || drag_center.x() > rect.max_x() + DETACH_SENSITIVITY
+                } else {
+                    drag_center.y() < rect.min_y() - DETACH_SENSITIVITY
+                        || drag_center.y() > rect.max_y() + DETACH_SENSITIVITY
+                }
+            })
+        };
+
+        if CrossWindowTabDrag::as_ref(ctx).is_active() {
+            let window_id = ctx.window_id();
+            let drag_result = CrossWindowTabDrag::handle(ctx)
+                .update(ctx, |drag, ctx| drag.on_drag(window_id, position, ctx));
+            if let DragResult::ReorderInSource = drag_result
+                && let Some((new_first, _)) = group_member_index_range(&self.tabs, group_id)
+            {
+                CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                    drag.set_source_placeholder_index(new_first);
+                });
+            }
+            return;
+        }
+
+        if is_drag_outside_tab_bar && FeatureFlag::DragTabsToWindows.is_enabled() {
+            let Some(transferred_group) =
+                self.get_tab_group_transfer_info_for_attach(group_id, ctx)
+            else {
+                return;
+            };
+            let window_bounds = match ctx.window_bounds(&ctx.window_id()) {
+                Some(bounds) => bounds,
+                None => return,
+            };
+            let source_window_origin = window_bounds.origin();
+            let group_origin_in_window = vec2f(position.min_x(), position.min_y());
+            let group_origin_on_screen = source_window_origin + group_origin_in_window;
+            let last_known_target_tab_origin_in_window =
+                group_container_rect(ctx.window_id(), group_id, ctx)
+                    .map(|rect| vec2f(rect.min_x(), rect.min_y()))
+                    .unwrap_or(group_origin_in_window);
+            let window_position = group_origin_on_screen - last_known_target_tab_origin_in_window;
+            let window_size = window_bounds.size();
+            let initial_drag_center_offset = position.center() - group_origin_in_window;
+            let source_window_id = ctx.window_id();
+            let was_vertical_layout = uses_vertical_tabs(ctx);
+            let source_element_size = position.size();
+            let source_tab_count = last - first + 1;
+            let close_source_window = source_tab_count == self.tabs.len();
+
+            for index in first..=last {
+                if let Some(tab) = self.tabs.get_mut(index) {
+                    tab.detached = true;
+                }
+            }
+
+            let Some(preview_window_id) = crate::root_view::create_transferred_group_window(
+                transferred_group,
+                source_window_id,
+                window_size,
+                window_position,
+                true,
+                ctx,
+            ) else {
+                return;
+            };
+            ctx.set_suppress_focus_for_window(Some(preview_window_id));
+
+            CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _ctx| {
+                drag.begin_multi_tab_drag(
+                    source_window_id,
+                    first,
+                    source_tab_count,
+                    initial_drag_center_offset,
+                    window_size,
+                    last_known_target_tab_origin_in_window,
+                    preview_window_id,
+                    was_vertical_layout,
+                    source_element_size,
+                    Some(group_id),
+                    close_source_window,
+                );
+            });
+
+            if !close_source_window && (first..=last).contains(&self.active_tab_index) {
+                let adjacent = if last + 1 < self.tabs.len() {
+                    last + 1
+                } else {
+                    first.saturating_sub(1)
+                };
+                self.set_active_tab_index(adjacent, ctx);
+            }
+
+            ctx.notify();
+            return;
+        }
         // Reorders that would carry the block across the pinned/unpinned
         // boundary are skipped below: a pinned group must stay in the pinned
         // prefix and an unpinned group must stay out of it.
@@ -29333,6 +29584,24 @@ fn group_container_rect(
     app.element_position_by_id_at_last_frame(window_id, position_id)
 }
 
+pub(crate) fn drag_preview_element_rect_for_window(
+    window_id: WindowId,
+    source_group_id: Option<TabGroupId>,
+    was_vertical_layout: bool,
+    app: &AppContext,
+) -> Option<RectF> {
+    if let Some(group_id) = source_group_id {
+        let position_id = if was_vertical_layout {
+            vtab_group_position_id(group_id)
+        } else {
+            htab_group_position_id(group_id)
+        };
+        app.element_position_by_id_at_last_frame(window_id, position_id)
+    } else {
+        app.element_position_by_id_at_last_frame(window_id, tab_position_id(0))
+    }
+}
+
 /// Renders the floating chip shown in the target window during a cross-window
 /// ghost drag. The chip's contents come from the same render code paths used
 /// by the source layout (`TabComponent` for horizontal, `render_tab_group`
@@ -29360,8 +29629,11 @@ fn render_cross_window_ghost_chip(
     let inner = WorkspaceRegistry::as_ref(app)
         .get(ghost.preview_window_id, app)
         .map(|ws| {
-            ws.as_ref(app)
-                .render_tab_for_drag_ghost(0, ghost.was_vertical_layout, app)
+            ws.as_ref(app).render_transfer_payload_for_drag_ghost(
+                ghost.source_group_id,
+                ghost.was_vertical_layout,
+                app,
+            )
         })
         .unwrap_or_else(|| Empty::new().finish());
 
