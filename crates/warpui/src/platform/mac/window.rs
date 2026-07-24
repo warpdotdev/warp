@@ -645,6 +645,9 @@ impl Window {
 
             // SAFETY: these call into the hand-written Objective-C positioning helpers.
             unsafe {
+                if let Some(title) = options.title.as_deref() {
+                    set_window_title(native_window_ref, &NSString::from_str(title));
+                }
                 match options.style {
                     WindowStyle::Normal | WindowStyle::Pin => {
                         match options.bounds {

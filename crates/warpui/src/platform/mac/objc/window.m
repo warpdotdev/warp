@@ -39,6 +39,11 @@ dispatch_once_t fullscreenQueueOnce;
 - (void)enqueueFullscreenTransition;
 @end
 
+static void refresh_windows_menu_item(NSWindow *window) {
+    if (![window isVisible]) return;
+    [NSApp changeWindowsItem:window title:[window title] filename:NO];
+}
+
 @implementation NSWindow (Fullscreen)
 - (void)enqueueFullscreenTransition {
     // If the queue doesn't already exist, allocate it.
@@ -52,6 +57,7 @@ dispatch_once_t fullscreenQueueOnce;
       [fullscreenManager enqueueWindow:self];
     });
 }
+
 @end
 
 @protocol WarpWindowProtocol
@@ -1109,14 +1115,8 @@ void set_window_alpha(WarpWindow<WarpWindowProtocol> *window, double alpha) {
 }
 
 void set_window_title(id window, NSString *title) {
-    if ([window isKindOfClass:[WarpPanel class]] && [window isVisible]) {
-        // For the hotkey window (which is an NSPanel), we need to explicitly
-        // add the panel to the windows list.  `changeWindowsItem` will add the
-        // panel to the list if it isn't already there.
-        [NSApp changeWindowsItem:window title:title filename:NO];
-    }
-
     [window setTitle:title];
+    refresh_windows_menu_item(window);
 }
 
 void set_titlebar_height(id window, CGFloat height) {
@@ -1144,6 +1144,7 @@ void position_and_order_front(WarpWindow<WarpWindowProtocol> *window) {
     }
 
     [window makeKeyAndOrderFront:nil];
+    refresh_windows_menu_item(window);
 }
 
 void position_at_given_location(WarpWindow<WarpWindowProtocol> *window, NSPoint origin) {
@@ -1152,9 +1153,11 @@ void position_at_given_location(WarpWindow<WarpWindowProtocol> *window, NSPoint 
     NSPoint topLeft = NSMakePoint(origin.x, origin.y + [window frame].size.height);
     [window setFrameTopLeftPoint:topLeft];
     [window makeKeyAndOrderFront:nil];
+    refresh_windows_menu_item(window);
 }
 
 void order_front_without_focus(WarpWindow<WarpWindowProtocol> *window, NSPoint origin) {
     [window setFrameOrigin:origin];
     [window orderFront:nil];
+    refresh_windows_menu_item(window);
 }
