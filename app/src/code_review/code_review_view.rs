@@ -2417,6 +2417,9 @@ impl CodeReviewView {
                     self.viewported_list_state.remove(index);
                     let new_states =
                         self.build_view_state_for_file_diffs(std::slice::from_ref(diff), ctx);
+                    for _ in &new_states {
+                        self.viewported_list_state.add_item();
+                    }
                     diff_data.file_states.extend(
                         new_states
                             .into_iter()
@@ -2443,6 +2446,9 @@ impl CodeReviewView {
             (None, Some(diff)) => {
                 let new_states =
                     self.build_view_state_for_file_diffs(std::slice::from_ref(diff.as_ref()), ctx);
+                for _ in &new_states {
+                    self.viewported_list_state.add_item();
+                }
                 diff_data.file_states.extend(
                     new_states
                         .into_iter()
@@ -2525,18 +2531,51 @@ impl CodeReviewView {
             return;
         };
 
-        // Deallocate global buffers that are going to be invalidated.
-        if let Some(repo) = self.active_repo.as_mut() {
-            repo.state = CodeReviewViewState::None;
-            GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
-                model.remove_deallocated_buffers(ctx);
-            });
-        }
+        // Reuse existing editors instead of tearing the whole view down.
+        // Rebuilding every editor resets each one to its "not yet loaded" state,
+        // which makes `render` fall back to the loading skeleton until every
+        // editor reloads (see `all_editors_loaded`). An already-rendered diff
+        // would then flash skeleton → content on every refresh — e.g. the
+        // metadata-triggered reload that fires right after the panel opens emits
+        // a second, identical `NewDiffsComputed`. Preserving editors keeps their
+        // loaded state so unchanged files stay on screen; only genuinely new
+        // files start unloaded.
+        let mut reusable_states = self
+            .active_repo
+            .as_mut()
+            .and_then(|repo| repo.pop_loaded_state())
+            .map(|loaded| loaded.file_states)
+            .unwrap_or_default();
 
         // Create a new list state for this update
         self.viewported_list_state = Self::create_list_state(ctx);
 
-        let file_states_vec = self.build_view_state_for_file_diffs(&diff_data.files, ctx);
+        let mut file_states_vec = Vec::with_capacity(diff_data.files.len());
+        for file in &diff_data.files {
+            let reused = reusable_states
+                .swap_remove(&file.file_diff.file_path)
+                .and_then(|prev| self.reuse_file_state_if_compatible(prev, file, ctx));
+            match reused {
+                Some(state) => file_states_vec.push(state),
+                None => file_states_vec
+                    .extend(self.build_view_state_for_file_diffs(std::slice::from_ref(file), ctx)),
+            }
+        }
+
+        // Populate the viewported list with one item per file diff. Both the
+        // reuse and rebuild paths feed `file_states_vec`, so list-item accounting
+        // lives here in a single place.
+        for _ in &file_states_vec {
+            self.viewported_list_state.add_item();
+        }
+
+        // Any states left behind are for files no longer present in the diff;
+        // dropping them releases their editors so the now-unused global buffers
+        // can be deallocated.
+        drop(reusable_states);
+        GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_deallocated_buffers(ctx);
+        });
         let is_local = self.repo_is_local();
         let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
 
@@ -2579,7 +2618,10 @@ impl CodeReviewView {
         ctx.notify();
     }
 
-    /// Builds view state for the given file diffs, returning the list of newly created file states.
+    /// Builds view state for the given file diffs, returning the list of newly
+    /// created file states. Does not touch the viewported list; the caller owns
+    /// list-item accounting and must add one item per returned state (see
+    /// `invalidate_all` and `update_from_single_file_diff_result`).
     fn build_view_state_for_file_diffs(
         &self,
         files: &[FileDiffAndContent],
@@ -2589,11 +2631,6 @@ impl CodeReviewView {
             .diff_state_model
             .as_ref(ctx)
             .is_git_operation_blocked(ctx);
-        let discard_tooltip_text = if git_operation_blocked {
-            get_discard_button_disabled_tooltip(git_operation_blocked)
-        } else {
-            "Discard changes".to_string()
-        };
 
         let mut file_states = vec![];
         for file in files {
@@ -2619,7 +2656,6 @@ impl CodeReviewView {
             let is_expanded = self.should_auto_expand_file(&file.file_diff);
 
             let file_path = file.file_diff.file_path.clone();
-            let file_line = file_line_for_open(&file.file_diff);
 
             let chevron_path = file_path.clone();
             let initial_icon = if is_expanded {
@@ -2638,42 +2674,13 @@ impl CodeReviewView {
                     })
             });
 
-            let open_tab_path = file_path.clone();
-            let open_in_tab_button = ctx.add_typed_action_view(move |_ctx| {
-                ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::LinkExternal)
-                    .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Open file")
-                    .on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CodeReviewAction::OpenInNewTab {
-                            path: open_tab_path.clone(),
-                            line_and_column: file_line.map(|line| LineAndColumnArg {
-                                line_num: line,
-                                column_num: None,
-                            }),
-                        })
-                    })
-            });
+            let open_in_tab_button = self.build_open_in_tab_button(&file.file_diff, ctx);
 
-            let discard_path = file.file_diff.file_path.clone();
-            let discard_tooltip = discard_tooltip_text.clone();
-            let discard_button = ctx.add_typed_action_view(move |ctx| {
-                let mut button = ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::ReverseLeft)
-                    .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip(discard_tooltip);
-
-                if git_operation_blocked {
-                    button.set_disabled(true, ctx);
-                } else {
-                    button = button.on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CodeReviewAction::ShowDiscardConfirmDialog(Some(
-                            discard_path.clone(),
-                        )))
-                    });
-                }
-                button
-            });
+            let discard_button = self.build_discard_button(
+                file.file_diff.file_path.clone(),
+                git_operation_blocked,
+                ctx,
+            );
 
             let context_path = file.file_diff.file_path.clone();
             let add_context_button = ctx.add_typed_action_view(move |_ctx| {
@@ -2713,11 +2720,162 @@ impl CodeReviewView {
             })
         }
 
-        // Populate the viewported list with file diffs
-        for _ in file_states.iter() {
-            self.viewported_list_state.add_item();
-        }
         file_states
+    }
+
+    /// Builds the per-file Discard action button, capturing the current
+    /// `git_operation_blocked` state: disabled with no click handler while a
+    /// git operation is in progress, a live discard dispatch otherwise.
+    ///
+    /// This is rebuilt on every reload — including the editor-reuse path in
+    /// [`Self::reuse_file_state_if_compatible`] — so the button can never go
+    /// stale. The disabled flag and the presence of the click handler are bound
+    /// together at construction (a button built while blocked stores no
+    /// handler), so refreshing in place via `set_disabled` would only be correct
+    /// in one direction; rebuilding re-derives both and is correct whether a
+    /// merge/rebase just started or just finished.
+    fn build_discard_button(
+        &self,
+        file_path: String,
+        git_operation_blocked: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<ActionButton> {
+        let discard_tooltip = if git_operation_blocked {
+            get_discard_button_disabled_tooltip(git_operation_blocked)
+        } else {
+            "Discard changes".to_string()
+        };
+        ctx.add_typed_action_view(move |ctx| {
+            let mut button = ActionButton::new("", NakedTheme)
+                .with_icon(Icon::ReverseLeft)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_tooltip(discard_tooltip);
+
+            if git_operation_blocked {
+                button.set_disabled(true, ctx);
+            } else {
+                button = button.on_click(move |ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::ShowDiscardConfirmDialog(Some(
+                        file_path.clone(),
+                    )))
+                });
+            }
+            button
+        })
+    }
+
+    /// Builds the per-file "Open file" action button, capturing the diff's first
+    /// changed line ([`file_line_for_open`]) so the button opens the file at the
+    /// relevant location.
+    ///
+    /// Like [`Self::build_discard_button`], this is rebuilt on every reuse: the
+    /// captured line is derived from the file's diff, so a reload that changes
+    /// the diff for a same-path file must refresh it or the button would
+    /// navigate to a stale location.
+    fn build_open_in_tab_button(
+        &self,
+        file_diff: &FileDiff,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<ActionButton> {
+        let path = file_diff.file_path.clone();
+        let file_line = file_line_for_open(file_diff);
+        ctx.add_typed_action_view(move |_ctx| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(Icon::LinkExternal)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_tooltip("Open file")
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::OpenInNewTab {
+                        path: path.clone(),
+                        line_and_column: file_line.map(|line| LineAndColumnArg {
+                            line_num: line,
+                            column_num: None,
+                        }),
+                    })
+                })
+        })
+    }
+
+    /// Attempts to reuse an existing file's editor for the incoming diff during a
+    /// full reload, refreshing it in place rather than rebuilding it.
+    ///
+    /// Rebuilding an editor resets its loaded state, which forces the whole view
+    /// back to the loading skeleton until every editor reloads (see
+    /// `all_editors_loaded`) — the source of the diff "flashing" on refresh.
+    /// Returns `Some(state)` when the editor was reused, or `None` when the file
+    /// is incompatible (no editor, deleted-state toggled, now binary, or has no
+    /// content) and a fresh editor must be built by the caller.
+    fn reuse_file_state_if_compatible(
+        &self,
+        mut prev: FileState,
+        file: &FileDiffAndContent,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<FileState> {
+        let can_reuse = prev.editor_state.is_some()
+            && !file_status_changed_deleted_state(&prev.file_diff.status, &file.file_diff.status)
+            && !file.file_diff.is_binary
+            && file.content_at_head.is_some();
+        if !can_reuse {
+            return None;
+        }
+
+        // An identical diff (e.g. a redundant reload) needs nothing re-applied —
+        // keep the editor exactly as-is.
+        if prev.file_diff != file.file_diff {
+            // Don't clobber edits the user hasn't saved; leave the editor and its
+            // (now stale) `file_diff` untouched, mirroring the single-file path.
+            let has_unsaved_changes = prev
+                .editor_state
+                .as_ref()
+                .is_some_and(|editor_state| editor_state.has_unsaved_changes(ctx));
+            if !has_unsaved_changes {
+                let applied = if let (Some(editor_state), Some(repo_path)) =
+                    (prev.editor_state.as_ref(), self.repo_path())
+                {
+                    let full_file_location = repo_path.join(&file.file_diff.file_path);
+                    let comment_line_numbers =
+                        self.comment_line_numbers_for_file(&full_file_location, ctx);
+                    Self::apply_diff_to_code_editor(
+                        editor_state.editor(),
+                        file,
+                        false,
+                        &comment_line_numbers,
+                        ctx,
+                    );
+                    true
+                } else {
+                    false
+                };
+                // Only adopt the new diff once it has actually been applied to the
+                // editor, so `file_diff` never gets ahead of the editor's contents.
+                if applied {
+                    prev.file_diff = file.file_diff.clone();
+                }
+            }
+        }
+
+        // The per-file action buttons capture diff-derived or ambient state at
+        // build time, so a reused file state must refresh them or they go stale:
+        //   - Discard captures `git_operation_blocked`: a reload landing after a
+        //     merge/rebase starts (or finishes) would otherwise keep a button
+        //     that can dispatch a discard while git operations are blocked, or
+        //     one left permanently inert once they unblock.
+        //   - Open file captures the diff's first changed line, which moves when
+        //     the diff changes, so the stale button would navigate to the old
+        //     location.
+        // Both are tiny views with no loaded state, so rebuilding them doesn't
+        // touch `all_editors_loaded` and never reintroduces the skeleton flash.
+        // (The other buttons capture only the file's own path, which is the
+        // reuse key and therefore unchanged.)
+        let git_operation_blocked = self
+            .diff_state_model
+            .as_ref(ctx)
+            .is_git_operation_blocked(ctx);
+        prev.discard_button =
+            self.build_discard_button(file.file_diff.file_path.clone(), git_operation_blocked, ctx);
+        prev.open_in_tab_button = self.build_open_in_tab_button(&file.file_diff, ctx);
+
+        Some(prev)
     }
 
     fn render_diff_at_index(
