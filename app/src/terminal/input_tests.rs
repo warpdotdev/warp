@@ -8367,6 +8367,43 @@ fn test_should_show_completions_in_ai_input() {
     // Space at the end invalidates triggering completions.
     assert!(!should_show_completions_in_ai_input("../foo "));
 }
+#[test]
+fn test_should_show_completions_while_typing_for_shell_paths_without_global_setting() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        InputSettings::handle(&app).update(&mut app, |input_settings, ctx| {
+            let _ = input_settings
+                .completions_open_while_typing
+                .set_value(false, ctx);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.ai_input_model().update(ctx, |ai_input, ctx| {
+                ai_input.set_input_config(
+                    InputConfig {
+                        input_type: InputType::Shell,
+                        is_locked: true,
+                    },
+                    true, /* is_input_buffer_empty */
+                    None,
+                    ctx,
+                );
+            });
+
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("cd ./fo", ctx);
+            assert!(input.should_show_completions_while_typing(ctx));
+
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git st", ctx);
+            assert!(!input.should_show_completions_while_typing(ctx));
+        });
+    });
+}
 
 #[test]
 fn test_remove_ignored_suggestion_on_command_execution() {

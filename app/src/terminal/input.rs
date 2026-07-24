@@ -1503,10 +1503,10 @@ lazy_static! {
     ).expect("Expect regex to be valid");
 }
 
-/// Returns boolean indicating whether completions-as-you-type should pop up, while in AI input.
+/// Returns boolean indicating whether completions-as-you-type should pop up for a path-like token.
 /// This is primarily based on the last word in the buffer text, and whether it makes sense to show
 /// filepath completions.
-fn should_show_completions_in_ai_input(buffer_text: &str) -> bool {
+fn should_show_path_completions_while_typing(buffer_text: &str) -> bool {
     if buffer_text.ends_with(char::is_whitespace) {
         return false;
     }
@@ -1518,6 +1518,11 @@ fn should_show_completions_in_ai_input(buffer_text: &str) -> bool {
     } else {
         false
     }
+}
+
+/// Returns boolean indicating whether completions-as-you-type should pop up, while in AI input.
+fn should_show_completions_in_ai_input(buffer_text: &str) -> bool {
+    should_show_path_completions_while_typing(buffer_text)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11933,10 +11938,16 @@ impl Input {
     fn should_show_completions_while_typing(&self, ctx: &mut ViewContext<Self>) -> bool {
         let editor = self.editor.as_ref(ctx);
         let buffer_text = editor.buffer_text(ctx);
+        let is_ai_input_enabled = self.ai_input_model.as_ref(ctx).is_ai_input_enabled();
+        let is_completions_while_typing_turned_on = self.is_completions_while_typing_turned_on(ctx);
+        let should_show_path_completions = should_show_path_completions_while_typing(&buffer_text);
+        let should_show_for_input_type = if is_ai_input_enabled {
+            is_completions_while_typing_turned_on && should_show_path_completions
+        } else {
+            is_completions_while_typing_turned_on || should_show_path_completions
+        };
 
-        self.is_completions_while_typing_turned_on(ctx)
-            && (!self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
-                || should_show_completions_in_ai_input(&buffer_text))
+        should_show_for_input_type
             && buffer_text.len() >= MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING
             && self.is_cursor_in_valid_position_for_completions_while_typing(ctx)
     }
@@ -12106,10 +12117,19 @@ impl Input {
             // For now, don't use native shell completions for multi-line commands.
             && !buffer_text.contains('\n');
 
+        let input_type = self.ai_input_model.as_ref(ctx).input_type();
+        let should_fallback_to_path_completions = completions_trigger
+            == CompletionsTrigger::AsYouType
+            && !input_type.is_ai()
+            && should_show_path_completions_while_typing(&before_cursor_text);
+
         let fallback_strategy = match completions_trigger {
             CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen
                 if !use_native_shell_completions =>
             {
+                CompletionsFallbackStrategy::FilePaths
+            }
+            CompletionsTrigger::AsYouType if should_fallback_to_path_completions => {
                 CompletionsFallbackStrategy::FilePaths
             }
             _ => CompletionsFallbackStrategy::None,
@@ -12120,8 +12140,6 @@ impl Input {
         {
             last_abort_handle.abort();
         }
-
-        let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
         // Don't trigger completions if the last character typed is whitespace, in AI input mode.
         // The user is likely typing in a natural language word at this point, not a filepath.
