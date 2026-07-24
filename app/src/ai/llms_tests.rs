@@ -284,6 +284,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
     };
     let preferences = LLMPreferences {
         models_by_feature: ModelsByFeature::default(),
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
@@ -426,6 +427,7 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
     };
     let preferences = LLMPreferences {
         models_by_feature: ModelsByFeature::default(),
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
@@ -609,6 +611,7 @@ fn with_model_picker_query_test_context(f: impl FnOnce(&LLMPreferences, &AppCont
                     agent_mode,
                     ..Default::default()
                 },
+                agent_mode_models_unavailable: false,
                 last_update: None,
                 base_llm_for_terminal_view: HashMap::new(),
                 custom_llms: Vec::new(),
@@ -869,6 +872,7 @@ fn preferences_for_profile_model_tests() -> LLMPreferences {
             agent_mode,
             ..Default::default()
         },
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: Vec::new(),
