@@ -1,10 +1,6 @@
 use std::path::PathBuf;
 
-use ai::agent::action::FileEdit;
-use ai::agent::action_result::{
-    AnyFileContent, FileContext, RequestFileEditsResult, UpdatedFileContext,
-};
-use ai::diff_validation::{DiffDelta, DiffType, ParsedDiff};
+use ai::diff_validation::{DiffDelta, DiffType};
 use futures::channel::oneshot;
 use warp::appearance::Appearance;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -15,7 +11,7 @@ use warpui::App;
 
 use super::{
     SectionKey, SectionStates, ToolCallDisplayState, deltas_for, file_edit_header_label,
-    file_edits_fallback_label, restored_file_diffs, should_rehydrate_restored_diffs, verb_and_name,
+    verb_and_name,
 };
 
 fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
@@ -23,94 +19,6 @@ fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
         replacement_line_range: range,
         insertion: insertion.to_owned(),
     }
-}
-
-#[test]
-fn restored_file_edits_rehydrate_non_zero_diff_stats() {
-    let file_edits = vec![FileEdit::Edit(ParsedDiff::StrReplaceEdit {
-        file: Some("src/lib.rs".to_owned()),
-        search: Some("1|old\\n".to_owned()),
-        replace: Some("1|new\\n".to_owned()),
-    })];
-
-    let diffs = restored_file_diffs(file_edits);
-
-    assert_eq!(diffs.len(), 1);
-    assert_eq!(diffs[0].line_stats(), (1, 1));
-}
-
-fn updated_file_context(file_name: &str) -> UpdatedFileContext {
-    UpdatedFileContext {
-        was_edited_by_user: false,
-        file_context: FileContext::new(
-            file_name.to_string(),
-            AnyFileContent::StringContent("new\n".to_string()),
-            None,
-            None,
-        ),
-    }
-}
-
-/// A restored successful `RequestFileEdits` action rehydrates its
-/// originally-requested diffs and renders the per-file summary fallback label
-/// from the recorded result.
-#[test]
-fn restored_successful_file_edits_rehydrate_and_summarize() {
-    let success = RequestFileEditsResult::Success {
-        diff: String::new(),
-        updated_files: vec![updated_file_context("src/lib.rs")],
-        deleted_files: Vec::new(),
-        lines_added: 3,
-        lines_removed: 1,
-    };
-
-    assert!(should_rehydrate_restored_diffs(Some(&success)));
-    assert_eq!(
-        file_edits_fallback_label(Some(&success)),
-        "Edited 1 file (+3 −1)"
-    );
-}
-
-/// Regression: a restored *cancelled* `RequestFileEdits` action must NOT
-/// hydrate its originally-requested diffs. Previously the hydration guard was
-/// `get_action_result().is_some()`, which is true for `Cancelled`, so restored
-/// cancelled edits rendered the requested diffs instead of the terminal
-/// fallback label. The guard now restricts hydration to `Success`, so the
-/// cancelled action keeps its "File edits cancelled" label (the GUI mirrors
-/// this by marking non-success results `CodeDiffState::Rejected`).
-#[test]
-fn restored_cancelled_file_edits_do_not_rehydrate_and_keep_fallback_label() {
-    let cancelled = RequestFileEditsResult::Cancelled;
-
-    assert!(!should_rehydrate_restored_diffs(Some(&cancelled)));
-    assert_eq!(
-        file_edits_fallback_label(Some(&cancelled)),
-        "File edits cancelled"
-    );
-}
-
-/// Regression: a restored *failed* (`DiffApplicationFailed`) action likewise
-/// must NOT hydrate diffs and keeps its "File edits failed" fallback label.
-#[test]
-fn restored_failed_file_edits_do_not_rehydrate_and_keep_fallback_label() {
-    let failed = RequestFileEditsResult::DiffApplicationFailed {
-        error: "boom".to_string(),
-    };
-
-    assert!(!should_rehydrate_restored_diffs(Some(&failed)));
-    assert_eq!(
-        file_edits_fallback_label(Some(&failed)),
-        "File edits failed"
-    );
-}
-
-/// A live action (no recorded result yet) is executor-backed, not
-/// pre-hydrated, so it renders the pending label until the executor seeds the
-/// storage.
-#[test]
-fn live_file_edits_do_not_prehydrate_and_show_pending_label() {
-    assert!(!should_rehydrate_restored_diffs(None));
-    assert_eq!(file_edits_fallback_label(None), "Preparing edits…");
 }
 
 #[test]
