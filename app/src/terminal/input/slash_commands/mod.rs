@@ -1258,6 +1258,7 @@ impl Input {
             | SlashCommandKind::ViewLogs
             | SlashCommandKind::Voice
             | SlashCommandKind::NaturalLanguageDetection
+            | SlashCommandKind::Theme
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout
             | SlashCommandKind::Version => {

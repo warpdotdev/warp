@@ -71,6 +71,7 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
         (&commands::VERSION, SlashCommandKind::Version),
         (&commands::VIEW_LOGS, SlashCommandKind::ViewLogs),
         (&commands::VOICE, SlashCommandKind::Voice),
+        (&commands::THEME, SlashCommandKind::Theme),
     ] {
         assert_eq!(
             command.kind, expected,

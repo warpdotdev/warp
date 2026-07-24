@@ -99,6 +99,19 @@ pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
     auto_enter_ai_mode: false,
     argument: None,
 };
+pub const THEME: StaticCommand = StaticCommand {
+    name: "/theme",
+    description: "Cycle color theme",
+    kind: SlashCommandKind::Theme,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: Some("<auto|light|dark>"),
+        is_optional: true,
+        should_execute_on_selection: true,
+    }),
+};
 
 pub const EXIT: StaticCommand = StaticCommand {
     name: "/exit",
@@ -864,6 +877,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
         NATURAL_LANGUAGE_DETECTION,
+        THEME,
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,

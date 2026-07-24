@@ -5,7 +5,9 @@ use std::time::Duration;
 use instant::Instant;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
-use warp::settings::{AISettings, TuiUsageDisplayMode, TuiZeroStateObject};
+use warp::settings::{
+    AISettings, TuiTheme, TuiThemeSettings, TuiUsageDisplayMode, TuiZeroStateObject,
+};
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
     AIAgentActionId, AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId,
@@ -43,7 +45,7 @@ use super::{
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
     log_bundle_success_message, raw_prompt_if_not_blank, render_status_footer_row,
-    voice_argument_is_empty, voice_command_argument,
+    theme_from_argument, voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -204,6 +206,57 @@ fn zero_state_reload_failure_renders_as_an_error_footer_hint() {
                     .expect("error text style should have a foreground")
             );
         });
+    });
+}
+
+#[test]
+fn theme_slash_command_accepts_direct_selection_and_rejects_invalid_values() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let light = "light".to_owned();
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, Some(&light), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(super::active_theme(ctx), TuiTheme::Light);
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Light
+            );
+        });
+
+        let auto = "auto".to_owned();
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, Some(&auto), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Auto
+            );
+        });
+
+        let invalid = "sepia".to_owned();
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, Some(&invalid), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Auto
+            );
+        });
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(super::THEME_INVALID_ARGUMENT_HINT.to_owned())
+        );
     });
 }
 
@@ -493,6 +546,84 @@ fn auto_approve_slash_command_toggles_selected_conversation_off_on_off() {
                     AUTO_APPROVE_DISABLED_HINT,
                     crate::transient_hint::TransientHintTone::Success
                 ))
+            );
+        });
+    });
+}
+
+#[test]
+fn theme_argument_selects_or_cycles_supported_modes() {
+    assert_eq!(
+        theme_from_argument(TuiTheme::Auto, None),
+        Some(TuiTheme::Light)
+    );
+    assert_eq!(
+        theme_from_argument(TuiTheme::Light, None),
+        Some(TuiTheme::Dark)
+    );
+    assert_eq!(
+        theme_from_argument(TuiTheme::Dark, None),
+        Some(TuiTheme::Auto)
+    );
+    assert_eq!(
+        theme_from_argument(TuiTheme::Dark, Some(" auto ")),
+        Some(TuiTheme::Auto)
+    );
+    assert_eq!(
+        theme_from_argument(TuiTheme::Auto, Some("LIGHT")),
+        Some(TuiTheme::Light)
+    );
+    assert_eq!(
+        theme_from_argument(TuiTheme::Auto, Some("dark")),
+        Some(TuiTheme::Dark)
+    );
+    assert_eq!(theme_from_argument(TuiTheme::Auto, Some("sepia")), None);
+}
+
+#[test]
+fn theme_slash_command_cycles_and_persists_all_modes() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        app.read(|ctx| {
+            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Auto
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, None, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(super::active_theme(ctx), TuiTheme::Light);
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Light
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, None, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Dark
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, None, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Auto
             );
         });
     });

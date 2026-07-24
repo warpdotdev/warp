@@ -10,7 +10,7 @@ use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
-use warp::settings::AISettings;
+use warp::settings::{AISettings, TuiTheme, TuiThemeSettings};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, ConversationSelectionHandle, ParsedSlashCommandInput,
     SlashCommandDataSource as _, SlashCommandMixer, TuiSlashCommandDataSource,
@@ -27,6 +27,7 @@ use crate::inline_menu::{
     TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
+use crate::terminal_background::active_theme;
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, false, false);
 
@@ -287,6 +288,15 @@ impl TuiSlashCommandModel {
     }
 
     fn state_suffix(&self, title: &str, ctx: &AppContext) -> Option<String> {
+        if title == slash_commands::THEME.name {
+            let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
+            return Some(match selected_theme {
+                TuiTheme::Auto => format!("(currently auto: {})", active_theme(ctx).display_name()),
+                TuiTheme::Light | TuiTheme::Dark => {
+                    format!("(currently {})", selected_theme.display_name())
+                }
+            });
+        }
         let enabled = if title == slash_commands::AUTO_APPROVE.name {
             self.auto_approve_enabled(ctx)
         } else if title == slash_commands::NATURAL_LANGUAGE_DETECTION.name {

@@ -162,6 +162,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     });
     app.add_singleton_model(|_| ai::project_context::model::ProjectContextModel::default());
     app.update(crate::settings::TuiAutoupdateSettings::register);
+    app.update(crate::settings::TuiThemeSettings::register);
     app.update(crate::settings::CodeSettings::register);
     app.update(crate::settings::FontSettings::register);
     app.update(crate::settings::InputSettings::register);
