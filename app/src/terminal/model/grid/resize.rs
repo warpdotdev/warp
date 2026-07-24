@@ -56,8 +56,6 @@ impl GridHandler {
     }
 
     pub(super) fn resize_storage(&mut self, num_rows: usize, num_cols: usize) {
-        use std::cmp::min;
-
         // If this is the alt screen, we can skip reflowing the grid and simply
         // adjust the size of rows. We also do this for CLI agent TUIs so pane
         // resizes don't append old frames into block scrollback before the app
@@ -82,6 +80,114 @@ impl GridHandler {
 
             return;
         }
+
+        // Fast path: when only the row count changes (columns stay the same),
+        // we can adjust the grid directly without the expensive round-trip
+        // through flat_storage. The full round-trip pushes all grid rows into
+        // flat_storage, rebuilds the index for the new column count, then pops
+        // them back — cloning every row's cell data via Rc::unwrap_or_clone.
+        // Skipping this avoids O(visible_rows × columns) clone allocations per
+        // block per resize, which is the dominant source of memory spikes
+        // during window resizing (see Sentry issue 7366781652).
+        if num_cols == self.columns() {
+            self.resize_rows_only(num_rows);
+            return;
+        }
+
+        self.resize_storage_full(num_rows, num_cols);
+    }
+
+    /// Resize when only the number of rows has changed. Since the column
+    /// count is unchanged, no content reflowing is necessary. We transfer
+    /// rows directly between the grid and flat_storage without
+    /// materializing/cloning cell data through the RowIterator.
+    fn resize_rows_only(&mut self, num_rows: usize) {
+        use std::cmp::min;
+
+        let old_rows = self.visible_rows();
+        let num_cols = self.columns();
+
+        // For finished grids, don't let the number of visible rows exceed
+        // the total content available.
+        let target_visible_rows = if self.finished {
+            let total_available = self.flat_storage.total_rows() + self.grid.total_rows();
+            num_rows.min(total_available)
+        } else {
+            num_rows
+        };
+
+        if target_visible_rows > old_rows {
+            // Growing: pull rows from flat_storage (scrollback) into the
+            // grid, or add blank rows if scrollback is exhausted.
+            let rows_to_add = target_visible_rows - old_rows;
+            let from_scrollback = min(rows_to_add, self.flat_storage.total_rows());
+            let blank_rows = rows_to_add - from_scrollback;
+
+            // Pop rows from flat_storage and prepend them to the grid.
+            if from_scrollback > 0 {
+                let scrollback_rows = self.flat_storage.pop_rows(from_scrollback);
+                self.grid.prepend_rows(scrollback_rows);
+
+                // Shift cursors down to account for prepended rows.
+                self.grid.cursor.point.row += from_scrollback;
+                self.grid.saved_cursor.point.row += from_scrollback;
+                self.grid.max_cursor_point.row += from_scrollback;
+            }
+
+            // Add blank rows at the bottom if we still need more.
+            if blank_rows > 0 {
+                self.grid.append_blank_rows(blank_rows, num_cols);
+            }
+
+            self.grid.rows = target_visible_rows;
+        } else if target_visible_rows < old_rows {
+            // Shrinking: push excess rows from the grid into flat_storage.
+            let rows_to_remove = old_rows - target_visible_rows;
+
+            // Prefer removing blank rows below the cursor first.
+            let cursor_row = self.grid.cursor.point.row.0;
+            let rows_after_cursor = old_rows.saturating_sub(cursor_row + 1);
+            let rows_to_drop_below = min(rows_to_remove, rows_after_cursor);
+            let rows_to_push_to_scrollback = rows_to_remove - rows_to_drop_below;
+
+            // Drop rows from the bottom of the grid (after cursor).
+            if rows_to_drop_below > 0 {
+                self.grid.truncate_bottom(rows_to_drop_below);
+            }
+
+            // Push rows from the top of the grid into scrollback.
+            if rows_to_push_to_scrollback > 0 {
+                let top_rows = self.grid.remove_top_rows(rows_to_push_to_scrollback);
+                for row in &top_rows {
+                    self.flat_storage.push_rows([row]);
+                }
+
+                // Shift cursors up to account for removed rows.
+                self.grid.cursor.point.row =
+                    self.grid.cursor.point.row.saturating_sub(rows_to_push_to_scrollback);
+                self.grid.saved_cursor.point.row =
+                    self.grid.saved_cursor.point.row.saturating_sub(rows_to_push_to_scrollback);
+                self.grid.max_cursor_point.row =
+                    self.grid.max_cursor_point.row.saturating_sub(rows_to_push_to_scrollback);
+            }
+
+            self.grid.rows = target_visible_rows;
+        }
+
+        // Clamp cursors to the new visible region.
+        let last_row = VisibleRow(target_visible_rows - 1);
+        self.grid.cursor.point.row = min(self.grid.cursor.point.row, last_row);
+        self.grid.max_cursor_point.row = min(self.grid.max_cursor_point.row, last_row);
+        self.grid.saved_cursor.point.row = min(self.grid.saved_cursor.point.row, last_row);
+
+        // Apply max rows limit on flat_storage.
+        self.flat_storage.apply_max_rows();
+    }
+
+    /// Full resize path that handles column count changes via flat_storage
+    /// round-trip and content reflowing.
+    fn resize_storage_full(&mut self, num_rows: usize, num_cols: usize) {
+        use std::cmp::min;
 
         // Store information about the initial cursor position in the grid.
         let cursor = InitialCursorState::new(

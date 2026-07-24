@@ -234,6 +234,99 @@ impl GridStorage {
         self.raw = Storage::with_rows(rows, is_sequential, visible_rows);
     }
 
+    /// Prepend rows from scrollback to the top of the visible area.
+    /// The rows are in logical order (oldest first).
+    pub(super) fn prepend_rows(&mut self, rows: Vec<Row>) {
+        if rows.is_empty() {
+            return;
+        }
+        let num_new = rows.len();
+        // Take all existing rows out, combine, and rebuild.
+        let mut existing = self.raw.take_all();
+        let is_sequential = self.raw.is_sequential();
+
+        let combined = if is_sequential {
+            let mut combined = rows;
+            combined.append(&mut existing);
+            combined
+        } else {
+            // Non-sequential storage stores rows in reverse order.
+            let mut reversed_new: Vec<Row> = rows.into_iter().rev().collect();
+            existing.append(&mut reversed_new);
+            existing
+        };
+
+        let new_visible = self.rows + num_new;
+        self.raw = Storage::with_rows(combined, is_sequential, new_visible);
+    }
+
+    /// Append blank rows at the bottom of the visible area.
+    pub(super) fn append_blank_rows(&mut self, count: usize, columns: usize) {
+        if count == 0 {
+            return;
+        }
+        let is_sequential = self.raw.is_sequential();
+        let mut existing = self.raw.take_all();
+        let blank_rows: Vec<Row> = (0..count).map(|_| Row::new(columns)).collect();
+
+        if is_sequential {
+            existing.extend(blank_rows);
+        } else {
+            // Non-sequential: blank rows go at the front (they represent the
+            // bottom of the visible grid in reversed storage).
+            let mut combined = blank_rows;
+            combined.reverse();
+            combined.append(&mut existing);
+            existing = combined;
+        }
+
+        let new_visible = self.rows + count;
+        self.raw = Storage::with_rows(existing, is_sequential, new_visible);
+    }
+
+    /// Remove rows from the bottom of the visible area (drops them).
+    pub(super) fn truncate_bottom(&mut self, count: usize) {
+        if count == 0 || count > self.rows {
+            return;
+        }
+        let is_sequential = self.raw.is_sequential();
+        let mut existing = self.raw.take_all();
+
+        if is_sequential {
+            existing.truncate(existing.len().saturating_sub(count));
+        } else {
+            // Non-sequential: the bottom rows are at the front.
+            existing.drain(0..count);
+        }
+
+        let new_visible = self.rows - count;
+        self.raw = Storage::with_rows(existing, is_sequential, new_visible);
+    }
+
+    /// Remove and return rows from the top of the visible area.
+    /// Returns rows in logical order (oldest first).
+    pub(super) fn remove_top_rows(&mut self, count: usize) -> Vec<Row> {
+        if count == 0 || count > self.rows {
+            return Vec::new();
+        }
+        let is_sequential = self.raw.is_sequential();
+        let mut existing = self.raw.take_all();
+
+        let removed = if is_sequential {
+            existing.drain(0..count).collect()
+        } else {
+            // Non-sequential: the top rows are at the end.
+            let start = existing.len().saturating_sub(count);
+            let mut removed: Vec<Row> = existing.drain(start..).collect();
+            removed.reverse();
+            removed
+        };
+
+        let new_visible = self.rows - count;
+        self.raw = Storage::with_rows(existing, is_sequential, new_visible);
+        removed
+    }
+
     /// Update the size of the scrollback history.
     pub fn update_history(&mut self, history_size: usize) {
         let current_history_size = self.history_size();
