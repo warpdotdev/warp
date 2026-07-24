@@ -524,7 +524,6 @@ default = [
     "ligatures",
     "dynamic_workflow_enums",
     "rect_selection",
-    "reload_stale_conversation_files",
     "loginless_conversion",
     "warp_packs",
     "ai_rules",
@@ -904,7 +903,6 @@ full_source_code_embedding = []
 use_tantivy_search = []
 agent_management_popup = []
 simulate_github_unauthed = []
-reload_stale_conversation_files = []
 shared_block_title_generation = []
 retry_truncated_code_responses = []
 usage_based_pricing = []
