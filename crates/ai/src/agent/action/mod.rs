@@ -836,10 +836,7 @@ impl AIAgentPtyWriteMode {
         match self {
             AIAgentPtyWriteMode::Raw => bytes,
             AIAgentPtyWriteMode::Line => {
-                // Move to beginning of line, write input, then submit (Enter).
-                let mut v = Vec::with_capacity(bytes.len() + 2);
-                // ^A (SOH) is "beginning of line" for readline/prompt-toolkit style editors.
-                v.push(escape_sequences::C0::SOH);
+                let mut v = Vec::with_capacity(bytes.len() + 1);
                 v.extend_from_slice(&bytes);
                 cfg_if::cfg_if! {
                     if #[cfg(target_os = "windows")] {
@@ -865,6 +862,41 @@ impl AIAgentPtyWriteMode {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AIAgentPtyWriteMode;
+    use warp_terminal::model::escape_sequences;
+
+    #[test]
+    fn line_mode_does_not_prefix_input_with_control_a() {
+        let decorated = AIAgentPtyWriteMode::Line.decorate_bytes(b"hello".to_vec(), false);
+
+        assert_eq!(decorated.first(), Some(&b'h'));
+        assert!(!decorated.starts_with(&[escape_sequences::C0::SOH]));
+        assert_eq!(
+            &decorated[..decorated.len() - 1],
+            b"hello",
+            "line mode should only append a submit byte to user-facing input"
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn line_mode_submits_with_lf_on_posix() {
+        let decorated = AIAgentPtyWriteMode::Line.decorate_bytes(b"hello".to_vec(), false);
+
+        assert_eq!(decorated, b"hello\n");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn line_mode_submits_with_cr_on_windows() {
+        let decorated = AIAgentPtyWriteMode::Line.decorate_bytes(b"hello".to_vec(), false);
+
+        assert_eq!(decorated, b"hello\r");
     }
 }
 
