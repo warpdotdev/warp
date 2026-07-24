@@ -261,7 +261,10 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             let file_context = FileContext::from(content.clone());
 
             if !file_context.file_name.is_empty() && !file_context.content.is_empty() {
-                result.push(AIAgentContext::File(file_context.clone()));
+                // Move `file_context` into the result instead of cloning it; it
+                // is not used afterwards. Avoids duplicating restored file
+                // contents, a hot allocation during conversation restore.
+                result.push(AIAgentContext::File(file_context));
             }
         }
     }
@@ -362,8 +365,8 @@ impl ConvertToExchanges for &api::Task {
                     .unwrap_or(false);
 
                 if let Some(exchange) = create_exchange_from_messages(
-                    &current_inputs,
-                    &current_outputs,
+                    std::mem::take(&mut current_inputs),
+                    std::mem::take(&mut current_outputs),
                     is_output_tool_call_canceled,
                     &current_message_ids,
                     &message_map,
@@ -371,8 +374,8 @@ impl ConvertToExchanges for &api::Task {
                 ) {
                     exchanges.push(exchange);
                 }
-                current_inputs.clear();
-                current_outputs.clear();
+                // `std::mem::take` above already leaves the input/output buffers
+                // empty for reuse, so only the message-id set needs clearing.
                 current_message_ids.clear();
             }
 
@@ -546,8 +549,8 @@ impl ConvertToExchanges for &api::Task {
             });
 
             if let Some(exchange) = create_exchange_from_messages(
-                &current_inputs,
-                &current_outputs,
+                std::mem::take(&mut current_inputs),
+                std::mem::take(&mut current_outputs),
                 is_output_tool_call_canceled,
                 &current_message_ids,
                 &message_map,
@@ -1879,8 +1882,8 @@ fn create_cancelled_result_for_tool_call(
 }
 
 fn create_exchange_from_messages(
-    inputs: &[AIAgentInput],
-    outputs: &[AIAgentOutputMessage],
+    inputs: Vec<AIAgentInput>,
+    outputs: Vec<AIAgentOutputMessage>,
     is_output_tool_call_canceled: bool,
     message_ids: &HashSet<String>,
     message_map: &HashMap<&str, &api::Message>,
@@ -1938,7 +1941,7 @@ fn create_exchange_from_messages(
 
     // Collect all citations from the output messages.
     let mut citations = Vec::new();
-    for output in outputs {
+    for output in &outputs {
         citations.extend(output.citations.clone());
     }
     let model_used = message_ids
@@ -1951,9 +1954,12 @@ fn create_exchange_from_messages(
             })
         });
 
-    // Create AIAgentOutput from the output messages
+    // Create AIAgentOutput from the output messages. `outputs` is consumed
+    // (moved) here instead of cloned via `to_vec`; capture whether it was empty
+    // beforehand for the status check below.
+    let outputs_is_empty = outputs.is_empty();
     let ai_output = AIAgentOutput {
-        messages: outputs.to_vec(),
+        messages: outputs,
         citations,
         api_metadata_bytes: None,
         server_output_id: server_output_id.map(|id| ServerOutputId::new(id.to_owned())),
@@ -1980,7 +1986,7 @@ fn create_exchange_from_messages(
         .unwrap_or(false);
 
     // Create exchange with finished status
-    let output_status = if outputs.is_empty() && !last_input_is_action_result {
+    let output_status = if outputs_is_empty && !last_input_is_action_result {
         AIAgentOutputStatus::Finished {
             finished_output: FinishedAIAgentOutput::Cancelled {
                 output: None,
@@ -2020,7 +2026,7 @@ fn create_exchange_from_messages(
 
     Some(AIAgentExchange {
         id: exchange_id,
-        input: inputs.to_vec(),
+        input: inputs,
         output_status,
         start_time,
         finish_time,
