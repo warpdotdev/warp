@@ -123,6 +123,17 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("CodeEditorView"))
         .with_key_binding("cmdorctrl-r u"),
     ]);
+
+    // Toggle a markdown code pane back to its rendered preview. Mirrors the
+    // `FileNotebookView` binding so the same shortcut toggles both directions.
+    #[cfg(feature = "local_fs")]
+    app.register_editable_bindings([EditableBinding::new(
+        "code_view:toggle_markdown_display_mode",
+        "Toggle Markdown rendered/raw view",
+        CodeViewAction::RenderMarkdown,
+    )
+    .with_context_predicate(text_entry)
+    .with_key_binding("cmdorctrl-e")]);
 }
 
 const PADDING: f32 = 4.;
@@ -2337,9 +2348,23 @@ impl TypedActionView for CodeView {
             }
             #[cfg(feature = "local_fs")]
             CodeViewAction::RenderMarkdown => {
+                // The keybinding is registered for all code panes, but only markdown
+                // files have a rendered preview to switch to. Drop the path otherwise so
+                // the action is a no-op (the context-menu entry is already markdown-gated).
+                //
+                // Detect markdown from the standardized path component (always
+                // `/`-separated) rather than display_path(), which is local-OS
+                // oriented and would misparse a remote file's path on a cross-OS
+                // session. is_markdown_file takes impl AsRef<Path> and only inspects
+                // the extension/file name, so feed it the standardized &str directly.
                 let lor_path = self
                     .tab_at(self.active_tab_index)
-                    .and_then(|t| t.location.clone());
+                    .and_then(|t| t.location.clone())
+                    .filter(|p| {
+                        crate::util::openable_file_type::is_markdown_file(
+                            p.path_component().as_str(),
+                        )
+                    });
 
                 if let Some(lor_path) = lor_path {
                     let source = self.source.clone();
