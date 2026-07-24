@@ -140,14 +140,14 @@ fn agent_icon_variant_from_terminal_inputs(
     inputs: &TerminalIconInputs,
 ) -> Option<IconWithStatusVariant> {
     // 1. CLI session with a known (non-Unknown) agent wins. Status is only meaningful when
-    //    the session is plugin-backed and the handler exposes rich status.
+    //    the session is plugin-backed and the handler exposes rich status. Success is
+    //    intentionally hidden after the unread completion badge is cleared.
     if let Some(session) = inputs
         .cli_session
         .as_ref()
         .filter(|s| !matches!(s.agent, CLIAgent::Unknown))
     {
-        let status =
-            (session.has_listener && session.supports_rich_status).then(|| session.status.clone());
+        let status = cli_session_terminal_icon_status(session);
         return Some(IconWithStatusVariant::CLIAgent {
             agent: session.agent,
             status,
@@ -179,6 +179,14 @@ fn agent_icon_variant_from_terminal_inputs(
     }
 
     None
+}
+
+fn cli_session_terminal_icon_status(session: &CLISessionInputs) -> Option<ConversationStatus> {
+    match &session.status {
+        ConversationStatus::Success => None,
+        _ if session.has_listener && session.supports_rich_status => Some(session.status.clone()),
+        _ => None,
+    }
 }
 
 /// Pure run-card logic: maps a [`Harness`], status, and ambient flag into an

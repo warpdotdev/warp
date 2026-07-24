@@ -1061,11 +1061,8 @@ fn summary_conversation_status_for_terminal(
     app: &AppContext,
 ) -> Option<ConversationStatus> {
     let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
-    if let Some(session) = cli_agent_session
-        .filter(|s| s.supports_rich_status())
-        .filter(|s| !matches!(s.agent, CLIAgent::Unknown))
-    {
-        return Some(session.status.to_conversation_status());
+    if let Some(status) = cli_agent_session.and_then(cli_agent_display_status) {
+        return Some(status);
     }
 
     let is_ambient = terminal_view.is_ambient_agent_session(app);
@@ -1075,6 +1072,16 @@ fn summary_conversation_status_for_terminal(
     (has_conversation || is_ambient)
         .then(|| terminal_view.selected_conversation_status_for_display(app))
         .flatten()
+}
+
+fn cli_agent_display_status(
+    session: &crate::terminal::cli_agent_sessions::CLIAgentSession,
+) -> Option<ConversationStatus> {
+    if matches!(session.agent, CLIAgent::Unknown) {
+        return None;
+    }
+
+    session.terminal_chrome_status()
 }
 
 fn coalesce_summary_branch_entries(
@@ -6717,8 +6724,8 @@ fn render_terminal_detail_section(
     let (conversation_display_title, cli_agent_title) =
         preferred_agent_tab_titles(&agent_text, agent_tab_text_preference(app));
     let kind_label = terminal_kind_badge_label(agent_text.is_oz_agent, agent_text.cli_agent);
-    let status = if let Some(session) = cli_agent_session.filter(|s| s.supports_rich_status()) {
-        Some(session.status.to_conversation_status())
+    let status = if let Some(status) = cli_agent_session.and_then(cli_agent_display_status) {
+        Some(status)
     } else if agent_text.is_oz_agent {
         terminal_view.selected_conversation_status_for_display(app)
     } else {
