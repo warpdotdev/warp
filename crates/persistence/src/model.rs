@@ -375,6 +375,7 @@ pub struct TabGroup {
     pub color: Option<String>,
     pub collapsed: bool,
     pub pinned: bool,
+    pub working_directory: Option<String>,
 }
 
 #[derive(Insertable)]
@@ -385,6 +386,7 @@ pub struct NewTabGroup {
     pub color: Option<String>,
     pub collapsed: bool,
     pub pinned: bool,
+    pub working_directory: Option<String>,
 }
 
 /// The panes data model includes pane_nodes, pane_leaves and pane_branches.

@@ -51,39 +51,39 @@ pub async fn complete(
 
     // True if and only if we called the complete function.
     let mut arg_has_spec = false;
-    if let Some(found_signature) = found_signature {
-        if let hir::Command::Classified(mut shell_command) = classified_command.command {
-            suggestions = match classified_command.error {
-                Some(error) => {
-                    let (results, complete_called) = suggestions_for_parse_error(
-                        input,
-                        tokens_without_last_editing,
-                        &location.span,
-                        error,
-                        &mut shell_command,
-                        found_signature,
-                        session_env_vars,
-                        options,
-                        ctx,
-                    )
-                    .await;
-                    arg_has_spec = complete_called;
-                    results
-                }
-                None => {
-                    let (results, complete_called) = suggestions_for_last_argument(
-                        tokens_without_last_editing,
-                        &mut shell_command,
-                        &location.span,
-                        found_signature,
-                        session_env_vars,
-                        options,
-                        ctx,
-                    )
-                    .await;
-                    arg_has_spec = complete_called;
-                    results
-                }
+    if let Some(found_signature) = found_signature
+        && let hir::Command::Classified(mut shell_command) = classified_command.command
+    {
+        suggestions = match classified_command.error {
+            Some(error) => {
+                let (results, complete_called) = suggestions_for_parse_error(
+                    input,
+                    tokens_without_last_editing,
+                    &location.span,
+                    error,
+                    &mut shell_command,
+                    found_signature,
+                    session_env_vars,
+                    options,
+                    ctx,
+                )
+                .await;
+                arg_has_spec = complete_called;
+                results
+            }
+            None => {
+                let (results, complete_called) = suggestions_for_last_argument(
+                    tokens_without_last_editing,
+                    &mut shell_command,
+                    &location.span,
+                    found_signature,
+                    session_env_vars,
+                    options,
+                    ctx,
+                )
+                .await;
+                arg_has_spec = complete_called;
+                results
             }
         }
     }
@@ -96,15 +96,14 @@ pub async fn complete(
             options.fallback_strategy,
             CompletionsFallbackStrategy::FilePaths
         )
+        && let Some(path_completion_context) = ctx.path_completion_context()
     {
-        if let Some(path_completion_context) = ctx.path_completion_context() {
-            suggestions = sorted_paths_relative_to(
-                parsed_argument,
-                options.match_strategy,
-                path_completion_context,
-            )
-            .await;
-        }
+        suggestions = sorted_paths_relative_to(
+            parsed_argument,
+            options.match_strategy,
+            path_completion_context,
+        )
+        .await;
     }
 
     suggestions
@@ -402,35 +401,35 @@ async fn complete_positional(
     // command.
     let mut should_suggest_subcommands = true;
 
-    if let Some(positionals) = &shell_command.args.positionals.as_ref() {
-        if !arguments.is_empty() {
-            let positional_index = positionals.len() - 1;
+    if let Some(positionals) = &shell_command.args.positionals.as_ref()
+        && !arguments.is_empty()
+    {
+        let positional_index = positionals.len() - 1;
 
-            let arg = match arguments
-                .iter()
-                .enumerate()
-                .find(|(idx, arg)| idx <= &positional_index && arg.is_variadic())
-            {
-                None => arguments.get(positionals.len() - 1),
-                Some((_, arg)) => {
-                    // If the argument is optional, it's possible the user is actually trying to
-                    // enter a subcommand.
-                    should_suggest_subcommands = arg.optional;
-                    Some(arg)
-                }
-            };
-
-            if let Some(arg) = arg {
-                suggestions = generate_suggestions_for_argument(
-                    arg,
-                    parsed_token,
-                    tokens_without_last_editing,
-                    session_env_vars,
-                    options,
-                    ctx,
-                )
-                .await;
+        let arg = match arguments
+            .iter()
+            .enumerate()
+            .find(|(idx, arg)| idx <= &positional_index && arg.is_variadic())
+        {
+            None => arguments.get(positionals.len() - 1),
+            Some((_, arg)) => {
+                // If the argument is optional, it's possible the user is actually trying to
+                // enter a subcommand.
+                should_suggest_subcommands = arg.optional;
+                Some(arg)
             }
+        };
+
+        if let Some(arg) = arg {
+            suggestions = generate_suggestions_for_argument(
+                arg,
+                parsed_token,
+                tokens_without_last_editing,
+                session_env_vars,
+                options,
+                ctx,
+            )
+            .await;
         }
     }
 
@@ -566,15 +565,13 @@ async fn generate_suggestions_for_argument_value(
             type_name: TemplateType::Files,
             ..
         } => {
-            let path_suggestions = match ctx.path_completion_context() {
+            // TODO(completions-v2): Implement template filter functions.
+            match ctx.path_completion_context() {
                 Some(path_completion_context) => {
                     sorted_paths_relative_to(parsed_token, matcher, path_completion_context).await
                 }
                 None => Vec::new(),
-            };
-
-            // TODO(completions-v2): Implement template filter functions.
-            path_suggestions
+            }
         }
         ArgumentValue::Template {
             type_name: TemplateType::Folders,
@@ -583,7 +580,9 @@ async fn generate_suggestions_for_argument_value(
             let is_cd = tokens_without_last_editing
                 .first()
                 .is_some_and(|t| *t == "cd");
-            let path_suggestions = match ctx.path_completion_context() {
+
+            // TODO(completions-v2): Implement template filter functions.
+            match ctx.path_completion_context() {
                 Some(path_completion_context) => {
                     if is_cd {
                         sorted_cd_directories(parsed_token, matcher, path_completion_context).await
@@ -597,10 +596,7 @@ async fn generate_suggestions_for_argument_value(
                     }
                 }
                 None => Vec::new(),
-            };
-
-            // TODO(completions-v2): Implement template filter functions.
-            path_suggestions
+            }
         }
         ArgumentValue::Generator(GeneratorFn::Custom(js_fn)) => {
             let (Some(js_ctx), Some(path_ctx)) = (ctx.js_context(), ctx.path_completion_context())

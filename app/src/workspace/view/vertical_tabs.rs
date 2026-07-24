@@ -2790,10 +2790,25 @@ fn render_grouped_tabs_header(
                 .name
                 .clone()
                 .unwrap_or_else(|| "New Group".to_string());
-            Text::new_inline(title_text, font_family, 12.)
+            let text_element = Text::new_inline(title_text, font_family, 12.)
                 .with_clip(ClipConfig::ellipsis())
                 .with_color(main_text_color.into())
-                .finish()
+                .finish();
+            if group.working_directory.is_some() {
+                let folder_icon =
+                    ConstrainedBox::new(WarpIcon::Folder.to_warpui_icon(main_text_color).finish())
+                        .with_width(12.)
+                        .with_height(12.)
+                        .finish();
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(4.)
+                    .with_child(folder_icon)
+                    .with_child(Shrinkable::new(1., text_element).finish())
+                    .finish()
+            } else {
+                text_element
+            }
         };
     let subtitle_text = if member_count == 1 {
         "1 tab".to_string()

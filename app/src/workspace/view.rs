@@ -3928,6 +3928,10 @@ impl Workspace {
                                     // Pinned Tabs feature is enabled.
                                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                                         && group_snapshot.pinned,
+                                    working_directory: group_snapshot
+                                        .working_directory
+                                        .clone()
+                                        .map(std::path::PathBuf::from),
                                 },
                             )
                         })
@@ -3987,6 +3991,7 @@ impl Workspace {
                         None,  /* chosen_shell */
                         None,  /* ai_conversation */
                         false, /* hide_homepage */
+                        None,  /* override_directory */
                         ctx,
                     );
                 } else if self.left_panel_visibility_across_tabs_enabled(ctx) {
@@ -4248,6 +4253,7 @@ impl Workspace {
                     shell,
                     None,  /* ai_conversation */
                     false, /* hide_homepage */
+                    None,  /* override_directory */
                     ctx,
                 );
                 self.check_and_trigger_onboarding(ctx);
@@ -4706,6 +4712,7 @@ impl Workspace {
             None,
             None,
             false,
+            None,
             DefaultSessionModeBehavior::Ignore,
             ctx,
         );
@@ -4739,6 +4746,7 @@ impl Workspace {
             None,
             None,
             false,
+            None,
             DefaultSessionModeBehavior::Ignore,
             ctx,
         );
@@ -6770,6 +6778,14 @@ impl Workspace {
                     .with_icon(icons::Icon::LayersThree01)
                     .into_item(),
             );
+            menu_items.push(
+                MenuItemFields::new("New project folder")
+                    .with_on_select_action(WorkspaceAction::SelectNewSessionMenuItem(
+                        NewSessionMenuItem::CreateProjectFolder,
+                    ))
+                    .with_icon(icons::Icon::Folder)
+                    .into_item(),
+            );
         }
 
         menu_items.push(MenuItem::Separator);
@@ -6931,6 +6947,11 @@ impl Workspace {
             NewSessionMenuItem::CreateNewTabGroup => {
                 if FeatureFlag::GroupedTabs.is_enabled() {
                     self.create_new_tab_group(ctx);
+                }
+            }
+            NewSessionMenuItem::CreateProjectFolder => {
+                if FeatureFlag::GroupedTabs.is_enabled() {
+                    ctx.dispatch_typed_action_deferred(WorkspaceAction::AddProjectFolder);
                 }
             }
         }
@@ -7096,6 +7117,7 @@ impl Workspace {
             None,
             None,
             false,
+            None,
             ctx,
         );
         let new_tab_index = self.active_tab_index;
@@ -7372,6 +7394,11 @@ impl Workspace {
             return;
         }
 
+        let group_working_directory = self
+            .tab_groups
+            .get(&group_id)
+            .and_then(|g| g.working_directory.clone());
+
         // Creating the tab honors the default session mode and becomes active.
         self.add_new_session_tab_with_default_mode(
             NewSessionSource::Tab,
@@ -7379,6 +7406,46 @@ impl Workspace {
             None,
             None,
             false,
+            group_working_directory,
+            ctx,
+        );
+
+        // If the creation path already dropped the new tab into this group
+        // (`AfterCurrentTab` with a member active), it's correctly placed right
+        // after the active tab. Otherwise pull it to the end of the group's run.
+        let new_idx = self.active_tab_index;
+        let already_in_group = self
+            .tabs
+            .get(new_idx)
+            .is_some_and(|tab| tab.group_id == Some(group_id));
+        if !already_in_group {
+            let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
+            if let Some(tab) = self.tabs.get_mut(new_idx) {
+                tab.group_id = Some(group_id);
+            }
+            self.move_tab_to_index(new_idx, target_index, ctx);
+        }
+        self.expand_tab_group(group_id, ctx);
+    }
+
+    fn new_tab_in_group_with_directory(
+        &mut self,
+        group_id: TabGroupId,
+        directory: std::path::PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::GroupedTabs.is_enabled() || !self.tab_groups.contains_key(&group_id) {
+            return;
+        }
+
+        // Creating the tab honors the default session mode and becomes active.
+        self.add_new_session_tab_with_default_mode(
+            NewSessionSource::Tab,
+            Some(ctx.window_id()),
+            None,
+            None,
+            false,
+            Some(directory),
             ctx,
         );
 
@@ -8928,6 +8995,7 @@ impl Workspace {
                     None,
                     None,
                     false,
+                    None,
                     ctx,
                 );
             }
@@ -9961,17 +10029,33 @@ impl Workspace {
             )
         };
 
+        let is_project_folder = self
+            .tab_groups
+            .get(&group_id)
+            .and_then(|g| g.working_directory.as_ref())
+            .is_some();
+        let mut group_actions = vec![
+            MenuItemFields::new("Ungroup tabs")
+                .with_on_select_action(WorkspaceAction::UngroupTabs(group_id))
+                .into_item(),
+            MenuItemFields::new("New tab in group")
+                .with_on_select_action(WorkspaceAction::NewTabInGroup(group_id))
+                .into_item(),
+        ];
+        if is_project_folder {
+            group_actions.push(
+                MenuItemFields::new("New tab in subfolder...")
+                    .with_on_select_action(WorkspaceAction::NewTabInGroupWithDirectoryPicker(
+                        group_id,
+                    ))
+                    .into_item(),
+            );
+        }
+
         let mut menu_items = vec![];
         for section_items in [
             pin_section,
-            vec![
-                MenuItemFields::new("Ungroup tabs")
-                    .with_on_select_action(WorkspaceAction::UngroupTabs(group_id))
-                    .into_item(),
-                MenuItemFields::new("New tab in group")
-                    .with_on_select_action(WorkspaceAction::NewTabInGroup(group_id))
-                    .into_item(),
-            ],
+            group_actions,
             move_section,
             vec![
                 MenuItemFields::new("Rename")
@@ -11582,6 +11666,10 @@ impl Workspace {
                     color: group.color,
                     collapsed: group.collapsed,
                     pinned: FeatureFlag::PinnedTabs.is_enabled() && group.pinned,
+                    working_directory: group
+                        .working_directory
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned()),
                 })
                 .collect()
         } else {
@@ -12363,6 +12451,7 @@ impl Workspace {
             None,
             None,
             hide_homepage,
+            None,
             ctx,
         );
         ctx.notify();
@@ -12414,6 +12503,7 @@ impl Workspace {
                     Some(shell),
                     None,
                     true, /* hide_homepage */
+                    None, /* override_directory */
                     DefaultSessionModeBehavior::Ignore,
                     ctx,
                 );
@@ -12468,11 +12558,13 @@ impl Workspace {
             Some(shell),
             None,
             false,
+            None,
             ctx,
         );
         ctx.notify();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn add_new_session_tab_with_default_mode(
         &mut self,
         new_session_source: NewSessionSource,
@@ -12480,6 +12572,7 @@ impl Workspace {
         chosen_shell: Option<AvailableShell>,
         conversation_restoration: Option<ConversationRestorationInNewPaneType>,
         hide_homepage: bool,
+        override_directory: Option<PathBuf>,
         ctx: &mut ViewContext<Self>,
     ) {
         self.add_new_session_tab_internal_with_default_session_mode_behavior(
@@ -12488,6 +12581,7 @@ impl Workspace {
             chosen_shell,
             conversation_restoration,
             hide_homepage,
+            override_directory,
             DefaultSessionModeBehavior::Apply,
             ctx,
         );
@@ -12501,6 +12595,7 @@ impl Workspace {
         chosen_shell: Option<AvailableShell>,
         conversation_restoration: Option<ConversationRestorationInNewPaneType>,
         hide_homepage: bool,
+        override_directory: Option<PathBuf>,
         default_session_mode_behavior: DefaultSessionModeBehavior,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -12530,12 +12625,14 @@ impl Workspace {
             .filter(|path| path.is_dir());
 
         let startup_directory = startup_directory_from_conversation.or_else(|| {
-            self.get_new_tab_startup_directory(
-                new_session_source,
-                previous_session_window_id,
-                chosen_shell.as_ref(),
-                ctx,
-            )
+            override_directory.or_else(|| {
+                self.get_new_tab_startup_directory(
+                    new_session_source,
+                    previous_session_window_id,
+                    chosen_shell.as_ref(),
+                    ctx,
+                )
+            })
         });
 
         self.add_tab_with_pane_layout(
@@ -13743,6 +13840,7 @@ impl Workspace {
                     has_initial_query,
                 }),
                 false,
+                None,
                 ctx,
             );
 
@@ -19155,6 +19253,7 @@ impl Workspace {
                     None,
                     None,
                     false,
+                    None,
                     DefaultSessionModeBehavior::Ignore,
                     ctx,
                 );
@@ -19303,6 +19402,7 @@ impl Workspace {
             None,  // Chosen shell
             None,  // Conversation restoration
             false, // Hide the agent view homepage
+            None,
             DefaultSessionModeBehavior::Ignore,
             ctx,
         );
@@ -23914,6 +24014,25 @@ impl TypedActionView for Workspace {
             }
             UngroupTabs(group_id) => self.ungroup_tabs(*group_id, ctx),
             NewTabInGroup(group_id) => self.new_tab_in_group(*group_id, ctx),
+            NewTabInGroupWithDirectoryPicker(group_id) => {
+                let group_id = *group_id;
+                ctx.open_file_picker(
+                    move |result, app| {
+                        if let Ok(paths) = result
+                            && let Some(path_str) = paths.into_iter().next()
+                        {
+                            let path = std::path::PathBuf::from(path_str);
+                            app.dispatch_typed_action_deferred(
+                                WorkspaceAction::NewTabInGroupWithDirectory(group_id, path),
+                            );
+                        }
+                    },
+                    FilePickerConfiguration::new().folders_only(),
+                );
+            }
+            NewTabInGroupWithDirectory(group_id, path) => {
+                self.new_tab_in_group_with_directory(*group_id, path.clone(), ctx)
+            }
             MoveTabGroupUp(group_id) => self.move_tab_group(*group_id, TabMovement::Left, ctx),
             MoveTabGroupDown(group_id) => self.move_tab_group(*group_id, TabMovement::Right, ctx),
             CloseTabsOutsideGroup(group_id) => self.close_tabs_outside_group(*group_id, ctx),
@@ -23941,6 +24060,63 @@ impl TypedActionView for Workspace {
                     .and_then(|tab| tab.group_id)
                 {
                     self.unpin_tab_group(group_id, ctx);
+                }
+            }
+            AddProjectFolder => {
+                log::info!("AddProjectFolder action received! Opening file picker.");
+                ctx.open_file_picker(
+                    |result, app| {
+                        log::info!("File picker callback invoked with result: {:?}", result);
+                        if let Ok(paths) = result
+                            && let Some(path_str) = paths.into_iter().next()
+                        {
+                            let path = std::path::PathBuf::from(path_str);
+                            app.dispatch_typed_action_deferred(
+                                WorkspaceAction::AddProjectFolderConfirmed(path),
+                            );
+                        }
+                    },
+                    FilePickerConfiguration::new().folders_only(),
+                );
+            }
+            AddProjectFolderConfirmed(path) => {
+                log::info!("AddProjectFolderConfirmed received with path: {:?}", path);
+                if FeatureFlag::GroupedTabs.is_enabled() {
+                    log::info!("GroupedTabs is enabled, creating new project folder group.");
+                    let mut new_group = TabGroup::new();
+                    new_group.working_directory = Some(path.clone());
+                    if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                        new_group.name = Some(file_name.to_string());
+                    } else {
+                        new_group.name = Some("Project".to_string());
+                    }
+                    let group_id = new_group.id;
+                    self.tab_groups.insert(group_id, new_group);
+
+                    // A project folder must spawn an initial tab to be visible in the UI.
+                    self.add_new_session_tab_with_default_mode(
+                        NewSessionSource::Tab,
+                        Some(ctx.window_id()),
+                        None,
+                        None,
+                        false,
+                        Some(path.clone()),
+                        ctx,
+                    );
+                    let new_tab_index = self.active_tab_index;
+
+                    // Ensure that new tab groups always land below pinned items, but above
+                    // any other items in the tab list.
+                    let target = self.pinned_boundary_index(&self.tabs);
+
+                    if let Some(tab) = self.tabs.get_mut(new_tab_index) {
+                        tab.group_id = Some(group_id);
+                    }
+
+                    self.move_tab_to_index(new_tab_index, target, ctx);
+
+                    ctx.dispatch_global_action("workspace:save_app", ());
+                    ctx.notify();
                 }
             }
             AddDefaultTab => {
@@ -23987,6 +24163,7 @@ impl TypedActionView for Workspace {
                     None,
                     None,
                     *hide_homepage,
+                    None,
                     DefaultSessionModeBehavior::Ignore,
                     ctx,
                 );
