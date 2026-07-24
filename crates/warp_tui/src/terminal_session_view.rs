@@ -265,7 +265,7 @@ fn log_bundle_success_message(path: &Path) -> String {
 /// Installed builds expose `warp`, `warp-dev`, `warp-preview`, etc. Local cargo
 /// builds don't ship a versioned `warp` binary on PATH, so they intentionally
 /// target `warp-dev` (the dogfood channel name).
-fn tui_cli_binary_name(channel: Channel) -> &'static str {
+pub(crate) fn tui_cli_binary_name(channel: Channel) -> &'static str {
     match channel {
         Channel::Stable => "warp",
         Channel::Dev | Channel::Local => "warp-dev",
@@ -273,6 +273,11 @@ fn tui_cli_binary_name(channel: Channel) -> &'static str {
         Channel::Oss => "warp-oss",
         Channel::Integration => "warp-integration",
     }
+}
+
+/// Shell command used by the exit hint to resume a server conversation.
+pub(crate) fn tui_resume_shell_command(channel: Channel, token: &str) -> String {
+    format!("{} --resume {token}", tui_cli_binary_name(channel))
 }
 
 /// Shell command used by `/version` to print the binary version as a normal
