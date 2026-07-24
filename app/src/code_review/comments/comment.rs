@@ -127,12 +127,23 @@ impl From<AttachedReviewComment> for api::ReviewComment {
                 content,
                 line,
             } => {
-                // For now, comments are only attached to a single line.
+                // Calculate range end based on added lines, ensuring a minimum span of 1 line
+                // unless the file is empty/deleted (where range must remain empty to satisfy
+                // backend boundary validation on 0-line files). We check `line_number == 0`
+                // because pure deletions in normal files also have empty line_ranges (e.g. 5..5)
+                // but need to be mapped to a 1-line range (5..6) rather than collapsing.
                 let line_range = line.line_number().map(|lc| {
                     let line_number = lc.as_usize() as u32;
+                    let is_empty_file =
+                        line_number == 0 && line.line_range().start == line.line_range().end;
+                    let end = line_number.saturating_add(if is_empty_file {
+                        0
+                    } else {
+                        content.lines_added.as_u32().max(1)
+                    });
                     api::FileContentLineRange {
                         start: line_number,
-                        end: line_number + 1,
+                        end,
                     }
                 });
 
