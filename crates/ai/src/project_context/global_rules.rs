@@ -143,7 +143,14 @@ impl GlobalRules {
                 // denied, file replaced with a non-regular file) is converted
                 // to `None`; the callback below decides whether that means
                 // "insert/refresh" or "drop a previously-known entry."
-                let content = async_fs::read_to_string(&file_path).await.ok();
+                //
+                // Guard against memory spikes from pathologically large rule
+                // files: on macOS, `read_to_string` reserves a buffer equal
+                // to the file's metadata size up front, which can be GiB for
+                // a sparse or corrupted file.  Cap at MAX_RULE_FILE_BYTES;
+                // silently skip oversized files (they would be impractically
+                // large as agent instructions anyway).
+                let content = read_rule_file_capped(&file_path).await;
                 (file_path, content)
             },
             move |me, (file_path, content_opt), ctx| match content_opt {
@@ -356,6 +363,38 @@ impl GlobalRules {
                 self.register_global_source_watcher(source, &subdir_path, ctx);
             }
         }
+    }
+}
+
+/// Maximum size for a rule file (WARP.md / AGENTS.md) read into memory.
+///
+/// `std::fs::read_to_string` (used internally by `async_fs::read_to_string`)
+/// calls `String::try_reserve_exact` with the file's metadata length before
+/// reading.  On macOS, virtual-memory reservations for sparse or very large
+/// files can succeed even when physical RAM is unavailable, inflating the
+/// process footprint by many GiB and tripping the "Excessive memory usage
+/// detected" Sentry monitor.  Rule files are human-written markdown
+/// instructions; 1 MiB is a generous cap that no legitimate file should ever
+/// approach.
+pub(crate) const MAX_RULE_FILE_BYTES: u64 = 1024 * 1024; // 1 MiB
+
+/// Read a rule file into a `String`, returning `None` if the file exceeds
+/// [`MAX_RULE_FILE_BYTES`] or cannot be read.
+///
+/// Checks the file size via metadata before attempting the full read so that a
+/// pathologically large file never causes a giant upfront allocation.
+pub(crate) async fn read_rule_file_capped(path: &std::path::Path) -> Option<String> {
+    match async_fs::metadata(path).await {
+        Ok(meta) if meta.len() > MAX_RULE_FILE_BYTES => {
+            log::debug!(
+                "Skipping rule file {} ({} bytes): exceeds {MAX_RULE_FILE_BYTES}-byte limit",
+                path.display(),
+                meta.len()
+            );
+            None
+        }
+        Err(_) => None, // file does not exist or is not accessible
+        _ => async_fs::read_to_string(path).await.ok(),
     }
 }
 
