@@ -60,6 +60,8 @@ pub enum ThemeKind {
     CyberWave,
     #[schemars(description = "Solar Flare")]
     SolarFlare,
+    #[schemars(description = "Olive Grove")]
+    OliveGrove,
     #[schemars(description = "Solarized Dark")]
     SolarizedDark,
     #[schemars(description = "Willow Dream")]
@@ -130,6 +132,7 @@ impl std::fmt::Display for ThemeKind {
             ThemeKind::FancyDracula => "Fancy Dracula",
             ThemeKind::Phenomenon => "Phenomenon",
             ThemeKind::SolarFlare => "Solar Flare",
+            ThemeKind::OliveGrove => "Olive Grove",
             ThemeKind::Adeberry => "Adeberry",
             ThemeKind::SentReferralReward => "Warp Referral",
             ThemeKind::ReceivedReferralReward => "Referred to Warp",
@@ -491,6 +494,7 @@ impl WarpThemeConfig {
             (ThemeKind::FancyDracula, fancy_dracula()),
             (ThemeKind::Phenomenon, phenomenon()),
             (ThemeKind::SolarFlare, solar_flare()),
+            (ThemeKind::OliveGrove, olive_grove()),
             (ThemeKind::Adeberry, adeberry()),
         ]);
         WarpThemeConfig { theme_map }
