@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use markdown_parser::{compute_formatted_text_delta, parse_markdown};
+use markdown_parser::{
+    FormattedTextFragment, FormattedTextLine, compute_formatted_text_delta, parse_markdown,
+};
 use serde_yaml::Value;
 use string_offset::CharOffset;
 use vec1::Vec1;
@@ -175,6 +177,41 @@ fn test_gfm_table_html_serialization() {
         assert!(html.contains(
             "<table><thead><tr><th align=\"left\">header 1</th><th align=\"left\">header 2</th></tr></thead><tbody><tr><td align=\"left\">value 1</td><td align=\"left\">value 2</td></tr></tbody></table>"
         ));
+    });
+}
+
+#[test]
+fn test_list_item_soft_wrap_imports_as_single_item() {
+    // End-to-end editor check for the soft-wrapped list-item fix: a list item whose text is
+    // hard-wrapped in the source (continuation indented to the content column) is imported as a
+    // SINGLE list item, with emphasis spanning the wrap, and re-serializes to one source line.
+    App::test((), |mut app| async move {
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            "- **W2.4 alpha\n  beta** trailing",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+        buffer.read(&app, |buffer, _| {
+            let formatted = buffer.range_to_formatted_text(
+                CharOffset::from(1)..buffer.max_charoffset(),
+                StyledBlockBoundaryBehavior::Exclusive,
+            );
+            assert_eq!(
+                formatted.lines,
+                vec![FormattedTextLine::UnorderedList(
+                    markdown_parser::FormattedIndentTextInline {
+                        indent_level: 0,
+                        text: vec![
+                            FormattedTextFragment::bold("W2.4 alpha beta"),
+                            FormattedTextFragment::plain_text(" trailing"),
+                        ],
+                    }
+                )]
+            );
+            // The item re-serializes to a single source line (the source hard-wrap is gone).
+            assert_eq!(buffer.markdown(), "* **W2\\.4 alpha beta** trailing\n");
+        });
     });
 }
 

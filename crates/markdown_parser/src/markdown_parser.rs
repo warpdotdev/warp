@@ -169,15 +169,15 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             map(parse_header, FormattedTextLine::Heading),
             map(parse_image, FormattedTextLine::Image),
             |i| {
-                parse_task_list(i, &indentation_context)
+                parse_task_list(i, &indentation_context, parse_gfm_tables)
                     .map(|(s, t)| (s, FormattedTextLine::TaskList(t)))
             },
             |i| {
-                parse_ordered_list(i, &indentation_context)
+                parse_ordered_list(i, &indentation_context, parse_gfm_tables)
                     .map(|(s, o)| (s, FormattedTextLine::OrderedList(o)))
             },
             |i| {
-                parse_unordered_list(i, &indentation_context)
+                parse_unordered_list(i, &indentation_context, parse_gfm_tables)
                     .map(|(s, u)| (s, FormattedTextLine::UnorderedList(u)))
             },
             |i| {
@@ -227,6 +227,10 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 }
 
 /// Parse a single paragraph of Markdown text.
+///
+/// Each source line is its own paragraph line. General paragraph soft-wrap reflow (joining
+/// consecutive non-blank lines into one logical line) is intentionally NOT done here — see the
+/// deviations documented on [`collect_soft_wrapped_text`].
 fn parse_paragraph<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
 ) -> IResult<&'a str, FormattedTextLine, E> {
@@ -234,6 +238,148 @@ fn parse_paragraph<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         "paragraph",
         map(parse_markdown_line, FormattedTextLine::Line),
     )(markdown)
+}
+
+/// Join a list item's first source line with any soft-wrapped continuation lines that follow.
+///
+/// This is used only for list items (unordered/ordered/task). A soft-wrapped continuation line —
+/// a following line indented to at least the item's content column — is joined into the item with
+/// a single space (CommonMark soft line breaks reflow as a space), so inline styling can span a
+/// source hard-wrap within a list item. Trailing spaces before each soft break are dropped and
+/// leading indentation up to `content_indent` (plus any extra leading spaces) is stripped.
+/// Grouping stops at a blank line or any line that begins a new block-level construct (see
+/// [`starts_new_block_or_blank`]). When there is only a single source line, its content is
+/// returned verbatim (preserving any trailing spaces) so single-line items behave exactly as
+/// before.
+///
+/// Intentional deviations from CommonMark in this initial version (all non-regressions, tracked
+/// as follow-ups):
+/// * General (non-list) paragraph soft-wrap reflow is NOT done: consecutive non-blank plain
+///   lines each stay their own rendered line, as before. Reflowing them is deferred pending
+///   product review because it changes editor search/word-navigation semantics (the editor
+///   buffer stores such lines with real newlines).
+/// * Hard line breaks (a line ending preceded by two-or-more spaces or a backslash) are NOT
+///   preserved as forced breaks; within a joined list item they collapse to a space. This is
+///   not a regression because hard breaks were unsupported before this change.
+/// * Lazy continuation is not supported: a continuation line must be indented to at least
+///   `content_indent`; a less-indented, non-block line ends the item instead of continuing it.
+fn collect_soft_wrapped_text<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+    content_indent: usize,
+    require_indent: bool,
+    parse_gfm_tables: bool,
+) -> IResult<&'a str, String, E> {
+    let (mut remaining, first_line) = parse_line(input)?;
+    let mut lines: Vec<&str> = vec![first_line];
+
+    while !remaining.is_empty() {
+        if starts_new_block_or_blank(remaining, parse_gfm_tables) {
+            break;
+        }
+
+        let leading_spaces = remaining.chars().take_while(|c| *c == ' ').count();
+        if require_indent && leading_spaces < content_indent {
+            break;
+        }
+
+        let (after, line) = parse_line::<E>(remaining)?;
+        remaining = after;
+
+        // Strip up to `content_indent` leading spaces (list continuation alignment), then any
+        // remaining leading spaces.
+        let strip = leading_spaces.min(content_indent);
+        lines.push(line[strip..].trim_start_matches(' '));
+    }
+
+    // A single source line is returned verbatim so single-line blocks are unaffected. When we
+    // joined continuation lines, trailing spaces before each soft break are dropped and replaced
+    // with a single joining space.
+    let joined = if lines.len() == 1 {
+        lines[0].to_string()
+    } else {
+        let last = lines.len() - 1;
+        let mut joined = String::new();
+        for (index, line) in lines.iter().enumerate() {
+            if index == last {
+                joined.push_str(line);
+            } else {
+                // Drop trailing spaces and a single trailing backslash before the soft-break
+                // join. A trailing backslash is a CommonMark hard break; in v1 hard breaks
+                // collapse to the joining space (documented deviation), so it must not survive as
+                // a literal backslash in the joined text.
+                let trimmed = line.trim_end_matches(' ');
+                let trimmed = trimmed.strip_suffix('\\').unwrap_or(trimmed);
+                joined.push_str(trimmed);
+                joined.push(' ');
+            }
+        }
+        joined
+    };
+
+    Ok((remaining, joined))
+}
+
+/// Run inline parsing over an owned, joined block string, returning owned fragments.
+///
+/// On failure, the error is reported at `err_input` (the original block start) so the error
+/// lifetime matches the surrounding parser.
+fn inline_fragments_from_joined<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    joined: &str,
+    err_input: &'a str,
+) -> Result<Vec<FormattedTextFragment>, nom::Err<E>> {
+    match all_consuming(parse_inline::<nom::error::Error<&str>>)(joined) {
+        Ok((_, fragments)) => Ok(fragments),
+        Err(_) => Err(nom::Err::Error(make_error(err_input, ErrorKind::Verify))),
+    }
+}
+
+/// Whether `input` begins a blank line or a new block-level construct, meaning it cannot be a
+/// soft-wrapped continuation of the current paragraph or list item.
+fn starts_new_block_or_blank(input: &str, parse_gfm_tables: bool) -> bool {
+    if input.is_empty() {
+        return true;
+    }
+    if parse_blank_line::<()>(input).is_ok() {
+        return true;
+    }
+    if parse_header_tag::<()>(input).is_ok() {
+        return true;
+    }
+    if parse_horizontal_rule::<()>(input).is_ok() {
+        return true;
+    }
+    if starts_code_fence(input) {
+        return true;
+    }
+    if parse_image::<()>(input).is_ok() {
+        return true;
+    }
+    if preceded(parse_indentation::<()>, parse_task_list_tag::<()>)(input).is_ok() {
+        return true;
+    }
+    if parse_unordered_list_tag::<()>(input).is_ok() {
+        return true;
+    }
+    if parse_ordered_list_tag::<()>(input).is_ok() {
+        return true;
+    }
+    if parse_gfm_tables && starts_gfm_table(input) {
+        return true;
+    }
+    false
+}
+
+/// Whether the first line of `input` opens a fenced code block (up to three leading spaces).
+fn starts_code_fence(input: &str) -> bool {
+    input.trim_start_matches(' ').starts_with("```")
+}
+
+/// Whether a real GFM table begins at `input` — a header row immediately followed by a delimiter
+/// row. A lone pipe-containing line (e.g. a list-item continuation such as `| beta`) is NOT a
+/// table and must not end a soft-wrapped list item, so we require a full table lookahead rather
+/// than keying off a leading `|` alone.
+fn starts_gfm_table(input: &str) -> bool {
+    parse_table::<()>(input).is_ok()
 }
 
 /// Parse a blank line.
@@ -709,17 +855,17 @@ fn parse_header_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 fn parse_unordered_list<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
     indentation_context: &RefCell<ListIndentationContext>,
+    parse_gfm_tables: bool,
 ) -> IResult<&'a str, FormattedIndentTextInline, E> {
-    context(
-        "unordered_list",
-        pair(parse_unordered_list_tag, parse_markdown_line),
-    )(markdown)
-    .map(|(s, (raw_space_count, text))| {
-        let indent_level = indentation_context
-            .borrow_mut()
-            .get_and_register_indent_level(raw_space_count);
-        (s, FormattedIndentTextInline { indent_level, text })
-    })
+    let (after_tag, raw_space_count) = parse_unordered_list_tag::<E>(markdown)?;
+    let content_indent = markdown.len() - after_tag.len();
+    let (remaining, joined) =
+        collect_soft_wrapped_text(after_tag, content_indent, true, parse_gfm_tables)?;
+    let text = inline_fragments_from_joined(&joined, markdown)?;
+    let indent_level = indentation_context
+        .borrow_mut()
+        .get_and_register_indent_level(raw_space_count);
+    Ok((remaining, FormattedIndentTextInline { indent_level, text }))
 }
 fn parse_unordered_list_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
@@ -740,23 +886,23 @@ fn parse_unordered_list_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 fn parse_ordered_list<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
     indentation_context: &RefCell<ListIndentationContext>,
+    parse_gfm_tables: bool,
 ) -> IResult<&'a str, OrderedFormattedIndentTextInline, E> {
-    context(
-        "ordered_list",
-        pair(parse_ordered_list_tag, parse_markdown_line),
-    )(markdown)
-    .map(|(s, ((raw_space_count, number), text))| {
-        let indent_level = indentation_context
-            .borrow_mut()
-            .get_and_register_indent_level(raw_space_count);
-        (
-            s,
-            OrderedFormattedIndentTextInline {
-                number: number.parse().ok(),
-                indented_text: FormattedIndentTextInline { indent_level, text },
-            },
-        )
-    })
+    let (after_tag, (raw_space_count, number)) = parse_ordered_list_tag::<E>(markdown)?;
+    let content_indent = markdown.len() - after_tag.len();
+    let (remaining, joined) =
+        collect_soft_wrapped_text(after_tag, content_indent, true, parse_gfm_tables)?;
+    let text = inline_fragments_from_joined(&joined, markdown)?;
+    let indent_level = indentation_context
+        .borrow_mut()
+        .get_and_register_indent_level(raw_space_count);
+    Ok((
+        remaining,
+        OrderedFormattedIndentTextInline {
+            number: number.parse().ok(),
+            indented_text: FormattedIndentTextInline { indent_level, text },
+        },
+    ))
 }
 
 /// Parse ordered list tag returning raw space count for main parser.
@@ -776,24 +922,25 @@ fn parse_ordered_list_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 fn parse_task_list<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
     indentation_context: &RefCell<ListIndentationContext>,
+    parse_gfm_tables: bool,
 ) -> IResult<&'a str, FormattedTaskList, E> {
-    context(
-        "task_list",
-        tuple((parse_indentation, parse_task_list_tag, parse_markdown_line)),
-    )(markdown)
-    .map(|(s, (raw_space_count, complete, text))| {
-        let indent_level = indentation_context
-            .borrow_mut()
-            .get_and_register_indent_level(raw_space_count);
-        (
-            s,
-            FormattedTaskList {
-                complete,
-                indent_level,
-                text,
-            },
-        )
-    })
+    let (after_tag, (raw_space_count, complete)) =
+        pair(parse_indentation::<E>, parse_task_list_tag::<E>)(markdown)?;
+    let content_indent = markdown.len() - after_tag.len();
+    let (remaining, joined) =
+        collect_soft_wrapped_text(after_tag, content_indent, true, parse_gfm_tables)?;
+    let text = inline_fragments_from_joined(&joined, markdown)?;
+    let indent_level = indentation_context
+        .borrow_mut()
+        .get_and_register_indent_level(raw_space_count);
+    Ok((
+        remaining,
+        FormattedTaskList {
+            complete,
+            indent_level,
+            text,
+        },
+    ))
 }
 
 /// Parse indentation returning raw space count for main parser.
