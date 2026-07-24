@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use super::{
     AskUserQuestionAction, AskUserQuestionEffect, AskUserQuestionPhase, AskUserQuestionSession,
     QuestionDraft,
@@ -35,6 +37,32 @@ fn build_session(questions: Vec<AskUserQuestionItem>) -> AskUserQuestionSession 
 
 fn current_draft(session: &AskUserQuestionSession) -> Option<&QuestionDraft> {
     session.current().and_then(|current| current.draft)
+}
+#[test]
+fn initial_drafts_follow_questions_after_multiselect_sorting() {
+    let questions = vec![
+        build_question("single", "Single", false, false, &["One"]),
+        build_question("multi", "Multi", true, false, &["Alpha", "Beta"]),
+    ];
+    let mut drafts = HashMap::new();
+    drafts.insert(
+        "multi".to_owned(),
+        QuestionDraft {
+            selected_option_indices: HashSet::from([1]),
+            ..Default::default()
+        },
+    );
+
+    let session = AskUserQuestionSession::new_with_drafts(questions, drafts);
+
+    assert_eq!(session.questions()[0].question_id, "multi");
+    assert_eq!(
+        session
+            .draft_for_question(0)
+            .map(|draft| &draft.selected_option_indices),
+        Some(&HashSet::from([1]))
+    );
+    assert!(session.draft_for_question(1).is_none());
 }
 
 #[test]

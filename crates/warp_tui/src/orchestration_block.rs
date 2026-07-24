@@ -623,6 +623,7 @@ impl TuiOrchestrationBlock {
             TuiOptionSelectorEvent::LayoutInvalidated => {
                 ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
             }
+            TuiOptionSelectorEvent::RowsReordered { .. } => {}
         }
     }
 
