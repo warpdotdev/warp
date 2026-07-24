@@ -1756,9 +1756,9 @@ pub(crate) fn initialize_app(
     remote_server::wire_auth_token_rotation(ctx);
 
     log::info!(
-        "Starting warp with channel state {} and version {:?}",
+        "Starting warp version {:?} with channel state:\n{}",
+        ChannelState::app_version(),
         ChannelState::debug_str(),
-        ChannelState::app_version()
     );
 
     // Teach our app that sometimes option means meta.
