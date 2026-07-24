@@ -45,7 +45,7 @@ use super::{
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
     log_bundle_success_message, raw_prompt_if_not_blank, render_status_footer_row,
-    theme_from_argument, voice_argument_is_empty, voice_command_argument,
+    voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -220,7 +220,10 @@ fn theme_slash_command_accepts_direct_selection_and_rejects_invalid_values() {
             view.execute_tui_slash_command(&slash_commands::THEME, Some(&light), ctx);
         });
         app.read(|ctx| {
-            assert_eq!(super::active_theme(ctx), TuiTheme::Light);
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Light
+            );
             assert_eq!(
                 TuiThemeSettings::as_ref(ctx).selected_theme(),
                 TuiTheme::Light
@@ -231,7 +234,10 @@ fn theme_slash_command_accepts_direct_selection_and_rejects_invalid_values() {
             view.execute_tui_slash_command(&slash_commands::THEME, Some(&dark), ctx);
         });
         app.read(|ctx| {
-            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Dark
+            );
             assert_eq!(
                 TuiThemeSettings::as_ref(ctx).selected_theme(),
                 TuiTheme::Dark
@@ -243,7 +249,10 @@ fn theme_slash_command_accepts_direct_selection_and_rejects_invalid_values() {
             view.execute_tui_slash_command(&slash_commands::THEME, Some(&auto), ctx);
         });
         app.read(|ctx| {
-            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Dark
+            );
             assert_eq!(
                 TuiThemeSettings::as_ref(ctx).selected_theme(),
                 TuiTheme::Auto
@@ -563,23 +572,16 @@ fn auto_approve_slash_command_toggles_selected_conversation_off_on_off() {
 }
 
 #[test]
-fn theme_argument_selects_supported_modes() {
-    assert_eq!(theme_from_argument(None), None);
-    assert_eq!(theme_from_argument(Some("  ")), None);
-    assert_eq!(theme_from_argument(Some(" auto ")), Some(TuiTheme::Auto));
-    assert_eq!(theme_from_argument(Some("LIGHT")), Some(TuiTheme::Light));
-    assert_eq!(theme_from_argument(Some("dark")), Some(TuiTheme::Dark));
-    assert_eq!(theme_from_argument(Some("sepia")), None);
-}
-
-#[test]
 fn theme_slash_command_rejects_a_missing_argument() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
         app.read(|ctx| {
-            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Dark
+            );
             assert_eq!(
                 TuiThemeSettings::as_ref(ctx).selected_theme(),
                 TuiTheme::Auto
@@ -590,7 +592,10 @@ fn theme_slash_command_rejects_a_missing_argument() {
             view.execute_tui_slash_command(&slash_commands::THEME, None, ctx);
         });
         app.read(|ctx| {
-            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Dark
+            );
             assert_eq!(
                 TuiThemeSettings::as_ref(ctx).selected_theme(),
                 TuiTheme::Auto

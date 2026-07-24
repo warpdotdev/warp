@@ -1,9 +1,35 @@
 use settings::schema::SettingSchemaEntry;
 use settings::{Setting, SettingSurfaces, SettingsMode, SyncToCloud};
 use settings_value::SettingsValue;
+use warpui_core::runtime::BackgroundLuminance;
 
 use super::{TuiTheme, TuiThemeSetting};
 
+#[test]
+fn theme_names_parse_case_insensitively() {
+    assert_eq!("auto".parse(), Ok(TuiTheme::Auto));
+    assert_eq!("LIGHT".parse(), Ok(TuiTheme::Light));
+    assert_eq!("dark".parse(), Ok(TuiTheme::Dark));
+    assert!("sepia".parse::<TuiTheme>().is_err());
+}
+
+#[test]
+fn automatic_theme_follows_the_background_luminance() {
+    let light = TuiTheme::Auto.resolve_for_background(BackgroundLuminance::Light);
+    let dark = TuiTheme::Auto.resolve_for_background(BackgroundLuminance::Dark);
+    let unknown = TuiTheme::Auto.resolve_for_background(BackgroundLuminance::Unknown);
+
+    assert_eq!(TuiTheme::from(&light), TuiTheme::Light);
+    assert_eq!(TuiTheme::from(&dark), TuiTheme::Dark);
+    assert_eq!(TuiTheme::from(&unknown), TuiTheme::Dark);
+}
+
+#[test]
+fn explicit_theme_overrides_the_background_luminance() {
+    let dark = TuiTheme::Dark.resolve_for_background(BackgroundLuminance::Light);
+
+    assert_eq!(TuiTheme::from(&dark), TuiTheme::Dark);
+}
 #[test]
 fn theme_values_use_lowercase_file_representation() {
     assert_eq!(TuiTheme::Auto.to_file_value(), serde_json::json!("auto"));

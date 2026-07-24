@@ -95,7 +95,7 @@ use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
-use crate::terminal_background::{active_theme, theme_for};
+use crate::terminal_background::probed_colors;
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
     TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
@@ -201,18 +201,6 @@ const SWITCH_UNAVAILABLE_HINT: &str = "That conversation is no longer available.
 const LOADING_CONVERSATION_HINT: &str = "Loading conversation…";
 const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model.";
 const THEME_INVALID_ARGUMENT_HINT: &str = "Theme must be auto, light, or dark.";
-fn theme_from_argument(argument: Option<&str>) -> Option<TuiTheme> {
-    match argument
-        .map(str::trim)
-        .filter(|argument| !argument.is_empty())
-    {
-        None => None,
-        Some(argument) if argument.eq_ignore_ascii_case("auto") => Some(TuiTheme::Auto),
-        Some(argument) if argument.eq_ignore_ascii_case("light") => Some(TuiTheme::Light),
-        Some(argument) if argument.eq_ignore_ascii_case("dark") => Some(TuiTheme::Dark),
-        Some(_) => None,
-    }
-}
 
 /// Footer label shown while the input is in `!` shell mode. The how-to-exit
 /// guidance lives in the input's placeholder ghost text, so the footer only
@@ -3577,7 +3565,8 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-        let Some(theme) = theme_from_argument(argument) else {
+        let Some(theme) = argument.and_then(|argument| argument.trim().parse::<TuiTheme>().ok())
+        else {
             self.show_transient_hint(THEME_INVALID_ARGUMENT_HINT.to_owned(), ctx);
             record_static_slash_command_accepted(command_name, true, ctx);
             return;
@@ -3587,12 +3576,15 @@ impl TuiTerminalSessionView {
         match result {
             Ok(()) => {
                 Appearance::handle(ctx).update(ctx, |appearance, ctx| {
-                    appearance.set_theme(theme_for(theme), ctx);
+                    appearance.set_theme(
+                        theme.resolve_for_background(probed_colors().background_luminance()),
+                        ctx,
+                    );
                 });
                 let hint = match theme {
                     TuiTheme::Auto => format!(
                         "Theme set to auto mode (currently {}).",
-                        active_theme(ctx).display_name()
+                        TuiTheme::from(Appearance::as_ref(ctx).theme()).display_name()
                     ),
                     TuiTheme::Light | TuiTheme::Dark => {
                         format!("Theme set to {} mode.", theme.display_name())

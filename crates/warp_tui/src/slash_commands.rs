@@ -12,10 +12,10 @@ use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
 use warp::settings::{AISettings, TuiTheme, TuiThemeSettings};
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, ConversationSelectionHandle, ParsedSlashCommandInput,
-    SlashCommandDataSource as _, SlashCommandMixer, TuiSlashCommandDataSource,
-    UpdatedActiveCommands, should_close_slash_command_menu_for_exact_match, slash_command_query,
-    slash_commands,
+    AcceptSlashCommandOrSavedPrompt, Appearance, ConversationSelectionHandle,
+    ParsedSlashCommandInput, SlashCommandDataSource as _, SlashCommandMixer,
+    TuiSlashCommandDataSource, UpdatedActiveCommands,
+    should_close_slash_command_menu_for_exact_match, slash_command_query, slash_commands,
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InputDrivenInlineMenuLifecycle};
@@ -27,7 +27,6 @@ use crate::inline_menu::{
     TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
-use crate::terminal_background::active_theme;
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, false, false);
 
@@ -291,7 +290,10 @@ impl TuiSlashCommandModel {
         if title == slash_commands::THEME.name {
             let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
             return Some(match selected_theme {
-                TuiTheme::Auto => format!("(currently auto: {})", active_theme(ctx).display_name()),
+                TuiTheme::Auto => format!(
+                    "(currently auto: {})",
+                    TuiTheme::from(Appearance::as_ref(ctx).theme()).display_name()
+                ),
                 TuiTheme::Light | TuiTheme::Dark => {
                     format!("(currently {})", selected_theme.display_name())
                 }

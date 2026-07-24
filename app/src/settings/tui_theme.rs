@@ -1,5 +1,11 @@
+use std::str::FromStr;
+
 use settings::macros::define_settings_group;
 use settings::{Setting as _, SupportedPlatforms, SyncToCloud};
+use warp_core::ui::theme::{ColorScheme, WarpTheme};
+use warpui_core::runtime::BackgroundLuminance;
+
+use crate::themes::default_themes::{dark_theme, light_theme};
 
 /// The color theme selection used by Warp Agent CLI.
 #[derive(
@@ -31,6 +37,42 @@ impl TuiTheme {
             Self::Auto => "auto",
             Self::Light => "light",
             Self::Dark => "dark",
+        }
+    }
+
+    pub fn resolve_for_background(self, background_luminance: BackgroundLuminance) -> WarpTheme {
+        match self {
+            Self::Auto => match background_luminance {
+                BackgroundLuminance::Light => light_theme(),
+                BackgroundLuminance::Dark | BackgroundLuminance::Unknown => dark_theme(),
+            },
+            Self::Light => light_theme(),
+            Self::Dark => dark_theme(),
+        }
+    }
+}
+
+impl FromStr for TuiTheme {
+    type Err = strum::ParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.eq_ignore_ascii_case("auto") {
+            Ok(Self::Auto)
+        } else if value.eq_ignore_ascii_case("light") {
+            Ok(Self::Light)
+        } else if value.eq_ignore_ascii_case("dark") {
+            Ok(Self::Dark)
+        } else {
+            Err(strum::ParseError::VariantNotFound)
+        }
+    }
+}
+
+impl From<&WarpTheme> for TuiTheme {
+    fn from(theme: &WarpTheme) -> Self {
+        match theme.inferred_color_scheme() {
+            ColorScheme::DarkOnLight => Self::Light,
+            ColorScheme::LightOnDark => Self::Dark,
         }
     }
 }
