@@ -44,6 +44,18 @@ impl GeapCredentials {
             None => false,
         }
     }
+
+    /// Returns `true` when the credential is at or past its hard expiry.
+    ///
+    /// Unlike [`Self::needs_refresh`], this deliberately ignores the proactive
+    /// lead window so request-time blocking refresh only adds latency when the
+    /// currently stored token is known to be unusable.
+    pub fn is_expired(&self) -> bool {
+        match self.expires_at {
+            Some(expires_at) => expires_at <= SystemTime::now(),
+            None => false,
+        }
+    }
 }
 
 impl From<GeapCredentials> for api::request::settings::api_keys::GoogleCloudCredentials {

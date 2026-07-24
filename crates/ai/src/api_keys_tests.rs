@@ -1,5 +1,8 @@
 use std::time::{Duration, SystemTime};
 
+#[cfg(not(target_family = "wasm"))]
+use warpui_core::App;
+
 use super::*;
 
 fn make_manager(keys: ApiKeys) -> ApiKeyManager {
@@ -114,6 +117,8 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_waiters: None,
+        #[cfg(not(target_family = "wasm"))]
+        geap_refresh_waiters: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         geap_credentials_state: GeapCredentialsState::Missing,
@@ -806,6 +811,62 @@ fn api_keys_for_request_omits_geap_token_when_previous_binding_mismatches() {
     let mut gate = geap_gate();
     gate.user_uid = "someone-else".into();
     assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_expired_refresh_eligibility_requires_expired_matching_binding() {
+    let binding = geap_gate();
+    let expired = make_manager_with_geap(geap_loaded("expired", Some(0)));
+    assert!(expired.geap_expired_refresh_eligibility(&binding));
+
+    let valid = make_manager_with_geap(geap_loaded("valid", Some(3600)));
+    assert!(!valid.geap_expired_refresh_eligibility(&binding));
+
+    let refreshing = make_manager_with_geap(GeapCredentialsState::Refreshing {
+        previous: Some((geap_credentials("expired", Some(0)), binding.clone())),
+    });
+    assert!(refreshing.geap_expired_refresh_eligibility(&binding));
+
+    let first_mint = make_manager_with_geap(GeapCredentialsState::Refreshing { previous: None });
+    assert!(!first_mint.geap_expired_refresh_eligibility(&binding));
+
+    let mut mismatched = binding.clone();
+    mismatched.user_uid = "different-user".into();
+    assert!(!expired.geap_expired_refresh_eligibility(&mismatched));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn begin_expired_geap_refresh_is_single_flight() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| make_manager_with_geap(geap_loaded("expired", Some(0))));
+        manager.update(&mut app, |manager, ctx| {
+            let binding = geap_gate();
+            let mut kickoff_count = 0;
+            let first = manager.begin_expired_geap_refresh(&binding, ctx, |_, _| {
+                kickoff_count += 1;
+            });
+            let second = manager.begin_expired_geap_refresh(&binding, ctx, |_, _| {
+                kickoff_count += 1;
+            });
+
+            assert!(first.is_some());
+            assert!(second.is_some());
+            assert_eq!(kickoff_count, 1);
+            assert_eq!(
+                manager
+                    .geap_refresh_waiters
+                    .as_ref()
+                    .expect("refresh should be in flight")
+                    .len(),
+                2
+            );
+
+            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Refreshed);
+            assert!(manager.geap_refresh_waiters.is_none());
+        });
+    });
 }
 
 // ── grok expiry + blocking-refresh eligibility ──────────────────

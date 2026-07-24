@@ -194,6 +194,13 @@ pub enum AIApiError {
         "Grok subscription token could not be refreshed. Please try reconnecting your subscription."
     )]
     GrokSubscriptionTokenRefreshFailed,
+
+    /// Synthesized client-side when a request that uses Gemini Enterprise
+    /// can't be sent because its expired credential failed to refresh.
+    #[error(
+        "Gemini Enterprise credentials could not be refreshed. Please refresh your credentials."
+    )]
+    GeminiEnterpriseCredentialsRefreshFailed,
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -337,7 +344,8 @@ impl AIApiError {
             }
             // A failed Grok token refresh is a credential problem the user must
             // fix by reconnecting, so retrying or resuming won't help.
-            AIApiError::GrokSubscriptionTokenRefreshFailed => false,
+            AIApiError::GrokSubscriptionTokenRefreshFailed
+            | AIApiError::GeminiEnterpriseCredentialsRefreshFailed => false,
             // By default, attempt recovery on error.
             _ => true,
         }
@@ -359,7 +367,8 @@ impl ErrorExt for AIApiError {
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
             | AIApiError::NoContextFound
-            | AIApiError::GrokSubscriptionTokenRefreshFailed => false,
+            | AIApiError::GrokSubscriptionTokenRefreshFailed
+            | AIApiError::GeminiEnterpriseCredentialsRefreshFailed => false,
         }
     }
 }

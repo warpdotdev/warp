@@ -2,7 +2,7 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{
     ApiKeyManager, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation,
-    GeapMintBinding, LoadGeapCredentialsError,
+    GeapMintBinding, GeapRefreshOutcome, LoadGeapCredentialsError,
 };
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
@@ -255,11 +255,13 @@ fn apply_geap_mint_result(
         GeapPolicy::Disabled => {
             log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
             manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
+            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
             return;
         }
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
             manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
+            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
@@ -291,6 +293,10 @@ fn apply_geap_mint_result(
                 manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
             }
         }
+        // Requests waiting on the old binding must not send the previous
+        // credential. They terminate while the safety-net mint continues under
+        // the current binding.
+        manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
         refresh_geap_credentials(manager, ctx);
         return;
     }
@@ -313,6 +319,7 @@ fn apply_geap_mint_result(
             // Arm the next one-shot proactive refresh — this is what makes
             // the ~hourly loop self-sustaining.
             schedule_geap_token_refresh(manager, ctx);
+            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Refreshed);
         }
         Err(err) => {
             report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
@@ -342,6 +349,7 @@ fn apply_geap_mint_result(
                     );
                 }
             }
+            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
         }
     }
 }

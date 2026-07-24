@@ -211,6 +211,16 @@ pub enum GrokRefreshOutcome {
     /// The refresh failed; the stored token is unchanged (still expired).
     Failed,
 }
+/// Outcome of a Gemini Enterprise credential refresh, delivered to requests
+/// waiting for an expired credential to be replaced before sending.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeapRefreshOutcome {
+    /// The credential was refreshed and the new value stored.
+    Refreshed,
+    /// The refresh failed; the expired credential must not be sent.
+    Failed,
+}
 
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -248,6 +258,10 @@ pub struct ApiKeyManager {
     /// refresh is running. Always cleared when the refresh finishes.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_waiters: Option<Vec<oneshot::Sender<GrokRefreshOutcome>>>,
+    /// Coordinates request-time GEAP refreshes. `Some` means a mint is in
+    /// flight; its senders are woken by the app-layer mint completion callback.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) geap_refresh_waiters: Option<Vec<oneshot::Sender<GeapRefreshOutcome>>>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     /// In-memory Gemini Enterprise (GEAP) credential state.
@@ -275,6 +289,8 @@ impl ApiKeyManager {
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_waiters: None,
+            #[cfg(not(target_family = "wasm"))]
+            geap_refresh_waiters: None,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             geap_credentials_state: GeapCredentialsState::Missing,
@@ -488,6 +504,67 @@ impl ApiKeyManager {
 
     pub fn geap_credentials_state(&self) -> &GeapCredentialsState {
         &self.geap_credentials_state
+    }
+
+    /// Returns whether the currently stored GEAP credential is expired and
+    /// belongs to the request's active mint binding.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn geap_expired_refresh_eligibility(&self, binding: &GeapMintBinding) -> bool {
+        match self.geap_credentials_state() {
+            GeapCredentialsState::Loaded {
+                credentials,
+                minted_for,
+                ..
+            } if minted_for == binding => credentials.is_expired(),
+            GeapCredentialsState::Refreshing {
+                previous: Some((credentials, minted_for)),
+            } if minted_for == binding => credentials.is_expired(),
+            _ => false,
+        }
+    }
+
+    /// Ensures one refresh is in flight for an expired GEAP credential and
+    /// returns a receiver for its completion. The app layer supplies the mint
+    /// kickoff because it owns the network credential machinery.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn begin_expired_geap_refresh<F>(
+        &mut self,
+        binding: &GeapMintBinding,
+        ctx: &mut ModelContext<Self>,
+        start_refresh: F,
+    ) -> Option<oneshot::Receiver<GeapRefreshOutcome>>
+    where
+        F: FnOnce(&mut Self, &mut ModelContext<Self>),
+    {
+        if !self.geap_expired_refresh_eligibility(binding) {
+            return None;
+        }
+
+        let (tx, rx) = oneshot::channel();
+        if let Some(waiters) = self.geap_refresh_waiters.as_mut() {
+            waiters.push(tx);
+            return Some(rx);
+        }
+
+        self.geap_refresh_waiters = Some(vec![tx]);
+        if !matches!(
+            self.geap_credentials_state(),
+            GeapCredentialsState::Refreshing { .. }
+        ) {
+            start_refresh(self, ctx);
+        }
+        Some(rx)
+    }
+
+    /// Wakes requests waiting for a request-time GEAP refresh and clears the
+    /// single-flight guard. Dropped receivers are expected when a stream was
+    /// cancelled or superseded.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn notify_geap_refresh_outcome(&mut self, outcome: GeapRefreshOutcome) {
+        let waiters = self.geap_refresh_waiters.take().unwrap_or_default();
+        for waiter in waiters {
+            let _ = waiter.send(outcome);
+        }
     }
 
     pub fn aws_credentials_refresh_strategy(&self) -> AwsCredentialsRefreshStrategy {

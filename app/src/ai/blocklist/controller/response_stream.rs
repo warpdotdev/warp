@@ -7,7 +7,7 @@ use chrono::{DateTime, Local, TimeDelta};
 use futures::channel::oneshot;
 use uuid::Uuid;
 use warp_errors::report_error;
-use warp_multi_agent_api::response_event;
+use warp_multi_agent_api::{self as maa_api, response_event};
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::api::{self, ConvertToAPITypeError, generate_multi_agent_output};
@@ -26,6 +26,11 @@ const MAX_RETRIES: usize = 3;
 /// stall the request.
 #[cfg(not(target_family = "wasm"))]
 const GROK_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Maximum time to wait for a request-time GEAP credential mint before
+/// surfacing the existing manual-refresh recovery UI.
+#[cfg(not(target_family = "wasm"))]
+const GEAP_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What to do about a failed or truncated MAA response attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,13 +253,13 @@ impl ResponseStream {
     }
 
     /// Sends the request for `request_id`. When the request's model is served by
-    /// the connected Grok subscription and that subscription's OAuth token is
-    /// already past hard expiry, this first blocks on a single shared refresh
+    /// the connected Grok subscription or Gemini Enterprise and that credential
+    /// is already past hard expiry, this first blocks on a single shared refresh
     /// (owned by `ApiKeyManager`, so only one runs at a time) before sending.
-    /// The wait is bounded by [`GROK_REFRESH_REQUEST_TIMEOUT`]. If the refresh
-    /// fails or times out, the request is NOT sent with the dead token; a
-    /// terminal, user-visible error is surfaced instead. Requests that don't use
-    /// the Grok subscription (and tokens that are still valid) are sent directly.
+    /// The wait is bounded by the provider-specific five-second timeout. If the
+    /// refresh fails or times out, the request is NOT sent with the dead token; a
+    /// terminal, user-visible error is surfaced instead. Requests with valid
+    /// credentials (and requests for other providers) are sent directly.
     fn spawn_request(
         request_id: Uuid,
         params: api::RequestParams,
@@ -264,10 +269,10 @@ impl ResponseStream {
         // The Grok subscription and its OAuth refresh are native-only.
         #[cfg(not(target_family = "wasm"))]
         {
-            use ::ai::api_keys::{ApiKeyManager, GrokRefreshOutcome};
+            use ::ai::api_keys::{ApiKeyManager, GeapRefreshOutcome, GrokRefreshOutcome};
             use warpui::r#async::FutureExt as _;
 
-            use crate::ai::llms::{LLMPreferences, LLMProvider};
+            use crate::ai::llms::{LLMModelHost, LLMPreferences, LLMProvider};
             use crate::workspaces::user_workspaces::UserWorkspaces;
 
             // Only touch the Grok token for requests that actually use the Grok
@@ -324,6 +329,63 @@ impl ResponseStream {
                     return;
                 }
             }
+
+            // Gemini Enterprise credentials are minted by the app layer but
+            // coordinated on ApiKeyManager so concurrent prompts share one
+            // in-flight mint. Only a hard-expired, binding-matching token
+            // blocks; near-expiry tokens continue through the existing
+            // asynchronous safety net.
+            let uses_geap = LLMPreferences::as_ref(ctx)
+                .get_llm_info(&params.model)
+                .is_some_and(|info| {
+                    info.host_configs
+                        .get(&LLMModelHost::GeminiEnterprise)
+                        .is_some_and(|host| host.enabled)
+                });
+            if uses_geap
+                && let Some(binding) =
+                    crate::ai::geap_credentials::current_geap_policy(ctx).mint_binding()
+            {
+                let refresh_binding = binding.clone();
+                let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.begin_expired_geap_refresh(&binding, ctx, |manager, ctx| {
+                        crate::ai::geap_credentials::refresh_geap_credentials(manager, ctx);
+                    })
+                });
+                if let Some(refresh_rx) = refresh_rx {
+                    let _ = ctx.spawn(
+                        async move { refresh_rx.with_timeout(GEAP_REFRESH_REQUEST_TIMEOUT).await },
+                        move |me, result, ctx| {
+                            if me.current_request_id != Some(request_id) {
+                                return;
+                            }
+                            if matches!(result, Ok(Ok(GeapRefreshOutcome::Refreshed))) {
+                                // RequestParams snapshots credentials before
+                                // the wait. Re-read only GEAP credentials so
+                                // unrelated API keys remain unchanged.
+                                let fresh_credentials = ApiKeyManager::as_ref(ctx)
+                                    .api_keys_for_request(
+                                        UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx),
+                                        UserWorkspaces::as_ref(ctx)
+                                            .is_aws_bedrock_credentials_enabled(ctx),
+                                        Some(refresh_binding.clone()),
+                                    )
+                                    .and_then(|keys| keys.google_cloud_credentials);
+                                replace_geap_credentials(&mut me.params, fresh_credentials);
+                                Self::spawn_generate(
+                                    request_id,
+                                    me.params.clone(),
+                                    cancellation_rx,
+                                    ctx,
+                                );
+                            } else {
+                                me.surface_geap_refresh_failure(request_id, ctx);
+                            }
+                        },
+                    );
+                    return;
+                }
+            }
         }
 
         Self::spawn_generate(request_id, params, cancellation_rx, ctx);
@@ -335,6 +397,19 @@ impl ResponseStream {
     #[cfg(not(target_family = "wasm"))]
     fn surface_grok_refresh_failure(&mut self, request_id: Uuid, ctx: &mut ModelContext<Self>) {
         let error = Arc::new(AIApiError::GrokSubscriptionTokenRefreshFailed);
+        self.error_event_emitted = true;
+        self.report_request_failure(&error, NetworkStatus::as_ref(ctx).is_online());
+        ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
+            error,
+        ))));
+        self.on_response_stream_complete(request_id, ctx);
+    }
+
+    /// Emits the existing Gemini Enterprise credentials recovery error when a
+    /// request-time mint fails or times out, without sending the expired token.
+    #[cfg(not(target_family = "wasm"))]
+    fn surface_geap_refresh_failure(&mut self, request_id: Uuid, ctx: &mut ModelContext<Self>) {
+        let error = Arc::new(AIApiError::GeminiEnterpriseCredentialsRefreshFailed);
         self.error_event_emitted = true;
         self.report_request_failure(&error, NetworkStatus::as_ref(ctx).is_online());
         ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
@@ -675,6 +750,15 @@ impl ResponseStream {
             ctx.emit(ResponseStreamEvent::WaitingForNetwork { waiting: false });
             me.retry(ctx);
         });
+    }
+}
+
+fn replace_geap_credentials(
+    params: &mut api::RequestParams,
+    credentials: Option<maa_api::request::settings::api_keys::GoogleCloudCredentials>,
+) {
+    if let Some(keys) = params.api_keys.as_mut() {
+        keys.google_cloud_credentials = credentials;
     }
 }
 

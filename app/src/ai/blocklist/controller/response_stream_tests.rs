@@ -1,4 +1,5 @@
-use super::{RecoveryAction, recovery_action};
+use super::{RecoveryAction, recovery_action, replace_geap_credentials};
+use crate::ai::agent::api::RequestParams;
 
 // Argument order: has_received_client_actions, is_recoverable, has_retry_budget,
 // can_attempt_resume_on_error, is_online.
@@ -80,5 +81,35 @@ fn non_recoverable_post_action_failure_is_terminal() {
     assert_eq!(
         recovery_action(true, false, true, true, true),
         RecoveryAction::Fail
+    );
+}
+
+#[test]
+fn geap_request_refresh_injects_the_fresh_token_before_send() {
+    let mut params = RequestParams::new_for_test();
+    params.api_keys = Some(Default::default());
+    params.api_keys.as_mut().unwrap().google_cloud_credentials = Some(
+        warp_multi_agent_api::request::settings::api_keys::GoogleCloudCredentials {
+            access_token: "expired-token".to_string(),
+        },
+    );
+
+    replace_geap_credentials(
+        &mut params,
+        Some(
+            warp_multi_agent_api::request::settings::api_keys::GoogleCloudCredentials {
+                access_token: "fresh-token".to_string(),
+            },
+        ),
+    );
+
+    assert_eq!(
+        params
+            .api_keys
+            .unwrap()
+            .google_cloud_credentials
+            .unwrap()
+            .access_token,
+        "fresh-token"
     );
 }
