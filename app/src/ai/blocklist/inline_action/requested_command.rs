@@ -1325,7 +1325,9 @@ impl RequestedCommandView {
         }
 
         if let Some(font_override) = font_override {
-            config = config.with_font_family(font_override);
+            config = config
+                .with_font_family(font_override)
+                .with_soft_wrap_title();
         }
         if let Some(font_color_override) = font_color_override {
             config = config.with_font_color(font_color_override);
