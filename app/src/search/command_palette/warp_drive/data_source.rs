@@ -563,14 +563,31 @@ mod full_text_searcher {
     use crate::search::command_palette::warp_drive::workflow_search_item::WorkflowSearchItem;
     use crate::search::env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionResult;
     use crate::search::notebooks::fuzzy_match::FuzzyMatchNotebookResult;
-    use crate::search::searcher::{AsyncSearcher, DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR};
+    use crate::search::searcher::{
+        AsyncSearcher, DEFAULT_MEMORY_BUDGET, MIN_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR,
+    };
     use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
     use crate::server::ids::ObjectUid;
     use crate::workflows::CloudWorkflow;
 
-    /// Memory budget for the search index of warp drive.
-    /// Warp could potentially have a lot of objects, so we increase it from the default of 50MB to 100MB
-    const MEMORY_BUDGET: usize = 100_000_000; // TODO: is 100MB really necessary?
+    /// Maximum number of bytes to index from large text content fields (notebooks, workflows).
+    /// Indexing only the first portion of content significantly reduces tantivy's in-RAM
+    /// segment sizes while preserving search quality for typical queries.
+    const MAX_INDEXED_CONTENT_BYTES: usize = 50_000; // 50 KB
+
+    /// Truncates `s` to at most `max_bytes` bytes, ensuring the cut falls on a valid UTF-8
+    /// character boundary.
+    fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
+        if s.len() <= max_bytes {
+            return s;
+        }
+        // Walk backwards from max_bytes until we land on a char boundary.
+        let mut end = max_bytes;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        &s[..end]
+    }
 
     // All Warp Drive objects are boosted due to multiple fields being a part of the same total score,
     // putting them at an inherent disadvantage, as each field would only have a fractional weight.
@@ -710,10 +727,13 @@ mod full_text_searcher {
                     let notebook: Option<&CloudNotebook> = object.into();
                     if let Some(notebook) = notebook {
                         let name = notebook.model().title.to_lowercase();
-                        let content = NotebookManager::as_ref(app)
+                        let raw_content = NotebookManager::as_ref(app)
                             .notebook_raw_text(notebook.id)
-                            .unwrap_or(&notebook.model().data)
-                            .to_lowercase();
+                            .unwrap_or(&notebook.model().data);
+                        // Truncate large content to limit tantivy in-RAM segment sizes.
+                        let content =
+                            truncate_to_char_boundary(raw_content, MAX_INDEXED_CONTENT_BYTES)
+                                .to_lowercase();
                         let folder = notebook.breadcrumbs(app).to_lowercase();
                         let uid = notebook.uid();
 
@@ -734,7 +754,12 @@ mod full_text_searcher {
                         let workflow = &cloud_workflow.model().data;
 
                         let title = workflow.name().to_lowercase();
-                        let content = workflow.content().to_lowercase();
+                        // Truncate large content to limit tantivy in-RAM segment sizes.
+                        let content = truncate_to_char_boundary(
+                            workflow.content(),
+                            MAX_INDEXED_CONTENT_BYTES,
+                        )
+                        .to_lowercase();
                         let description = workflow
                             .description()
                             .unwrap_or(&"".to_owned())
@@ -869,10 +894,13 @@ mod full_text_searcher {
                     let notebook: Option<&CloudNotebook> = obj.as_ref().into();
                     notebook.map(|notebook| {
                         let name = notebook.model().title.to_lowercase();
-                        let content = NotebookManager::as_ref(app)
+                        let raw_content = NotebookManager::as_ref(app)
                             .notebook_raw_text(notebook.id)
-                            .unwrap_or(&notebook.model().data)
-                            .to_lowercase();
+                            .unwrap_or(&notebook.model().data);
+                        // Truncate large content to limit tantivy in-RAM segment sizes.
+                        let content =
+                            truncate_to_char_boundary(raw_content, MAX_INDEXED_CONTENT_BYTES)
+                                .to_lowercase();
                         let folder = notebook.breadcrumbs(app).to_lowercase();
                         let uid = notebook.uid();
                         NotebookSearchDocument {
@@ -894,7 +922,12 @@ mod full_text_searcher {
                     cloud_workflow.map(|cloud_workflow| {
                         let workflow = &cloud_workflow.model().data;
                         let title = workflow.name().to_lowercase();
-                        let content = workflow.content().to_lowercase();
+                        // Truncate large content to limit tantivy in-RAM segment sizes.
+                        let content = truncate_to_char_boundary(
+                            workflow.content(),
+                            MAX_INDEXED_CONTENT_BYTES,
+                        )
+                        .to_lowercase();
                         let description = workflow
                             .description()
                             .unwrap_or(&"".to_owned())
@@ -1119,11 +1152,11 @@ mod full_text_searcher {
         pub(crate) fn new(background: Arc<Background>) -> Self {
             FullTextWarpDriveSearcher {
                 notebook_searcher: NOTEBOOK_SEARCH_SCHEMA
-                    .create_async_searcher(MEMORY_BUDGET, background.clone()),
+                    .create_async_searcher(DEFAULT_MEMORY_BUDGET, background.clone()),
                 workflow_searcher: WORKFLOW_SEARCH_SCHEMA
                     .create_async_searcher(DEFAULT_MEMORY_BUDGET, background.clone()),
                 env_var_searcher: ENVVAR_SEARCH_SCHEMA
-                    .create_async_searcher(DEFAULT_MEMORY_BUDGET, background),
+                    .create_async_searcher(MIN_MEMORY_BUDGET, background),
             }
         }
     }
