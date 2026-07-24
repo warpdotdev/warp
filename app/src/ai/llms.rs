@@ -725,6 +725,14 @@ struct AvailableLLMsUpdate {
 /// use as well as the user's preferred LLM for Agent Mode.
 pub struct LLMPreferences {
     models_by_feature: ModelsByFeature,
+    /// Whether the most recent authed agent-mode model-list fetch failed (or
+    /// returned an empty list), meaning the server-provided model list is
+    /// currently unavailable. Set in [`Self::refresh_authed_models`] on a fetch
+    /// error and cleared on the next successful authed fetch. Lets validators
+    /// distinguish "model list unavailable (server unhealthy)" from "id
+    /// genuinely not in a valid list" instead of blaming the user's model id
+    /// when the list never populated.
+    agent_mode_models_unavailable: bool,
     last_update: Option<AvailableLLMsUpdate>,
     // Stores model overrides for a given terminal view. User selections are
     // normalized against the GUI profile default, while explicit child-run
@@ -801,6 +809,7 @@ impl LLMPreferences {
 
         let mut me = Self {
             models_by_feature,
+            agent_mode_models_unavailable: false,
             last_update: None,
             base_llm_for_terminal_view,
             custom_llms,
@@ -1423,6 +1432,21 @@ impl LLMPreferences {
             .and_then(|id| self.models_by_feature.agent_mode.info_for_id(id))
     }
 
+    /// Returns `true` when the most recent authed agent-mode model-list fetch
+    /// failed (or returned an empty list), so the server-provided model list is
+    /// currently unavailable. Validators use this to surface a
+    /// server/model-list-availability error instead of blaming the user's model
+    /// id when the list never populated (e.g. the server is unhealthy).
+    pub fn agent_mode_models_unavailable(&self) -> bool {
+        self.agent_mode_models_unavailable
+    }
+
+    /// Sets whether the authed agent-mode model list is currently unavailable.
+    /// Called from the authed fetch path on success/failure and from tests.
+    pub(crate) fn set_agent_mode_models_unavailable(&mut self, unavailable: bool) {
+        self.agent_mode_models_unavailable = unavailable;
+    }
+
     #[cfg(feature = "integration_tests")]
     pub fn is_available_agent_mode_llm(&self, id: &LLMId) -> bool {
         self.models_by_feature.agent_mode.info_for_id(id).is_some()
@@ -1656,9 +1680,19 @@ impl LLMPreferences {
                     if update != me.models_by_feature {
                         me.on_server_update(update, ctx);
                     }
+                    // A successful authed fetch means the server-provided model
+                    // list is available again; clear the unavailable flag a
+                    // prior failed fetch may have set (see the `Err` branch).
+                    me.set_agent_mode_models_unavailable(false);
                 }
                 Err(e) => {
                     report_error!(e.context("Failed to fetch LLMs from server"));
+                    // The authed model list is unavailable (the server is
+                    // unhealthy or returned an empty list). Track it so
+                    // validators can surface a server/model-list-availability
+                    // error instead of blaming the user's model id when the
+                    // list never populated.
+                    me.set_agent_mode_models_unavailable(true);
                 }
             },
         );
