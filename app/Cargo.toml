@@ -526,7 +526,6 @@ default = [
     "rect_selection",
     "reload_stale_conversation_files",
     "loginless_conversion",
-    "warp_packs",
     "ai_rules",
     "suggested_rules",
     "default_waterfall_mode",
@@ -897,7 +896,6 @@ drive_objects_as_context = []
 iterm_images = []
 validate_autosuggestions = []
 autoupdate_ui_revamp = []
-warp_packs = []
 suggested_rules = []
 command_correction_key = []
 full_source_code_embedding = []
