@@ -497,7 +497,6 @@ use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
-use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::toast_stack::{
     ToastStack, ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
 };
@@ -19736,11 +19735,7 @@ impl Workspace {
         ctx: &AppContext,
     ) -> Box<dyn Element> {
         let tab = &self.tabs[tab_index];
-        let close_button_position = if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
-            TabSettings::as_ref(ctx).close_button_position
-        } else {
-            TabCloseButtonPosition::default()
-        };
+        let close_button_position = TabSettings::as_ref(ctx).close_button_position;
 
         let is_drag_target = self
             .hovered_tab_index
@@ -19841,11 +19836,7 @@ impl Workspace {
                 )
                 .finish(),
             );
-            let close_button_position = if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
-                TabSettings::as_ref(ctx).close_button_position
-            } else {
-                TabCloseButtonPosition::default()
-            };
+            let close_button_position = TabSettings::as_ref(ctx).close_button_position;
             // When a group has only one member, suppress that member's per-tab
             // `Draggable` so the parent group's `Draggable` picks up the drag
             // instead, dragging the whole group rather than orphaning it.
@@ -20276,11 +20267,7 @@ impl Workspace {
             vertical_tabs::render_tab_group_for_drag_ghost(self, tab_index, ctx)
         } else {
             let tab = &self.tabs[tab_index];
-            let close_button_position = if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
-                TabSettings::as_ref(ctx).close_button_position
-            } else {
-                TabCloseButtonPosition::default()
-            };
+            let close_button_position = TabSettings::as_ref(ctx).close_button_position;
             let tab_bar_state = TabBarState {
                 tab_count: self.tabs.len(),
                 active_tab_index: Some(tab_index),

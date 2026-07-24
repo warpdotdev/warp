@@ -345,9 +345,6 @@ pub enum FeatureFlag {
     /// Enables fallback model load output messaging in the warping indicator.
     FallbackModelLoadOutputMessaging,
 
-    /// Enables close button on left side of tabs
-    TabCloseButtonOnLeft,
-
     /// Enables AI agent profile settings UI and functionality.
     ///
     /// TODO: When cleaning up this flag, also remove the `show_model_selectors_in_prompt`
