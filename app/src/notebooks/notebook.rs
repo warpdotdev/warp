@@ -366,7 +366,7 @@ impl NotebookView {
         let input = ctx.add_typed_action_view(|ctx| {
             let editor_model = ctx.add_model(|ctx| {
                 let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
-                NotebooksEditorModel::new(styles, window_id, ctx)
+                NotebooksEditorModel::new(styles, window_id, false, ctx)
             });
             let editor = RichTextEditorView::new(
                 view_position_id.clone(),
