@@ -7714,11 +7714,15 @@ impl PaneGroup {
 
     /// Get all terminal CWDs for this pane group.
     /// This is used by the Workspace to refresh the active directories model.
+    ///
+    /// Only panes that are visible in the layout tree are included. Off-tree
+    /// child agent panes and panes displaced by a swap (TemporaryReplacement)
+    /// are excluded so they cannot inject ghost repo roots into the file tree.
     pub fn terminal_view_working_directories<'a>(
         &'a self,
         ctx: &'a AppContext,
     ) -> impl Iterator<Item = (EntityId, Option<LocalOrRemotePath>)> + 'a {
-        self.terminal_views(ctx).into_iter().map(|terminal_view| {
+        self.visible_terminal_views(ctx).into_iter().map(|terminal_view| {
             let terminal_id = terminal_view.id();
             let cwd = terminal_view.as_ref(ctx).pwd_as_local_or_remote(ctx);
             (terminal_id, cwd)

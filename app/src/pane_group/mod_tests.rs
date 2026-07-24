@@ -3336,3 +3336,125 @@ fn decide_remote_child_hydration_empty_token_falls_back() {
         );
     }
 }
+
+// Regression test: off-tree child agent panes must not contribute ghost
+// repo roots to the file tree.
+//
+// Before the fix, `terminal_view_working_directories` used `terminal_views()`
+// which iterates ALL `pane_contents` entries (including off-tree child agent
+// panes). After the fix it uses `visible_terminal_views()`, which only walks
+// the layout tree.
+#[test]
+fn test_hidden_child_agent_pane_excluded_from_working_directories() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_terminal_id = panes
+                .terminal_view_from_pane_id(parent_pane_id, ctx)
+                .expect("parent pane should have a terminal view")
+                .id();
+
+            // Only the one visible parent pane should contribute.
+            let before: Vec<_> = panes.terminal_view_working_directories(ctx).collect();
+            assert_eq!(before.len(), 1, "one visible pane → one working directory entry");
+            assert_eq!(before[0].0, parent_terminal_id, "entry must be the visible parent");
+
+            // Insert a child agent pane off-tree (the path that causes the bug:
+            // pane lives in pane_contents but is NOT in the layout tree).
+            let child_pane_id = panes.insert_terminal_pane_hidden_for_child_agent(
+                parent_pane_id,
+                HashMap::new(),
+                IsSharedSessionCreator::No,
+                ctx,
+            );
+
+            // Verify the child pane really is off-tree but still in pane_contents.
+            assert!(panes.has_pane_id(child_pane_id.into()));
+            assert!(!panes.panes.is_pane_in_tree(child_pane_id.into()));
+
+            // After the fix: the hidden child must NOT increase the count.
+            // (Before the fix `terminal_views()` would have included it → count == 2.)
+            let after: Vec<_> = panes.terminal_view_working_directories(ctx).collect();
+            assert_eq!(
+                after.len(),
+                1,
+                "off-tree child agent pane must not contribute to working directories \
+                 (ghost repo roots in the file tree are caused by this bug)"
+            );
+            assert_eq!(after[0].0, parent_terminal_id, "entry must still be the visible parent");
+        });
+    });
+}
+
+// Regression test: when a child agent pane is swapped into the visible slot,
+// the displaced original pane (TemporaryReplacement) must not contribute
+// ghost repo roots to the file tree.
+#[test]
+fn test_swapped_out_original_pane_excluded_from_working_directories() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+
+            let child = create_hidden_child_agent_conversation(
+                panes,
+                HiddenChildAgentConversationRequest {
+                    parent_pane_id,
+                    name: "Test Agent".to_string(),
+                    parent_conversation_id,
+                    orchestration_harness: None,
+                    env_vars: HashMap::new(),
+                    task_context: None,
+                    is_shared_session_creator: IsSharedSessionCreator::No,
+                },
+                ctx,
+            )
+            .expect("hidden child conversation should be created");
+            let child_pane_id = panes
+                .child_agent_panes
+                .get(&child.conversation_id)
+                .copied()
+                .expect("fresh hidden child pane should be tracked");
+
+            // Before swap: only the visible parent pane contributes.
+            let before: Vec<_> = panes.terminal_view_working_directories(ctx).collect();
+            assert_eq!(before.len(), 1, "before swap: only the parent pane is visible");
+
+            // Swap: the child pane takes the parent's slot; the parent is
+            // hidden as TemporaryReplacement (still in pane_contents, off-tree).
+            panes.swap_active_pane_to_conversation(
+                parent_pane_id,
+                child.conversation_id,
+                ctx,
+            );
+
+            // The child pane is now the visible pane; the original is hidden.
+            assert_eq!(panes.focused_pane_id(ctx), child_pane_id);
+            assert!(
+                panes.original_pane_for_replacement(child_pane_id).is_some(),
+                "original pane should be hidden as TemporaryReplacement"
+            );
+
+            // After the fix: the displaced original must NOT increase the count.
+            // (Before the fix `terminal_views()` would have included it → count == 2.)
+            let after: Vec<_> = panes.terminal_view_working_directories(ctx).collect();
+            assert_eq!(
+                after.len(),
+                1,
+                "TemporaryReplacement (displaced original) must not contribute to \
+                 working directories after a swap"
+            );
+            let child_terminal_id = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("child pane should have a terminal view")
+                .id();
+            assert_eq!(after[0].0, child_terminal_id, "entry must be the now-visible child pane");
+        });
+    });
+}
