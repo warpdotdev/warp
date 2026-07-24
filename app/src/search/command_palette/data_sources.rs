@@ -120,7 +120,7 @@ impl DataSourceStore {
                 );
             }
 
-            if FeatureFlag::CommandPaletteFileSearch.is_enabled() && !is_shared_session_viewer {
+            if !is_shared_session_viewer {
                 let file_search_model = FileSearchModel::as_ref(ctx);
                 let is_in_git_repo = file_search_model.repo_root_location(ctx).is_some();
 
