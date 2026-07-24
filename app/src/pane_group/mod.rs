@@ -7329,6 +7329,118 @@ impl PaneGroup {
         ctx.emit(Event::AppStateChanged);
     }
 
+    /// Detach every off-tree child agent pane whose parent conversation
+    /// lives on `parent_terminal_view_id` so they can travel with the
+    /// parent pane when it is moved into another pane group (drag-to-tab-bar
+    /// or drag-into-existing-tab). Returns the detached
+    /// `(conversation_id, content)` pairs for
+    /// [`adopt_migrated_child_agent_panes`] to re-attach in the destination
+    /// group. This is the parent-move counterpart of
+    /// [`take_child_agent_pane_for_split_off`], generalized to all of a
+    /// parent's children, and is a no-op (empty `Vec`) when the moved pane
+    /// owns no child agent panes.
+    pub fn take_child_agent_panes_for_parent_move(
+        &mut self,
+        parent_terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<(AIConversationId, Box<dyn AnyPaneContent>)> {
+        let children = self.child_pane_ids_for_parent(parent_terminal_view_id, ctx);
+        let mut migrated = Vec::with_capacity(children.len());
+
+        for (conversation_id, child_pane_id) in children {
+            // Drop the registration so this group no longer resolves the
+            // child via `child_agent_panes`.
+            self.child_agent_panes.remove(&conversation_id);
+
+            // Revert the swap if the child is currently swapped in.
+            if self
+                .panes
+                .original_pane_for_replacement(child_pane_id)
+                .is_some()
+            {
+                self.panes.revert_temporary_replacement(child_pane_id);
+            }
+
+            // Remove the child from the tree if it was a real sibling
+            // (e.g. revealed via "Open in new pane").
+            if self.panes.is_pane_in_tree(child_pane_id) && !self.panes.remove(child_pane_id) {
+                log::error!(
+                    "take_child_agent_panes_for_parent_move: failed to remove pane from tree"
+                );
+            }
+
+            // Drop any leftover hidden/swap entry naming this child so a
+            // later revert of a surviving sibling can't splice the
+            // now-detached child back into this group's tree.
+            self.panes.remove_hidden_pane(child_pane_id);
+
+            // Shift focus and active session away from the departing child.
+            self.focus_next_terminal_pane_and_activate_session(
+                child_pane_id,
+                PaneRemovalReason::Move,
+                ctx,
+            );
+
+            // Forget any transitive-share tracking that named this child in
+            // this group; the share state itself lives on the terminal view
+            // and travels with the pane content.
+            self.forget_transitively_shared_pane(child_pane_id);
+
+            // Detach so the destination group can re-attach cleanly.
+            if let Some(pane_data) = self.pane_contents.get(&child_pane_id) {
+                let pane = pane_data.as_pane();
+                pane.detach(self, DetachType::Moved, ctx);
+            }
+
+            if let Some(pane_content) = self.pane_contents.remove(&child_pane_id) {
+                migrated.push((conversation_id, pane_content));
+            }
+        }
+
+        if !migrated.is_empty() {
+            let in_split_pane = self.panes.visible_pane_count() > 1;
+            self.focus_state.update(ctx, |focus_state, ctx| {
+                focus_state.set_in_split_pane(in_split_pane, ctx);
+            });
+            ctx.notify();
+            ctx.emit(Event::TerminalViewStateChanged);
+            ctx.emit(Event::AppStateChanged);
+        }
+
+        migrated
+    }
+
+    /// Re-attach child agent panes migrated from another group (via
+    /// [`take_child_agent_panes_for_parent_move`]) as off-tree children of
+    /// the parent pane that now lives in this group, restoring their
+    /// `child_agent_panes` registrations. This is the parent-move
+    /// counterpart of [`re_adopt_child_agent_pane`]; the migrated children
+    /// were never split off, so their orchestration split-off marker is
+    /// left untouched. No-op when `children` is empty.
+    pub fn adopt_migrated_child_agent_panes(
+        &mut self,
+        children: Vec<(AIConversationId, Box<dyn AnyPaneContent>)>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if children.is_empty() {
+            return;
+        }
+
+        for (conversation_id, pane_content) in children {
+            let pane_id = pane_content.as_pane().id();
+            if let Some(returned_pane_id) = self.attach_child_pane_off_tree(pane_content, ctx) {
+                debug_assert_eq!(returned_pane_id, pane_id);
+                self.child_agent_panes.insert(conversation_id, pane_id);
+            } else {
+                log::error!("adopt_migrated_child_agent_panes: failed to attach pane {pane_id:?}");
+            }
+        }
+
+        ctx.notify();
+        ctx.emit(Event::TerminalViewStateChanged);
+        ctx.emit(Event::AppStateChanged);
+    }
+
     /// Diagnostic logging for [`swap_active_pane_to_conversation`] when none of
     /// the three resolvers (`child_agent_panes`, visible-pane lookup, history
     /// model owner lookup) finds a pane in this group for the target

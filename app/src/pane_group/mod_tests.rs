@@ -2080,6 +2080,163 @@ fn test_entering_parent_agent_view_skips_child_owned_by_another_pane_group() {
     });
 }
 
+/// Regression test for QUALITY-925: dragging an orchestrator pane out of a
+/// split into its own tab must carry its off-tree child agent panes (and
+/// their `child_agent_panes` registrations) into the destination group, so
+/// chip navigation keeps resolving locally there instead of falling back to
+/// `FocusTerminalViewInWorkspace` (which jumped focus back to the original
+/// tab and rendered a blank pane).
+#[test]
+fn test_moving_orchestrator_pane_to_new_group_migrates_child_agent_panes() {
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let source_pane_group = mock_pane_group(&mut app, Default::default());
+        let destination_pane_group = mock_pane_group(&mut app, Default::default());
+
+        // Build the source group: an orchestrator parent pane that owns two
+        // off-tree hidden child agent panes.
+        let (parent_pane_id, parent_terminal_view_id, child_a, child_b, child_a_pane, child_b_pane) =
+            source_pane_group.update(&mut app, |panes, ctx| {
+                let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+                let parent_terminal_view_id = panes
+                    .terminal_view_from_pane_id(parent_pane_id, ctx)
+                    .expect("parent pane should have a terminal view")
+                    .id();
+                let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+
+                let child_a = create_hidden_child_agent_conversation(
+                    panes,
+                    HiddenChildAgentConversationRequest {
+                        parent_pane_id,
+                        name: "Agent 1".to_string(),
+                        parent_conversation_id,
+                        orchestration_harness: None,
+                        env_vars: HashMap::new(),
+                        task_context: None,
+                        is_shared_session_creator: IsSharedSessionCreator::No,
+                    },
+                    ctx,
+                )
+                .expect("first hidden child conversation should be created")
+                .conversation_id;
+                let child_b = create_hidden_child_agent_conversation(
+                    panes,
+                    HiddenChildAgentConversationRequest {
+                        parent_pane_id,
+                        name: "Agent 2".to_string(),
+                        parent_conversation_id,
+                        orchestration_harness: None,
+                        env_vars: HashMap::new(),
+                        task_context: None,
+                        is_shared_session_creator: IsSharedSessionCreator::No,
+                    },
+                    ctx,
+                )
+                .expect("second hidden child conversation should be created")
+                .conversation_id;
+
+                let child_a_pane = *panes
+                    .child_agent_panes
+                    .get(&child_a)
+                    .expect("first hidden child pane should be tracked");
+                let child_b_pane = *panes
+                    .child_agent_panes
+                    .get(&child_b)
+                    .expect("second hidden child pane should be tracked");
+                (
+                    parent_pane_id,
+                    parent_terminal_view_id,
+                    child_a,
+                    child_b,
+                    child_a_pane,
+                    child_b_pane,
+                )
+            });
+
+        // The destination group's own initial pane stands in for the
+        // orchestrator's new home and acts as the swap anchor.
+        let destination_anchor_pane =
+            destination_pane_group.update(&mut app, |panes, ctx| panes.focused_pane_id(ctx));
+
+        // Simulate the single-pane move: pull the parent's visible content
+        // out (as `add_tab_from_existing_pane` would), then take its
+        // off-tree children for migration.
+        let migrated = source_pane_group.update(&mut app, |source, ctx| {
+            let _parent_content = source.remove_pane_for_move(&parent_pane_id, ctx);
+            source.take_child_agent_panes_for_parent_move(parent_terminal_view_id, ctx)
+        });
+        assert_eq!(
+            migrated.len(),
+            2,
+            "both child agent panes should be taken for migration"
+        );
+
+        // The source group no longer tracks or owns the children.
+        source_pane_group.read(&app, |source, _| {
+            assert!(
+                !source.child_agent_panes.contains_key(&child_a),
+                "source must drop the first child's registration"
+            );
+            assert!(
+                !source.child_agent_panes.contains_key(&child_b),
+                "source must drop the second child's registration"
+            );
+            assert!(
+                !source.has_pane_id(child_a_pane),
+                "source must no longer own the first child's pane contents"
+            );
+            assert!(
+                !source.has_pane_id(child_b_pane),
+                "source must no longer own the second child's pane contents"
+            );
+        });
+
+        // Adopt the migrated children into the destination group.
+        destination_pane_group.update(&mut app, |destination, ctx| {
+            destination.adopt_migrated_child_agent_panes(migrated, ctx);
+        });
+
+        // The destination group now tracks and owns every child conversation.
+        destination_pane_group.read(&app, |destination, _| {
+            assert_eq!(
+                destination.child_agent_panes.get(&child_a),
+                Some(&child_a_pane),
+                "destination must register the first child to its original pane id"
+            );
+            assert_eq!(
+                destination.child_agent_panes.get(&child_b),
+                Some(&child_b_pane),
+                "destination must register the second child to its original pane id"
+            );
+            assert!(
+                destination.has_pane_id(child_a_pane),
+                "destination must own the first child's pane contents"
+            );
+            assert!(
+                destination.has_pane_id(child_b_pane),
+                "destination must own the second child's pane contents"
+            );
+        });
+
+        // Revealing a child in the destination resolves a LOCAL pane: the
+        // child becomes the focused pane in the destination group. Before
+        // the fix the child lived off-tree in the source group, so this
+        // swap hit the no-local-pane fallback that dispatched
+        // `FocusTerminalViewInWorkspace` and never focused a destination
+        // pane.
+        destination_pane_group.update(&mut app, |destination, ctx| {
+            destination.swap_active_pane_to_conversation(destination_anchor_pane, child_a, ctx);
+            assert_eq!(
+                destination.focused_pane_id(ctx),
+                child_a_pane,
+                "revealing the migrated child must focus its pane locally in the destination group"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_active_session_id_reset_on_last_pane_close() {
     App::test((), |mut app| async move {

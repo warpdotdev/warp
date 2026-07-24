@@ -12769,6 +12769,42 @@ impl Workspace {
         }
     }
 
+    /// When a single pane that owns parent/orchestrator conversations is
+    /// moved out of `source_pane_group` into the tab at
+    /// `destination_tab_index`, relocate its off-tree child agent panes (and
+    /// their `child_agent_panes` registrations) so chip navigation keeps
+    /// resolving locally in the destination tab. No-op when
+    /// `parent_terminal_view_id` is `None` or the moved pane owns no
+    /// children, keeping the blast radius limited to orchestrator moves.
+    fn migrate_child_agent_panes_after_move(
+        &mut self,
+        source_pane_group: &ViewHandle<PaneGroup>,
+        parent_terminal_view_id: Option<EntityId>,
+        destination_tab_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(parent_terminal_view_id) = parent_terminal_view_id else {
+            return;
+        };
+        let migrated = source_pane_group.update(ctx, |source, ctx| {
+            source.take_child_agent_panes_for_parent_move(parent_terminal_view_id, ctx)
+        });
+        if migrated.is_empty() {
+            return;
+        }
+        let Some(destination) = self.get_pane_group_view(destination_tab_index).cloned() else {
+            log::error!(
+                "migrate_child_agent_panes_after_move: destination tab {destination_tab_index} \
+                 not found; dropping {} migrated child agent pane(s)",
+                migrated.len()
+            );
+            return;
+        };
+        destination.update(ctx, |destination, ctx| {
+            destination.adopt_migrated_child_agent_panes(migrated, ctx);
+        });
+    }
+
     pub fn add_tab_for_cloud_notebook(
         &mut self,
         notebook_id: SyncId,
@@ -16555,6 +16591,16 @@ impl Workspace {
                             index: workspace_tab_index,
                             group,
                         } => {
+                            // Capture the moved pane's owner terminal view id
+                            // before removal so we can migrate its off-tree
+                            // child agent panes once the destination tab
+                            // exists. `None` (and thus a no-op) for panes that
+                            // own no children, e.g. editor/code panes.
+                            let parent_terminal_view_id = pane_group
+                                .as_ref(ctx)
+                                .terminal_view_from_pane_id(*pane_id, ctx)
+                                .map(|view| view.id());
+
                             // If an editor tab is dropped into a new position in the workspace tab group,
                             // create a new pane and insert it into the group.
                             let pane = if let ActionOrigin::EditorTab(editor_tab_index) = origin {
@@ -16586,6 +16632,17 @@ impl Workspace {
                                     pane,
                                     workspace_tab_index,
                                     inherited_group,
+                                    ctx,
+                                );
+
+                                // Migrate the moved orchestrator pane's
+                                // off-tree child agent panes into the new tab
+                                // so chip navigation keeps resolving locally
+                                // there. No-op when the pane owns no children.
+                                self.migrate_child_agent_panes_after_move(
+                                    &pane_group,
+                                    parent_terminal_view_id,
+                                    self.active_tab_index,
                                     ctx,
                                 );
 
@@ -16784,6 +16841,15 @@ impl Workspace {
                     return;
                 };
 
+                // Capture the moved pane's owner terminal view id before
+                // removal so its off-tree child agent panes can travel with
+                // it into the destination tab. `None` (no-op) for panes that
+                // own no children.
+                let parent_terminal_view_id = pane_group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(*pane_id, ctx)
+                    .map(|view| view.id());
+
                 if let Some(pane) = pane_group.update(ctx, |pane_group, ctx| {
                     pane_group.remove_pane_for_move(pane_id, ctx)
                 }) {
@@ -16791,6 +16857,16 @@ impl Workspace {
                     self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                         pane_group.add_pane_as_hidden(pane, *hidden_pane_preview_direction, ctx)
                     });
+
+                    // Migrate the moved orchestrator pane's off-tree child
+                    // agent panes into the destination tab so chip
+                    // navigation keeps resolving locally there.
+                    self.migrate_child_agent_panes_after_move(
+                        &pane_group,
+                        parent_terminal_view_id,
+                        *tab_idx,
+                        ctx,
+                    );
                 }
             }
             pane_group::Event::UpdateHoveredTabIndex {
