@@ -1119,3 +1119,139 @@ fn test_keyboard_enhancement_event_types() {
         Some(b"\x1b[13;2u".to_vec())
     );
 }
+
+/// Regression test for macOS editing keys under the Kitty keyboard protocol (GH#9159).
+///
+/// Before the fix, the CSI-u gate never checked `keystroke.cmd` and blanket-excluded `alt`
+/// on macOS, so Cmd/Option + Backspace/Delete/arrows silently dropped their modifier. Each
+/// case asserts the exact bytes Kitty/Ghostty emit under `DISAMBIGUATE_ESCAPE`:
+/// - Backspace (codepoint 127, no legacy code) → CSI u.
+/// - Arrows & Delete (own legacy codes) → the legacy `CSI 1;<mods><letter>` / `CSI 3;<mods>~`
+///   forms, now carrying the full modifier value (Super = bit 8 → e.g. Cmd → `9`).
+#[test]
+fn test_kitty_protocol_cmd_and_option_editing_keys() {
+    // `Keystroke::parse` has no portable `cmd-` token in these tests, so build Cmd combos
+    // as literals.
+    let cmd = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        cmd: true,
+        meta: false,
+        key: key.to_owned(),
+    };
+
+    let mock = mock_with_disambiguate_only();
+
+    // OS-independent: Cmd is unrepresentable in legacy encoding on every platform, and raw
+    // Option on a non-printable functional key never composes via the IME, so both are
+    // always ambiguous → CSI u / modified legacy form.
+    let os_independent: &[(Keystroke, Vec<u8>)] = &[
+        // Backspace → CSI u (key code 127).
+        (cmd("backspace"), b"\x1b[127;9u".to_vec()),
+        (
+            Keystroke::parse("alt-backspace").unwrap(),
+            b"\x1b[127;3u".to_vec(),
+        ),
+        // Arrows → legacy `CSI 1;<mods> <letter>` (Kitty keeps the legacy code for these).
+        (cmd("left"), b"\x1b[1;9D".to_vec()),
+        (cmd("right"), b"\x1b[1;9C".to_vec()),
+        (Keystroke::parse("alt-left").unwrap(), b"\x1b[1;3D".to_vec()),
+        (
+            Keystroke::parse("alt-right").unwrap(),
+            b"\x1b[1;3C".to_vec(),
+        ),
+        // Cmd+Delete → legacy `CSI 3;<mods> ~`.
+        (cmd("delete"), b"\x1b[3;9~".to_vec()),
+    ];
+    validate_keystroke_test_cases(os_independent, &mock);
+
+    // Option+Delete is asserted on macOS only: on other platforms Alt is interpreted as Meta
+    // and ESC-prefixes instead (`meta_keystroke_to_escape_sequence`).
+    if warpui_core::platform::OperatingSystem::get().is_mac() {
+        let mac_only: &[(Keystroke, Vec<u8>)] = &[(
+            Keystroke::parse("alt-delete").unwrap(),
+            b"\x1b[3;3~".to_vec(),
+        )];
+        validate_keystroke_test_cases(mac_only, &mock);
+    }
+}
+
+/// On macOS, Option+Space composes a non-breaking space via the IME. Its key name is "space"
+/// (multi-character), which the original key-length heuristic misclassified as non-composing,
+/// wrongly forcing it to CSI u. Composition is now detected from the OS-provided `chars`.
+#[test]
+fn test_kitty_protocol_mac_option_space_composition_is_not_disambiguated() {
+    if !warpui_core::platform::OperatingSystem::get().is_mac() {
+        return;
+    }
+
+    let mock = mock_with_disambiguate_only();
+    let option_space = Keystroke {
+        ctrl: false,
+        alt: true,
+        shift: false,
+        cmd: false,
+        meta: false,
+        key: "space".to_owned(),
+    };
+
+    // Composed text present → Option is part of the character, not a modifier → not
+    // disambiguated (None, so the composed nbsp flows through the caller's text fallback).
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &option_space,
+            key_without_modifiers: None,
+            chars: Some("\u{a0}"),
+        }
+        .to_escape_sequence(&mock),
+        None
+    );
+
+    // No composed text → nothing to pass through, so the key stays ambiguous and is
+    // disambiguated as CSI u (base key 'space' = 32, Alt modifier = 3).
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &option_space,
+            key_without_modifiers: None,
+            chars: None,
+        }
+        .to_escape_sequence(&mock),
+        Some(b"\x1b[32;3u".to_vec())
+    );
+}
+
+/// Cmd (Super) had no arm in the legacy single-byte modifier, so Cmd+Fn silently dropped the
+/// modifier. Function keys now use `modifier_param`, which encodes Super and multi-digit values
+/// (Cmd = 9, Cmd+Shift = 10).
+#[test]
+fn test_fn_keystroke_with_cmd_modifier() {
+    let cmd = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        cmd: true,
+        meta: false,
+        key: key.to_owned(),
+    };
+    let cmd_shift = |key: &str| Keystroke {
+        ctrl: false,
+        alt: false,
+        shift: true,
+        cmd: true,
+        meta: false,
+        key: key.to_owned(),
+    };
+
+    let mock = TerminalModelMock::new();
+    let cases: &[(Keystroke, Vec<u8>)] = &[
+        // F1-F4 use the SS3-derived `CSI 1;<mods> P/Q/R/S` form.
+        (cmd("f1"), b"\x1b[1;9P".to_vec()),
+        // F5+ use the `CSI <n>;<mods> ~` form.
+        (cmd("f5"), b"\x1b[15;9~".to_vec()),
+        (cmd("f12"), b"\x1b[24;9~".to_vec()),
+        // Cmd+Shift = 1 + 1 + 8 = 10 (multi-digit, unrepresentable by the old single byte).
+        (cmd_shift("f5"), b"\x1b[15;10~".to_vec()),
+    ];
+    validate_keystroke_test_cases(cases, &mock);
+}

@@ -26,14 +26,25 @@ pub(super) fn maybe_convert_keystroke_to_csi_u(
     // - The Escape key (ESC byte 0x1B is also the start of all escape sequences)
     // - Modified keys where the modifier is lost in legacy encoding (e.g.,
     //   Ctrl+A → C0 code 0x01, Alt+a → ESC a on non-macOS)
-    //
-    // On macOS, Alt is excluded because Option generates composed characters
-    // (e.g., Option+a → å) via the IME rather than acting as a modifier.
+    // - Any Cmd/Super-modified key: legacy encoding has no representation for Super
+    //   at all, so e.g. Cmd+Backspace must use CSI u (→ CSI 127;9u).
     //
     // See: https://sw.kovidgoyal.net/kitty/keyboard-protocol/#disambiguate
-    let mut is_ambiguous = keystroke.key == "escape" || keystroke.ctrl || keystroke.meta;
-    if !OperatingSystem::get().is_mac() {
-        is_ambiguous = is_ambiguous || keystroke.alt;
+    let mut is_ambiguous =
+        keystroke.key == "escape" || keystroke.ctrl || keystroke.meta || keystroke.cmd;
+    if keystroke.alt {
+        // Alt/Option is a modifier that legacy encoding cannot represent, so it is
+        // ambiguous — except on macOS, where raw Option composes characters via the IME
+        // (Option+a → å, Option+Space → nbsp). When Option composed printable text it is
+        // part of that character rather than a modifier, so the key is NOT ambiguous.
+        // Functional/editing keys (Backspace, Delete, arrows, …) produce no such text and
+        // stay ambiguous. Detect composition from the OS-provided `chars`, falling back to a
+        // single-character key name for frontends that don't populate `chars` (e.g. tests).
+        let composed_printable_text =
+            chars.is_some_and(|text| !text.is_empty() && !text.chars().any(|c| c.is_control()));
+        let composes_via_ime = OperatingSystem::get().is_mac()
+            && (composed_printable_text || keystroke.key.chars().count() == 1);
+        is_ambiguous = is_ambiguous || !composes_via_ime;
     }
     // Shift alone is NOT ambiguous for printable keys — Shift changes the
     // character itself (e.g., Shift+a → A). But for functional keys like
@@ -188,19 +199,7 @@ fn keystroke_to_csi_u(
     // the terminal concept of Alt — `meta` is just the macOS user preference that
     // remaps Option to behave as a terminal Meta/Alt key. They cannot both be true
     // simultaneously in practice (Option is either raw or Meta, never both).
-    let mut modifiers = 1u32;
-    if keystroke.shift {
-        modifiers += 1;
-    }
-    if keystroke.alt || keystroke.meta {
-        modifiers += 2;
-    }
-    if keystroke.ctrl {
-        modifiers += 4;
-    }
-    if keystroke.cmd {
-        modifiers += 8;
-    }
+    let modifiers = super::modifier_param(keystroke);
 
     // Compute associated text if REPORT_ASSOCIATED_TEXT is active.
     // Per spec: "The associated text must not contain control codes (control codes are code
