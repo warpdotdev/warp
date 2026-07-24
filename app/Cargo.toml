@@ -570,7 +570,6 @@ default = [
     "undo_closed_panes",
     "revert_diff_hunk",
     "code_review_save_changes",
-    "create_project_flow",
     "get_started_tab",
     "file_tree",
     "vim_code_editor",
@@ -744,7 +743,6 @@ file_retrieval_tools = []
 get_started_tab = []
 code_mode_chip = []
 github_pr_prompt_chip = []
-create_project_flow = []
 agent_mode_evals = [
     "integration_tests",
     "warpui/defer_scene_build",

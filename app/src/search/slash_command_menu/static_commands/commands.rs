@@ -885,9 +885,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         commands.push(CREATE_ENVIRONMENT.clone());
     }
 
-    if FeatureFlag::CreateProjectFlow.is_enabled() {
-        commands.push(CREATE_NEW_PROJECT.clone());
-    }
+    commands.push(CREATE_NEW_PROJECT.clone());
 
     if FeatureFlag::SummarizationConversationCommand.is_enabled() {
         commands.push(COMPACT.clone());
