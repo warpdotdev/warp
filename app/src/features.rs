@@ -401,8 +401,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::InlineProfileSelector,
         #[cfg(feature = "oz_platform_skills")]
         FeatureFlag::OzPlatformSkills,
-        #[cfg(feature = "oz_identity_federation")]
-        FeatureFlag::OzIdentityFederation,
         #[cfg(feature = "oz_changelog_updates")]
         FeatureFlag::OzChangelogUpdates,
         #[cfg(feature = "bundled_skills")]

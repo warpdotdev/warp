@@ -191,12 +191,7 @@ fn dispatch_command(
             }
             secret::run(ctx, global_options, secret_cmd)
         }
-        CliCommand::Federate(federate_cmd) => {
-            if !FeatureFlag::OzIdentityFederation.is_enabled() {
-                return Err(anyhow::anyhow!("invalid value 'federate'"));
-            }
-            federate::run(ctx, global_options, federate_cmd)
-        }
+        CliCommand::Federate(federate_cmd) => federate::run(ctx, global_options, federate_cmd),
         CliCommand::HarnessSupport(args) => {
             if !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'harness-support'"));
@@ -1465,15 +1460,13 @@ impl AgentDriverRunner {
             })
             .await??;
 
-        if FeatureFlag::OzIdentityFederation.is_enabled() {
-            let run_id = driver_options
-                .task_id
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "local".to_string());
-            driver_options.cloud_providers =
-                driver::cloud_provider::load_providers(&environment.providers, &run_id)
-                    .map_err(AgentDriverError::CloudProviderSetupFailed)?;
-        }
+        let run_id = driver_options
+            .task_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "local".to_string());
+        driver_options.cloud_providers =
+            driver::cloud_provider::load_providers(&environment.providers, &run_id)
+                .map_err(AgentDriverError::CloudProviderSetupFailed)?;
 
         driver_options.environment = Some(environment);
         Ok(())

@@ -247,15 +247,6 @@ impl Args {
                     }
                 }
 
-                if !FeatureFlag::OzIdentityFederation.is_enabled() {
-                    let args: Vec<String> = env::args().collect();
-                    if args.len() > 1 && args[1] == "federate" {
-                        eprintln!("error: unrecognized subcommand 'federate'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
-                    }
-                }
-
                 if !FeatureFlag::ArtifactCommand.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "artifact" {
@@ -369,11 +360,6 @@ impl Args {
         // Hide the secret subcommand from help text.
         if !FeatureFlag::WarpManagedSecrets.is_enabled() {
             command = command.mut_subcommand("secret", |c| c.hide(true));
-        }
-
-        // Hide the federate subcommand from help text.
-        if !FeatureFlag::OzIdentityFederation.is_enabled() {
-            command = command.mut_subcommand("federate", |c| c.hide(true));
         }
 
         // Hide the harness-support subcommand from help text.

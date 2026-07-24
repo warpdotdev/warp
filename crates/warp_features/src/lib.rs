@@ -650,8 +650,6 @@ pub enum FeatureFlag {
     /// Skills are loaded from `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, and `.codex/skills/`
     /// directories to provide base prompts for agent runs.
     OzPlatformSkills,
-    /// Enables Oz identity federation commands.
-    OzIdentityFederation,
 
     /// Gates populating/reading oz updates from channel versions in the changelog model.
     OzChangelogUpdates,

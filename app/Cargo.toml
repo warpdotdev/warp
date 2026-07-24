@@ -626,7 +626,6 @@ default = [
     "agent_mode_computer_use",
     "background_computer_use",
     "oz_platform_skills",
-    "oz_identity_federation",
     "sync_ambient_plans",
     "conversation_artifacts",
     "agent_view",
@@ -993,7 +992,6 @@ inline_model_selector = ["agent_view"]
 inline_profile_selector = ["agent_view"]
 restore_prompt_on_inline_model_selector_search = []
 oz_platform_skills = []
-oz_identity_federation = []
 oz_launch_modal = []
 open_warp_launch_modal = []
 orchestration_launch_modal = []
