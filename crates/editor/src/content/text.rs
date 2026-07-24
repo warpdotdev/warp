@@ -1420,6 +1420,14 @@ impl TextStyles {
         self.weight
     }
 
+    /// Whether this mask carries *any* custom weight. Unlike [`Self::exact_match_style`], this
+    /// doesn't distinguish which [`CustomWeight`] — it's for "strip all styles" callers (see
+    /// [`Self::all`]) that need to treat every `BufferTextStyle::Weight(_)` variant as a single
+    /// family, since the underlying `Option<CustomWeight>` can only ever name one weight at a time.
+    pub fn has_any_weight(&self) -> bool {
+        self.weight.is_some()
+    }
+
     pub fn is_italic(&self) -> bool {
         self.italic
     }
