@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 #[cfg(not(target_family = "wasm"))]
 use uuid::Uuid;
+use warp_errors::ErrorExt;
 
 #[cfg(not(target_family = "wasm"))]
 use super::{
@@ -168,7 +169,7 @@ fn geap_request_refresh_injects_the_fresh_token_before_send() {
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn geap_spawn_request_dispatches_fresh_token_after_refresh_success() {
-    use warpui::{AddSingletonModel, App};
+    use warpui::App;
 
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| NetworkStatus::new());
@@ -220,7 +221,7 @@ fn geap_spawn_request_dispatches_fresh_token_after_refresh_success() {
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn geap_spawn_request_dispatch_failure_does_not_send_expired_token() {
-    use warpui::{AddSingletonModel, App};
+    use warpui::App;
 
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| NetworkStatus::new());
