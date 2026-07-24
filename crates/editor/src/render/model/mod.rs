@@ -3378,25 +3378,26 @@ impl RenderState {
             let mut cursor = content.cursor::<LineCount, CharOffset>();
 
             if let Some(items) = blocks.remove(&LineCount::zero()) {
-                for item in items {
-                    new_tree.push(item);
-                }
+                new_tree.extend(items);
             }
 
             cursor.descend_to_first_item(&content, |_| true);
+            let mut batch = Vec::new();
             while let Some(item) = cursor.item() {
                 if !matches!(item, BlockItem::TemporaryBlock { .. }) {
-                    new_tree.push(item.clone());
+                    batch.push(item.clone());
                 }
 
                 if let Some(items) = blocks.remove(&cursor.end_seek_position()) {
-                    for item in items {
-                        new_tree.push(item);
-                    }
+                    // Flush accumulated items before inserting block-specific items
+                    // to preserve ordering.
+                    new_tree.extend(batch.drain(..));
+                    new_tree.extend(items);
                 }
 
                 cursor.next();
             }
+            new_tree.extend(batch);
         }
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&new_tree));
@@ -3444,18 +3445,30 @@ impl RenderState {
                 new_tree.describe()
             );
 
-            for item in pending_edit.laid_out_line {
-                let offset = new_tree.extent::<CharOffset>() + 1;
-                // If the item should be hidden (but it's not labelled as hidden), don't push it to the sumtree.
-                if !matches!(item, BlockItem::Hidden(_))
-                    && hidden_range_clone
-                        .as_ref()
-                        .map(|hr| hr.contains(&offset))
-                        .unwrap_or(false)
-                {
-                    continue;
-                }
-                new_tree.push(item);
+            // Use extend instead of individual push calls to batch items into full
+            // SumTree leaf nodes (12 items each), reducing intermediate allocations
+            // by ~12x for large files.
+            if let Some(hidden_ranges) = &hidden_range_clone {
+                // Pre-filter items against hidden ranges, tracking the running offset
+                // to replicate the original per-push extent check.
+                let mut running_offset: CharOffset = new_tree.extent();
+                let filtered_items: Vec<BlockItem> = pending_edit
+                    .laid_out_line
+                    .into_iter()
+                    .filter(|item| {
+                        let offset = running_offset + 1;
+                        if !matches!(item, BlockItem::Hidden(_)) && hidden_ranges.contains(&offset)
+                        {
+                            return false;
+                        }
+                        running_offset += item.content_length();
+                        true
+                    })
+                    .collect();
+                new_tree.extend(filtered_items);
+            } else {
+                // No hidden ranges — all items are included, use extend directly.
+                new_tree.extend(pending_edit.laid_out_line);
             }
 
             // TODO(CLD-558): Ideally, we'd use the content-level offset as is.
