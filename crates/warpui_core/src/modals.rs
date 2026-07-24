@@ -39,6 +39,12 @@ pub struct AlertDialogWithCallbacks<F> {
     /// Callback to run if the user clicks the "don't ask again" checkbox. This should prevent that
     /// type of modal in the future.
     pub on_disable: F,
+    /// Custom label for the "don't show again" checkbox shown in the Warp-native modal.
+    /// When `None`, the modal uses its default label.
+    pub disable_label: Option<String>,
+    /// When `true`, the "don't show again" checkbox starts checked when the modal opens.
+    /// When `false`, the modal uses its own persisted default.
+    pub disable_initially_checked: bool,
 }
 
 /// Wraps the button text with its click handler.
@@ -88,6 +94,8 @@ impl AlertDialogWithCallbacks<AppModalCallback> {
             info_text: info_text.into(),
             button_data,
             on_disable: Box::new(on_disable),
+            disable_label: None,
+            disable_initially_checked: false,
         }
     }
 }
@@ -124,6 +132,8 @@ impl<V: View> AlertDialogWithCallbacks<ViewModalCallback<V>> {
             info_text: info_text.into(),
             button_data,
             on_disable: Box::new(on_disable),
+            disable_label: None,
+            disable_initially_checked: false,
         }
     }
 }

@@ -8,6 +8,7 @@ mod crash_recovery;
 pub(crate) mod feature_intro_modal;
 pub(crate) mod free_ai_removal_modal;
 pub mod global_search;
+pub(crate) mod iap_refresh_failure_modal;
 pub(crate) mod launch_modal;
 pub(crate) mod left_panel;
 pub(crate) mod onboarding;
@@ -520,6 +521,9 @@ use crate::workspace::view::free_ai_removal_modal::{
     FreeAiRemovalModalVariant,
 };
 use crate::workspace::view::global_search::view::GlobalSearchEntryFocus;
+use crate::workspace::view::iap_refresh_failure_modal::{
+    IapRefreshFailureModal, IapRefreshFailureModalEvent,
+};
 use crate::workspace::view::launch_modal::{LaunchModal, LaunchModalEvent, OzLaunchSlide};
 use crate::workspace::view::left_panel::{
     LeftPanelAction, LeftPanelEvent, LeftPanelView, ToolPanelView,
@@ -1117,6 +1121,7 @@ pub struct Workspace {
     codex_modal: ViewHandle<CodexModal>,
     cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
     free_ai_removal_modal: ViewHandle<FreeAiRemovalModal>,
+    iap_refresh_failure_modal: ViewHandle<IapRefreshFailureModal>,
     /// Second instance of the free-AI-removal modal, opened on demand when a
     /// Free user activates Prompt Suggestions while out of credits.
     prompt_suggestions_unavailable_modal: ViewHandle<FreeAiRemovalModal>,
@@ -2970,6 +2975,10 @@ impl Workspace {
         ctx.subscribe_to_view(&free_ai_removal_modal, |me, _, event, ctx| {
             me.handle_free_ai_removal_modal_event(event, ctx);
         });
+        let iap_refresh_failure_modal = ctx.add_typed_action_view(IapRefreshFailureModal::new);
+        ctx.subscribe_to_view(&iap_refresh_failure_modal, |me, _, event, ctx| {
+            me.handle_iap_refresh_failure_modal_event(event, ctx);
+        });
 
         let prompt_suggestions_unavailable_modal = ctx.add_typed_action_view(|ctx| {
             FreeAiRemovalModal::new(FreeAiRemovalModalVariant::PromptSuggestions, ctx)
@@ -3497,6 +3506,7 @@ impl Workspace {
             codex_modal,
             cloud_agent_capacity_modal,
             free_ai_removal_modal,
+            iap_refresh_failure_modal,
             prompt_suggestions_unavailable_modal,
             lightbox_view: None,
             hoa_onboarding_flow: None,
@@ -3530,8 +3540,8 @@ impl Workspace {
         ws.sync_settings_error_state_into_settings_pane(ctx);
 
         let weak_handle = ctx.handle();
-        WorkspaceRegistry::handle(ctx).update(ctx, |registry, _| {
-            registry.register(window_id, weak_handle);
+        WorkspaceRegistry::handle(ctx).update(ctx, |registry, ctx| {
+            registry.register(window_id, weak_handle, ctx);
         });
 
         ws
@@ -12267,8 +12277,8 @@ impl Workspace {
         // `Workspace::new`, so register it again.
         let window_id = ctx.window_id();
         let weak_handle = ctx.handle();
-        WorkspaceRegistry::handle(ctx).update(ctx, |registry, _| {
-            registry.register(window_id, weak_handle);
+        WorkspaceRegistry::handle(ctx).update(ctx, |registry, ctx| {
+            registry.register(window_id, weak_handle, ctx);
         });
     }
 
@@ -19109,6 +19119,36 @@ impl Workspace {
         }
     }
 
+    fn handle_iap_refresh_failure_modal_event(
+        &mut self,
+        event: &IapRefreshFailureModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            IapRefreshFailureModalEvent::Dismiss => {
+                self.focus_active_tab(ctx);
+            }
+            IapRefreshFailureModalEvent::LogIn => {
+                self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                    pane_group.add_terminal_pane(Direction::Right, None, ctx);
+                });
+                self.set_active_terminal_input_contents_and_focus_app("gcloud auth login", ctx);
+            }
+        }
+        ctx.notify();
+    }
+
+    pub fn show_iap_refresh_failure_modal(
+        &mut self,
+        message: String,
+        on_snooze: impl Fn() + 'static,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.iap_refresh_failure_modal
+            .update(ctx, |modal, ctx| modal.show(message, on_snooze, ctx));
+        ctx.focus(&self.iap_refresh_failure_modal);
+        ctx.notify();
+    }
     fn handle_prompt_suggestions_unavailable_modal_event(
         &mut self,
         event: &FreeAiRemovalModalEvent,
@@ -27196,6 +27236,9 @@ impl View for Workspace {
 
         if should_show_modal && one_time_modal_model.is_free_ai_removal_modal_open() {
             stack.add_child(ChildView::new(&self.free_ai_removal_modal).finish());
+        }
+        if self.iap_refresh_failure_modal.as_ref(app).is_open() {
+            stack.add_child(ChildView::new(&self.iap_refresh_failure_modal).finish());
         }
 
         if self
