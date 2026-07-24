@@ -1376,6 +1376,11 @@ pub(crate) fn initialize_app(
     ensure_warp_watch_roots_exist();
     ctx.add_singleton_model(WarpManagedPathsWatcher::new);
 
+    // Build the system command search PATH so that child processes can
+    // find user-installed binaries (e.g. git-lfs) even when Warp is
+    // launched from the Dock/Spotlight with a minimal inherited PATH.
+    ctx.add_singleton_model(util::command_search_path::CommandSearchPathModel::new);
+
     ctx.add_singleton_model(WarpConfig::new);
     ctx.add_singleton_model(|_ctx| SettingsManager::default());
 
