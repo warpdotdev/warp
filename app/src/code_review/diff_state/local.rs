@@ -65,9 +65,9 @@ use warp_errors::report_error;
 use super::DiffOperation;
 use super::{
     BackendOrigin, CommitChainMode, DiffHunk, DiffLine, DiffLineType, DiffMetadata,
-    DiffMetadataAgainstBase, DiffMode, DiffState, DiffStateError, DiffStateModelEvent, DiffStats,
-    FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData, GitDiffWithBaseContent,
-    GitFileStatus, GitOpResult,
+    DiffMetadataAgainstBase, DiffMode, DiffSnapshot, DiffState, DiffStateError,
+    DiffStateModelEvent, DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData,
+    GitDiffWithBaseContent, GitFileStatus, GitOpResult,
 };
 
 // Unicode bidirectional characters that should be flagged
@@ -316,7 +316,7 @@ impl LocalDiffStateModel {
                 me.state = InternalDiffState::NotInRepository;
                 me.tracked_diff_load_start_time = None;
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-                    diffs: None,
+                    snapshot: DiffSnapshot::NotInRepository,
                     load_duration: None,
                 });
             });
@@ -1705,8 +1705,15 @@ impl LocalDiffStateModel {
         self.state = InternalDiffState::Loaded((&diffs).into());
         // Compute merge base and flush deferred invalidations before emitting.
         self.recompute_merge_base_and_flush(ctx);
+        // A clean tree is `Ok` with an empty `GitDiffWithBaseContent`, so it
+        // rides through as `Loaded` (empty) and clears the panel; only a load
+        // failure becomes `Error`.
+        let snapshot = match diffs.changes {
+            Ok(data) => DiffSnapshot::Loaded(Arc::new(data)),
+            Err(err) => DiffSnapshot::Error(err),
+        };
         ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-            diffs: diffs.changes.ok().map(Arc::new),
+            snapshot,
             load_duration,
         });
     }
