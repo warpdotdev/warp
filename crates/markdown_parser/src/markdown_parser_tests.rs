@@ -525,6 +525,173 @@ fn test_line_break() {
 }
 
 #[test]
+fn test_parse_html_line_break_spellings() {
+    for source in [
+        "first<br>second",
+        "first<br/>second",
+        "first<br />second",
+        "first<BR>second",
+        "first<Br />second",
+    ] {
+        assert_eq!(
+            test_parse_markdown(source),
+            vec![FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text("first"),
+                FormattedTextFragment::plain_text("\n"),
+                FormattedTextFragment::plain_text("second"),
+            ])],
+            "source: {source:?}"
+        );
+    }
+}
+
+#[test]
+fn test_parse_trailing_and_consecutive_html_line_breaks() {
+    assert_eq!(
+        test_parse_markdown("A<br>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("A"),
+            FormattedTextFragment::plain_text("\n"),
+        ])]
+    );
+    assert_eq!(
+        test_parse_markdown("A<br><br>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("A"),
+            FormattedTextFragment::plain_text("\n"),
+            FormattedTextFragment::plain_text("\n"),
+        ])]
+    );
+}
+
+#[test]
+fn test_parse_html_line_break_at_physical_line_end_continues_paragraph() {
+    assert_eq!(
+        test_parse_markdown("first<br>\nsecond"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("first"),
+            FormattedTextFragment::plain_text("\n"),
+            FormattedTextFragment::plain_text("second"),
+        ])]
+    );
+
+    assert_eq!(
+        test_parse_markdown("first<br>  \nsecond"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("first"),
+            FormattedTextFragment::plain_text("\n"),
+            FormattedTextFragment::plain_text("  second"),
+        ])]
+    );
+}
+
+#[test]
+fn test_literal_html_break_at_physical_line_end_does_not_continue_paragraph() {
+    for source in [
+        "first\\<br>\nsecond",
+        "first<br>middle\\<br>\nsecond",
+        "`first<br>`\nsecond",
+    ] {
+        let lines = test_parse_markdown(source);
+        assert_eq!(lines.len(), 2, "source: {source:?}");
+        assert!(matches!(lines[0], FormattedTextLine::Line(_)));
+        assert!(matches!(lines[1], FormattedTextLine::Line(_)));
+    }
+}
+
+#[test]
+fn test_parse_html_line_break_at_physical_line_end_preserves_following_blocks() {
+    let heading = test_parse_markdown("first<br>\n# heading");
+    assert!(matches!(heading[0], FormattedTextLine::Line(_)));
+    assert!(matches!(heading[1], FormattedTextLine::Heading(_)));
+
+    let list = test_parse_markdown("first<br>\n- item");
+    assert!(matches!(list[0], FormattedTextLine::Line(_)));
+    assert!(matches!(list[1], FormattedTextLine::UnorderedList(_)));
+
+    let code = test_parse_markdown("first<br>\n```text\ncode\n```");
+    assert!(matches!(code[0], FormattedTextLine::Line(_)));
+    assert!(matches!(code[1], FormattedTextLine::CodeBlock(_)));
+
+    let table = test_parse_markdown_with_gfm_tables(
+        "first<br>\n| Feature | Notes |\n| --- | --- |\n| Export | CSV |\n",
+    );
+    assert!(matches!(table[0], FormattedTextLine::Line(_)));
+    assert!(matches!(table[1], FormattedTextLine::Table(_)));
+}
+
+#[test]
+fn test_parse_newline_entity_does_not_continue_physical_paragraph_line() {
+    let lines = test_parse_markdown("first&#10;\nsecond");
+    assert_eq!(lines.len(), 2);
+    assert!(matches!(lines[0], FormattedTextLine::Line(_)));
+    assert!(matches!(lines[1], FormattedTextLine::Line(_)));
+}
+
+#[test]
+fn test_parse_html_line_break_is_limited_to_paragraphs_and_table_cells() {
+    assert_eq!(
+        test_parse_markdown("# first<br>second\n- first<br>second"),
+        vec![
+            FormattedTextLine::Heading(FormattedTextHeader {
+                heading_size: 1,
+                text: vec![FormattedTextFragment::plain_text("first<br>second")],
+            }),
+            FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("first<br>second")],
+            }),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_html_line_break_preserves_inline_formatting() {
+    assert_eq!(
+        test_parse_markdown("before **bold<br>still bold** after"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("before "),
+            FormattedTextFragment::bold("bold"),
+            FormattedTextFragment::bold("\n"),
+            FormattedTextFragment::bold("still bold"),
+            FormattedTextFragment::plain_text(" after"),
+        ])]
+    );
+}
+
+#[test]
+fn test_parse_html_line_break_is_literal_in_code_or_when_malformed() {
+    assert_eq!(
+        test_parse_markdown("`first<br>second`"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::inline_code("first<br>second"),
+        ])]
+    );
+    assert_eq!(
+        test_parse_markdown(r"first\<br>second"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("first<br>second"),
+        ])]
+    );
+
+    for source in [
+        "first<br second",
+        "first<br >second",
+        "first<br class=x>second",
+        "first<brx>second",
+        "first</br>second",
+    ] {
+        assert_eq!(
+            test_parse_markdown(source),
+            vec![FormattedTextLine::Line(vec![
+                FormattedTextFragment::plain_text(source),
+            ])],
+            "source: {source:?}"
+        );
+    }
+}
+
+#[test]
 fn test_special_chars() {
     // This tests that we can parse:
     // - A non-escaping literal backslash
@@ -2827,6 +2994,289 @@ fn test_parse_table_with_inline_formatting() {
     } else {
         panic!("Expected table");
     }
+}
+
+#[test]
+fn test_parse_table_with_html_line_breaks() {
+    let source = "| Feature | Notes |\n| --- | --- |\n| Export | **CSV<br>JSON** |\n";
+    let result = test_parse_markdown_with_gfm_tables(source);
+
+    let FormattedTextLine::Table(table) = &result[0] else {
+        panic!("Expected table");
+    };
+    assert_eq!(
+        table.rows[0][1],
+        vec![
+            FormattedTextFragment::bold("CSV"),
+            FormattedTextFragment::bold("\n"),
+            FormattedTextFragment::bold("JSON"),
+        ]
+    );
+    assert_eq!(
+        table.to_internal_format(),
+        "Feature\tNotes\nExport\t**CSV<br>JSON**\n"
+    );
+    assert_eq!(
+        table.to_plain_text(),
+        "| Feature | Notes |\n| --- | --- |\n| Export | CSV<br>JSON |"
+    );
+    assert_eq!(table.to_gfm_markdown(), source);
+}
+
+#[test]
+fn test_table_gfm_round_trip_preserves_inline_code_punctuation() {
+    let source = "| Value |\n| --- |\n| `a*b_c` |\n";
+    let result = test_parse_markdown_with_gfm_tables(source);
+    let FormattedTextLine::Table(table) = &result[0] else {
+        panic!("Expected table");
+    };
+
+    assert_eq!(table.to_gfm_markdown(), source);
+    assert_eq!(
+        test_parse_markdown_with_gfm_tables(&table.to_gfm_markdown()),
+        result
+    );
+}
+
+#[test]
+fn test_table_literal_html_breaks_remain_literal_in_internal_format() {
+    let source = concat!(
+        "| Kind | Notes |\n",
+        "| --- | --- |\n",
+        "| Escaped | first\\<br>second |\n",
+        "| Entity | first&lt;br&gt;second |\n",
+        "| Break | first<br>second |\n",
+        r"| Backslash | first\\\<br>second |",
+        "\n",
+    );
+    let result = test_parse_markdown_with_gfm_tables(source);
+    let FormattedTextLine::Table(table) = &result[0] else {
+        panic!("Expected table");
+    };
+
+    assert_eq!(
+        table.to_internal_format(),
+        concat!(
+            "Kind\tNotes\n",
+            "Escaped\tfirst\\<br>second\n",
+            "Entity\tfirst\\<br>second\n",
+            "Break\tfirst<br>second\n",
+            "Backslash\t",
+            r"first\\\<br>second",
+            "\n",
+        )
+    );
+    assert_eq!(
+        table.to_plain_text(),
+        concat!(
+            "| Kind | Notes |\n",
+            "| --- | --- |\n",
+            "| Escaped | first\\<br>second |\n",
+            "| Entity | first\\<br>second |\n",
+            "| Break | first<br>second |",
+            "\n",
+            r"| Backslash | first\\\<br>second |",
+        )
+    );
+    assert_eq!(
+        table.to_gfm_markdown(),
+        concat!(
+            "| Kind | Notes |\n",
+            "| --- | --- |\n",
+            "| Escaped | first\\<br>second |\n",
+            "| Entity | first\\<br>second |\n",
+            "| Break | first<br>second |\n",
+            r"| Backslash | first\\\<br>second |",
+            "\n",
+        )
+    );
+}
+
+#[test]
+fn test_inline_source_map_handles_formatting_and_escapes() {
+    let source = "**Bold** [Link](https://warp.dev)";
+    let parsed = parse_inline_markdown_with_source_map(source);
+
+    assert_eq!(parsed.source_map.rendered_length(), 9);
+    assert_eq!(parsed.source_map.source_length(), source.chars().count());
+    assert_eq!(parsed.source_map.rendered_to_source(0), 2);
+    assert_eq!(parsed.source_map.rendered_to_source(4), 8);
+    assert_eq!(parsed.source_map.rendered_to_source(5), 10);
+    assert_eq!(parsed.source_map.rendered_to_source(9), 14);
+    assert_eq!(parsed.source_map.source_to_rendered(0), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(2), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(11), 6);
+    assert_eq!(parsed.source_map.source_to_rendered(14), 9);
+    assert_eq!(parsed.source_map.source_to_rendered(32), 9);
+
+    let escaped_source = "a \\*star\\* b";
+    let escaped = parse_inline_markdown_with_source_map(escaped_source);
+    let rendered_text = escaped
+        .inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect::<String>();
+    assert_eq!(rendered_text, "a *star* b");
+    assert_eq!(escaped.source_map.rendered_length(), rendered_text.len());
+    assert_eq!(escaped.source_map.source_length(), escaped_source.len());
+    assert_eq!(escaped.source_map.rendered_to_source(2), 2);
+    assert_eq!(escaped.source_map.rendered_to_source(3), 4);
+    assert_eq!(escaped.source_map.rendered_to_source(7), 8);
+    assert_eq!(escaped.source_map.rendered_to_source(8), 10);
+    assert_eq!(escaped.source_map.source_to_rendered(2), 2);
+    assert_eq!(escaped.source_map.source_to_rendered(3), 3);
+    assert_eq!(escaped.source_map.source_to_rendered(4), 3);
+    assert_eq!(escaped.source_map.source_to_rendered(8), 7);
+    assert_eq!(escaped.source_map.source_to_rendered(9), 8);
+    assert_eq!(escaped.source_map.source_to_rendered(10), 8);
+    assert_eq!(
+        escaped
+            .source_map
+            .rendered_to_source(rendered_text.chars().count()),
+        escaped_source.chars().count()
+    );
+}
+
+#[test]
+fn test_inline_source_map_handles_html_entities() {
+    let source = "a&amp;b &#x2a; c";
+    let parsed = parse_inline_markdown_with_source_map(source);
+    let rendered_text = parsed
+        .inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect::<String>();
+    assert_eq!(rendered_text, "a&b * c");
+
+    assert_eq!(parsed.source_map.rendered_to_source(0), 0);
+    assert_eq!(parsed.source_map.rendered_to_source(1), 1);
+    assert_eq!(parsed.source_map.rendered_to_source(2), 6);
+    assert_eq!(parsed.source_map.rendered_to_source(4), 8);
+    assert_eq!(parsed.source_map.rendered_to_source(5), 14);
+    assert_eq!(parsed.source_map.source_to_rendered(1), 1);
+    for source_offset in 2..6 {
+        assert_eq!(parsed.source_map.source_to_rendered(source_offset), 2);
+    }
+    assert_eq!(parsed.source_map.source_to_rendered(6), 2);
+    assert_eq!(parsed.source_map.source_to_rendered(8), 4);
+    for source_offset in 9..14 {
+        assert_eq!(parsed.source_map.source_to_rendered(source_offset), 5);
+    }
+    assert_eq!(parsed.source_map.source_to_rendered(14), 5);
+}
+
+#[test]
+fn test_inline_source_map_handles_code_spans_and_escaped_autolinks() {
+    let source = "`a*b` https://warp.dev/a\\.b";
+    let parsed = parse_inline_markdown_with_source_map(source);
+    let rendered_text = parsed
+        .inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect::<String>();
+    assert_eq!(rendered_text, "a*b https://warp.dev/a.b");
+
+    assert_eq!(parsed.source_map.rendered_to_source(0), 1);
+    assert_eq!(parsed.source_map.rendered_to_source(1), 2);
+    assert_eq!(parsed.source_map.rendered_to_source(2), 3);
+    assert_eq!(parsed.source_map.source_to_rendered(0), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(4), 3);
+
+    let escaped_dot_source = source.find("\\.").expect("escaped dot should be present");
+    let decoded_dot_rendered = rendered_text
+        .rfind('.')
+        .expect("decoded dot should be present");
+    assert_eq!(
+        parsed.source_map.rendered_to_source(decoded_dot_rendered),
+        escaped_dot_source
+    );
+    assert_eq!(
+        parsed.source_map.source_to_rendered(escaped_dot_source),
+        decoded_dot_rendered
+    );
+    assert_eq!(
+        parsed.source_map.source_to_rendered(escaped_dot_source + 1),
+        decoded_dot_rendered + 1
+    );
+}
+
+#[test]
+fn test_inline_source_map_uses_recognized_html_line_break_spans() {
+    for source in ["a<br>b", "a<br/>b", "a<br />b", "a<BR />b"] {
+        let parsed = parse_inline_markdown_with_source_map(source);
+        let rendered_text = parsed
+            .inline
+            .iter()
+            .map(|fragment| fragment.text.as_str())
+            .collect::<String>();
+        assert_eq!(rendered_text, "a\nb", "source: {source:?}");
+
+        let following_source_offset = source.chars().count() - 1;
+        assert_eq!(parsed.source_map.rendered_length(), 3);
+        assert_eq!(parsed.source_map.rendered_to_source(0), 0);
+        assert_eq!(parsed.source_map.rendered_to_source(1), 1);
+        assert_eq!(
+            parsed.source_map.rendered_to_source(2),
+            following_source_offset
+        );
+        assert_eq!(
+            parsed.source_map.rendered_to_source(3),
+            source.chars().count()
+        );
+        assert_eq!(parsed.source_map.source_to_rendered(0), 0);
+        assert_eq!(parsed.source_map.source_to_rendered(1), 1);
+        for source_offset in 2..following_source_offset {
+            assert_eq!(
+                parsed.source_map.source_to_rendered(source_offset),
+                2,
+                "source offset {source_offset} in {source:?}"
+            );
+        }
+        assert_eq!(
+            parsed
+                .source_map
+                .source_to_rendered(following_source_offset),
+            2
+        );
+    }
+}
+
+#[test]
+fn test_inline_source_map_handles_nested_styles() {
+    let source = "**a *b* c**";
+    let parsed = parse_inline_markdown_with_source_map(source);
+    let rendered_text = parsed
+        .inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect::<String>();
+    assert_eq!(rendered_text, "a b c");
+    assert_eq!(parsed.source_map.source_length(), source.chars().count());
+    assert_eq!(
+        parsed.source_map.rendered_length(),
+        rendered_text.chars().count()
+    );
+    for (rendered_offset, rendered_character) in rendered_text.chars().enumerate() {
+        let source_offset = parsed.source_map.rendered_to_source(rendered_offset);
+        assert_eq!(
+            source.chars().nth(source_offset),
+            Some(rendered_character),
+            "rendered {rendered_offset} ({rendered_character:?}) should map to same source character",
+        );
+    }
+    assert_eq!(parsed.source_map.source_to_rendered(0), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(2), 0);
+    assert_eq!(parsed.source_map.source_to_rendered(4), 2);
+    assert_eq!(parsed.source_map.source_to_rendered(6), 3);
+    assert_eq!(parsed.source_map.source_to_rendered(8), 4);
+    assert_eq!(parsed.source_map.source_to_rendered(10), 5);
+    assert_eq!(parsed.source_map.source_to_rendered(11), 5);
+}
+
+#[test]
+fn test_html_line_break_updates_formatted_line_count() {
+    let line = test_parse_markdown("first<br>second").remove(0);
+    assert_eq!(line.num_lines(), 2);
 }
 
 #[test]

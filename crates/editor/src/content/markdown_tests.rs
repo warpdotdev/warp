@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use markdown_parser::{compute_formatted_text_delta, parse_markdown};
+use markdown_parser::{
+    FormattedTable, FormattedText, FormattedTextFragment, FormattedTextLine, TableAlignment,
+    compute_formatted_text_delta, parse_markdown,
+};
 use serde_yaml::Value;
 use string_offset::CharOffset;
 use vec1::Vec1;
@@ -9,6 +12,7 @@ use warpui_core::{App, ReadModel};
 use super::MarkdownStyle;
 use crate::content::buffer::tests::TestEmbeddedItem;
 use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin, StyledBlockBoundaryBehavior};
+use crate::content::selection_model::BufferSelectionModel;
 use crate::content::text::{IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG};
 
 #[test]
@@ -332,6 +336,40 @@ fn test_table_markdown_round_trip() {
             exported_markdown,
             "| header 1 | header 2 |\n| --- | --- |\n| value 1 | value 2 |\n"
         );
+    });
+}
+
+#[test]
+fn test_table_inline_newline_serializes_as_html_break() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+        let formatted = FormattedText::new(vec![FormattedTextLine::Table(FormattedTable {
+            headers: vec![vec![FormattedTextFragment::plain_text("Notes")]],
+            alignments: vec![TableAlignment::Left],
+            rows: vec![vec![vec![
+                FormattedTextFragment::bold("CSV"),
+                FormattedTextFragment::bold("\n"),
+                FormattedTextFragment::bold("JSON"),
+            ]]],
+        })]);
+        buffer.update(&mut app, |buffer, ctx| {
+            *buffer = Buffer::from_formatted_text(
+                formatted,
+                None,
+                Box::new(|_, _| IndentBehavior::Ignore),
+                selection,
+                ctx,
+            );
+        });
+
+        let html = app
+            .read_model(&buffer, |buffer, ctx| {
+                let range = CharOffset::from(1)..buffer.max_charoffset();
+                buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+            })
+            .expect("table should serialize to HTML");
+        assert!(html.contains("<strong>CSV<br>JSON</strong>"), "{html}");
     });
 }
 

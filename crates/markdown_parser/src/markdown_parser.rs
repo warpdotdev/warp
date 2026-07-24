@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::ops::Range;
 
 use anyhow::Result;
 use itertools::Itertools;
@@ -192,9 +193,28 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
     let mut remaining = markdown;
     let mut lines = Vec::new();
+    let mut previous_paragraph_ends_with_html_line_break = false;
     while !remaining.is_empty() {
+        let block_source = remaining;
         let (remaining_after_block, mut line) = block(remaining)?;
         remaining = remaining_after_block;
+        let consumed_len = block_source.len() - remaining.len();
+        let consumed_source = &block_source[..consumed_len];
+        let paragraph_ends_with_html_line_break =
+            matches!(
+                &line,
+                FormattedTextLine::Line(inline) if inline_ends_with_newline(inline)
+            ) && source_line_ends_with_html_line_break(consumed_source);
+
+        if previous_paragraph_ends_with_html_line_break
+            && let Some(FormattedTextLine::Line(previous)) = lines.last_mut()
+            && let FormattedTextLine::Line(continuation) = &line
+        {
+            previous.extend(continuation.iter().cloned());
+            *previous = consolidate_fragments(std::mem::take(previous));
+            previous_paragraph_ends_with_html_line_break = paragraph_ends_with_html_line_break;
+            continue;
+        }
 
         // Clear indentation context for non-list content and handle ordered list numbering
         match &mut line {
@@ -221,6 +241,7 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             }
         }
         lines.push(line);
+        previous_paragraph_ends_with_html_line_break = paragraph_ends_with_html_line_break;
     }
 
     Ok((remaining, lines))
@@ -232,8 +253,30 @@ fn parse_paragraph<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 ) -> IResult<&'a str, FormattedTextLine, E> {
     context(
         "paragraph",
-        map(parse_markdown_line, FormattedTextLine::Line),
+        map(
+            parse_markdown_line_with_html_line_breaks,
+            FormattedTextLine::Line,
+        ),
     )(markdown)
+}
+
+fn source_line_ends_with_html_line_break(source: &str) -> bool {
+    let line = source.trim_end_matches([' ', '\t', '\r', '\n']);
+    (4..=6).any(|tag_len| {
+        line.get(line.len().saturating_sub(tag_len)..)
+            .is_some_and(|suffix| html_line_break_tag_len(suffix) == Some(tag_len))
+    })
+}
+
+fn inline_ends_with_newline(inline: &FormattedTextInline) -> bool {
+    inline
+        .iter()
+        .rev()
+        .find_map(|fragment| {
+            let text = fragment.text.trim_end_matches([' ', '\t']);
+            (!text.is_empty()).then(|| text.ends_with('\n'))
+        })
+        .unwrap_or(false)
 }
 
 /// Parse a blank line.
@@ -287,6 +330,15 @@ fn parse_markdown_line<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     markdown: &'a str,
 ) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
     map_parser(parse_line, all_consuming(parse_inline))(markdown)
+}
+
+fn parse_markdown_line_with_html_line_breaks<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    markdown: &'a str,
+) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
+    map_parser(
+        parse_line,
+        all_consuming(parse_inline_with_html_line_breaks),
+    )(markdown)
 }
 
 fn parse_header<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
@@ -676,7 +728,7 @@ fn parse_separator_cell<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
 /// Parse cell content as inline markdown
 fn parse_cell_content(cell: &str) -> Vec<FormattedTextFragment> {
-    match all_consuming(parse_inline::<nom::error::Error<_>>)(cell) {
+    match all_consuming(parse_inline_with_html_line_breaks::<nom::error::Error<_>>)(cell) {
         Ok((_, fragments)) => fragments,
         Err(_) => vec![FormattedTextFragment::plain_text(cell)],
     }
@@ -687,6 +739,143 @@ fn parse_cell_content(cell: &str) -> Vec<FormattedTextFragment> {
 /// formatting like **bold**, *italic*, `code`, [links](url), etc.
 pub fn parse_inline_markdown(text: &str) -> Vec<FormattedTextFragment> {
     parse_cell_content(text)
+}
+
+/// Parsed inline Markdown together with its parser-owned source-to-rendered mapping.
+#[derive(Debug, Clone)]
+pub struct ParsedInlineMarkdown {
+    pub inline: FormattedTextInline,
+    pub source_map: InlineMarkdownSourceMap,
+}
+
+/// Maps character offsets between inline Markdown source and rendered semantic text.
+#[derive(Debug, Clone)]
+pub struct InlineMarkdownSourceMap {
+    rendered_source_spans: Vec<Range<usize>>,
+    rendered_length: usize,
+    source_length: usize,
+}
+
+impl InlineMarkdownSourceMap {
+    fn new(source: &str, rendered_source_spans: Vec<Range<usize>>) -> Self {
+        Self {
+            rendered_length: rendered_source_spans.len(),
+            rendered_source_spans,
+            source_length: source.chars().count(),
+        }
+    }
+
+    pub fn rendered_length(&self) -> usize {
+        self.rendered_length
+    }
+
+    pub fn source_length(&self) -> usize {
+        self.source_length
+    }
+
+    pub fn rendered_to_source(&self, rendered_offset: usize) -> usize {
+        if rendered_offset >= self.rendered_length {
+            return self
+                .rendered_source_spans
+                .last()
+                .map(|span| span.end)
+                .unwrap_or(self.source_length);
+        }
+        self.rendered_source_spans[rendered_offset].start
+    }
+
+    pub fn source_to_rendered(&self, source_offset: usize) -> usize {
+        if source_offset >= self.source_length {
+            return self.rendered_length;
+        }
+
+        for (rendered_offset, span) in self.rendered_source_spans.iter().enumerate() {
+            if source_offset <= span.start {
+                return rendered_offset;
+            }
+            if source_offset < span.end {
+                return rendered_offset + 1;
+            }
+        }
+
+        self.rendered_length
+    }
+}
+
+fn identity_source_spans(source_start: usize, text: &str) -> Vec<Range<usize>> {
+    (0..text.chars().count())
+        .map(|offset| source_start + offset..source_start + offset + 1)
+        .collect()
+}
+
+fn single_source_span(source_start: usize, source_end: usize) -> Vec<Range<usize>> {
+    std::iter::once(source_start..source_end).collect()
+}
+
+fn source_spans_if(
+    track_source_spans: bool,
+    build: impl FnOnce() -> Vec<Range<usize>>,
+) -> Vec<Range<usize>> {
+    if track_source_spans {
+        build()
+    } else {
+        Vec::new()
+    }
+}
+
+fn code_span_source_spans(source_start: usize, token_input: &str, code: &str) -> Vec<Range<usize>> {
+    let opening_backticks = token_input
+        .chars()
+        .take_while(|character| *character == '`')
+        .count();
+    identity_source_spans(source_start + opening_backticks, code)
+}
+
+fn decoded_source_spans(source_start: usize, raw: &str, decoded: &str) -> Vec<Range<usize>> {
+    let mut spans = Vec::with_capacity(decoded.chars().count());
+    let mut remaining = raw;
+    let mut source_offset = source_start;
+    for decoded_character in decoded.chars() {
+        if let Ok((rest, escaped_character)) = parse_escape::<nom::error::Error<&str>>(remaining)
+            && escaped_character == decoded_character
+        {
+            let consumed = remaining[..remaining.len() - rest.len()].chars().count();
+            spans.push(source_offset..source_offset + consumed);
+            source_offset += consumed;
+            remaining = rest;
+            continue;
+        }
+
+        let source_character = remaining
+            .chars()
+            .next()
+            .expect("decoded text should not exceed its source token");
+        debug_assert_eq!(source_character, decoded_character);
+        spans.push(source_offset..source_offset + 1);
+        source_offset += 1;
+        remaining = &remaining[source_character.len_utf8()..];
+    }
+    debug_assert!(remaining.is_empty());
+    spans
+}
+
+/// Parse inline Markdown and retain the source spans recognized while consuming raw syntax.
+pub fn parse_inline_markdown_with_source_map(text: &str) -> ParsedInlineMarkdown {
+    match all_consuming(parse_inline_with_html_line_breaks_and_spans::<nom::error::Error<_>>)(text)
+    {
+        Ok((_, parsed)) => {
+            let source_map = InlineMarkdownSourceMap::new(text, parsed.rendered_source_spans);
+            ParsedInlineMarkdown {
+                inline: parsed.fragments,
+                source_map,
+            }
+        }
+        Err(_) => {
+            let inline = vec![FormattedTextFragment::plain_text(text)];
+            let source_map = InlineMarkdownSourceMap::new(text, identity_source_spans(0, text));
+            ParsedInlineMarkdown { inline, source_map }
+        }
+    }
 }
 
 fn parse_header_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
@@ -981,22 +1170,94 @@ fn not_markdown_line_ending<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 }
 
 fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
-    mut input: &'a str,
+    input: &'a str,
 ) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
+    let (remaining, parsed) = parse_inline_impl(input, false, false)?;
+    Ok((remaining, parsed.fragments))
+}
+
+fn parse_inline_with_html_line_breaks<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, Vec<FormattedTextFragment>, E> {
+    let (remaining, parsed) = parse_inline_impl(input, true, false)?;
+    Ok((remaining, parsed.fragments))
+}
+
+fn parse_inline_with_html_line_breaks_and_spans<
+    'a,
+    E: ContextError<&'a str> + ParseError<&'a str>,
+>(
+    input: &'a str,
+) -> IResult<&'a str, ParsedInlineWithSourceSpans, E> {
+    parse_inline_impl(input, true, true)
+}
+
+struct ParsedInlineWithSourceSpans {
+    fragments: Vec<FormattedTextFragment>,
+    rendered_source_spans: Vec<Range<usize>>,
+}
+
+fn parse_inline_impl<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    mut input: &'a str,
+    parse_html_line_breaks: bool,
+    track_source_spans: bool,
+) -> IResult<&'a str, ParsedInlineWithSourceSpans, E> {
     // We're parsing inline tokens "by hand" instead of using `fold_many0` to allow lookahead.
-    let mut state = InlineState::default();
+    let source = input;
+    let mut state = InlineState {
+        track_source_spans,
+        ..Default::default()
+    };
     while !input.is_empty() {
-        let (remaining, token) = parse_inline_token(input)?;
+        let token_input = input;
+        let (remaining, token) = if parse_html_line_breaks {
+            parse_inline_token_with_html_line_breaks(input)?
+        } else {
+            parse_inline_token(input)?
+        };
+        let consumed_bytes = token_input.len() - remaining.len();
+        let source_start = if track_source_spans {
+            source[..source.len() - token_input.len()].chars().count()
+        } else {
+            0
+        };
+        let source_end = if track_source_spans {
+            source_start + token_input[..consumed_bytes].chars().count()
+        } else {
+            0
+        };
         input = remaining;
 
         match token {
             InlineToken::CodeSpan(text) => {
-                state.push_closed_node(FormattedTextFragment::inline_code(text));
+                state.push_closed_node(
+                    FormattedTextFragment::inline_code(text),
+                    source_spans_if(track_source_spans, || {
+                        code_span_source_spans(source_start, token_input, text)
+                    }),
+                );
             }
             InlineToken::Text(text) => {
-                state.push_text(text);
+                if text == "\n" {
+                    state.push_closed_node(
+                        FormattedTextFragment::plain_text(text),
+                        source_spans_if(track_source_spans, || {
+                            single_source_span(source_start, source_end)
+                        }),
+                    );
+                } else {
+                    state.push_text(
+                        text,
+                        source_spans_if(track_source_spans, || {
+                            identity_source_spans(source_start, text)
+                        }),
+                    );
+                }
             }
             InlineToken::AutoLink(url) => {
+                let source_spans = source_spans_if(track_source_spans, || {
+                    decoded_source_spans(source_start, &token_input[..consumed_bytes], &url)
+                });
                 // Per GFM spec, autolinks can follow whitespace, line beginning, or formatting
                 // delimiters (`*`, `_`, `~`, `(`).
                 // https://github.github.com/gfm/#autolinks-extension-
@@ -1008,13 +1269,21 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                         c.is_whitespace() || FORMATTING_DELIMITERS.contains(c) || c == '('
                     });
                 if can_autolink {
-                    state.push_closed_node(FormattedTextFragment::hyperlink(url.clone(), url));
+                    state.push_closed_node(
+                        FormattedTextFragment::hyperlink(url.clone(), url),
+                        source_spans,
+                    );
                 } else {
-                    state.push_text(url);
+                    state.push_text(url, source_spans);
                 }
             }
             InlineToken::BackslashEscape(ch) | InlineToken::HtmlEntity(ch) => {
-                state.push_text(ch);
+                state.push_text(
+                    ch,
+                    source_spans_if(track_source_spans, || {
+                        single_source_span(source_start, source_end)
+                    }),
+                );
             }
             InlineToken::Delimiter { kind, count } => {
                 let node_index = state.nodes.len();
@@ -1026,14 +1295,32 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
                 let delimiter =
                     Delimiter::new(node_index, kind, count, preceding_char, following_char);
-                state.push_closed_node(FormattedTextFragment::plain_text(delimiter.to_text()));
+                let delimiter_text = delimiter.to_text();
+                state.push_closed_node(
+                    FormattedTextFragment::plain_text(&delimiter_text),
+                    source_spans_if(track_source_spans, || {
+                        identity_source_spans(source_start, &delimiter_text)
+                    }),
+                );
                 state.delimiters.push(delimiter);
             }
             InlineToken::LinkEnd => {
-                input = parse_link(&mut state, remaining);
+                input = parse_link(
+                    &mut state,
+                    remaining,
+                    source_spans_if(track_source_spans, || {
+                        identity_source_spans(source_start, &token_input[..consumed_bytes])
+                    }),
+                );
             }
             InlineToken::UnderlineEnd => {
-                input = parse_underline(&mut state, remaining);
+                input = parse_underline(
+                    &mut state,
+                    remaining,
+                    source_spans_if(track_source_spans, || {
+                        identity_source_spans(source_start, &token_input[..consumed_bytes])
+                    }),
+                );
             }
         }
     }
@@ -1042,7 +1329,14 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
     assert!(state.delimiters.is_empty()); // All delimiters should have been processed.
 
-    Ok((input, consolidate_fragments(state.nodes)))
+    let rendered_source_spans = state.node_source_spans.into_iter().flatten().collect();
+    Ok((
+        input,
+        ParsedInlineWithSourceSpans {
+            fragments: consolidate_fragments(state.nodes),
+            rendered_source_spans,
+        },
+    ))
 }
 
 /// State for parsing inline Markdown.
@@ -1050,6 +1344,12 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 struct InlineState {
     /// Accumulator for fragments of formatted text.
     nodes: Vec<FormattedTextFragment>,
+    /// Per-rendered-character source spans, kept parallel with `nodes` while delimiters are
+    /// resolved and removed.
+    node_source_spans: Vec<Vec<Range<usize>>>,
+    /// Whether the caller requested source maps. Ordinary Markdown parsing leaves this disabled to
+    /// avoid per-character allocation on the parser hot path.
+    track_source_spans: bool,
     /// Whether the last fragment in `nodes` is "open" or "closed". If the node is open, additional
     /// text can be appended to it. If it's closed, it's a unique chunk of formatting and shouldn't
     /// be further extended. Note: this is completely separate from the idea of open/closed delimiters.
@@ -1061,28 +1361,47 @@ struct InlineState {
 
 impl InlineState {
     /// Append plain text. This will reuse the previous fragment if possible
-    fn push_text<S>(&mut self, text: S)
-    where
-        S: Into<String>,
-        String: Extend<S>,
-    {
+    fn push_text(&mut self, text: impl Into<String>, source_spans: Vec<Range<usize>>) {
+        let text = text.into();
+        if self.track_source_spans {
+            debug_assert_eq!(text.chars().count(), source_spans.len());
+        } else {
+            debug_assert!(source_spans.is_empty());
+        }
         // We can only reuse the previous fragment if:
         // 1. It exists
         // 2. It wasn't marked as closed (it's a delimiter, autolink, etc.)
         if !self.last_node_closed
             && let Some(node) = self.nodes.last_mut()
         {
-            node.text.extend(Some(text));
+            node.text.push_str(&text);
+            if self.track_source_spans {
+                self.node_source_spans
+                    .last_mut()
+                    .expect("source spans should parallel inline nodes")
+                    .extend(source_spans);
+            }
             return;
         }
 
         self.nodes.push(FormattedTextFragment::plain_text(text));
+        if self.track_source_spans {
+            self.node_source_spans.push(source_spans);
+        }
         self.last_node_closed = false;
     }
 
     /// Append a closed node of formatted text.
-    fn push_closed_node(&mut self, node: FormattedTextFragment) {
+    fn push_closed_node(&mut self, node: FormattedTextFragment, source_spans: Vec<Range<usize>>) {
+        if self.track_source_spans {
+            debug_assert_eq!(node.text.chars().count(), source_spans.len());
+        } else {
+            debug_assert!(source_spans.is_empty());
+        }
         self.nodes.push(node);
+        if self.track_source_spans {
+            self.node_source_spans.push(source_spans);
+        }
         self.last_node_closed = true;
     }
 
@@ -1092,6 +1411,9 @@ impl InlineState {
     /// Panics if `index` is out of bounds.
     fn remove_node(&mut self, index: usize) {
         self.nodes.remove(index);
+        if self.track_source_spans {
+            self.node_source_spans.remove(index);
+        }
         // Loop backwards so we can short-circuit.
         for delimiter in self.delimiters.iter_mut().rev() {
             if delimiter.node_index > index {
@@ -1109,7 +1431,7 @@ impl InlineState {
     /// Panics if `start` is out of bounds.
     fn backtrack_styles(&mut self, start: usize, mut f: impl FnMut(&mut FormattedTextStyles)) {
         if start + 1 == self.nodes.len() {
-            self.push_text("");
+            self.push_text("", Vec::new());
         }
         for fragment in &mut self.nodes[start..] {
             f(&mut fragment.styles);
@@ -1122,7 +1444,11 @@ impl InlineState {
 ///
 /// This is approximately equivalent to CommonMark's [look for link or image](https://spec.commonmark.org/0.30/#phase-2-inline-structure)
 /// algorithm.
-fn parse_link<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+fn parse_link<'a>(
+    state: &mut InlineState,
+    remaining: &'a str,
+    closing_source_spans: Vec<Range<usize>>,
+) -> &'a str {
     // When we encounter a `]` character, we look backwards in the delimiter stack to find a
     // potential start to the link (or, eventually, the image). We then parse ahead to find the
     // link's target. If either step fails, we insert literal `]` text.
@@ -1135,14 +1461,14 @@ fn parse_link<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
         .find(|(_, delimiter)| delimiter.kind == DelimiterKind::LinkStart)
     else {
         // If there's no link start, treat this as a literal `]`.
-        state.push_text("]");
+        state.push_text("]", closing_source_spans);
         return remaining;
     };
 
     if !link_start.active {
         // If the start is inactive, remove it - this prevents nested links.
         state.delimiters.remove(link_start_index);
-        state.push_text("]");
+        state.push_text("]", closing_source_spans);
         return remaining;
     }
 
@@ -1181,7 +1507,7 @@ fn parse_link<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
         Err(_) => {
             // If there isn't a link target, treat this as a literal `]`.
             state.delimiters.remove(link_start_index);
-            state.push_text("]");
+            state.push_text("]", closing_source_spans);
 
             remaining
         }
@@ -1280,7 +1606,11 @@ fn parse_link_target<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 }
 
 /// Parses underlined text using the same logic as parse_link.
-fn parse_underline<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+fn parse_underline<'a>(
+    state: &mut InlineState,
+    remaining: &'a str,
+    closing_source_spans: Vec<Range<usize>>,
+) -> &'a str {
     let Some((underline_start_index, underline_start)) = state
         .delimiters
         .iter()
@@ -1289,14 +1619,14 @@ fn parse_underline<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
         .find(|(_, delimiter)| delimiter.kind == DelimiterKind::UnderlineStart)
     else {
         // If there's no underline start, treat this as a literal `</u>`.
-        state.push_text("</u>");
+        state.push_text("</u>", closing_source_spans);
         return remaining;
     };
 
     if !underline_start.active {
         // If the start is inactive, remove it - this prevents nested underlines.
         state.delimiters.remove(underline_start_index);
-        state.push_text("</u>");
+        state.push_text("</u>", closing_source_spans);
         return remaining;
     }
 
@@ -1404,6 +1734,9 @@ fn process_emphasis(state: &mut InlineState, stack_bottom: Option<usize>) {
                 closer.count -= consumed_delimiters;
                 let removed_closer = if closer.count == 0 {
                     state.nodes.remove(closer.node_index);
+                    if state.track_source_spans {
+                        state.node_source_spans.remove(closer.node_index);
+                    }
                     used_delimiters_end += 1;
 
                     // If we removed the closing delimiter, we advance to the next delimiter in
@@ -1413,8 +1746,14 @@ fn process_emphasis(state: &mut InlineState, stack_bottom: Option<usize>) {
 
                     true
                 } else {
+                    let source_spans = if state.track_source_spans {
+                        Some(&mut state.node_source_spans[closer.node_index])
+                    } else {
+                        None
+                    };
                     truncate_delimiters(
                         &mut state.nodes[closer.node_index],
+                        source_spans,
                         closer.kind,
                         consumed_delimiters,
                     );
@@ -1425,11 +1764,20 @@ fn process_emphasis(state: &mut InlineState, stack_bottom: Option<usize>) {
                 opener.count -= consumed_delimiters;
                 let removed_opener = if opener.count == 0 {
                     state.nodes.remove(opener.node_index);
+                    if state.track_source_spans {
+                        state.node_source_spans.remove(opener.node_index);
+                    }
                     used_delimiters_start -= 1;
                     true
                 } else {
+                    let source_spans = if state.track_source_spans {
+                        Some(&mut state.node_source_spans[opener.node_index])
+                    } else {
+                        None
+                    };
                     truncate_delimiters(
                         &mut state.nodes[opener.node_index],
+                        source_spans,
                         opener.kind,
                         consumed_delimiters,
                     );
@@ -1481,7 +1829,12 @@ fn process_emphasis(state: &mut InlineState, stack_bottom: Option<usize>) {
 /// Helper for [`process_emphasis`] that removes `count` delimiters of `kind` from `node`.
 ///
 /// In debug builds, this panics if `node` is not a run of `kind` delimiters.
-fn truncate_delimiters(node: &mut FormattedTextFragment, kind: DelimiterKind, count: usize) {
+fn truncate_delimiters(
+    node: &mut FormattedTextFragment,
+    source_spans: Option<&mut Vec<Range<usize>>>,
+    kind: DelimiterKind,
+    count: usize,
+) {
     let delimiter = kind.as_str();
     if cfg!(debug_assertions) {
         let text = &node.text;
@@ -1494,6 +1847,9 @@ fn truncate_delimiters(node: &mut FormattedTextFragment, kind: DelimiterKind, co
 
     node.text
         .truncate(node.text.len() - count * delimiter.len());
+    if let Some(source_spans) = source_spans {
+        source_spans.truncate(node.text.chars().count());
+    }
 }
 
 /// Helper to merge adjacent text fragments with the same styling. Such fragments might come from:
@@ -1505,7 +1861,12 @@ fn consolidate_fragments(
     fragments
         .into_iter()
         .coalesce(|mut prev, current| {
-            if prev.styles == current.styles {
+            // Keep inline newlines isolated so source-to-rendered offset maps can associate the
+            // single rendered character with the complete raw HTML tag that produced it.
+            if prev.styles == current.styles
+                && !prev.text.contains('\n')
+                && !current.text.contains('\n')
+            {
                 prev.text.push_str(&current.text);
                 Ok(prev)
             } else {
@@ -1557,6 +1918,66 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             unmatched_char,
         )),
     )(input)
+}
+
+fn parse_inline_token_with_html_line_breaks<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "inline_token",
+        alt((parse_inline_token_html_line_break, parse_inline_token)),
+    )(input)
+}
+
+/// Return the byte length of a supported raw HTML line-break tag at the start of `input`.
+pub(crate) fn html_line_break_tag_len(input: &str) -> Option<usize> {
+    ["<br />", "<br/>", "<br>"]
+        .into_iter()
+        .find(|tag| {
+            input
+                .get(..tag.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(tag))
+        })
+        .map(str::len)
+}
+
+/// Escape supported raw HTML line-break tags so reparsing keeps them as literal text.
+pub(crate) fn escape_literal_html_line_break_tags(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while let Some(tag_start) = remaining.find('<') {
+        escaped.push_str(&remaining[..tag_start]);
+        remaining = &remaining[tag_start..];
+        if let Some(tag_len) = html_line_break_tag_len(remaining) {
+            let preceding_backslashes = escaped.chars().rev().take_while(|&ch| ch == '\\').count();
+            escaped.extend(std::iter::repeat_n('\\', preceding_backslashes + 1));
+            escaped.push_str(&remaining[..tag_len]);
+            remaining = &remaining[tag_len..];
+        } else {
+            escaped.push('<');
+            remaining = &remaining[1..];
+        }
+    }
+    escaped.push_str(remaining);
+    escaped
+}
+
+/// Parse an HTML line-break tag as an ordinary newline in inline formatted text.
+///
+/// Keeping the result on the existing text path lets every consumer render it without adding a
+/// separate editor or buffer concept. Raw HTML inside code spans is handled earlier and remains
+/// literal text.
+fn parse_inline_token_html_line_break<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("html_line_break", |input| {
+        let Some(tag_len) = html_line_break_tag_len(input) else {
+            return Err(nom::Err::Error(E::from_error_kind(input, ErrorKind::Tag)));
+        };
+        let (remaining, _) = take(tag_len)(input)?;
+        Ok((remaining, InlineToken::Text("\n")))
+    })(input)
 }
 
 /// Parse a `*` delimiter run.

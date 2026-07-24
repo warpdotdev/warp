@@ -10,8 +10,10 @@ pub mod markdown_parser;
 pub mod weight;
 pub use html_parser::parse_html;
 use itertools::Itertools;
+use markdown_parser::escape_literal_html_line_break_tags;
 pub use markdown_parser::{
-    parse_image_prefix, parse_image_run_line, parse_inline_markdown, parse_markdown,
+    InlineMarkdownSourceMap, ParsedInlineMarkdown, parse_image_prefix, parse_image_run_line,
+    parse_inline_markdown, parse_inline_markdown_with_source_map, parse_markdown,
     parse_markdown_with_gfm_tables,
 };
 use serde_yaml::Mapping;
@@ -286,7 +288,12 @@ impl LineCount for FormattedTextLine {
         match self {
             Self::CodeBlock(text) => text.code.matches('\n').count(),
             Self::Heading(_) => 1,
-            Self::Line(_) => 1,
+            Self::Line(line) => {
+                1 + line
+                    .iter()
+                    .map(|fragment| fragment.text.matches('\n').count())
+                    .sum::<usize>()
+            }
             Self::OrderedList(_) => 1,
             Self::UnorderedList(_) => 1,
             Self::TaskList(_) => 1,
@@ -431,7 +438,12 @@ impl FormattedTable {
     /// Serialize to GFM pipe-table markdown.
     pub fn to_plain_text(&self) -> String {
         fn inline_to_text(inline: &FormattedTextInline) -> String {
-            inline.iter().map(|f| f.text.as_str()).collect()
+            inline.iter().fold(String::new(), |mut text, fragment| {
+                text.push_str(
+                    &escape_literal_html_line_break_tags(&fragment.text).replace('\n', "<br>"),
+                );
+                text
+            })
         }
 
         let mut lines = Vec::new();
@@ -453,13 +465,249 @@ impl FormattedTable {
         }
         lines.join("\n")
     }
+
+    /// Serialize to GFM pipe-table Markdown.
+    pub fn to_gfm_markdown(&self) -> String {
+        let mut column_count = self.headers.len();
+        for row in &self.rows {
+            column_count = column_count.max(row.len());
+        }
+
+        if column_count == 0 {
+            return String::new();
+        }
+
+        let mut markdown = String::new();
+        let header_cells = (0..column_count)
+            .map(|index| {
+                self.headers
+                    .get(index)
+                    .map(formatted_inline_to_gfm_table_cell_markdown)
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        append_gfm_table_row(&header_cells, &mut markdown);
+
+        let separator_cells = (0..column_count)
+            .map(|index| {
+                match self
+                    .alignments
+                    .get(index)
+                    .copied()
+                    .unwrap_or(TableAlignment::Left)
+                {
+                    TableAlignment::Left => "---",
+                    TableAlignment::Center => ":---:",
+                    TableAlignment::Right => "---:",
+                }
+                .to_string()
+            })
+            .collect::<Vec<_>>();
+        append_gfm_table_row(&separator_cells, &mut markdown);
+
+        for row in &self.rows {
+            let row_cells = (0..column_count)
+                .map(|index| {
+                    row.get(index)
+                        .map(formatted_inline_to_gfm_table_cell_markdown)
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>();
+            append_gfm_table_row(&row_cells, &mut markdown);
+        }
+
+        markdown
+    }
+}
+
+/// Serialize semantic inline content as Markdown suitable for a GFM table cell. Inline newlines
+/// become canonical `<br>` tags, while literal line-break tags remain escaped text.
+fn formatted_inline_to_gfm_table_cell_markdown(inline: &FormattedTextInline) -> String {
+    let mut markdown = String::new();
+    let mut previous_styles = FormattedTextStyles::default();
+    for fragment in inline {
+        let text = if fragment.styles.inline_code {
+            fragment.text.clone()
+        } else {
+            escape_gfm_table_cell_text(&fragment.text)
+        };
+        let content =
+            append_inline_formatting(&previous_styles, &fragment.styles, &text, &mut markdown);
+        previous_styles.clone_from(&fragment.styles);
+        markdown.push_str(content);
+    }
+    append_inline_formatting(
+        &previous_styles,
+        &FormattedTextStyles::default(),
+        "",
+        &mut markdown,
+    );
+    markdown
+}
+
+fn append_inline_formatting<'a>(
+    previous: &FormattedTextStyles,
+    next: &FormattedTextStyles,
+    mut next_content: &'a str,
+    markdown: &mut String,
+) -> &'a str {
+    if previous.inline_code && !next.inline_code {
+        markdown.push('`');
+    }
+
+    let end_bold = style_is_bold(previous) && !style_is_bold(next);
+    let end_italic = previous.italic && !next.italic;
+    let end_strikethrough = previous.strikethrough && !next.strikethrough;
+    let end_underline = previous.underline && !next.underline;
+    let swapped_content = markdown
+        .char_indices()
+        .rev()
+        .take_while(|(_, character)| character.is_whitespace())
+        .last()
+        .map(|(index, _)| markdown.split_off(index));
+
+    if end_underline {
+        markdown.push_str("</u>");
+    }
+    if end_strikethrough {
+        markdown.push_str("~~");
+    }
+    if end_bold {
+        markdown.push_str("**");
+    }
+    if end_italic {
+        markdown.push('*');
+    }
+    markdown.extend(swapped_content);
+
+    let previous_link = style_link(previous);
+    let next_link = style_link(next);
+    if previous_link != next_link {
+        if let Some(closing_url) = previous_link {
+            markdown.push_str("](");
+            markdown.push_str(closing_url);
+            markdown.push(')');
+        }
+        if next_link.is_some() {
+            markdown.push('[');
+        }
+    }
+
+    let start_bold = !style_is_bold(previous) && style_is_bold(next);
+    let start_italic = !previous.italic && next.italic;
+    let start_strikethrough = !previous.strikethrough && next.strikethrough;
+    let start_underline = !previous.underline && next.underline;
+    if (start_bold || start_italic || start_strikethrough || start_underline)
+        && let Some(index) = next_content.find(|character: char| !character.is_whitespace())
+    {
+        let (whitespace, rest) = next_content.split_at(index);
+        markdown.push_str(whitespace);
+        next_content = rest;
+    }
+
+    if start_bold {
+        markdown.push_str("**");
+    }
+    if start_italic {
+        markdown.push('*');
+    }
+    if start_strikethrough {
+        markdown.push_str("~~");
+    }
+    if start_underline {
+        markdown.push_str("<u>");
+    }
+    if !previous.inline_code && next.inline_code {
+        markdown.push('`');
+    }
+
+    next_content
+}
+
+fn style_is_bold(styles: &FormattedTextStyles) -> bool {
+    styles
+        .weight
+        .is_some_and(|weight| weight.is_at_least_bold())
+}
+
+fn style_link(styles: &FormattedTextStyles) -> Option<&str> {
+    match &styles.hyperlink {
+        Some(Hyperlink::Url(url)) => Some(url),
+        Some(Hyperlink::Action(_)) | None => None,
+    }
+}
+
+fn escape_gfm_table_cell_text(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        if let Some(rest) = remaining.strip_prefix('\n') {
+            escaped.push_str("<br>");
+            remaining = rest;
+            continue;
+        }
+        if let Some(tag_length) = markdown_parser::html_line_break_tag_len(remaining) {
+            escaped.push('\\');
+            escaped.push_str(&remaining[..tag_length]);
+            remaining = &remaining[tag_length..];
+            continue;
+        }
+
+        let character = remaining
+            .chars()
+            .next()
+            .expect("remaining text should not be empty");
+        if is_markdown_special_character(character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+        remaining = &remaining[character.len_utf8()..];
+    }
+    escaped
+}
+
+fn is_markdown_special_character(character: char) -> bool {
+    matches!(
+        character,
+        '\\' | '`' | '*' | '_' | '{' | '}' | '[' | ']' | '(' | ')' | '#' | '+' | '-' | '.' | '!'
+    )
+}
+
+fn append_gfm_table_row(cells: &[String], markdown: &mut String) {
+    markdown.push('|');
+    for cell in cells {
+        markdown.push(' ');
+        markdown.push_str(&cell.replace('|', "\\|"));
+        markdown.push(' ');
+        markdown.push('|');
+    }
+    markdown.push('\n');
 }
 
 /// Convert a `FormattedTextInline` back to markdown syntax.
 fn inline_to_markdown(inline: &FormattedTextInline) -> String {
     let mut result = String::new();
-    for fragment in inline {
-        let mut text = fragment.text.clone();
+    let fragments = inline
+        .iter()
+        .cloned()
+        .map(|mut fragment| {
+            if !fragment.styles.inline_code {
+                fragment.text = escape_literal_html_line_break_tags(&fragment.text);
+            }
+            fragment.text = fragment.text.replace('\n', "<br>");
+            fragment
+        })
+        .coalesce(|mut prev, current| {
+            if prev.styles == current.styles {
+                prev.text.push_str(&current.text);
+                Ok(prev)
+            } else {
+                Err((prev, current))
+            }
+        });
+    for fragment in fragments {
+        // Keep inline newlines as tags so they cannot be confused with table row boundaries.
+        let mut text = fragment.text;
         if text.is_empty() {
             continue;
         }

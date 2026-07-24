@@ -9,8 +9,8 @@ use html5ever::{QualName, serialize};
 use itertools::Itertools;
 use markdown_parser::{
     CodeBlockText, FormattedIndentTextInline, FormattedTableAlignment, FormattedTaskList,
-    FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextInline,
-    FormattedTextLine, OrderedFormattedIndentTextInline,
+    FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextLine,
+    OrderedFormattedIndentTextInline,
 };
 use markup5ever::ns;
 use string_offset::CharOffset;
@@ -159,45 +159,7 @@ impl<'a> BufferMarkdownParser<'a> {
     }
 
     fn serialize_table_to_gfm_markdown(table: &FormattedTable, buf: &mut String) {
-        let mut column_count = table.headers.len();
-        for row in &table.rows {
-            column_count = column_count.max(row.len());
-        }
-
-        if column_count == 0 {
-            return;
-        }
-
-        let header_cells = (0..column_count)
-            .map(|index| {
-                table
-                    .headers
-                    .get(index)
-                    .map(inline_to_markdown)
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>();
-        append_gfm_table_row(&header_cells, buf);
-
-        let separator_cells: Vec<String> = (0..column_count)
-            .map(|index| {
-                alignment_to_gfm_separator(
-                    table
-                        .alignments
-                        .get(index)
-                        .copied()
-                        .unwrap_or(FormattedTableAlignment::Left),
-                )
-            })
-            .collect();
-        append_gfm_table_row(&separator_cells, buf);
-
-        for row in &table.rows {
-            let row_cells = (0..column_count)
-                .map(|index| row.get(index).map(inline_to_markdown).unwrap_or_default())
-                .collect::<Vec<_>>();
-            append_gfm_table_row(&row_cells, buf);
-        }
+        buf.push_str(&table.to_gfm_markdown());
     }
 
     /// Emits Markdown formatting markers for changing from `prev_styles` to `next_styles`.
@@ -1145,8 +1107,16 @@ fn serialize_table_cell_inline<S>(
 where
     S: Serializer,
 {
-    for fragment in inline {
-        let styles = TextStylesWithMetadata::from(fragment.styles.clone());
+    let fragments = inline.iter().cloned().coalesce(|mut prev, current| {
+        if prev.styles == current.styles {
+            prev.text.push_str(&current.text);
+            Ok(prev)
+        } else {
+            Err((prev, current))
+        }
+    });
+    for fragment in fragments {
+        let styles = TextStylesWithMetadata::from(fragment.styles);
 
         if let Some(link) = styles.link_content() {
             let tag = QualName::new(None, ns!(html), "a".into());
@@ -1172,7 +1142,14 @@ where
             serializer.start_elem(QualName::new(None, ns!(html), "code".into()), iter::empty())?;
         }
 
-        serializer.write_text(&fragment.text)?;
+        for (index, text) in fragment.text.split('\n').enumerate() {
+            if index > 0 {
+                let tag = QualName::new(None, ns!(html), "br".into());
+                serializer.start_elem(tag.clone(), iter::empty())?;
+                serializer.end_elem(tag)?;
+            }
+            serializer.write_text(text)?;
+        }
 
         if styles.is_inline_code() {
             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;
@@ -1242,52 +1219,6 @@ where
     serializer.end_elem(table_tag)?;
 
     Ok(())
-}
-
-fn inline_to_markdown(inline: &FormattedTextInline) -> String {
-    let mut markdown = String::new();
-    let mut previous_styles = TextStylesWithMetadata::default();
-    for fragment in inline {
-        let next_styles = TextStylesWithMetadata::from(fragment.styles.clone());
-        let content = BufferMarkdownParser::append_formatting(
-            &previous_styles,
-            &next_styles,
-            fragment.text.as_str(),
-            &mut markdown,
-        );
-        previous_styles = next_styles;
-        BufferMarkdownParser::append_content(content, true, &mut markdown);
-    }
-    BufferMarkdownParser::append_formatting(
-        &previous_styles,
-        &TextStylesWithMetadata::default(),
-        "",
-        &mut markdown,
-    );
-    markdown
-}
-
-fn append_gfm_table_row(cells: &[String], buf: &mut String) {
-    buf.push('|');
-    for cell in cells {
-        buf.push(' ');
-        buf.push_str(&escape_gfm_table_cell(cell));
-        buf.push(' ');
-        buf.push('|');
-    }
-    buf.push('\n');
-}
-
-fn alignment_to_gfm_separator(alignment: FormattedTableAlignment) -> String {
-    match alignment {
-        FormattedTableAlignment::Left => "---".to_string(),
-        FormattedTableAlignment::Center => ":---:".to_string(),
-        FormattedTableAlignment::Right => "---:".to_string(),
-    }
-}
-
-fn escape_gfm_table_cell(cell: &str) -> String {
-    cell.replace('|', "\\|")
 }
 
 #[cfg(test)]
