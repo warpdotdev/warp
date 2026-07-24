@@ -313,8 +313,13 @@ async fn select_adapter(
         .collect::<HashSet<_>>();
 
     for adapter in adapters {
-        if let Some((device, queue, surface_config)) =
-            initialize_device(&adapter, surface, initial_surface_size).await
+        if let Some((device, queue, surface_config)) = initialize_device(
+            &adapter,
+            surface,
+            initial_surface_size,
+            gpu_power_preference,
+        )
+        .await
         {
             return Some((adapter, device, queue, surface_config, supported_backends));
         }
@@ -623,6 +628,7 @@ async fn initialize_device(
     adapter: &Adapter,
     surface: &Surface<'static>,
     initial_surface_size: Vector2F,
+    gpu_power_preference: GPUPowerPreference,
 ) -> Option<(Device, Queue, SurfaceConfiguration)> {
     log::info!(
         "Verifying adapter \"{}\" is valid...",
@@ -660,7 +666,9 @@ async fn initialize_device(
 
     // Ensure that we're able to create a swapchain before we treat the device
     // as valid.
-    let Some(surface_config) = create_surface_config(adapter, surface, initial_surface_size) else {
+    let Some(surface_config) =
+        create_surface_config(adapter, surface, initial_surface_size, gpu_power_preference)
+    else {
         log::warn!("Failed to get default surface configuration");
         return None;
     };
@@ -855,6 +863,7 @@ fn create_surface_config(
     adapter: &Adapter,
     surface: &Surface,
     initial_surface_size: Vector2F,
+    gpu_power_preference: GPUPowerPreference,
 ) -> Option<SurfaceConfiguration> {
     let mut config = surface.get_default_config(
         adapter,
@@ -872,10 +881,7 @@ fn create_surface_config(
         config.usage |= wgpu::TextureUsages::COPY_SRC;
     }
 
-    // Use a non-vsync presentation mode for reduced input delay.  This could
-    // cause visual tearing on present, but we're ok with paying that cost to
-    // improve responsiveness.
-    config.present_mode = PresentMode::AutoNoVsync;
+    config.present_mode = present_mode_for_power_preference(gpu_power_preference);
 
     // Explicitly request a non-opaque alpha compositing mode, if available.
     // Without this, transparent surfaces don't work on native Wayland.
@@ -897,6 +903,18 @@ fn create_surface_config(
     }
 
     Some(config)
+}
+
+fn present_mode_for_power_preference(gpu_power_preference: GPUPowerPreference) -> PresentMode {
+    match gpu_power_preference {
+        // Pace presentation with the display refresh rate when users prefer the low-power GPU.
+        // This avoids driving the GPU harder than necessary while typing or scrolling.
+        GPUPowerPreference::LowPower => PresentMode::AutoVsync,
+        // Use a non-vsync presentation mode for reduced input delay in the high-performance path.
+        // This could cause visual tearing on present, but we're ok with paying that cost to improve
+        // responsiveness.
+        GPUPowerPreference::HighPerformance => PresentMode::AutoNoVsync,
+    }
 }
 
 #[derive(Error, Debug)]
