@@ -17,6 +17,8 @@ use crate::ai::agent::conversation::AIConversationId;
 /// completion back to every waiter, including callers that only joined work
 /// started by a different path.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+// Every variant is constructed only in non-wasm finalization paths.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) enum FinalizeReason {
     StoppedByAgent,
     RunEnded,

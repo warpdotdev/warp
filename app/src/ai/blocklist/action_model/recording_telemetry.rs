@@ -15,6 +15,8 @@ use crate::features::FeatureFlag;
 /// user-generated content.
 #[derive(Serialize, Debug, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]
+// `Stopped` is only built in the non-wasm stop/finalize path.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub enum RecordingTelemetryEvent {
     /// Emitted when a `StartRecording` action successfully begins capture.
     Started {
