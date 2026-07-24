@@ -1767,7 +1767,7 @@ impl Delimiter {
                 right_flanking && (!left_flanking || followed_by_punctuation)
             }
             DelimiterKind::Strikethrough => right_flanking,
-            DelimiterKind::UnderlineStart => right_flanking,
+            DelimiterKind::UnderlineStart => false,
         };
 
         Self {
@@ -1790,6 +1790,13 @@ impl Delimiter {
     fn can_open_for(&self, other: &Delimiter) -> bool {
         // Base rules that apply to all styling.
         if !self.can_open || self.kind != other.kind {
+            return false;
+        }
+
+        // Underline start (`<u>`) is only ever closed by an explicit `</u>` tag,
+        // handled separately by `parse_underline`. It must never be paired with
+        // another `<u>` through the emphasis algorithm.
+        if self.kind == DelimiterKind::UnderlineStart {
             return false;
         }
 
