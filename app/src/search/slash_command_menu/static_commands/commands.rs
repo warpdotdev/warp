@@ -99,6 +99,16 @@ pub const EXIT: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const VERSION: StaticCommand = StaticCommand {
+    name: "/version",
+    description: "Show the Warp version",
+    kind: SlashCommandKind::Version,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub const LOGOUT: StaticCommand = StaticCommand {
     name: "/logout",
     description: "Log out of Warp",
@@ -847,6 +857,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
         MODEL.clone(),
+        VERSION,
         VIEW_LOGS,
     ];
 

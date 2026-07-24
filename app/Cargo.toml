@@ -613,6 +613,7 @@ default = [
     "agent_tips",
     "pluggable_notifications",
     "agent_onboarding",
+    "account_first_onboarding",
     "global_search",
     "cloud_conversations",
     "list_skills",

@@ -47,6 +47,11 @@ pub(crate) struct ActiveRecording {
     /// The surface being recorded, used to resolve pointer-event coordinates
     /// into capture space for the post-stop burn-in.
     pub(crate) target: computer_use::Target,
+    /// Recording-scoped pointer session shared with each `UseComputer` call's
+    /// `PointerSink`, persisting the last resolved point and active button across
+    /// calls so a drag split into separate `Down`/`Move`/`Up` calls records its
+    /// release. Reset when a call fails or is cancelled.
+    pub(crate) pointer_session: computer_use::PointerSession,
     /// Action groups committed to the video, in completion order.
     pub(crate) actions: Vec<computer_use::ActionLogEntry>,
     /// Short agent-authored title shown in badges (from StartRecording.summary).
@@ -161,6 +166,7 @@ impl RecordingController {
                 started_at: Instant::now(),
                 frame_rate,
                 target,
+                pointer_session: computer_use::PointerSession::new(),
                 actions: Vec::new(),
                 summary,
                 description,
@@ -171,13 +177,14 @@ impl RecordingController {
 
     /// Begins an in-flight `UseComputer` action group for the owning
     /// conversation, recording the group's start offset and labels. Returns the
-    /// recording's capture start instant so the caller can measure the finish
-    /// offset from the same clock when the action sequence returns. A
-    /// pointer-only group is begun with empty labels; wait-only/no-op calls
-    /// should not call this. The pending group is committed with its finish
-    /// offset on success ([`commit_action_group`]) or discarded on failure
-    /// ([`discard_action_group`]). Returns `None` (and begins nothing) if no
-    /// recording is active for this conversation.
+    /// recording's capture start instant, its capture target, and a clone of the
+    /// recording-scoped pointer session so the caller can share it with this
+    /// call's `PointerSink` and a later split-call release can reuse the last
+    /// resolved point. A pointer-only group is begun with empty labels;
+    /// wait-only/no-op calls should not call this. The pending group is
+    /// committed with its finish offset on success ([`commit_action_group`]) or
+    /// discarded on failure ([`discard_action_group`]). Returns `None` (and
+    /// begins nothing) if no recording is active for this conversation.
     ///
     /// [`commit_action_group`]: Self::commit_action_group
     /// [`discard_action_group`]: Self::discard_action_group
@@ -186,7 +193,7 @@ impl RecordingController {
         &mut self,
         conversation_id: AIConversationId,
         labels: Vec<String>,
-    ) -> Option<(Instant, computer_use::Target)> {
+    ) -> Option<(Instant, computer_use::Target, computer_use::PointerSession)> {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
         {
@@ -213,7 +220,11 @@ impl RecordingController {
                 start_offset,
                 labels,
             });
-            return Some((recording.started_at, recording.target));
+            return Some((
+                recording.started_at,
+                recording.target,
+                recording.pointer_session.clone(),
+            ));
         }
         None
     }
@@ -256,6 +267,9 @@ impl RecordingController {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
         {
+            // Reset the pointer session so a later `UseComputer` call cannot
+            // inherit an abandoned press from this failed/cancelled call.
+            recording.pointer_session.clear();
             recording.pending_group = None;
         }
     }

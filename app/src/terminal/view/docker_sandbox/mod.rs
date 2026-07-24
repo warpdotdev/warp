@@ -289,10 +289,13 @@ impl TerminalView {
                     .ok_or("environment not found")?;
 
                 // Prepare the environment (clone repos, run setup commands, index codebases).
+                let source_repos = environment.effective_repos();
+                let setup_commands = environment.setup_commands;
                 let prepare_future = spawner
                     .spawn(|_, ctx| {
                         prepare_environment(
-                            environment,
+                            source_repos,
+                            setup_commands,
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
