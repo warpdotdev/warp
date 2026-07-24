@@ -386,6 +386,28 @@ fn get_files_and_folders_in_directory(directory: &Path) -> HashSet<PathBuf> {
     files_and_folders
 }
 
+/// Resolves a markdown hyperlink `url` to a local file link when it points at an existing file,
+/// honoring a `:line`/`:line:col` suffix in the URL. Returns `None` for URLs that don't resolve
+/// to a local file (e.g. real web links), so external hyperlinks are never reclassified.
+#[cfg(feature = "local_fs")]
+fn resolve_hyperlink_url_as_file_path(
+    working_directory: &str,
+    url: &str,
+    shell_launch_data: Option<&ShellLaunchData>,
+) -> Option<DetectedLinkType> {
+    let working_directory = shell_launch_data
+        .and_then(|launch_data| launch_data.maybe_convert_absolute_path(working_directory))
+        .unwrap_or_else(|| PathBuf::from(working_directory));
+    let files_and_folders = get_files_and_folders_in_directory(working_directory.as_path());
+    let expanded = shellexpand::tilde(url);
+    compute_valid_file_path(
+        working_directory.as_path(),
+        &expanded,
+        &files_and_folders,
+        shell_launch_data,
+    )
+}
+
 /// Returns the detected valid file paths in some text along with their char ranges.
 #[cfg(feature = "local_fs")]
 pub(crate) fn detect_file_paths(
@@ -727,6 +749,37 @@ pub(crate) fn detect_all_links(
     for (location, line_hyperlinks) in md_hyperlinks {
         let entry = all_links.entry(location).or_default();
         for (range, url) in line_hyperlinks {
+            #[cfg(feature = "local_fs")]
+            {
+                // If the hyperlink URL resolves to an existing local file carrying a line
+                // (e.g. `[server.go:164](server.go:164)`), open that file at that line rather
+                // than handing the URL to the system opener, which drops the line.
+                if let Some(file_link) = current_working_directory.and_then(|cwd| {
+                    resolve_hyperlink_url_as_file_path(cwd, &url, shell_launch_data)
+                }) {
+                    if matches!(
+                        file_link,
+                        DetectedLinkType::FilePath {
+                            line_and_column_num: Some(_),
+                            ..
+                        }
+                    ) {
+                        entry.insert(range, file_link);
+                        continue;
+                    }
+                }
+                // Otherwise, don't clobber a line-aware file link already detected from the
+                // on-screen text at this range.
+                if matches!(
+                    entry.get(&range),
+                    Some(DetectedLinkType::FilePath {
+                        line_and_column_num: Some(_),
+                        ..
+                    })
+                ) {
+                    continue;
+                }
+            }
             entry.insert(range, DetectedLinkType::Url(url));
         }
     }

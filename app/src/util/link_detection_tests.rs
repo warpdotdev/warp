@@ -242,3 +242,177 @@ fn link_tooltip_anchor_ids_are_unique_per_block() {
         RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID
     );
 }
+
+/// Baseline: a plain-text `foo.rs:59` reference resolves to a line-aware `FilePath`.
+#[cfg(feature = "local_fs")]
+#[test]
+fn plain_text_file_reference_is_line_aware() {
+    use crate::ai::blocklist::block::TextLocation;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("foo.rs"), "// x\n").unwrap();
+    let cwd = dir.path().to_str().unwrap().to_owned();
+    let location = TextLocation::Output {
+        section_index: 0,
+        line_index: 0,
+    };
+
+    let texts = vec![("foo.rs:59".to_string(), location)];
+    let all_links = detect_all_links(&texts, Vec::new(), Some(&cwd), None);
+
+    let link = all_links
+        .get(&location)
+        .and_then(|links| links.get(&(0..9)))
+        .expect("a file link should be detected for the plain-text reference");
+    assert!(
+        matches!(
+            link,
+            DetectedLinkType::FilePath {
+                line_and_column_num: Some(lc),
+                ..
+            } if lc.line_num == 59
+        ),
+        "plain-text `foo.rs:59` must resolve to a FilePath carrying line 59, got {link:?}"
+    );
+}
+
+/// Regression for the reported bug: a markdown link `[foo.rs:59](foo.rs)` must
+/// stay a line-aware `FilePath` rather than being clobbered by a line-less `Url`
+/// (which opened the file at line 1).
+#[cfg(feature = "local_fs")]
+#[test]
+fn markdown_link_preserves_line_aware_file_path() {
+    use crate::ai::blocklist::block::TextLocation;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("foo.rs"), "// x\n").unwrap();
+    let cwd = dir.path().to_str().unwrap().to_owned();
+    let location = TextLocation::Output {
+        section_index: 0,
+        line_index: 0,
+    };
+
+    // Display text `foo.rs:59`; markdown URL `foo.rs` (no line) over range 0..9.
+    let texts = vec![("foo.rs:59".to_string(), location)];
+    let md_hyperlinks: HyperlinksByLocation = vec![(location, vec![(0..9, "foo.rs".to_string())])];
+
+    let all_links = detect_all_links(&texts, md_hyperlinks, Some(&cwd), None);
+
+    let link = all_links
+        .get(&location)
+        .and_then(|links| links.get(&(0..9)))
+        .expect("a link should be detected for the markdown file reference");
+    assert!(
+        matches!(
+            link,
+            DetectedLinkType::FilePath {
+                line_and_column_num: Some(lc),
+                ..
+            } if lc.line_num == 59
+        ),
+        "the markdown link must resolve to a line-aware FilePath (line 59), not a \
+         line-less URL that opens the file at line 1, got {link:?}"
+    );
+}
+
+/// Guard: a genuine external markdown hyperlink stays a `Url`.
+#[cfg(feature = "local_fs")]
+#[test]
+fn markdown_external_link_stays_url() {
+    use crate::ai::blocklist::block::TextLocation;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().to_str().unwrap().to_owned();
+    let location = TextLocation::Output {
+        section_index: 0,
+        line_index: 0,
+    };
+
+    let texts = vec![("docs".to_string(), location)];
+    let md_hyperlinks: HyperlinksByLocation =
+        vec![(location, vec![(0..4, "https://example.com".to_string())])];
+
+    let all_links = detect_all_links(&texts, md_hyperlinks, Some(&cwd), None);
+
+    let link = all_links
+        .get(&location)
+        .and_then(|links| links.get(&(0..4)))
+        .expect("the external hyperlink should be detected");
+    assert!(
+        matches!(link, DetectedLinkType::Url(url) if url == "https://example.com"),
+        "an external markdown hyperlink must remain a Url, got {link:?}"
+    );
+}
+
+/// Guard: a file-like label with an explicit external href stays a `Url` (the
+/// guard is line-aware only, so a line-less local-file label doesn't hijack it).
+#[cfg(feature = "local_fs")]
+#[test]
+fn markdown_external_link_with_file_like_label_stays_url() {
+    use crate::ai::blocklist::block::TextLocation;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
+    let cwd = dir.path().to_str().unwrap().to_owned();
+    let location = TextLocation::Output {
+        section_index: 0,
+        line_index: 0,
+    };
+
+    // `[Cargo.toml](https://example.com)`: label is a real local file (no line).
+    let texts = vec![("Cargo.toml".to_string(), location)];
+    let md_hyperlinks: HyperlinksByLocation =
+        vec![(location, vec![(0..10, "https://example.com".to_string())])];
+
+    let all_links = detect_all_links(&texts, md_hyperlinks, Some(&cwd), None);
+
+    let link = all_links
+        .get(&location)
+        .and_then(|links| links.get(&(0..10)))
+        .expect("the hyperlink should be detected");
+    assert!(
+        matches!(link, DetectedLinkType::Url(url) if url == "https://example.com"),
+        "a file-like label with an explicit external href must stay a Url (not open \
+         the local file), got {link:?}"
+    );
+}
+
+/// Regression for the reported case: the line lives in the hyperlink *URL* while the on-screen
+/// label has no line. The URL must be resolved to a line-aware file link so clicking opens the
+/// file at that line instead of dropping it.
+#[cfg(feature = "local_fs")]
+#[test]
+fn markdown_link_with_line_in_url_is_line_aware() {
+    use crate::ai::blocklist::block::TextLocation;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("server.go"), "package main\n").unwrap();
+    let cwd = dir.path().to_str().unwrap().to_owned();
+    let location = TextLocation::Output {
+        section_index: 0,
+        line_index: 0,
+    };
+
+    // On-screen label `server.go` carries no line; the hyperlink URL `server.go:164` does.
+    let texts = vec![("server.go".to_string(), location)];
+    let md_hyperlinks: HyperlinksByLocation =
+        vec![(location, vec![(0..9, "server.go:164".to_string())])];
+
+    let all_links = detect_all_links(&texts, md_hyperlinks, Some(&cwd), None);
+
+    let link = all_links
+        .get(&location)
+        .and_then(|links| links.get(&(0..9)))
+        .expect("a link should be detected for the markdown file reference");
+    assert!(
+        matches!(
+            link,
+            DetectedLinkType::FilePath {
+                line_and_column_num: Some(lc),
+                ..
+            } if lc.line_num == 164
+        ),
+        "a markdown link whose URL carries `:164` must resolve to a line-aware FilePath \
+         (line 164), got {link:?}"
+    );
+}
