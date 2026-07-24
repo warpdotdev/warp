@@ -10,6 +10,11 @@ use super::display_menu::GenericMenuItem;
 use crate::completer::SessionContext;
 use crate::ui_components::icons::Icon;
 
+/// Maximum number of directory entries to collect for the context chip menu.
+/// Prevents unbounded memory growth when a directory has millions of entries
+/// (e.g. build output directories, node_modules, etc.).
+const MAX_DIRECTORY_ENTRIES: usize = 10_000;
+
 /// DirectoryFetcher model that caches directory state and provides an explicit refetch API
 pub struct DirectoryFetcher {
     current_directory: String,
@@ -98,12 +103,22 @@ impl DirectoryFetcher {
         // than serving the possibly-stale entry from the shared `SessionContext` cache.
         let entries = session_context.refresh_directory_entries(typed_path).await;
 
-        // Convert EngineDirEntry to GenericMenuItem, filtering out hidden files
+        // Convert EngineDirEntry to GenericMenuItem, filtering out hidden files.
+        // Cap the number of entries to prevent unbounded memory growth when a
+        // directory contains millions of files (see APP-4523).
         let mut items: Vec<DirectoryItem> = entries
             .iter()
             .filter(|entry| !entry.is_hidden()) // Skip hidden files (starting with '.')
+            .take(MAX_DIRECTORY_ENTRIES)
             .map(engine_entry_to_menu_item)
             .collect();
+
+        if entries.len() > MAX_DIRECTORY_ENTRIES {
+            log::warn!(
+                "Directory listing truncated: {dir_path} has {} entries, capped at {MAX_DIRECTORY_ENTRIES}",
+                entries.len()
+            );
+        }
 
         // Sort: directories first, then text files, then other files, all alphabetically within their groups
         sort_menu_items(&mut items);
