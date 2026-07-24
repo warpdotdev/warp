@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -17,6 +18,15 @@ use warp_util::standardized_path::StandardizedPath;
 
 use crate::index::file_outline::{FileOutline, Outline, Symbol};
 use crate::index::{Entry, FileId, FileMetadata, THREADPOOL};
+
+// Thread-local tree-sitter parser and query cursor, reused across files
+// to avoid repeated allocation of internal state. Tree-sitter parsers
+// allocate significant internal buffers that fragment the jemalloc heap
+// when created and destroyed per-file.
+thread_local! {
+    static THREAD_LOCAL_PARSER: RefCell<Parser> = RefCell::new(Parser::new());
+    static THREAD_LOCAL_CURSOR: RefCell<QueryCursor> = RefCell::new(QueryCursor::new());
+}
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -233,6 +243,10 @@ async fn parse_symbols_for_files(files: Vec<FileMetadata>) -> Option<HashMap<Fil
 }
 
 /// Given the path of a file, try to construct its outline.
+///
+/// Reuses a thread-local `Parser` and `QueryCursor` to avoid per-file
+/// allocation of tree-sitter internal state, which causes significant
+/// memory fragmentation in jemalloc on macOS.
 fn parse_file_outline(path: &Path) -> anyhow::Result<FileOutline> {
     if !is_file_parsable(path)? {
         return Err(anyhow!("File exceeds max file size limit for parsing"));
@@ -243,50 +257,46 @@ fn parse_file_outline(path: &Path) -> anyhow::Result<FileOutline> {
     };
     let content = fs::read_to_string(path)?;
 
-    let mut parser = Parser::new();
-    parser.set_language(&language.grammar)?;
-    let Some(tree) = parser.parse(&content, None) else {
-        return Err(anyhow!("Couldn't parse AST"));
-    };
-    let symbols = language.symbols_query.as_ref().map(|query| {
-        get_symbols(query, &tree, &content)
-            .into_iter()
-            .map(|(fn_name, type_prefix, comments, line_number)| Symbol {
-                name: fn_name.to_owned(),
-                type_prefix: type_prefix.map(String::from),
-                comment: if comments.is_empty() {
-                    None
-                } else {
-                    Some(comments.into_iter().map(String::from).collect())
-                },
-                line_number,
-            })
-            .collect_vec()
-    });
+    let symbols = THREAD_LOCAL_PARSER.with(|parser_cell| -> anyhow::Result<_> {
+        let mut parser = parser_cell.borrow_mut();
+        parser.set_language(&language.grammar)?;
+        let tree = parser
+            .parse(&content, None)
+            .ok_or_else(|| anyhow!("Couldn't parse AST"))?;
 
-    drop(tree);
-    drop(parser);
+        let symbols = language.symbols_query.as_ref().map(|query| {
+            get_symbols(query, &tree, &content)
+                .into_iter()
+                .map(|(fn_name, type_prefix, comments, line_number)| Symbol {
+                    name: fn_name.to_owned(),
+                    type_prefix: type_prefix.map(String::from),
+                    comment: if comments.is_empty() {
+                        None
+                    } else {
+                        Some(comments.into_iter().map(String::from).collect())
+                    },
+                    line_number,
+                })
+                .collect_vec()
+        });
 
-    // Release extra unused memory from malloc to the system.  For some
-    // reason, the memory obtained by the allocator is often not released
-    // back to the OS after we're done with it, resulting in high memory
-    // usage (from the perspective of the OS, though not from the perspective
-    // of the allocator).
-    //
-    // See: https://github.com/tree-sitter/tree-sitter/issues/3129
-    #[cfg(all(
-        any(target_os = "linux", target_os = "freebsd"),
-        target_env = "gnu",
-        not(feature = "jemalloc")
-    ))]
-    unsafe {
-        nix::libc::malloc_trim(0);
-    }
+        // Explicitly drop the tree so tree-sitter can reclaim the
+        // parse-tree memory while the parser's internal arena is
+        // still alive. The parser itself persists in thread-local
+        // storage and will be reconfigured via `set_language` on
+        // the next call.
+        drop(tree);
+
+        Ok(symbols)
+    })?;
 
     Ok(FileOutline { symbols })
 }
 
 /// Given the content of a file, return all the symbols of interest.
+///
+/// Uses a thread-local `QueryCursor` to avoid allocating a new cursor per
+/// file. The cursor is borrowed for the duration of the query iteration.
 fn get_symbols<'a>(
     query: &'a Query,
     tree: &Tree,
@@ -296,51 +306,55 @@ fn get_symbols<'a>(
         lines: Vec<&'a str>,
         last_line_number: usize,
     }
-    let mut cursor = QueryCursor::new();
-    let capture_names = query.capture_names();
-    let mut captures = cursor.captures(query, tree.root_node(), TextSlice(file_content.as_bytes()));
 
-    let mut symbols = vec![];
-    let mut comment: Option<PendingComment> = None;
-    while let Some(matches) = captures.next() {
-        for cap in matches.0.captures {
-            let capture_name = capture_names.get(cap.index as usize);
-            let matched_content =
-                &file_content[cap.node.byte_range().start..cap.node.byte_range().end];
-            let line_number = cap.node.range().start_point.row;
-            match capture_name {
-                Some(name) if *name == "comment" => match comment.as_mut() {
-                    Some(pending_comment)
-                        if pending_comment.last_line_number + 1 == line_number =>
-                    {
-                        pending_comment.lines.push(matched_content.trim());
-                        pending_comment.last_line_number = line_number;
-                    }
-                    _ => {
-                        comment = Some(PendingComment {
-                            lines: vec![matched_content.trim()],
-                            last_line_number: line_number,
-                        })
-                    }
-                },
-                _ => {
-                    let comments = match comment.take() {
+    THREAD_LOCAL_CURSOR.with(|cursor_cell| {
+        let mut cursor = cursor_cell.borrow_mut();
+        let capture_names = query.capture_names();
+        let mut captures =
+            cursor.captures(query, tree.root_node(), TextSlice(file_content.as_bytes()));
+
+        let mut symbols = vec![];
+        let mut comment: Option<PendingComment> = None;
+        while let Some(matches) = captures.next() {
+            for cap in matches.0.captures {
+                let capture_name = capture_names.get(cap.index as usize);
+                let matched_content =
+                    &file_content[cap.node.byte_range().start..cap.node.byte_range().end];
+                let line_number = cap.node.range().start_point.row;
+                match capture_name {
+                    Some(name) if *name == "comment" => match comment.as_mut() {
                         Some(pending_comment)
                             if pending_comment.last_line_number + 1 == line_number =>
                         {
-                            pending_comment.lines
+                            pending_comment.lines.push(matched_content.trim());
+                            pending_comment.last_line_number = line_number;
                         }
-                        _ => vec![],
-                    };
-                    let type_prefix = capture_name.and_then(|s| s.split(".").nth(1));
-                    symbols.push((matched_content, type_prefix, comments, line_number + 1));
-                    // Convert to 1-indexed
+                        _ => {
+                            comment = Some(PendingComment {
+                                lines: vec![matched_content.trim()],
+                                last_line_number: line_number,
+                            })
+                        }
+                    },
+                    _ => {
+                        let comments = match comment.take() {
+                            Some(pending_comment)
+                                if pending_comment.last_line_number + 1 == line_number =>
+                            {
+                                pending_comment.lines
+                            }
+                            _ => vec![],
+                        };
+                        let type_prefix = capture_name.and_then(|s| s.split(".").nth(1));
+                        symbols.push((matched_content, type_prefix, comments, line_number + 1));
+                        // Convert to 1-indexed
+                    }
                 }
             }
         }
-    }
 
-    symbols
+        symbols
+    })
 }
 
 #[cfg(test)]
