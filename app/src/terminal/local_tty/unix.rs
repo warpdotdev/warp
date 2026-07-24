@@ -438,6 +438,23 @@ fn build_host_shell_command(
         builder.env("WARP_INITIAL_WORKING_DIR", start_dir);
     }
 
+    // Strip Warp's own bundled-library entries from the dynamic-loader
+    // environment so the shell (and its descendants) resolve system libraries,
+    // not Warp's ABI-tuned bundled copies. Without this, a leaked
+    // `LD_LIBRARY_PATH` crashes .NET/pwsh grandchildren with SIGABRT (see
+    // `crate::terminal::loader_env` and warp#12228). Applied before the
+    // caller-provided overrides below so an explicit override still wins.
+    for (var, mutation) in crate::terminal::loader_env::loader_env_mutations() {
+        match mutation {
+            crate::terminal::loader_env::LoaderEnvMutation::Set(value) => {
+                builder.env(var, value);
+            }
+            crate::terminal::loader_env::LoaderEnvMutation::Remove => {
+                builder.env_remove(var);
+            }
+        }
+    }
+
     // Apply any caller-provided environment overrides last, so they win.
     for (key, value) in env_vars {
         builder.env(key, value);

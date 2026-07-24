@@ -317,6 +317,21 @@ async fn capture_interactive_shell_env(
         command.env("HOME", home);
     }
 
+    // Strip Warp's bundled-library entries from the loader environment so this
+    // capture shell (pwsh in particular) resolves system libraries rather than
+    // Warp's bundled copies, which otherwise crash it with SIGABRT (warp#12228).
+    #[cfg(unix)]
+    for (var, mutation) in crate::terminal::loader_env::loader_env_mutations() {
+        match mutation {
+            crate::terminal::loader_env::LoaderEnvMutation::Set(value) => {
+                command.env(var, value);
+            }
+            crate::terminal::loader_env::LoaderEnvMutation::Remove => {
+                command.env_remove(var);
+            }
+        }
+    }
+
     // stdin(null) prevents any prompts from blocking
     let output: std::process::Output = command
         .stdin(Stdio::null())
