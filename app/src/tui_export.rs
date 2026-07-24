@@ -70,6 +70,7 @@ pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
 };
+pub use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
 pub use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, register_agent_event_consumer,
     unregister_agent_event_consumer,

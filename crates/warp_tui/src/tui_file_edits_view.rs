@@ -15,13 +15,14 @@
 //! rows. Multi-file edits nest the per-file sections, indented, under one
 //! collapsible summary header (`✓ Edited 3 files +a −r ▾`); single-file edits
 //! render the file section alone. Blocked edits use the in-progress `Editing`
-//! verb while awaiting approval. When the storage was never seeded (failed or
-//! cancelled actions, or actions that resolved before this view existed), the
-//! view falls back to a one-line label from the action's recorded result.
+//! verb while awaiting approval. Failed and cancelled actions fall back to a
+//! one-line label from the action's recorded result; restored successful
+//! actions are hydrated from their original `FileEdit` request.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
+use ai::agent::action::FileEdit;
 use ai::agent::action_result::{AIAgentActionResultType, RequestFileEditsResult};
 use ai::diff_validation::{DiffDelta, DiffType};
 use itertools::Itertools;
@@ -29,6 +30,7 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AIActionStatus, AIAgentActionId, AIConversationId, BlocklistAIActionEvent,
     BlocklistAIActionModel, CancellationReason, DiffSessionType, FileDiff,
+    convert_file_edits_to_file_diffs,
 };
 use warp_editor::content::buffer::InitialBufferState;
 use warpui_core::elements::MouseStateHandle;
@@ -70,6 +72,7 @@ pub(super) struct TuiFileEditsView {
     /// header and each file.
     section_states: SectionStates,
 }
+
 /// Events emitted to the owning agent block.
 pub(super) enum TuiFileEditsViewEvent {
     BlockingStateChanged,
@@ -178,10 +181,43 @@ impl TuiFileEditsView {
     pub(super) fn new(
         action_id: AIAgentActionId,
         conversation_id: AIConversationId,
+        file_edits: Vec<FileEdit>,
         action_model: &ModelHandle<BlocklistAIActionModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let storage = ctx.add_model(|_| TuiDiffStorage::new(Vec::new(), DiffSessionType::Local));
+        // A recorded result means this is a restored (already-finished) action;
+        // live actions have no result yet and stay executor-backed below. The
+        // borrow into the action model is scoped here so it is released before
+        // the `add_model` / `subscribe_to_model` calls below.
+        let (is_restored, is_restored_success) = {
+            let restored_result = action_model
+                .as_ref(ctx)
+                .get_action_result(&action_id)
+                .and_then(|result| match &result.result {
+                    AIAgentActionResultType::RequestFileEdits(result) => Some(result),
+                    _ => None,
+                });
+            let is_restored = restored_result.is_some();
+            // Only successful restored edits rehydrate their originally-requested
+            // diffs. Cancelled and failed actions keep their terminal fallback
+            // label ("File edits cancelled" / "File edits failed"), mirroring
+            // the GUI's `set_restored_file_edits` which marks non-success
+            // results `CodeDiffState::Rejected` rather than showing the diff.
+            let is_restored_success = matches!(
+                restored_result,
+                Some(RequestFileEditsResult::Success { .. })
+            );
+            (is_restored, is_restored_success)
+        };
+        let initial_diffs = if is_restored_success {
+            // Legacy persisted results do not carry line counts, but the
+            // original request can be converted into the display-only diff
+            // ranges that drive TUI headers and bodies.
+            convert_file_edits_to_file_diffs(file_edits, &None, &None)
+        } else {
+            Default::default()
+        };
+        let storage = ctx.add_model(|_| TuiDiffStorage::new(initial_diffs, DiffSessionType::Local));
 
         ctx.subscribe_to_model(&storage, |me, _, event, ctx| match event {
             TuiDiffStorageEvent::CandidateDiffsSet => me.rebuild_sections(ctx),
@@ -198,14 +234,14 @@ impl TuiFileEditsView {
             }
         });
 
-        // An already-resolved action (e.g. on a restored transcript) renders
-        // from its recorded result; registering a storage for it would leave
-        // a stale entry in the executor.
-        if action_model
-            .as_ref(ctx)
-            .get_action_result(&action_id)
-            .is_none()
-        {
+        // An already-resolved action (e.g. on a restored transcript) must
+        // rehydrate the same lossy FileDiff representation used by the GUI.
+        // Legacy persisted ApplyFileDiffs results contain updated file metadata
+        // but no line counts, so rendering only the recorded result produces
+        // the incorrect +0/-0 fallback.
+        if !is_restored {
+            // Live actions stay executor-backed; registering a storage here
+            // lets preprocessing seed the authoritative resolved diffs.
             let executor = action_model.as_ref(ctx).request_file_edits_executor(ctx);
             executor.update(ctx, |executor, _| {
                 let handle = TuiDiffStorageHandle::new(storage.clone());
@@ -233,7 +269,7 @@ impl TuiFileEditsView {
             TuiPermissionPromptEvent::LayoutChanged => view.invalidate_layout(ctx),
         });
 
-        Self {
+        let mut view = Self {
             storage,
             action_id,
             action_model: action_model.clone(),
@@ -241,7 +277,11 @@ impl TuiFileEditsView {
             permission_prompt,
             sections: Vec::new(),
             section_states: SectionStates::default(),
+        };
+        if is_restored_success {
+            view.rebuild_sections(ctx);
         }
+        view
     }
 
     /// Rebuilds one [`FileSection`] per stored diff. Called when the executor
@@ -309,10 +349,11 @@ impl TuiFileEditsView {
             .action_model
             .as_ref(app)
             .get_action_result(&self.action_id);
-        match result.and_then(|result| match &result.result {
+        let file_edits_result = result.and_then(|result| match &result.result {
             AIAgentActionResultType::RequestFileEdits(result) => Some(result),
             _ => None,
-        }) {
+        });
+        match file_edits_result {
             Some(RequestFileEditsResult::Success {
                 updated_files,
                 deleted_files,
