@@ -390,12 +390,7 @@ impl TerminalView {
     }
 
     /// Returns whether the active long-running command in this terminal is
-    /// Warp's own headless TUI (`warp_tui`). Uses the same command-based
-    /// detection as [`Self::detect_cli_agent_from_model`] (which decides when to
-    /// show the CLI agent footer), but callers use it to *hide* the "Use agent"
-    /// footer and the outer agent input bar, since the Warp TUI is itself an
-    /// agent surface. This is the single source of truth for "is the Warp TUI
-    /// running here".
+    /// Warp's own headless TUI (`warp_tui`).
     pub(super) fn is_running_warp_tui(&self, model: &TerminalModel, ctx: &AppContext) -> bool {
         let active_block = model.block_list().active_block();
         if !active_block.is_active_and_long_running() {
@@ -410,7 +405,7 @@ impl TerminalView {
                     .map(|session| session.shell_family().escape_char())
             })
         });
-        CLIAgent::command_is_warp_tui(&command, escape_char)
+        CLIAgent::WarpTui.matches_command(&command, escape_char)
     }
 
     /// Updates the UI during a long running command to agent "tagged-in state".

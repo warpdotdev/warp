@@ -8221,20 +8221,42 @@ fn single_general_review_comment(content: &str) -> AgentReviewCommentBatch {
     }
 }
 
-/// While the Warp TUI is the active long-running command, the code review panel
-/// must recognize it as a CLI-agent-equivalent destination (parity with
-/// claude-code) so comment sending and diff/hunk attachment route to its PTY.
-/// The TUI owns no `CLIAgentSession`; `active_cli_agent` recognizes it directly
-/// via `is_running_warp_tui`, gated under `HoaCodeReview`.
+fn set_warp_tui_session(view: &mut TerminalView, ctx: &mut ViewContext<TerminalView>) {
+    view.model.lock().simulate_long_running_block("warp", "");
+    assert_eq!(
+        CLIAgent::detect("warp", None, None, ctx),
+        Some(CLIAgent::WarpTui)
+    );
+
+    CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+        sessions.set_session(
+            view.view_id,
+            CLIAgentSession {
+                agent: CLIAgent::WarpTui,
+                status: CLIAgentSessionStatus::InProgress,
+                session_context: CLIAgentSessionContext::default(),
+                input_state: CLIAgentInputState::Closed,
+                should_auto_toggle_input: false,
+                listener: None,
+                remote_host: None,
+                plugin_version: None,
+                draft_text: None,
+                custom_command_prefix: None,
+                received_rich_notification: false,
+            },
+            ctx,
+        );
+    });
+}
 #[test]
-fn active_cli_agent_recognizes_warp_tui_when_running() {
+fn active_cli_agent_recognizes_detected_warp_tui_session() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
         terminal.update(&mut app, |view, ctx| {
-            view.model.lock().simulate_long_running_block("warp", "");
+            set_warp_tui_session(view, ctx);
         });
 
         terminal.read(&app, |view, ctx| {
@@ -8257,7 +8279,7 @@ fn active_cli_agent_ignores_warp_tui_when_hoa_code_review_disabled() {
 
         let terminal = add_window_with_terminal(&mut app, None);
         terminal.update(&mut app, |view, ctx| {
-            view.model.lock().simulate_long_running_block("warp", "");
+            set_warp_tui_session(view, ctx);
         });
 
         terminal.read(&app, |view, ctx| {
@@ -8270,9 +8292,6 @@ fn active_cli_agent_ignores_warp_tui_when_hoa_code_review_disabled() {
     });
 }
 
-/// A non-TUI long-running command (e.g. `vim`) must not be recognized as a CLI
-/// agent review destination — only `command_is_warp_tui` commands qualify, plus
-/// real CLI agents tracked via `CLIAgentSessionsModel`.
 #[test]
 fn active_cli_agent_ignores_non_tui_long_running_command() {
     App::test((), |mut app| async move {
@@ -8280,11 +8299,12 @@ fn active_cli_agent_ignores_non_tui_long_running_command() {
         let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
-        terminal.update(&mut app, |view, ctx| {
+        terminal.update(&mut app, |view, _| {
             view.model.lock().simulate_long_running_block("vim", "");
         });
 
         terminal.read(&app, |view, ctx| {
+            assert_eq!(CLIAgent::detect("vim", None, None, ctx), None);
             assert_eq!(
                 view.active_cli_agent(ctx),
                 None,
@@ -8295,8 +8315,7 @@ fn active_cli_agent_ignores_non_tui_long_running_command() {
 }
 
 /// Sending review comments while the Warp TUI is running writes the built prompt
-/// directly to the TUI's PTY (PTY routing, not rich input — the TUI has no rich
-/// input session), at parity with the claude-code path.
+/// directly to the TUI's PTY rather than the outer rich input.
 #[test]
 fn send_review_comments_to_warp_tui_writes_prompt_to_pty() {
     App::test((), |mut app| async move {
@@ -8315,8 +8334,7 @@ fn send_review_comments_to_warp_tui_writes_prompt_to_pty() {
         });
 
         terminal.update(&mut app, |view, ctx| {
-            view.model.lock().simulate_long_running_block("warp", "");
-            // Sanity check: the TUI is recognized as the active review destination.
+            set_warp_tui_session(view, ctx);
             assert_eq!(view.active_cli_agent(ctx), Some(CLIAgent::WarpTui));
             assert!(!view.is_cli_agent_rich_input_open(ctx));
 
@@ -8325,8 +8343,8 @@ fn send_review_comments_to_warp_tui_writes_prompt_to_pty() {
                 .expect("send should succeed");
         });
 
-        // The review prompt is written to the PTY in a single write (no rich
-        // input session for the TUI, so no delayed/batched enter strategy).
+        // The review prompt is written to the PTY in a single write because
+        // Warp TUI sessions do not open the outer rich input.
         let writes = pty_writes.borrow();
         assert_eq!(
             writes.len(),

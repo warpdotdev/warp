@@ -952,15 +952,9 @@ impl CommentListView {
             if !has_sendable_comments {
                 Cow::Borrowed("No non-outdated comments to send")
             } else {
-                // Prefer the command prefix for known agents (e.g. `claude`);
-                // fall back to the display name for agents without a single
-                // prefix — notably `CLIAgent::WarpTui` ("Warp TUI") and
-                // `CLIAgent::Unknown` ("CLI Agent").
-                let cmd = agent.command_prefix();
-                let label = if cmd.is_empty() {
-                    agent.display_name()
-                } else {
-                    cmd
+                let label = match agent.command_prefixes() {
+                    [command_prefix] => *command_prefix,
+                    [] | [_, ..] => agent.display_name(),
                 };
                 Cow::Owned(format!("Send diff comments to {label}"))
             }

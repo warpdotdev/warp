@@ -136,12 +136,6 @@ const MISTRAL_ORANGE: ColorU = ColorU {
 };
 
 /// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
-///
-/// [`CLIAgent::WarpTui`] is a special case: it represents Warp's own headless
-/// TUI (`warp`, `warp-dev`, `warp-preview`, …), which is **not** a third-party
-/// CLI agent and is never returned by [`CLIAgent::detect`]. It exists so the
-/// code review panel can route comment sending and diff/hunk attachment to the
-/// TUI's PTY at parity with claude-code (see `TerminalView::active_cli_agent`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -159,40 +153,47 @@ pub enum CLIAgent {
     Hermes,
     Vibe,
     Antigravity,
-    /// Warp's own headless TUI. Not detected via [`CLIAgent::detect`] (which
-    /// matches third-party agent binaries); recognized separately via
-    /// [`CLIAgent::command_is_warp_tui`] so the code review panel can target it.
+    /// Warp's own headless TUI.
     WarpTui,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
     Unknown,
 }
 
 impl CLIAgent {
-    /// The command prefix used to invoke this CLI agent.
-    pub fn command_prefix(&self) -> &'static str {
+    /// Command prefixes that identify this CLI agent.
+    pub(crate) fn command_prefixes(&self) -> &'static [&'static str] {
         match self {
-            CLIAgent::Claude => "claude",
-            CLIAgent::Gemini => "gemini",
-            CLIAgent::Codex => "codex",
-            CLIAgent::Amp => "amp",
-            CLIAgent::Droid => "droid",
-            CLIAgent::OpenCode => "opencode",
-            CLIAgent::Copilot => "copilot",
-            CLIAgent::Pi => "pi",
-            CLIAgent::OhMyPi => "omp",
-            CLIAgent::Auggie => "auggie",
-            CLIAgent::CursorCli => "agent",
-            CLIAgent::Goose => "goose",
-            CLIAgent::Hermes => "hermes",
-            CLIAgent::Vibe => "vibe",
-            CLIAgent::Antigravity => "agy",
-            // The Warp TUI is not invoked via a single command prefix — it is
-            // launched as `warp`/`warp-dev`/`warp-preview`/`run-tui`/… and
-            // recognized via `command_is_warp_tui`, not via `detect`. Return an
-            // empty prefix (like `Unknown`) so `detect` never matches it.
-            CLIAgent::WarpTui => "",
-            CLIAgent::Unknown => "",
+            CLIAgent::Claude => &["claude"],
+            CLIAgent::Gemini => &["gemini"],
+            CLIAgent::Codex => &["codex"],
+            CLIAgent::Amp => &["amp"],
+            CLIAgent::Droid => &["droid"],
+            CLIAgent::OpenCode => &["opencode"],
+            CLIAgent::Copilot => &["copilot"],
+            CLIAgent::Pi => &["pi"],
+            CLIAgent::OhMyPi => &["omp"],
+            CLIAgent::Auggie => &["auggie"],
+            CLIAgent::CursorCli => &["agent"],
+            CLIAgent::Goose => &["goose"],
+            CLIAgent::Hermes => &["hermes"],
+            CLIAgent::Vibe => &["vibe", "vibe-acp"],
+            CLIAgent::Antigravity => &["agy"],
+            CLIAgent::WarpTui => &[
+                "warp",
+                "warp-preview",
+                "warp-dev",
+                "warp-tui",
+                "warp-tui-oss",
+                "run-tui",
+            ],
+            CLIAgent::Unknown => &[],
         }
+    }
+
+    /// The canonical command prefix used to identify this CLI agent in places
+    /// that require one stable value.
+    pub fn command_prefix(&self) -> &'static str {
+        self.command_prefixes().first().copied().unwrap_or_default()
     }
 
     /// Serialized version of the CLIAgent name (e.g. "Claude", "Gemini"). Used for the
@@ -325,6 +326,10 @@ impl CLIAgent {
             CLIAgent::Claude | CLIAgent::Codex | CLIAgent::OpenCode | CLIAgent::OhMyPi
         )
     }
+    /// Whether this CLI agent can use Warp's outer rich input.
+    pub(super) fn supports_rich_input(&self) -> bool {
+        !matches!(self, CLIAgent::WarpTui)
+    }
 
     /// Returns the brand color for this CLI agent, or `None` for unknown/custom agents.
     pub fn brand_color(&self) -> Option<ColorU> {
@@ -373,6 +378,15 @@ impl CLIAgent {
             None => command.split_whitespace().next().map(String::from),
         }
     }
+    /// Returns whether the command's executable name identifies this CLI agent.
+    pub(super) fn matches_command(&self, command: &str, escape_char: Option<EscapeChar>) -> bool {
+        let Some(first_word) = Self::extract_first_command(command.trim_start(), escape_char)
+        else {
+            return false;
+        };
+        let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
+        self.command_prefixes().contains(&basename)
+    }
 
     /// Detects the CLI agent from a command string.
     ///
@@ -407,22 +421,14 @@ impl CLIAgent {
             })
             .unwrap_or(Cow::Borrowed(trimmed));
 
-        let resolved_first_word = Self::extract_first_command(&resolved_command, escape_char)?;
-
         // Check if resolved command matches any known CLI agent.
-        // Also matches `aifx agent run claude` as Claude for Uber employees,
-        // and the `vibe-acp` ACP-mode binary as Mistral Vibe.
-        // `WarpTui` is intentionally excluded — it is detected separately via
-        // `command_is_warp_tui` (see `TerminalView::active_cli_agent`), not via
-        // command-prefix matching, so a bare `warp` command is not treated as a
-        // third-party CLI agent here.
+        // Also matches `aifx agent run claude` as Claude for Uber employees.
         enum_iterator::all::<CLIAgent>()
-            .filter(|agent| !matches!(agent, CLIAgent::Unknown | CLIAgent::WarpTui))
+            .filter(|agent| !matches!(agent, CLIAgent::Unknown))
             .find(|agent| {
-                resolved_first_word == agent.command_prefix()
+                agent.matches_command(&resolved_command, escape_char)
                     || (matches!(agent, CLIAgent::Claude)
                         && Self::is_aifx_agent_run_claude(&resolved_command, ctx))
-                    || (matches!(agent, CLIAgent::Vibe) && resolved_first_word == "vibe-acp")
             })
     }
 
@@ -441,30 +447,6 @@ impl CLIAgent {
             .iter()
             .flat_map(|workspace| workspace.teams.iter())
             .any(|team| team.uid.uid() == UBER_TEAM_UID)
-    }
-
-    /// Returns whether `command` launches Warp's own headless TUI (`warp_tui`) —
-    /// e.g. `warp`, `warp-preview`, `warp-dev`, the legacy `warp-tui` aliases,
-    /// an absolute/relative path to one of those, or the `./script/run-tui` dev
-    /// launcher.
-    ///
-    /// This mirrors [`Self::detect`] (which decides when to show the CLI agent
-    /// footer), but callers use it to *hide* the "Use agent" footer for the Warp
-    /// TUI, which is itself an agent surface. It is the single source of truth
-    /// for Warp-TUI command detection — update the matching here if the launch
-    /// surface changes.
-    pub fn command_is_warp_tui(command: &str, escape_char: Option<EscapeChar>) -> bool {
-        let Some(first_word) = Self::extract_first_command(command.trim_start(), escape_char)
-        else {
-            return false;
-        };
-        // Match on the executable's file name so absolute/relative paths work
-        // (e.g. `/path/to/warp-tui`, `./target/debug/warp-tui`).
-        let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
-        matches!(
-            basename,
-            "warp" | "warp-preview" | "warp-dev" | "warp-tui" | "warp-tui-oss" | "run-tui"
-        )
     }
 }
 

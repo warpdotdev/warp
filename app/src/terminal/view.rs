@@ -11977,6 +11977,10 @@ impl TerminalView {
                                             {
                                                 let remote_host =
                                                     me.active_session_remote_host(ctx);
+                                                let should_auto_toggle_input = agent
+                                                    .supports_rich_input()
+                                                    && *AISettings::as_ref(ctx)
+                                                        .auto_open_rich_input_on_cli_agent_start;
                                                 sessions_model.set_session(
                                                     view_id,
                                                     CLIAgentSession {
@@ -11985,15 +11989,13 @@ impl TerminalView {
                                                         session_context:
                                                             CLIAgentSessionContext::default(),
                                                         input_state: CLIAgentInputState::Closed,
-                                                        should_auto_toggle_input: *AISettings::as_ref(
-                                                            ctx,
-                                                        )
-                                                        .auto_open_rich_input_on_cli_agent_start,
+                                                        should_auto_toggle_input,
                                                         listener: None,
                                                         plugin_version: None,
                                                         remote_host,
                                                         draft_text: None,
-                                                        custom_command_prefix: custom_command_prefix.clone(),
+                                                        custom_command_prefix:
+                                                            custom_command_prefix.clone(),
                                                         received_rich_notification: false,
                                                     },
                                                     ctx,
@@ -22857,40 +22859,13 @@ impl TerminalView {
     }
 
     /// Returns the CLI agent currently active in this terminal, if any.
-    ///
-    /// In addition to third-party CLI agents tracked via [`CLIAgentSessionsModel`],
-    /// this recognizes Warp's own headless TUI (`warp`, `warp-dev`, `warp-preview`,
-    /// `run-tui`, …) as a first-class code-review destination at parity with
-    /// claude-code. The TUI intentionally owns no [`CLIAgentSession`] — it has
-    /// no plugin protocol or rich input — so it is recognized directly via
-    /// [`Self::is_running_warp_tui`] instead of through the sessions model. This
-    /// keeps the existing footer/input-bar suppression for the TUI intact (those
-    /// guard on `is_running_warp_tui`, not the session) while enabling comment
-    /// sending and diff/hunk attachment to route to the TUI's PTY. Gated under
-    /// [`FeatureFlag::HoaCodeReview`] alongside the rest of the CLI-agent review
-    /// feature.
     pub fn active_cli_agent(&self, ctx: &AppContext) -> Option<super::CLIAgent> {
         if !FeatureFlag::HoaCodeReview.is_enabled() {
             return None;
         }
-
-        if let Some(agent) = CLIAgentSessionsModel::as_ref(ctx)
+        CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
             .map(|s| s.agent)
-        {
-            return Some(agent);
-        }
-
-        // No third-party CLI agent session: recognize the Warp TUI directly so
-        // the code review panel can target it. `is_running_warp_tui` requires
-        // the active block's command, so lock the terminal model briefly. No
-        // caller of `active_cli_agent` holds the model lock on entry (verified
-        // at all call sites), so this cannot self-deadlock.
-        let model = self.model.lock();
-        if self.is_running_warp_tui(&model, ctx) {
-            return Some(super::CLIAgent::WarpTui);
-        }
-        None
     }
 
     /// Returns `true` if CLI agent rich input is currently open.
