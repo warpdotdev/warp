@@ -237,6 +237,7 @@ impl<'a> BufferMarkdownParser<'a> {
         let end_italic = prev_styles.is_italic() && !next_styles.is_italic();
         let end_strikethrough = prev_styles.is_strikethrough() && !next_styles.is_strikethrough();
         let end_underline = prev_styles.is_underlined() && !next_styles.is_underlined();
+        let end_kbd = prev_styles.is_kbd() && !next_styles.is_kbd();
 
         // This, and the parallel logic below, is an unfortunate workaround for the CommonMark
         // rules about space before/after bold and italic formatting markers
@@ -253,6 +254,10 @@ impl<'a> BufferMarkdownParser<'a> {
             // Panic safety: iterating over `char_indices` means that `idx` must be in-bounds and a
             // code point boundary.
             .map(|(idx, _)| buf.split_off(idx));
+
+        if end_kbd {
+            buf.push_str("</kbd>")
+        }
 
         if end_underline {
             buf.push_str("</u>")
@@ -293,11 +298,12 @@ impl<'a> BufferMarkdownParser<'a> {
         let start_italic = !prev_styles.is_italic() && next_styles.is_italic();
         let start_strikethrough = !prev_styles.is_strikethrough() && next_styles.is_strikethrough();
         let start_underline = !prev_styles.is_underlined() && next_styles.is_underlined();
+        let start_kbd = !prev_styles.is_kbd() && next_styles.is_kbd();
 
         // In order to parse correctly, Markdown emphasis markers must be after whitespace. If the
         // next run of content starts with whitespace, we write that and then the markers, and then
         // let the outer loop write the rest of the content.
-        if (start_bold || start_italic || start_strikethrough || start_underline)
+        if (start_bold || start_italic || start_strikethrough || start_underline || start_kbd)
             && let Some(idx) = next_content.find(|c: char| !c.is_whitespace())
         {
             // Panic safety: if the pattern matches, `find` returns the byte index of the first
@@ -319,8 +325,15 @@ impl<'a> BufferMarkdownParser<'a> {
             buf.push_str("~~");
         }
 
+        // Open underline before kbd so tags nest properly: the close order above is `</kbd>` then
+        // `</u>`, so the mirrored open order is `<u>` then `<kbd>`, yielding `<u><kbd>…</kbd></u>`
+        // rather than a crossed `<kbd><u>…</kbd></u>`.
         if start_underline {
             buf.push_str("<u>");
+        }
+
+        if start_kbd {
+            buf.push_str("<kbd>");
         }
 
         if !prev_styles.is_inline_code() && next_styles.is_inline_code() {
@@ -989,7 +1002,16 @@ impl Serialize for ExportedBufferBlocks<'_> {
                             serializer.start_elem(tag_name, iter::empty())?;
                         }
 
+                        if runs.text_styles.is_kbd() {
+                            let tag_name = QualName::new(None, ns!(html), "kbd".into());
+                            serializer.start_elem(tag_name, iter::empty())?;
+                        }
+
                         serializer.write_text(text)?;
+
+                        if runs.text_styles.is_kbd() {
+                            serializer.end_elem(QualName::new(None, ns!(html), "kbd".into()))?;
+                        }
 
                         if runs.text_styles.is_inline_code() {
                             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;
@@ -1171,9 +1193,15 @@ where
         if styles.is_inline_code() {
             serializer.start_elem(QualName::new(None, ns!(html), "code".into()), iter::empty())?;
         }
+        if styles.is_kbd() {
+            serializer.start_elem(QualName::new(None, ns!(html), "kbd".into()), iter::empty())?;
+        }
 
         serializer.write_text(&fragment.text)?;
 
+        if styles.is_kbd() {
+            serializer.end_elem(QualName::new(None, ns!(html), "kbd".into()))?;
+        }
         if styles.is_inline_code() {
             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;
         }

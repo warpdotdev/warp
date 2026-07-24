@@ -997,6 +997,110 @@ fn test_table_inline_style_runs_preserve_markdown_cell_styles() {
     });
 }
 
+/// A `<kbd>` cell picks up the same background chip as an inline-code cell (issue #13733).
+#[test]
+fn test_table_inline_style_runs_apply_kbd_background() {
+    App::test((), |app| async move {
+        let layout_cache = LayoutCache::new();
+        app.read(|ctx| {
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let body_style = text_layout.paragraph_styles(&BufferBlockStyle::table(Vec::new()));
+            let table = crate::content::text::table_from_internal_format_with_inline_markdown(
+                "Header\tValue\nText\t<kbd>Cmd</kbd>\n",
+                Vec::new(),
+            );
+
+            let layout_input = markdown_inline_to_text_and_style_runs(
+                &table.rows[0][1],
+                &body_style,
+                Some(body_style.text_color),
+                Some(TEST_STYLES.table_style.cell_background),
+            );
+
+            assert_eq!(layout_input.text, "Cmd");
+            assert_eq!(layout_input.style_runs.len(), 1);
+            assert!(
+                layout_input.style_runs[0]
+                    .1
+                    .style
+                    .background_color
+                    .is_some()
+            );
+        });
+    });
+}
+
+/// A `<kbd>` keycap must render as a bordered badge that is visually distinguishable from an
+/// inline-code chip: the keycap gets a visible outline (border color != background), while the
+/// inline-code chip stays borderless (border color == background). This guards issue #13733's
+/// requirement that a keycap not simply reuse the inline-code chip. (Regression: an earlier
+/// implementation shared the styling branch, so both chips rendered identically.)
+#[test]
+fn test_kbd_keycap_style_differs_from_inline_code() {
+    App::test((), |app| async move {
+        let layout_cache = LayoutCache::new();
+        app.read(|ctx| {
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let paragraph = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
+
+            let code_style = text_layout
+                .style_and_font(&paragraph, &TextStylesWithMetadata::default().inline_code());
+            let kbd_style =
+                text_layout.style_and_font(&paragraph, &TextStylesWithMetadata::default().kbd());
+
+            let code_border = code_style
+                .style
+                .border
+                .expect("inline code should have a chip border");
+            let kbd_border = kbd_style
+                .style
+                .border
+                .expect("kbd keycap should have a border");
+
+            // The inline-code chip is borderless: its border color matches its background.
+            assert_eq!(
+                Some(code_border.color),
+                code_style.style.background_color,
+                "inline code border should be invisible (border color == background)"
+            );
+
+            // The keycap outline is visible: its border color contrasts with its background.
+            assert_ne!(
+                Some(kbd_border.color),
+                kbd_style.style.background_color,
+                "kbd keycap border must be visible (border color != background)"
+            );
+
+            // The keycap and inline-code chips must not render identically.
+            assert_ne!(
+                kbd_border.color, code_border.color,
+                "kbd keycap must be visually distinguishable from an inline-code chip"
+            );
+
+            // The keycap gets a heavier bottom edge (the "raised key" cue); the inline-code chip
+            // does not.
+            assert!(
+                kbd_border.bottom_width.is_some(),
+                "kbd keycap should have a heavier bottom edge"
+            );
+            assert!(
+                code_border.bottom_width.is_none(),
+                "inline code chip should not have a bottom edge cue"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_layout_code_block_urls() {
     // Regression test for laying out URLs in a code block, which contains multiple lines.

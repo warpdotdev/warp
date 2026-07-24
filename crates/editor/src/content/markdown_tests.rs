@@ -499,3 +499,185 @@ fn test_image_with_content_html_serialization() {
         assert!(html.contains("Some text"));
     });
 }
+
+/// `<kbd>` in body text serializes to a `<kbd>` element on HTML export (issue #13733).
+#[test]
+fn test_kbd_html_serialization() {
+    App::test((), |mut app| async move {
+        let markdown = "Press <kbd>Cmd</kbd> to run\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let html = app.read_model(&buffer, |buffer, ctx| {
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+        });
+
+        let html = html.unwrap();
+        assert!(html.contains("<kbd>Cmd</kbd>"), "html was: {html}");
+    });
+}
+
+/// Serialization must always round-trip the AUTHORED `<kbd>` text, never a rendered key glyph
+/// (issue #13733). Glyph substitution (e.g. `<kbd>Cmd</kbd>` displaying as ⌘) is a render-only
+/// concern: it must never leak into the data model or any export path. This test pins that
+/// invariant across every serializer so a future glyph-substitution change that accidentally
+/// mutated the buffer text (instead of only the render layer) would fail here.
+#[test]
+fn test_kbd_serialization_preserves_authored_text_not_glyph() {
+    App::test((), |mut app| async move {
+        let markdown = "Press <kbd>Cmd</kbd> to run\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        // The glyph a renderer might substitute for "Cmd" on macOS.
+        let key_glyph = "\u{2318}"; // ⌘
+
+        // Every export path must emit the authored "Cmd", never the glyph.
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert!(
+            exported_markdown.contains("<kbd>Cmd</kbd>"),
+            "markdown export must preserve authored text, was: {exported_markdown}"
+        );
+        assert!(
+            !exported_markdown.contains(key_glyph),
+            "markdown export must not contain the rendered key glyph, was: {exported_markdown}"
+        );
+
+        let html = app
+            .read_model(&buffer, |buffer, ctx| {
+                let range = CharOffset::from(1)..buffer.max_charoffset();
+                buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+            })
+            .unwrap();
+        assert!(
+            html.contains("<kbd>Cmd</kbd>"),
+            "html export must preserve authored text, was: {html}"
+        );
+        assert!(
+            !html.contains(key_glyph),
+            "html export must not contain the rendered key glyph, was: {html}"
+        );
+
+        // The buffer's own plain-text content must also hold the authored text, not the glyph.
+        let plain_text = app.read_model(&buffer, |buffer, _| buffer.text().as_str().to_string());
+        assert!(
+            plain_text.contains("Cmd"),
+            "buffer text must preserve authored text, was: {plain_text}"
+        );
+        assert!(
+            !plain_text.contains(key_glyph),
+            "buffer text must not contain the rendered key glyph, was: {plain_text}"
+        );
+    });
+}
+
+/// Nested `<kbd>` flat-collapses in the parser (issue #13733), so it serializes to the CANONICAL
+/// FLAT form `<kbd>Ctrl+N</kbd>` — a single keycap over the inner content — rather than round-
+/// tripping the authored nested `<kbd><kbd>…</kbd></kbd>` markup. The nesting is discarded at parse
+/// time (the buffer model has no depth), so flat is the only faithful serialization; preserving the
+/// authored nesting is the depth-aware work deferred to issue #13912.
+#[test]
+fn test_nested_kbd_serializes_to_flat_form() {
+    App::test((), |mut app| async move {
+        let markdown = "Press <kbd><kbd>Ctrl</kbd>+<kbd>N</kbd></kbd> now\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert!(
+            exported.contains("<kbd>Ctrl+N</kbd>"),
+            "nested kbd should serialize to the flat form, was: {exported}"
+        );
+        // The flattened form must not re-emit the nested inner tags.
+        assert!(
+            !exported.contains("<kbd><kbd>") && !exported.contains("</kbd></kbd>"),
+            "serialization must not reproduce nested kbd tags, was: {exported}"
+        );
+    });
+}
+
+/// `<kbd>` inside a GFM table cell round-trips through both the Markdown and HTML export paths.
+#[test]
+fn test_kbd_in_table_cell_serialization() {
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        let markdown = "\
+| shortcut | action |\n\
+| --- | --- |\n\
+| <kbd>Cmd</kbd> | open palette |\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert!(
+            exported.contains("<kbd>Cmd</kbd>"),
+            "exported markdown was: {exported}"
+        );
+
+        let html = app.read_model(&buffer, |buffer, ctx| {
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+        });
+        let html = html.unwrap();
+        assert!(html.contains("<kbd>Cmd</kbd>"), "html was: {html}");
+    });
+}
+
+/// A run that is both `<kbd>` and underlined must export properly nested Markdown tags (issue
+/// #13733). The Markdown serializer closes `</kbd>` before `</u>`, so it must also open `<u>`
+/// before `<kbd>` — otherwise a crossed `<kbd><u>…</kbd></u>` is emitted, which is malformed and
+/// does not re-import to the same styles. This pins proper nesting and round-trip stability.
+#[test]
+fn test_kbd_underline_serializes_properly_nested() {
+    App::test((), |mut app| async move {
+        let markdown = "Press <u><kbd>Esc</kbd></u> now\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        // Tags must be properly nested, not crossed. The close order is `</kbd></u>`, so the open
+        // order must be `<u><kbd>`.
+        assert!(
+            exported.contains("<u><kbd>Esc</kbd></u>"),
+            "kbd+underline run must serialize as properly nested tags, was: {exported}"
+        );
+        assert!(
+            !exported.contains("<kbd><u>"),
+            "serialization must not emit crossed <kbd><u> tags, was: {exported}"
+        );
+
+        // Round-trip: re-importing the exported Markdown must yield the same kbd+underline styles.
+        let reparsed = parse_markdown(&exported).unwrap();
+        let has_kbd_underline_run = reparsed.lines.iter().any(|line| match line {
+            markdown_parser::FormattedTextLine::Line(fragments) => fragments
+                .iter()
+                .any(|f| f.styles.kbd && f.styles.underline && f.text.contains("Esc")),
+            _ => false,
+        });
+        assert!(
+            has_kbd_underline_run,
+            "exported markdown must re-import to a kbd+underline run, was: {exported}"
+        );
+    });
+}

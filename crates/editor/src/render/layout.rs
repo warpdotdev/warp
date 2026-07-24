@@ -168,7 +168,9 @@ impl<'a> TextLayout<'a> {
         text_styles: &TextStylesWithMetadata,
     ) -> StyleAndFont {
         let font_properties = text_styles.apply_properties(paragraph_styles.properties());
-        let font_family = if text_styles.is_inline_code() {
+        // Both inline code and `<kbd>` keycaps are monospace; only their chip styling
+        // (border, below) differs (issue #13733).
+        let font_family = if text_styles.is_inline_code() || text_styles.is_kbd() {
             self.rich_text_styles.inline_code_style.font_family
         } else {
             paragraph_styles.font_family
@@ -187,16 +189,31 @@ impl<'a> TextLayout<'a> {
             styling = styling.with_underline_color(self.rich_text_styles.base_text.text_color);
         }
 
-        if text_styles.is_inline_code() {
+        // Inline code and `<kbd>` share the monospace chip background but differ in their border,
+        // so a keycap reads as a distinct bordered badge rather than a code span (issue #13733).
+        if text_styles.is_inline_code() || text_styles.is_kbd() {
+            let inline_code_style = &self.rich_text_styles.inline_code_style;
+            // A `<kbd>` keycap gets a visible outline (the foreground/font color contrasts with the
+            // chip background by construction); an inline-code chip stays borderless by matching its
+            // border color to its background.
+            let border_color = if text_styles.is_kbd() {
+                inline_code_style.font_color
+            } else {
+                inline_code_style.background
+            };
+            // The keycap also gets a heavier bottom edge for a "raised key" cue; the inline-code
+            // chip does not (issue #13733).
+            let bottom_width = text_styles.is_kbd().then_some(1);
             styling = styling
-                .with_foreground_color(self.rich_text_styles.inline_code_style.font_color)
-                .with_background_color(self.rich_text_styles.inline_code_style.background)
+                .with_foreground_color(inline_code_style.font_color)
+                .with_background_color(inline_code_style.background)
                 .with_border(TextBorder {
-                    color: self.rich_text_styles.inline_code_style.background,
+                    color: border_color,
                     radius: 4,
                     width: 1,
                     // Use the set 1.2 line height ratio for inline code backgrounds.
                     line_height_ratio_override: Some(120),
+                    bottom_width,
                 });
         }
 
@@ -278,7 +295,7 @@ pub(crate) fn markdown_inline_to_text_and_style_runs(
         if fragment.styles.underline {
             text_style = text_style.with_underline_color(paragraph_style.text_color);
         }
-        if fragment.styles.inline_code
+        if (fragment.styles.inline_code || fragment.styles.kbd)
             && let Some(background) = inline_code_background
         {
             text_style = text_style.with_background_color(background);

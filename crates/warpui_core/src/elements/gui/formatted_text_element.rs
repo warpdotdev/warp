@@ -30,7 +30,8 @@ use crate::text::{
     count_chars_up_to_byte,
 };
 use crate::text_layout::{
-    ClipConfig, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextAlignment, TextFrame, TextStyle,
+    ClipConfig, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextAlignment, TextBorder, TextFrame,
+    TextStyle,
 };
 use crate::{
     AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
@@ -1525,6 +1526,37 @@ impl PartialClickableElement for FrameMouseHandlers {
     }
 }
 
+/// Border for a `<kbd>` keycap badge (issue #13733). The keycap reuses the inline-code chip's
+/// monospace background but adds this visible outline so it reads as a distinct bordered badge
+/// rather than a code span. The outline color is the run's foreground color, which contrasts
+/// with the chip background by construction, so an inline-code chip (which has no border) and a
+/// keycap are never rendered identically.
+fn keycap_border(foreground_color: ColorU) -> TextBorder {
+    TextBorder {
+        color: foreground_color,
+        radius: 4,
+        width: 1,
+        line_height_ratio_override: Some(120),
+        // Heavier bottom edge for the "raised key" cue.
+        bottom_width: Some(1),
+    }
+}
+
+/// Decides the keycap outline to apply to a chip run (issue #13733). Returns `Some` only for a
+/// `<kbd>` keycap that has no existing border (e.g. from a link/search highlight) and has a
+/// foreground color to draw the outline with. An inline-code chip always returns `None`, so it
+/// stays borderless and remains visually distinct from a keycap.
+fn keycap_border_for(
+    is_kbd: bool,
+    existing_border: Option<TextBorder>,
+    foreground_color: Option<ColorU>,
+) -> Option<TextBorder> {
+    if !is_kbd || existing_border.is_some() {
+        return None;
+    }
+    foreground_color.map(keycap_border)
+}
+
 /// Applies secret replacements to the given text using char indices adjusted by glyph_offset.
 /// Replacements are applied in descending order of start position to avoid shifting ranges.
 fn apply_secret_replacements(
@@ -1852,7 +1884,10 @@ impl Element for FormattedTextElement {
                                 text_style.foreground_color.unwrap_or(self.text_color);
                             text_style = text_style.with_underline_color(underline_color)
                         }
-                        if inline.styles.inline_code {
+                        // Inline code and `<kbd>` share the monospace chip background; a `<kbd>`
+                        // keycap additionally gets a visible outline so it reads as a distinct
+                        // bordered badge rather than a code span (issue #13733).
+                        if inline.styles.inline_code || inline.styles.kbd {
                             // If we have existing background and foreground highlighting from, for example,
                             // a link or a search, we don't want to override it.
                             if let Some(font_color) = self.inline_code_font_color
@@ -1865,10 +1900,19 @@ impl Element for FormattedTextElement {
                             {
                                 text_style.background_color = Some(bg_color);
                             }
+                            // A `<kbd>` keycap gets a visible outline (see `keycap_border_for`).
+                            if let Some(border) = keycap_border_for(
+                                inline.styles.kbd,
+                                text_style.border,
+                                text_style.foreground_color.or(self.inline_code_font_color),
+                            ) {
+                                text_style = text_style.with_border(border);
+                            }
                         }
 
                         let font_family_id = if matches!(line, FormattedTextLine::CodeBlock(_))
                             || inline.styles.inline_code
+                            || inline.styles.kbd
                         {
                             self.code_block_family_id
                         } else {

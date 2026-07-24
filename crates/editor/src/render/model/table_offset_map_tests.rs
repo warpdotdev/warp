@@ -259,3 +259,38 @@ fn test_table_cell_offset_map_handles_nested_styles() {
         );
     }
 }
+
+/// `<kbd>` tags exist in source but not in rendered text, so the offset map must skip them the
+/// same way it skips `**`/`<u>` — verified via the issue's motivating test case (#13733).
+#[test]
+fn test_table_cell_offset_map_handles_kbd_markers() {
+    let source = "Press <kbd>Cmd</kbd>+<kbd>K</kbd>";
+    let inline = parse_inline_markdown(source);
+    let rendered_text: String = inline
+        .iter()
+        .map(|fragment| fragment.text.as_str())
+        .collect();
+    assert_eq!(rendered_text, "Press Cmd+K");
+    assert!(
+        inline.iter().any(|fragment| fragment.styles.kbd),
+        "parsed inline should have a kbd fragment"
+    );
+
+    let map = TableCellOffsetMap::from_inline_and_source(source, &inline);
+    assert_eq!(
+        map.source_length(),
+        CharOffset::from(source.chars().count())
+    );
+    assert_eq!(
+        map.rendered_length(),
+        CharOffset::from(rendered_text.chars().count())
+    );
+    for (rendered_idx, rendered_char) in rendered_text.chars().enumerate() {
+        let source_pos = map.rendered_to_source(CharOffset::from(rendered_idx));
+        assert_eq!(
+            source.chars().nth(source_pos.as_usize()),
+            Some(rendered_char),
+            "rendered {rendered_idx} ({rendered_char:?}) should map to same char in source",
+        );
+    }
+}

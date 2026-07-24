@@ -12,7 +12,8 @@ use string_offset::ByteOffset;
 
 use super::{
     FormattedTextElement, FrameMouseHandlers, HeadingFontSizeMultipliers, HighlightedHyperlink,
-    HyperlinkSupport, LaidOutTextFrame, SecretRange, apply_secret_replacements,
+    HyperlinkSupport, LaidOutTextFrame, SecretRange, apply_secret_replacements, keycap_border,
+    keycap_border_for,
 };
 use crate::elements::{Element, PartialClickableElement, Point, SelectableElement, ZIndex};
 use crate::event::DispatchedEvent;
@@ -496,4 +497,66 @@ fn single_click_on_link_is_handled_so_selection_is_not_started() {
             );
         });
     });
+}
+
+/// A `<kbd>` keycap must render as a bordered badge distinguishable from an inline-code chip
+/// (issue #13733). The keycap outline uses the run's foreground color, which contrasts with the
+/// chip background, whereas an inline-code chip has no border at all. A regression that reused the
+/// inline-code chip verbatim (no border) would fail these assertions.
+#[test]
+fn test_keycap_border_is_visible_against_chip_background() {
+    let foreground = ColorU::new(200, 40, 40, 255);
+    let background = ColorU::new(30, 30, 30, 255);
+
+    let border = keycap_border(foreground);
+
+    // The keycap outline is the foreground color, so it is visible against the chip background.
+    assert_eq!(
+        border.color, foreground,
+        "keycap border should use the run's foreground color"
+    );
+    assert_ne!(
+        border.color, background,
+        "keycap border must contrast with the chip background to be visible"
+    );
+    assert!(border.width >= 1, "keycap border must be at least 1px wide");
+    // The keycap has a heavier bottom edge for the "raised key" cue.
+    assert!(
+        border.bottom_width.is_some(),
+        "keycap border must carry a bottom-edge cue"
+    );
+}
+
+/// The keycap outline is applied only to `<kbd>` runs, so an inline-code chip stays borderless and
+/// the two are never rendered identically (issue #13733).
+#[test]
+fn test_only_kbd_runs_get_a_keycap_border() {
+    let foreground = Some(ColorU::new(200, 40, 40, 255));
+
+    // A `<kbd>` run with no existing border gets a visible keycap outline.
+    let kbd_border = keycap_border_for(true, None, foreground);
+    assert_eq!(
+        kbd_border.map(|b| b.color),
+        foreground,
+        "a kbd run should get an outline in its foreground color"
+    );
+
+    // An inline-code run (is_kbd = false) never gets an outline: it stays borderless.
+    assert!(
+        keycap_border_for(false, None, foreground).is_none(),
+        "an inline-code chip must stay borderless"
+    );
+
+    // An existing border (e.g. from a link/search highlight) is never overwritten.
+    let existing = keycap_border(ColorU::new(1, 2, 3, 255));
+    assert!(
+        keycap_border_for(true, Some(existing), foreground).is_none(),
+        "a pre-existing border must be preserved"
+    );
+
+    // Without a foreground color there is nothing to draw the outline with.
+    assert!(
+        keycap_border_for(true, None, None).is_none(),
+        "no outline without a foreground color"
+    );
 }

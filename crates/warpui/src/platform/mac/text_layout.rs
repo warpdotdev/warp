@@ -199,6 +199,7 @@ const BORDER_COLOR_KEY: &str = "border-color";
 const BORDER_WIDTH_KEY: &str = "border-width";
 const BORDER_RADIUS_KEY: &str = "border-radius";
 const BORDER_LINE_HEIGHT_RATIO_KEY: &str = "border-line-height-ratio";
+const BORDER_BOTTOM_WIDTH_KEY: &str = "border-bottom-width";
 const SHOW_STRIKETHROUGH_KEY: &str = "show-strikethrough";
 const HYPERLINK_UNDERLINE_STYLE_KEY: &str = "hyperlink-underline-style";
 const HYPERLINK_ID: &str = "hyperlink-id";
@@ -253,6 +254,13 @@ fn text_style_as_cf_type_pairs(style: &TextStyle) -> Vec<(CFString, CFType)> {
             key_value_pairs.push((
                 CFString::new(BORDER_LINE_HEIGHT_RATIO_KEY),
                 CFNumber::from(line_height_override as i32).as_CFType(),
+            ));
+        }
+
+        if let Some(bottom_width) = border.bottom_width {
+            key_value_pairs.push((
+                CFString::new(BORDER_BOTTOM_WIDTH_KEY),
+                CFNumber::from(bottom_width as i32).as_CFType(),
             ));
         }
     }
@@ -318,6 +326,10 @@ fn attributes_to_text_style(attributes_dictionary: CFDictionary<CFString, CFType
         .find(CFString::new(BORDER_LINE_HEIGHT_RATIO_KEY))
         .and_then(|value| value.downcast::<CFNumber>())
         .and_then(|num| num.to_i32());
+    let border_bottom_width = attributes_dictionary
+        .find(CFString::new(BORDER_BOTTOM_WIDTH_KEY))
+        .and_then(|value| value.downcast::<CFNumber>())
+        .and_then(|num| num.to_i32());
 
     if let Some(((color, width), radius)) = border_color.zip(border_width).zip(border_radius) {
         text_styles = text_styles.with_border(TextBorder {
@@ -325,6 +337,7 @@ fn attributes_to_text_style(attributes_dictionary: CFDictionary<CFString, CFType
             radius: radius as u8,
             width: width as u8,
             line_height_ratio_override: border_line_height_ratio.map(|val| val as u8),
+            bottom_width: border_bottom_width.map(|val| val as u8),
         });
     }
 

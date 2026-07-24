@@ -1014,11 +1014,11 @@ fn test_random() {
     assert!(buffer.len().as_usize() <= 50);
     assert_eq!(
         buffer.text().as_str(),
-        "d3\nSOf\ngZjvGHqkBxl2583x69F13\n\n8wlTivQFFQ9cY"
+        "d3\nSOf\ngZjvGHqkBxl2583x69FA6KWOlTivQFFQ9cYt"
     );
     assert_eq!(
         buffer.content.debug(),
-        "<text>d3\\nSOf\\ngZjvGHqkBxl25<c_s>83x69F<i_s>13\\n\\n8wlTivQFFQ9cY<i_e><c_e>"
+        "<text>d3\\nSOf\\ngZjvGHqkBxl25<s_s>83x69F<b_s>A6<b_e>KWOlTivQFFQ9cYt<s_e>"
     );
 }
 
@@ -3152,6 +3152,8 @@ fn test_inline_markdown_roundtrips() {
         "Combined *~~italic and strikethrough~~*",
         "Overlapping *~~abc~~def*",
         "This is <u>underlined</u>",
+        "Press <kbd>Cmd</kbd> then <kbd>K</kbd>",
+        "A **<kbd>Cmd</kbd>** shortcut",
     ];
 
     for input in inputs {

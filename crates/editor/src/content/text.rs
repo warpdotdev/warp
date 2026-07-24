@@ -582,6 +582,7 @@ impl Display for BufferText {
                     BufferTextStyle::Underline => "u",
                     BufferTextStyle::InlineCode => "c",
                     BufferTextStyle::StrikeThrough => "s",
+                    BufferTextStyle::Kbd => "k",
                 };
 
                 let end = match dir {
@@ -1048,6 +1049,7 @@ pub enum BufferTextStyle {
     Underline,
     InlineCode,
     StrikeThrough,
+    Kbd,
 }
 
 impl BufferTextStyle {
@@ -1068,13 +1070,14 @@ impl BufferTextStyle {
     }
 
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        let r = rng.gen_range(0..5);
+        let r = rng.gen_range(0..6);
         match r {
             0 => Self::Weight(CustomWeight::Bold),
             1 => Self::Italic,
             2 => Self::Underline,
             3 => Self::InlineCode,
             4 => Self::StrikeThrough,
+            5 => Self::Kbd,
             _ => unreachable!(),
         }
     }
@@ -1086,6 +1089,7 @@ pub struct TextStylesWithMetadata {
     italic: bool,
     underline: bool,
     inline_code: bool,
+    kbd: bool,
     placeholder: bool,
     strikethrough: bool,
     link: Option<String>,
@@ -1109,6 +1113,11 @@ impl TextStylesWithMetadata {
 
     pub fn inline_code(mut self) -> Self {
         self.inline_code = true;
+        self
+    }
+
+    pub fn kbd(mut self) -> Self {
+        self.kbd = true;
         self
     }
 
@@ -1136,6 +1145,7 @@ impl TextStylesWithMetadata {
             BufferTextStyle::Underline => Some(&mut self.underline),
             BufferTextStyle::InlineCode => Some(&mut self.inline_code),
             BufferTextStyle::StrikeThrough => Some(&mut self.strikethrough),
+            BufferTextStyle::Kbd => Some(&mut self.kbd),
             BufferTextStyle::Weight(_) => None,
         }
     }
@@ -1146,6 +1156,7 @@ impl TextStylesWithMetadata {
             BufferTextStyle::Underline => self.underline,
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
+            BufferTextStyle::Kbd => self.kbd,
             BufferTextStyle::Weight(_) => self.weight.is_some(),
         }
     }
@@ -1156,6 +1167,7 @@ impl TextStylesWithMetadata {
             BufferTextStyle::Underline => self.underline,
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
+            BufferTextStyle::Kbd => self.kbd,
             BufferTextStyle::Weight(weight) => self.weight == Some(*weight),
         }
     }
@@ -1197,6 +1209,10 @@ impl TextStylesWithMetadata {
         self.inline_code
     }
 
+    pub fn is_kbd(&self) -> bool {
+        self.kbd
+    }
+
     pub fn is_italic(&self) -> bool {
         self.italic
     }
@@ -1232,6 +1248,7 @@ impl TextStylesWithMetadata {
             underline: text_styles.underline,
             placeholder: text_styles.placeholder,
             inline_code: text_styles.inline_code,
+            kbd: text_styles.kbd,
             strikethrough: text_styles.strikethrough,
             link,
             color,
@@ -1279,6 +1296,7 @@ impl TextStylesWithMetadata {
             italic: self.italic && other.italic,
             underline: self.underline && other.underline,
             inline_code: self.inline_code && other.inline_code,
+            kbd: self.kbd && other.kbd,
             strikethrough: self.strikethrough && other.strikethrough,
             link,
             color,
@@ -1294,6 +1312,7 @@ impl From<FormattedTextStyles> for TextStylesWithMetadata {
             italic: styles.italic,
             underline: styles.underline,
             inline_code: styles.inline_code,
+            kbd: styles.kbd,
             strikethrough: styles.strikethrough,
             placeholder: false,
             link: styles.hyperlink.and_then(Hyperlink::url),
@@ -1311,6 +1330,7 @@ impl From<TextStylesWithMetadata> for FormattedTextStyles {
             strikethrough: styles.strikethrough,
             hyperlink: styles.link.map(Hyperlink::Url),
             inline_code: styles.inline_code,
+            kbd: styles.kbd,
         }
     }
 }
@@ -1321,6 +1341,7 @@ pub struct TextStyles {
     italic: bool,
     underline: bool,
     inline_code: bool,
+    kbd: bool,
     strikethrough: bool,
     /// Whether or not this is placeholder text. Placeholders are sort of a pseudo-style - they're
     /// represented as their own kind of buffer content, but we render them as inline styled text.
@@ -1336,6 +1357,7 @@ impl TextStyles {
             italic: true,
             underline: true,
             inline_code: true,
+            kbd: true,
             strikethrough: true,
             ..Default::default()
         }
@@ -1361,6 +1383,11 @@ impl TextStyles {
         self
     }
 
+    pub fn kbd(mut self) -> Self {
+        self.kbd = true;
+        self
+    }
+
     pub fn strikethrough(mut self) -> Self {
         self.strikethrough = true;
         self
@@ -1376,6 +1403,7 @@ impl TextStyles {
             BufferTextStyle::Underline => Some(&mut self.underline),
             BufferTextStyle::InlineCode => Some(&mut self.inline_code),
             BufferTextStyle::StrikeThrough => Some(&mut self.strikethrough),
+            BufferTextStyle::Kbd => Some(&mut self.kbd),
             BufferTextStyle::Weight(_) => None,
         }
     }
@@ -1386,6 +1414,7 @@ impl TextStyles {
             BufferTextStyle::Underline => self.underline,
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
+            BufferTextStyle::Kbd => self.kbd,
             BufferTextStyle::Weight(_) => self.weight.is_some(),
         }
     }
@@ -1396,6 +1425,7 @@ impl TextStyles {
             BufferTextStyle::Underline => self.underline,
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
+            BufferTextStyle::Kbd => self.kbd,
             BufferTextStyle::Weight(weight) => Some(*weight) == self.weight,
         }
     }
@@ -1406,6 +1436,10 @@ impl TextStyles {
 
     pub fn is_inline_code(&self) -> bool {
         self.inline_code
+    }
+
+    pub fn is_kbd(&self) -> bool {
+        self.kbd
     }
 
     pub fn is_strikethrough(&self) -> bool {
@@ -1447,6 +1481,7 @@ impl TextStyles {
             italic: self.italic,
             underline: self.underline,
             inline_code: self.inline_code,
+            kbd: self.kbd,
             strikethrough: self.strikethrough,
             placeholder: false,
             link: false,
@@ -1463,6 +1498,7 @@ impl From<TextStylesWithMetadata> for TextStyles {
             underline: styles.underline,
             placeholder: styles.placeholder,
             inline_code: styles.inline_code,
+            kbd: styles.kbd,
             strikethrough: styles.strikethrough,
             link: styles.link.is_some(),
             colored: styles.color.is_some(),
@@ -1487,6 +1523,7 @@ impl BitXor for TextStyles {
             underline: self.underline ^ rhs.underline,
             placeholder: self.placeholder ^ rhs.placeholder,
             inline_code: self.inline_code ^ rhs.inline_code,
+            kbd: self.kbd ^ rhs.kbd,
             strikethrough: self.strikethrough ^ rhs.strikethrough,
             link: self.link ^ rhs.link,
             colored: self.colored ^ rhs.colored,
@@ -1508,6 +1545,7 @@ impl BitXorAssign for TextStyles {
         self.underline ^= rhs.underline;
         self.placeholder ^= rhs.placeholder;
         self.inline_code ^= rhs.inline_code;
+        self.kbd ^= rhs.kbd;
         self.strikethrough ^= rhs.strikethrough;
         self.link ^= rhs.link;
         self.colored ^= rhs.colored;
@@ -1555,6 +1593,7 @@ pub struct StyleSummary {
     italic_counter: i32,
     underline_counter: i32,
     inline_code_counter: i32,
+    kbd_counter: i32,
     strikethrough_counter: i32,
     link_counter: i32,
     syntax_color_counter: i32,
@@ -1571,6 +1610,7 @@ impl AddAssign<&StyleSummary> for StyleSummary {
         self.italic_counter += other.italic_counter;
         self.link_counter += other.link_counter;
         self.inline_code_counter += other.inline_code_counter;
+        self.kbd_counter += other.kbd_counter;
         self.total_link_marker += other.total_link_marker;
         self.syntax_color_counter += other.syntax_color_counter;
         self.total_color_marker += other.total_color_marker;
@@ -1587,6 +1627,7 @@ impl StyleSummary {
             BufferTextStyle::Underline => self.underline_counter,
             BufferTextStyle::InlineCode => self.inline_code_counter,
             BufferTextStyle::StrikeThrough => self.strikethrough_counter,
+            BufferTextStyle::Kbd => self.kbd_counter,
         }
     }
 
@@ -1609,6 +1650,7 @@ impl StyleSummary {
             BufferTextStyle::Underline => &mut self.underline_counter,
             BufferTextStyle::InlineCode => &mut self.inline_code_counter,
             BufferTextStyle::StrikeThrough => &mut self.strikethrough_counter,
+            BufferTextStyle::Kbd => &mut self.kbd_counter,
         }
     }
 
@@ -1625,6 +1667,7 @@ impl StyleSummary {
             underline: self.underline_counter > 0,
             link: self.link_counter > 0,
             inline_code: self.inline_code_counter > 0,
+            kbd: self.kbd_counter > 0,
             colored: self.syntax_color_counter > 0,
             strikethrough: self.strikethrough_counter > 0,
             placeholder: false,
@@ -1641,6 +1684,7 @@ impl From<TextStyles> for StyleSummary {
             underline_counter: styles.underline.into(),
             link_counter: styles.link.into(),
             inline_code_counter: styles.inline_code.into(),
+            kbd_counter: styles.kbd.into(),
             syntax_color_counter: styles.colored.into(),
             strikethrough_counter: styles.strikethrough.into(),
             total_color_marker: 0,

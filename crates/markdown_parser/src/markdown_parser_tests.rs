@@ -1982,6 +1982,258 @@ fn test_parse_empty_underline() {
 }
 
 #[test]
+fn test_basic_parse_kbd() {
+    let source = "Press <kbd>Cmd</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::kbd("Cmd"),
+        ])]
+    );
+}
+
+/// The motivating test case from issue #13733: two adjacent keycaps joined by a literal `+`.
+#[test]
+fn test_parse_kbd_issue_test_case() {
+    let source = "Press <kbd>Cmd</kbd>+<kbd>K</kbd> to open the command palette.";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::kbd("Cmd"),
+            FormattedTextFragment::plain_text("+"),
+            FormattedTextFragment::kbd("K"),
+            FormattedTextFragment::plain_text(" to open the command palette."),
+        ])]
+    );
+}
+
+/// `<kbd>` tags are recognized case-insensitively.
+#[test]
+fn test_parse_kbd_case_insensitive() {
+    let source = "Press <KBD>Cmd</KBD> and <Kbd>K</kBd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::kbd("Cmd"),
+            FormattedTextFragment::plain_text(" and "),
+            FormattedTextFragment::kbd("K"),
+        ])]
+    );
+}
+
+#[test]
+fn test_mixed_parse_kbd() {
+    let source = "This is ~~test~~ **with** <kbd>text</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("This is "),
+            FormattedTextFragment::strikethrough("test"),
+            FormattedTextFragment::plain_text(" "),
+            FormattedTextFragment::bold("with"),
+            FormattedTextFragment::plain_text(" "),
+            FormattedTextFragment::kbd("text"),
+        ])]
+    );
+}
+
+/// Bold nests inside `<kbd>`: the run carries both `kbd` and `weight`.
+#[test]
+fn test_parse_kbd_with_nested_bold() {
+    let fragments = parse_all("<kbd>**Cmd**</kbd>", parse_inline);
+    assert_eq!(fragments.len(), 1);
+    assert_eq!(fragments[0].text, "Cmd");
+    assert!(fragments[0].styles.kbd);
+    assert_eq!(fragments[0].styles.weight, Some(CustomWeight::Bold));
+}
+
+/// `<kbd>` nests inside bold: the run carries both `kbd` and `weight`.
+#[test]
+fn test_parse_bold_wrapping_kbd() {
+    let fragments = parse_all("**<kbd>Cmd</kbd>**", parse_inline);
+    assert_eq!(fragments.len(), 1);
+    assert_eq!(fragments[0].text, "Cmd");
+    assert!(fragments[0].styles.kbd);
+    assert_eq!(fragments[0].styles.weight, Some(CustomWeight::Bold));
+}
+
+/// Nested `<kbd>` flat-collapses into a single keycap spanning the full inner content, rather than
+/// leaking literal `<kbd>`/`</kbd>` tags (the pre-fix behavior) or double-badging (issue #13733).
+/// Depth-aware per-key badging (outer keycap wrapping inner keycaps) is deferred to issue #13912.
+#[test]
+fn test_parse_nested_kbd_flat_collapses() {
+    let source = "<kbd><kbd>Ctrl</kbd>+<kbd>N</kbd></kbd>";
+    let fragments = test_parse_markdown(source);
+    assert_eq!(
+        fragments,
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::kbd(
+            "Ctrl+N"
+        )])],
+        "nested kbd should collapse to a single flat keycap over the inner content"
+    );
+
+    // Guard against regressing to the tag-leak bug: no literal tag text survives.
+    let flattened: String = match &fragments[0] {
+        FormattedTextLine::Line(runs) => runs.iter().map(|f| f.text.as_str()).collect(),
+        other => panic!("expected a single line, got {other:?}"),
+    };
+    assert!(
+        !flattened.contains("<kbd>") && !flattened.contains("</kbd>"),
+        "nested kbd must not leak literal tag text, got: {flattened:?}"
+    );
+}
+
+/// Deep nesting collapses deterministically to a single keycap regardless of depth (issue #13733).
+#[test]
+fn test_parse_deeply_nested_kbd_flat_collapses() {
+    let source = "<kbd><kbd><kbd><kbd><kbd>Esc</kbd></kbd></kbd></kbd></kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::kbd(
+            "Esc"
+        )])],
+        "arbitrarily deep kbd nesting should collapse to one flat keycap"
+    );
+}
+
+/// A stray `</kbd>` with no matching open still renders as literal text (issue #13733) — the
+/// flat-collapse depth counter must not swallow unbalanced closes.
+#[test]
+fn test_parse_unmatched_kbd_close_is_literal() {
+    let source = "no open</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("no open</kbd>"),
+        ])]
+    );
+}
+
+/// An unterminated OUTER `<kbd>` that still contains a balanced inner nested pair must not panic
+/// or leave a dangling delimiter — the inner pair flat-collapses (dropped) and the unmatched outer
+/// open degrades to literal text, same as any unterminated `<kbd>` (issue #13733).
+#[test]
+fn test_parse_unterminated_nested_kbd_is_literal() {
+    let source = "<kbd><kbd>Ctrl</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<kbd>Ctrl"),
+        ])]
+    );
+}
+
+/// Two unmatched `<kbd>` opens with no close must stay literal — never a keycap (issue #13733).
+///
+/// This pins behavior against a theorized failure raised in review: because `KbdStart` is
+/// right-flanking-closable, the final generic `process_emphasis` pass could in principle let a
+/// second `<kbd>` opener close against the first, wrapping the text between them in a keycap. It
+/// can't, because the flat-collapse depth counter (see the `KbdStart` arm in `parse_inline`) drops
+/// any second `<kbd>` opened while still nested, so two `KbdStart` delimiters never coexist on the
+/// stack for the pass to pair. The lone surviving opener degrades to literal text. Note the dropped
+/// inner `<kbd>` leaves no literal tag, so only the outer tag remains in the output.
+#[test]
+fn test_parse_double_open_kbd_stays_literal() {
+    let source = "<kbd>Ctrl <kbd>K";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<kbd>Ctrl K"),
+        ])]
+    );
+}
+
+/// A well-formed `<kbd>` followed by a second unmatched open must keep the first as a keycap and
+/// leave the trailing opener literal — the depth counter resets to zero after the balanced close, so
+/// the second opener is a lone unpaired `KbdStart` that can't self-close (issue #13733).
+#[test]
+fn test_parse_kbd_then_unmatched_open_stays_literal() {
+    let source = "<kbd>a</kbd> b<kbd>c";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::kbd("a"),
+            FormattedTextFragment::plain_text(" b<kbd>c"),
+        ])]
+    );
+}
+
+#[test]
+fn test_multi_parse_kbd() {
+    let source = "<kbd>test1</kbd>\n<kbd>test2</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![
+            FormattedTextLine::Line(vec![FormattedTextFragment::kbd("test1")]),
+            FormattedTextLine::Line(vec![FormattedTextFragment::kbd("test2")]),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_empty_kbd() {
+    assert_eq!(
+        parse_all("some <kbd></kbd> text", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("some "),
+            FormattedTextFragment::kbd(""),
+            FormattedTextFragment::plain_text(" text"),
+        ]
+    );
+}
+
+/// An unmatched `</kbd>` (no opener) degrades to literal text, never a panic.
+#[test]
+fn test_parse_unmatched_kbd_end_is_literal() {
+    assert_eq!(
+        parse_all("no opener </kbd> here", parse_inline),
+        vec![FormattedTextFragment::plain_text("no opener </kbd> here")]
+    );
+}
+
+/// An unterminated `<kbd>` (missing closer) leaves the opening tag as literal text.
+#[test]
+fn test_parse_unterminated_kbd_is_literal() {
+    assert_eq!(
+        parse_all("dangling <kbd>Cmd here", parse_inline),
+        vec![FormattedTextFragment::plain_text("dangling <kbd>Cmd here")]
+    );
+}
+
+/// An unmatched, mixed-case `<KBD>` open must fall back to the AUTHORED spelling as literal text,
+/// not a synthesized lowercase `<kbd>` (issue #13733). `tag_no_case` matches case-insensitively but
+/// must not rewrite the source casing when the tag degrades to literal text.
+#[test]
+fn test_parse_unterminated_mixed_case_kbd_preserves_spelling() {
+    assert_eq!(
+        parse_all("dangling <KBD>Esc here", parse_inline),
+        vec![FormattedTextFragment::plain_text("dangling <KBD>Esc here")]
+    );
+}
+
+/// A stray, mixed-case `</KBD>` close with no opener must fall back to the AUTHORED spelling as
+/// literal text, not a synthesized lowercase `</kbd>` (issue #13733).
+#[test]
+fn test_parse_unmatched_mixed_case_kbd_close_preserves_spelling() {
+    assert_eq!(
+        parse_all("no opener </KBD> here", parse_inline),
+        vec![FormattedTextFragment::plain_text("no opener </KBD> here")]
+    );
+}
+
+/// The well-formed case-insensitive path still produces a keycap: `<KBD>x</KBD>` → kbd run.
+#[test]
+fn test_parse_well_formed_mixed_case_kbd_still_keycaps() {
+    assert_eq!(
+        parse_all("<KBD>x</KBD>", parse_inline),
+        vec![FormattedTextFragment::kbd("x")]
+    );
+}
+
+#[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
     let source_2space = "- top level\n  - sublevel\n    - subsublevel";

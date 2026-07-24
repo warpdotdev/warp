@@ -480,6 +480,9 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
         if fragment.styles.underline {
             text = format!("<u>{text}</u>");
         }
+        if fragment.styles.kbd {
+            text = format!("<kbd>{text}</kbd>");
+        }
         let is_bold = fragment
             .styles
             .weight
@@ -548,6 +551,11 @@ pub struct FormattedTextStyles {
     pub underline: bool,
     pub strikethrough: bool,
     pub inline_code: bool,
+    /// Whether this run came from a `<kbd>` keyboard-shortcut element. Rendered as a keycap
+    /// badge: the inline-code chip's monospace background plus a visible outline that sets it
+    /// apart from a code span. Kept distinct from `inline_code` so it round-trips back to `<kbd>`
+    /// rather than a backtick code span.
+    pub kbd: bool,
     pub hyperlink: Option<Hyperlink>,
 }
 
@@ -656,6 +664,16 @@ impl FormattedTextFragment {
         }
     }
 
+    pub fn kbd(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            styles: FormattedTextStyles {
+                kbd: true,
+                ..Default::default()
+            },
+        }
+    }
+
     pub fn raw_text(&self) -> &String {
         &self.text
     }
@@ -695,6 +713,14 @@ impl fmt::Debug for FormattedTextStyles {
                 f.write_str(" | ")?;
             }
             f.write_str("InlineCode")?;
+            first = false;
+        }
+
+        if self.kbd {
+            if !first {
+                f.write_str(" | ")?;
+            }
+            f.write_str("Kbd")?;
             first = false;
         }
 

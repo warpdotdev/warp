@@ -581,6 +581,10 @@ pub struct TextBorder {
     // The line height ratio override to determine the size of the border and the background color (if there is one).
     // By default, the border will fit the entire line height.
     pub line_height_ratio_override: Option<u8>,
+    // Optional heavier bottom edge, drawn as an accent stripe over the uniform border. Used to give
+    // a `<kbd>` keycap a "raised key" cue (issue #13733). `None` keeps the border uniform. The
+    // stripe reuses `color`; a total width of `width + bottom_width` is drawn along the bottom edge.
+    pub bottom_width: Option<u8>,
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -1279,6 +1283,24 @@ impl Line {
 
                 if let Some(color) = run.styles.background_color {
                     rendered_background.with_background(Fill::Solid(color));
+                }
+
+                // A heavier bottom edge (the keycap "raised key" cue, issue #13733) is drawn as a
+                // second overlay whose bottom-only border is `width + bottom_width` thick. The
+                // uniform border above keeps all four sides at `width`; this only thickens the
+                // bottom, which `Border`'s single shared width cannot express in one pass.
+                if let Some(border) = run.styles.border {
+                    if let Some(bottom_width) = border.bottom_width {
+                        let total_bottom = (border.width + bottom_width) as f32;
+                        scene
+                            .draw_rect_without_hit_recording(clipped_rect)
+                            .with_corner_radius(CornerRadius::with_all(
+                                crate::scene::Radius::Pixels(border.radius as f32),
+                            ))
+                            .with_border(
+                                Border::bottom(total_bottom).with_border_color(border.color),
+                            );
+                    }
                 }
             }
         }
