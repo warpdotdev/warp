@@ -2228,9 +2228,9 @@ impl AgentInputFooter {
                 };
                 Some(ChildView::new(button).finish())
             }
-            AgentToolbarItemKind::FastForwardToggle => FeatureFlag::FastForwardAutoexecuteButton
-                .is_enabled()
-                .then(|| ChildView::new(&self.fast_forward_button).finish()),
+            AgentToolbarItemKind::FastForwardToggle => {
+                Some(ChildView::new(&self.fast_forward_button).finish())
+            }
             AgentToolbarItemKind::HandoffToCloud => {
                 if !AISettings::as_ref(app).is_cloud_handoff_enabled(app) || is_cloud_context {
                     return None;

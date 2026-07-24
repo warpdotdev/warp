@@ -209,8 +209,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CodebaseIndexSpeedbump,
         #[cfg(feature = "context_line_review_comments")]
         FeatureFlag::ContextLineReviewComments,
-        #[cfg(feature = "fast_forward_autoexecute_button")]
-        FeatureFlag::FastForwardAutoexecuteButton,
         #[cfg(feature = "code_find_replace")]
         FeatureFlag::CodeFindReplace,
         #[cfg(feature = "command_palette_file_search")]

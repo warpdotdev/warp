@@ -543,7 +543,6 @@ default = [
     "clear_autosuggestion_on_escape",
     "file_retrieval_tools",
     "mcp_server",
-    "fast_forward_autoexecute_button",
     "image_as_context",
     "command_palette_file_search",
     "usage_based_pricing",
@@ -911,7 +910,6 @@ usage_based_pricing = []
 ai_context_menu = []
 at_menu_outside_of_ai_mode = []
 agent_decides_command_execution = []
-fast_forward_autoexecute_button = []
 code_find_replace = []
 command_palette_file_search = []
 conversation_filter = []
