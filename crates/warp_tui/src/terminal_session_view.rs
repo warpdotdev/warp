@@ -277,8 +277,7 @@ pub(crate) fn tui_cli_binary_name(channel: Channel) -> &'static str {
 
 /// Shell command used by the exit hint to resume a server conversation.
 pub(crate) fn tui_resume_shell_command(channel: Channel, token: &str) -> String {
-    let binary = tui_cli_binary_name(channel);
-    format!("{binary} --resume {token}")
+    format!("{} --resume {token}", tui_cli_binary_name(channel))
 }
 
 /// Shell command used by `/version` to print the binary version as a normal
