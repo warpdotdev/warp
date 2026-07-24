@@ -21767,12 +21767,13 @@ impl Workspace {
 
     fn render_offline_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder().clone();
+        let theme = appearance.theme();
 
         let tool_tip_label_text = "Some features may be unavailable offline".to_string();
         let icon = ConstrainedBox::new(
             Container::new(
                 icons::Icon::CloudOffline
-                    .to_warpui_icon(appearance.theme().foreground())
+                    .to_warpui_icon(theme.sub_text_color(theme.background()))
                     .finish(),
             )
             .with_uniform_padding(3.)
