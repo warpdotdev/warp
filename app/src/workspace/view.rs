@@ -441,7 +441,7 @@ use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
 use crate::ui_components::red_notification_dot::RedNotificationDot;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
 use crate::ui_components::{blended_colors, icons};
-use crate::undo_close::UndoCloseStack;
+use crate::undo_close::{UndoCloseSettings, UndoCloseStack};
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
@@ -558,6 +558,9 @@ pub const PANEL_HEADER_HEIGHT: f32 = TAB_BAR_HEIGHT;
 /// The hover area height for states where the tab bar is revealed on hover.
 const TAB_BAR_HOVER_HEIGHT: f32 = 12.;
 const TAB_BAR_PADDING_LEFT: f32 = 4.;
+/// `object_id` used for the inline "Reopen" toast shown after a tab is closed, so a
+/// subsequent close replaces any stale reopen toast instead of stacking them.
+const REOPEN_CLOSED_TAB_TOAST_ID: &str = "reopen_closed_tab_toast";
 const TAB_BAR_PADDING_RIGHT: f32 = 8.;
 const TITLE_BAR_SEARCH_BAR_MAX_WIDTH: f32 = 320.;
 const TITLE_BAR_SEARCH_BAR_SLOT_PADDING: f32 = 8.;
@@ -11954,6 +11957,18 @@ impl Workspace {
                 log::info!("storing data for closed tab");
                 stack.handle_tab_closed(handle, index, tab_data, ctx);
             });
+
+            // Surface an inline, dismissible "Reopen" affordance so the just-closed
+            // tab can be recovered without a native app menu — which is unavailable
+            // in the browser, where Warp on web previously had no discoverable
+            // reopen path. The toast's link reuses the existing
+            // `WorkspaceAction::ReopenClosedSession` -> `app:undo_close` restore
+            // path, so it works identically on web and desktop with no new state.
+            // Only offer it when undo-close is enabled, since the link routes
+            // through the same undo stack.
+            if *UndoCloseSettings::as_ref(ctx).enabled {
+                self.show_tab_closed_toast(ctx);
+            }
         }
 
         match index.cmp(&self.active_tab_index) {
@@ -11976,6 +11991,29 @@ impl Workspace {
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
+    }
+
+    /// Shows an ephemeral, dismissible "Tab closed. Reopen" toast that lets the
+    /// user recover the tab that was just closed.
+    ///
+    /// This gives Warp on web a discoverable reopen affordance — the native
+    /// app-menu "Reopen closed session" item isn't available in a browser, so
+    /// previously a closed tab was unrecoverable there even though it was still
+    /// held by the `UndoCloseStack`. The toast's "Reopen" link reuses the
+    /// existing `WorkspaceAction::ReopenClosedSession` -> `app:undo_close`
+    /// restore path rather than introducing new state, so it behaves
+    /// identically on web and desktop. A shared `object_id` means a subsequent
+    /// close replaces any stale reopen toast instead of stacking them.
+    fn show_tab_closed_toast(&mut self, ctx: &mut ViewContext<Self>) {
+        let toast = DismissibleToast::default("Tab closed.".to_string())
+            .with_object_id(REOPEN_CLOSED_TAB_TOAST_ID.to_string())
+            .with_link(
+                ToastLink::new("Reopen".to_string())
+                    .with_onclick_action(WorkspaceAction::ReopenClosedSession),
+            );
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(toast, ctx);
+        });
     }
 
     fn should_confirm_close_session(&self, ctx: &mut ViewContext<Self>) -> bool {
