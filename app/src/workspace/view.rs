@@ -2865,6 +2865,12 @@ impl Workspace {
             model.insert(window_id, new_resizable_modal_sizes)
         });
 
+        // Skipped under test: on macOS this changes the process's current working
+        // directory to the user's home directory with no restoration afterward. Since it's
+        // never undone, the first test in the binary that constructs a `Workspace` would
+        // otherwise permanently relocate the whole test process's cwd, breaking every later
+        // test that resolves a relative path (see #13980).
+        #[cfg(not(test))]
         terminal::platform::init().expect("Terminal platform initialized");
 
         let tab_bar_overflow_menu = Self::build_tab_bar_overflow_menu(ctx);
