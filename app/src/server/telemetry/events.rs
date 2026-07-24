@@ -5198,12 +5198,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::InlineConversationMenuOpened
             | Self::InlineConversationMenuItemSelected
             | Self::AgentShortcutsViewToggled => EnablementState::Flag(FeatureFlag::AgentView),
-            Self::CreateProjectPromptSubmitted => EnablementState::Flag(FeatureFlag::GetStartedTab),
-            Self::CreateProjectPromptSubmittedContent => {
-                EnablementState::Flag(FeatureFlag::GetStartedTab)
-            }
-            Self::CloneRepoPromptSubmitted => EnablementState::Flag(FeatureFlag::GetStartedTab),
-            Self::GetStartedSkipToTerminal => EnablementState::Flag(FeatureFlag::GetStartedTab),
+            Self::CreateProjectPromptSubmitted => EnablementState::Always,
+            Self::CreateProjectPromptSubmittedContent => EnablementState::Always,
+            Self::CloneRepoPromptSubmitted => EnablementState::Always,
+            Self::GetStartedSkipToTerminal => EnablementState::Always,
             Self::PtyThroughput => EnablementState::Flag(FeatureFlag::RecordPtyThroughput),
             Self::AgentModeCreatedAIBlock => EnablementState::Flag(FeatureFlag::AgentMode),
             Self::MCPServerCollectionPaneOpened { .. }
