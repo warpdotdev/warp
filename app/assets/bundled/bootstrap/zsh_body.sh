@@ -1063,7 +1063,7 @@ fi
 
 case "'${SHELL##*/}'" in
   bash)
-    exec -a bash bash --rcfile <(echo '"'
+    exec -a bash "'$SHELL'" --rcfile <(echo '"'
       command -p stty raw
       HISTCONTROL=ignorespace
       HISTIGNORE=" *"
@@ -1092,7 +1092,7 @@ case "'${SHELL##*/}'" in
     else
       echo \"Failed to bootstrap warp. Continuing with a non-bootstrapped shell.\"
     fi
-    TMPPREFIX="'$HOME/.zshtmp-'" WARP_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" WARP_HONOR_PS1="'$WARP_HONOR_PS1'" ZDOTDIR="'$WARP_TMP_DIR'" exec -l zsh -g $TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE
+    TMPPREFIX="'$HOME/.zshtmp-'" WARP_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" WARP_HONOR_PS1="'$WARP_HONOR_PS1'" ZDOTDIR="'$WARP_TMP_DIR'" exec -l "'$SHELL'" -g $TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE
       ;;
 esac
 "
