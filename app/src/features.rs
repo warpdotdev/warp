@@ -157,8 +157,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::RemoteCodebaseIndexing,
         #[cfg(feature = "use_tantivy_search")]
         FeatureFlag::UseTantivySearch,
-        #[cfg(feature = "grep_tool")]
-        FeatureFlag::GrepTool,
         #[cfg(feature = "mcp_server")]
         FeatureFlag::McpServer,
         #[cfg(feature = "mcp_debugging_ids")]

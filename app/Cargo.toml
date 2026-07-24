@@ -538,7 +538,6 @@ default = [
     "command_correction_key",
     "kitty_images",
     "global_ai_analytics_collection",
-    "grep_tool",
     "validate_autosuggestions",
     "clear_autosuggestion_on_escape",
     "file_retrieval_tools",
@@ -725,7 +724,6 @@ full_screen_zen_mode = []
 global_ai_analytics_banner = []
 global_ai_analytics_collection = []
 grab_the_baton_editing = []
-grep_tool = []
 # This feature is enabled in graphical builds of Warp, and groups together other features
 # that are not needed in headless builds. Because Cargo features are additive, the default
 # feature set is for a minimal build of Warp, and we add on GUI-specific features here.
