@@ -51,6 +51,10 @@ pub enum AppIcon {
     Glow,
     #[schemars(description = "Holographic")]
     Holographic,
+    #[schemars(description = "Liquid Glass Dark")]
+    LiquidGlassDark,
+    #[schemars(description = "Liquid Glass Light")]
+    LiquidGlassLight,
     #[schemars(description = "Mono")]
     Mono,
     #[schemars(description = "Neon")]
@@ -81,6 +85,8 @@ impl std::fmt::Display for AppIcon {
             AppIcon::Cow => "Cow",
             AppIcon::Glow => "Glow",
             AppIcon::Holographic => "Holographic",
+            AppIcon::LiquidGlassDark => "Liquid Glass Dark",
+            AppIcon::LiquidGlassLight => "Liquid Glass Light",
             AppIcon::Mono => "Mono",
             AppIcon::Neon => "Neon",
             AppIcon::Original => "Original",
@@ -111,6 +117,8 @@ impl AppIconSettings {
             AppIcon::Cow => "cow",
             AppIcon::Glow => "glow",
             AppIcon::Holographic => "holographic",
+            AppIcon::LiquidGlassDark => "liquid_glass_dark",
+            AppIcon::LiquidGlassLight => "liquid_glass_light",
             AppIcon::Mono => "mono",
             AppIcon::Neon => "neon",
             AppIcon::Original => "original",

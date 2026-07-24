@@ -1701,6 +1701,8 @@ impl AppearanceSettingsPageView {
             AppIcon::Cow => "Cow",
             AppIcon::Glow => "Glow",
             AppIcon::Holographic => "Holographic",
+            AppIcon::LiquidGlassDark => "Liquid Glass Dark",
+            AppIcon::LiquidGlassLight => "Liquid Glass Light",
             AppIcon::Mono => "Mono",
             AppIcon::Neon => "Neon",
             AppIcon::Original => "Original",
