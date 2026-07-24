@@ -14,6 +14,7 @@ import json
 import re
 import subprocess
 import sys
+from typing import Any
 
 # Matches lines like: CHANGELOG-NEW-FEATURE: Added dark mode
 MARKER_RE = re.compile(
@@ -98,6 +99,26 @@ def get_merged_commits(sha: str) -> list[str]:
     return log.splitlines()
 
 
+def fetch_pr_rest_metadata(repo: str, pr_number: int) -> dict[str, Any]:
+    """Fetch PR metadata only exposed by the REST API."""
+    raw = run(
+        ["gh", "api", f"repos/{repo}/pulls/{pr_number}"],
+        check=False,
+    )
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+    user = data.get("user") if isinstance(data.get("user"), dict) else {}
+    return {
+        "author_association": data.get("author_association", ""),
+        "author_is_bot": user.get("type") == "Bot",
+    }
+
+
 def fetch_pr_data(repo: str, pr_number: int) -> dict | None:
     """Fetch PR metadata and changed file paths via gh CLI."""
     fields = "number,title,author,body,labels,mergedAt,files,url"
@@ -108,9 +129,11 @@ def fetch_pr_data(repo: str, pr_number: int) -> dict | None:
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
     except json.JSONDecodeError:
         return None
+    data.update(fetch_pr_rest_metadata(repo, pr_number))
+    return data
 
 
 def fetch_pr_commit_messages(repo: str, pr_number: int) -> list[str]:
@@ -145,6 +168,17 @@ def get_author_login(data: dict) -> str:
     if isinstance(data.get("author"), str):
         return data["author"]
     return ""
+
+def get_author_is_bot(data: dict) -> bool:
+    """Return whether a gh PR JSON object's author is a bot/app account."""
+    author = data.get("author")
+    if isinstance(author, dict) and author.get("is_bot"):
+        return True
+    if data.get("author_is_bot"):
+        return True
+
+    login = get_author_login(data)
+    return login.endswith("[bot]") or login.startswith("app/")
 
 
 def get_label_names(data: dict) -> list[str]:
@@ -318,6 +352,8 @@ def main() -> None:
             "url": data.get("url", "") if source_repo == PUBLIC_REPO else "",
             "title": data.get("title", ""),
             "author": author_login,
+            "author_association": data.get("author_association", ""),
+            "author_is_bot": get_author_is_bot(data),
             "body": body,
             "labels": label_names,
             "merged_at": data.get("mergedAt", ""),

@@ -1921,9 +1921,12 @@ jobs:
       - name: Convert draft JSON to release format (stable only)
         if: inputs.channel == 'stable'
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 .agents/skills/changelog-draft/scripts/convert_to_release_json.py \
             --input "${{ runner.temp }}/changelog-draft/changelog-draft.json" \
+            --resolve-author-metadata \
             --output "${{ runner.temp }}/changelog-draft/changelog-release.json"
 
       - name: Obtain a GitHub App Installation Access Token (non-stable only)
