@@ -485,6 +485,7 @@ fn agent_mode_placeholder_hint_renders_only_while_empty() {
                 .session_state
                 .as_ref(ctx)
                 .resolve(ctx)
+                .expect("input test dependencies are available")
                 .hint_text()
                 .expect("agent composer has a hint");
             assert!(

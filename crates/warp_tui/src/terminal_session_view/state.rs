@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
+use std::{error, fmt};
 
 use parking_lot::FairMutex;
 use warp::tui_export::{BlocklistAIInputModel, CLISubagentController, TerminalModel};
@@ -51,6 +52,39 @@ pub(crate) struct TuiTerminalSessionStateModel {
     source: TuiTerminalSessionStateSource,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TuiTerminalSessionStateResolveError {
+    TerminalModel,
+    CliSubagentController,
+    Transcript,
+    InputMode,
+    SuggestionsMode,
+    OrchestrationTabBar,
+}
+
+impl fmt::Display for TuiTerminalSessionStateResolveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::TerminalModel => "terminal model is unavailable",
+            Self::CliSubagentController => "CLI subagent controller is unavailable",
+            Self::Transcript => "transcript view is unavailable",
+            Self::InputMode => "input-mode model is unavailable",
+            Self::SuggestionsMode => "suggestions-mode model is unavailable",
+            Self::OrchestrationTabBar => "orchestration tab bar is unavailable",
+        })
+    }
+}
+
+impl error::Error for TuiTerminalSessionStateResolveError {}
+
+fn upgrade_terminal_model(
+    terminal_model: &Weak<FairMutex<TerminalModel>>,
+) -> Result<Arc<FairMutex<TerminalModel>>, TuiTerminalSessionStateResolveError> {
+    terminal_model
+        .upgrade()
+        .ok_or(TuiTerminalSessionStateResolveError::TerminalModel)
+}
+
 impl Entity for TuiTerminalSessionStateModel {
     type Event = ();
 }
@@ -90,7 +124,10 @@ impl TuiTerminalSessionStateModel {
         }
     }
 
-    pub(crate) fn resolve(&self, ctx: &AppContext) -> TuiTerminalSessionState {
+    pub(crate) fn resolve(
+        &self,
+        ctx: &AppContext,
+    ) -> Result<TuiTerminalSessionState, TuiTerminalSessionStateResolveError> {
         match &self.source {
             TuiTerminalSessionStateSource::Session {
                 terminal_model,
@@ -100,24 +137,22 @@ impl TuiTerminalSessionStateModel {
                 suggestions_mode,
                 orchestration_tab_bar,
             } => {
-                let terminal_model = terminal_model
-                    .upgrade()
-                    .expect("terminal session owns its terminal model");
+                let terminal_model = upgrade_terminal_model(terminal_model)?;
                 let cli_subagent_controller = cli_subagent_controller
                     .upgrade(ctx)
-                    .expect("terminal session owns its CLI subagent controller");
+                    .ok_or(TuiTerminalSessionStateResolveError::CliSubagentController)?;
                 let transcript = transcript
                     .upgrade(ctx)
-                    .expect("terminal session owns its transcript view");
+                    .ok_or(TuiTerminalSessionStateResolveError::Transcript)?;
                 let input_mode = input_mode
                     .upgrade(ctx)
-                    .expect("terminal session owns its input-mode model");
+                    .ok_or(TuiTerminalSessionStateResolveError::InputMode)?;
                 let suggestions_mode = suggestions_mode
                     .upgrade(ctx)
-                    .expect("terminal session owns its suggestions-mode model");
+                    .ok_or(TuiTerminalSessionStateResolveError::SuggestionsMode)?;
                 let orchestration_tab_bar = orchestration_tab_bar
                     .upgrade(ctx)
-                    .expect("terminal session owns its orchestration tab bar");
+                    .ok_or(TuiTerminalSessionStateResolveError::OrchestrationTabBar)?;
                 let (alt_screen_active, input_target, user_owns_running_command) = {
                     let terminal_model = terminal_model.lock();
                     (
@@ -171,14 +206,14 @@ impl TuiTerminalSessionStateModel {
                     orchestration_available: orchestration_tab_bar.as_ref(ctx).has_tabs(),
                     plan_available: transcript.as_ref(ctx).has_toggleable_plan(ctx),
                 };
-                if alt_screen_active {
+                Ok(if alt_screen_active {
                     TuiTerminalSessionState::AltScreen {
                         input_target,
                         state,
                     }
                 } else {
                     TuiTerminalSessionState::Block(state)
-                }
+                })
             }
             #[cfg(test)]
             TuiTerminalSessionStateSource::InputTest {
@@ -188,16 +223,16 @@ impl TuiTerminalSessionStateModel {
             } => {
                 let input_mode = input_mode
                     .upgrade(ctx)
-                    .expect("test input owns its input-mode model");
+                    .ok_or(TuiTerminalSessionStateResolveError::InputMode)?;
                 let suggestions_mode = suggestions_mode
                     .upgrade(ctx)
-                    .expect("test input owns its suggestions-mode model");
-                TuiTerminalSessionState::for_input(
+                    .ok_or(TuiTerminalSessionStateResolveError::SuggestionsMode)?;
+                Ok(TuiTerminalSessionState::for_input(
                     input_mode_policy::is_shell_mode(input_mode.as_ref(ctx)),
                     suggestions_mode.as_ref(ctx).mode(),
                     true,
                     orchestration_tabs_available(ctx),
-                )
+                ))
             }
         }
     }

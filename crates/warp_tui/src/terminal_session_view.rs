@@ -119,7 +119,9 @@ pub(crate) mod state;
 
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
-use self::state::{TuiTerminalSessionState, TuiTerminalSessionStateModel};
+use self::state::{
+    TuiTerminalSessionState, TuiTerminalSessionStateModel, TuiTerminalSessionStateResolveError,
+};
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -788,7 +790,10 @@ impl TuiTerminalSessionView {
         tui_input_target(&terminal_model)
     }
 
-    fn session_state(&self, ctx: &AppContext) -> TuiTerminalSessionState {
+    fn session_state(
+        &self,
+        ctx: &AppContext,
+    ) -> Result<TuiTerminalSessionState, TuiTerminalSessionStateResolveError> {
         self.session_state.as_ref(ctx).resolve(ctx)
     }
 
@@ -3630,15 +3635,17 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
-        let state = self.session_state(ctx);
+        let state = self.session_state(ctx).ok();
         let mut context = Self::default_keymap_context();
-        if self.orchestration_tabs_focused && state.input_target().agent_editor_owns_input() {
+        if self.orchestration_tabs_focused
+            && state.is_some_and(|state| state.input_target().agent_editor_owns_input())
+        {
             context.set.insert(ORCHESTRATION_TAB_BAR_FOCUSED_FLAG);
         }
         if self.is_conversation_restore_loading() {
             context.set.insert(SESSION_CAN_CANCEL_RESTORE_FLAG);
         }
-        if state.can_hand_back_terminal_use() {
+        if state.is_some_and(TuiTerminalSessionState::can_hand_back_terminal_use) {
             context.set.insert(SESSION_CAN_HAND_BACK_CONTROL_FLAG);
         }
         if self
@@ -3649,13 +3656,13 @@ impl TuiView for TuiTerminalSessionView {
                 .set
                 .insert(SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG);
         }
-        if state.plan_available() {
+        if state.is_some_and(TuiTerminalSessionState::plan_available) {
             context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
         }
         if self.keyboard_enhancement_supported {
             context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
         }
-        if state.composer_owns_input() {
+        if state.is_some_and(TuiTerminalSessionState::composer_owns_input) {
             context.set.insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
             if attachment_focus_available(
                 self.is_shell_mode(ctx),
@@ -3682,8 +3689,9 @@ impl TuiView for TuiTerminalSessionView {
             }
             ConversationRestoreState::Idle => {}
         }
-
-        let state = self.session_state(ctx);
+        let Ok(state) = self.session_state(ctx) else {
+            return TuiText::new("").finish();
+        };
         let input_target = state.input_target();
         let cli_subagent_view = {
             let terminal_model = self.terminal_model.lock();

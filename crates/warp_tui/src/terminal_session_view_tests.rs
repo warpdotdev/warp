@@ -11,9 +11,8 @@ use warp::tui_export::{
     AIAgentActionId, AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId,
     AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel, ConversationStatus,
     ConversationUsageTotals, Harness, LLMPreferences, LongRunningCommandControlState, PtyIntent,
-    PtyIntentEvent, SizeInfo,
-    SizeUpdate, TaskId, TranscriptScope, UserTakeOverReason, export_conversation_markdown,
-    register_tui_session_view_test_singletons, slash_commands,
+    PtyIntentEvent, SizeInfo, SizeUpdate, TaskId, TranscriptScope, UserTakeOverReason,
+    export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
@@ -34,8 +33,8 @@ use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
 
 use super::{
-    ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, AUTO_APPROVE_FEEDBACK_DURATION,
-    AUTO_APPROVE_DISABLED_HINT, AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_TOGGLE_BINDING_NAME,
+    ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, AUTO_APPROVE_DISABLED_HINT,
+    AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION, AUTO_APPROVE_TOGGLE_BINDING_NAME,
     COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
     COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegments,
     INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,

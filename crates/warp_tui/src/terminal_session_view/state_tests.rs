@@ -4,7 +4,8 @@ use warpui_core::{App, TuiView};
 use super::{
     ASK_AGENT_HINT, COMMANDS_HINT, CONVERSATIONS_HINT, SHELL_HINT, SHELL_MODE_HINT, SHORTCUTS_HINT,
     TuiBlockSessionState, TuiComposerMode, TuiComposerState, TuiInteractionState, TuiPtyState,
-    TuiTerminalSessionState, agent_input_hint,
+    TuiTerminalSessionState, TuiTerminalSessionStateResolveError, agent_input_hint,
+    upgrade_terminal_model,
 };
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::terminal_session_view::TuiTerminalSessionView;
@@ -43,6 +44,20 @@ fn block_state(interaction: TuiInteractionState) -> TuiTerminalSessionState {
         orchestration_available: false,
         plan_available: false,
     })
+}
+
+#[test]
+fn resolve_returns_error_after_terminal_model_owner_drops() {
+    let terminal_model = std::sync::Arc::new(parking_lot::FairMutex::new(
+        warp::tui_export::TerminalModel::mock(None, None),
+    ));
+    let weak_terminal_model = std::sync::Arc::downgrade(&terminal_model);
+    drop(terminal_model);
+
+    assert!(matches!(
+        upgrade_terminal_model(&weak_terminal_model),
+        Err(TuiTerminalSessionStateResolveError::TerminalModel)
+    ));
 }
 
 #[test]
