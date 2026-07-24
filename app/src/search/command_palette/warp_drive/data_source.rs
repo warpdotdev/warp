@@ -568,9 +568,22 @@ mod full_text_searcher {
     use crate::server::ids::ObjectUid;
     use crate::workflows::CloudWorkflow;
 
-    /// Memory budget for the search index of warp drive.
-    /// Warp could potentially have a lot of objects, so we increase it from the default of 50MB to 100MB
-    const MEMORY_BUDGET: usize = 100_000_000; // TODO: is 100MB really necessary?
+    /// Maximum number of characters to index for a document's content field.
+    /// Large notebooks (e.g. AI conversation notebooks) can be tens of MB each;
+    /// indexing them in full causes 25+ GB of in-memory tantivy segment growth.
+    const MAX_CONTENT_INDEX_CHARS: usize = 10_000;
+
+    /// Truncates `s` to at most `max_chars` Unicode scalar values, always
+    /// on a valid UTF-8 boundary.  Returns `&s` unchanged when the string
+    /// is already short enough.
+    fn truncate_to_char_boundary(s: &str, max_chars: usize) -> &str {
+        // Walk char indices, stopping at max_chars. This is O(min(n, max_chars))
+        // instead of O(n), which matters for large notebook content.
+        match s.char_indices().nth(max_chars) {
+            Some((byte_idx, _)) => &s[..byte_idx],
+            None => s, // fewer than max_chars chars — return unchanged
+        }
+    }
 
     // All Warp Drive objects are boosted due to multiple fields being a part of the same total score,
     // putting them at an inherent disadvantage, as each field would only have a fractional weight.
@@ -710,10 +723,13 @@ mod full_text_searcher {
                     let notebook: Option<&CloudNotebook> = object.into();
                     if let Some(notebook) = notebook {
                         let name = notebook.model().title.to_lowercase();
-                        let content = NotebookManager::as_ref(app)
+                        let full_content = NotebookManager::as_ref(app)
                             .notebook_raw_text(notebook.id)
                             .unwrap_or(&notebook.model().data)
                             .to_lowercase();
+                        let content =
+                            truncate_to_char_boundary(&full_content, MAX_CONTENT_INDEX_CHARS)
+                                .to_owned();
                         let folder = notebook.breadcrumbs(app).to_lowercase();
                         let uid = notebook.uid();
 
@@ -734,7 +750,10 @@ mod full_text_searcher {
                         let workflow = &cloud_workflow.model().data;
 
                         let title = workflow.name().to_lowercase();
-                        let content = workflow.content().to_lowercase();
+                        let full_content = workflow.content().to_lowercase();
+                        let content =
+                            truncate_to_char_boundary(&full_content, MAX_CONTENT_INDEX_CHARS)
+                                .to_owned();
                         let description = workflow
                             .description()
                             .unwrap_or(&"".to_owned())
@@ -869,10 +888,13 @@ mod full_text_searcher {
                     let notebook: Option<&CloudNotebook> = obj.as_ref().into();
                     notebook.map(|notebook| {
                         let name = notebook.model().title.to_lowercase();
-                        let content = NotebookManager::as_ref(app)
+                        let full_content = NotebookManager::as_ref(app)
                             .notebook_raw_text(notebook.id)
                             .unwrap_or(&notebook.model().data)
                             .to_lowercase();
+                        let content =
+                            truncate_to_char_boundary(&full_content, MAX_CONTENT_INDEX_CHARS)
+                                .to_owned();
                         let folder = notebook.breadcrumbs(app).to_lowercase();
                         let uid = notebook.uid();
                         NotebookSearchDocument {
@@ -894,7 +916,10 @@ mod full_text_searcher {
                     cloud_workflow.map(|cloud_workflow| {
                         let workflow = &cloud_workflow.model().data;
                         let title = workflow.name().to_lowercase();
-                        let content = workflow.content().to_lowercase();
+                        let full_content = workflow.content().to_lowercase();
+                        let content =
+                            truncate_to_char_boundary(&full_content, MAX_CONTENT_INDEX_CHARS)
+                                .to_owned();
                         let description = workflow
                             .description()
                             .unwrap_or(&"".to_owned())
@@ -1119,7 +1144,7 @@ mod full_text_searcher {
         pub(crate) fn new(background: Arc<Background>) -> Self {
             FullTextWarpDriveSearcher {
                 notebook_searcher: NOTEBOOK_SEARCH_SCHEMA
-                    .create_async_searcher(MEMORY_BUDGET, background.clone()),
+                    .create_async_searcher(DEFAULT_MEMORY_BUDGET, background.clone()),
                 workflow_searcher: WORKFLOW_SEARCH_SCHEMA
                     .create_async_searcher(DEFAULT_MEMORY_BUDGET, background.clone()),
                 env_var_searcher: ENVVAR_SEARCH_SCHEMA
