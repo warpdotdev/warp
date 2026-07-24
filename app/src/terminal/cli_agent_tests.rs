@@ -266,6 +266,7 @@ fn test_detect_known_agents() {
                 ("vibe", CLIAgent::Vibe),
                 ("agy", CLIAgent::Antigravity),
                 ("omp", CLIAgent::OhMyPi),
+                ("plank", CLIAgent::Plank),
             ] {
                 assert_eq!(
                     CLIAgent::detect(command, None, None, ctx),

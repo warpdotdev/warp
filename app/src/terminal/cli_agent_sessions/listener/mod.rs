@@ -56,7 +56,8 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         // Auggie and Pi are supported via community-maintained plugins
         // (https://github.com/augmentmoogi/auggie-warp,
         // https://github.com/badlogic/pi-mono). OhMyPi emits these structured
-        // OSC 777 events natively. Droid can be supported by user-configured
+        // OSC 777 events natively, as does Plank
+        // (https://github.com/aovestdipaperino/plank). Droid can be supported by user-configured
         // hooks or future integrations that emit the same events. We don't ship
         // install flows for these agents here — we just listen.
         CLIAgent::Claude
@@ -65,7 +66,8 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Auggie
         | CLIAgent::Droid
         | CLIAgent::Pi
-        | CLIAgent::OhMyPi => Some(Box::new(DefaultSessionListener)),
+        | CLIAgent::OhMyPi
+        | CLIAgent::Plank => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
         CLIAgent::Hermes
         | CLIAgent::Amp
