@@ -18127,6 +18127,15 @@ impl TerminalView {
                         });
                     }
                 }
+
+                // When a link is highlighted, skip focus redetermination so the confirmation
+                // tooltip set by ClickOnGrid (dispatched earlier in mouse_up) is not cleared
+                // before it renders. Without this guard, redetermine_global_focus() would shift
+                // focus to the input box, triggering on_blur() on the terminal view, which calls
+                // open_grid_link_tool_tip.take() and clears the tooltip.
+                if self.highlighted_link.is_some() {
+                    return;
+                }
             }
         }
 

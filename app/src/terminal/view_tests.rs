@@ -6152,6 +6152,82 @@ fn ctrl_g_closes_cli_agent_rich_input_from_terminal_context() {
     })
 }
 
+/// Regression test for QUALITY-932.
+///
+/// Clicking a highlighted URL/file link should show the confirmation tooltip. The bug was
+/// that `BlockSelect::MouseUp` with `should_redetermine_focus=true` called
+/// `redetermine_global_focus()`, which shifted focus to the input box, triggering `on_blur()`
+/// that cleared `open_grid_link_tool_tip` before the next render.
+///
+/// The fix: skip `redetermine_global_focus()` in `BlockSelectAction::MouseUp` when
+/// `highlighted_link` is `Some`.
+#[test]
+fn block_select_mouse_up_with_highlighted_link_does_not_redetermine_focus() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.focus_terminal(ctx);
+
+            // Construct a dummy highlighted link via the AltScreen variant so we don't need a
+            // real block with URL content. The important thing is highlighted_link.is_some().
+            let point = crate::terminal::model::index::Point::zero();
+            let link = crate::terminal::model::grid::grid_handler::Link {
+                range: point..=point,
+                is_empty: false,
+            };
+            let highlighted = GridHighlightedLink::Url(WithinModel::AltScreen(link));
+            let cloned = highlighted.clone();
+
+            // Simulate hovering over a URL: set highlighted_link.
+            let mut model_guard = view.model.lock();
+            view.highlighted_link.set(highlighted, &mut *model_guard);
+            drop(model_guard);
+
+            // Simulate what click_on_grid sets when a link tooltip is shown.
+            view.open_grid_link_tool_tip = Some(cloned);
+
+            // Record the last_focus_ts before calling block_select. redetermine_global_focus()
+            // always sets last_focus_ts when it runs past its early-return guards.
+            let initial_focus_ts = view.last_focus_ts;
+
+            // Call block_select(MouseUp, should_redetermine_focus=true): the exact call that
+            // the mouse_up handler dispatches after LeftMouseUp.
+            view.block_select(
+                &BlockSelectAction::MouseUp {
+                    block_index: 0.into(),
+                    is_ctrl_down: false,
+                    is_cmd_down: false,
+                    is_shift_down: false,
+                },
+                true,
+                ctx,
+            );
+
+            // With the fix: highlighted_link.is_some() causes an early return in the MouseUp arm,
+            // so redetermine_global_focus() is NOT called and last_focus_ts is unchanged.
+            // Without the fix: redetermine_global_focus() IS called, updating last_focus_ts.
+            assert_eq!(
+                view.last_focus_ts, initial_focus_ts,
+                "redetermine_global_focus() must not be called when highlighted_link is Some \
+                 (regression QUALITY-932: this would blur the terminal and clear the link tooltip)"
+            );
+
+            // Belt-and-suspenders: verify block_select() itself did not clear open_grid_link_tool_tip.
+            // Note: in production the tooltip is cleared in on_blur(), which fires asynchronously
+            // after redetermine_global_focus() shifts focus — but on_blur() does not fire in the
+            // unit-test environment. This assertion therefore does not detect the focus-triggered
+            // clearing; the last_focus_ts assertion above is the primary signal. This check only
+            // confirms that block_select(MouseUp) does not clear the tooltip directly.
+            assert!(
+                view.open_grid_link_tool_tip.is_some(),
+                "open_grid_link_tool_tip must remain set when highlighted_link is Some"
+            );
+        });
+    })
+}
+
 /// Verifies that Ctrl-G is a true toggle: opens then closes rich input from
 /// the terminal context. Regression test for #9916.
 #[test]
