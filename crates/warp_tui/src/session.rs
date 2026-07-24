@@ -9,6 +9,7 @@ use clap::Parser;
 use clap::error::ErrorKind;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
+use warp_core::channel::ChannelState;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -22,7 +23,9 @@ use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
-use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiConversationRestoreTarget};
+use crate::terminal_session_view::{
+    TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
+};
 
 /// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
 /// local cargo builds fall back to a numeric placeholder.
@@ -86,7 +89,8 @@ pub fn run() -> Result<()> {
     {
         let token = token.as_str();
         println!("To continue this conversation, run:");
-        println!("warp --resume {token}");
+        let command = tui_resume_shell_command(ChannelState::channel(), token);
+        println!("{command}");
     }
     result
 }

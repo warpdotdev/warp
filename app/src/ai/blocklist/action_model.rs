@@ -17,7 +17,7 @@ mod preprocess;
 pub(crate) mod recording_controller;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod recording_finalize;
-
+pub(crate) mod recording_telemetry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,6 +42,7 @@ use futures::future::{BoxFuture, join_all};
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use preprocess::{PendingPreprocessedActions, PreprocessId};
+pub(crate) use recording_telemetry::RecordingTelemetryEvent;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::execute::search_codebase::SearchCodebaseExecutor;
@@ -956,7 +957,7 @@ impl BlocklistAIActionModel {
 
     /// Installs a front-of-queue confirmation action without preprocessing.
     #[cfg(all(feature = "tui", any(test, feature = "test-util")))]
-    pub(crate) fn queue_confirmation_action(
+    pub fn queue_confirmation_action(
         &mut self,
         action: AIAgentAction,
         conversation_id: AIConversationId,
@@ -1132,15 +1133,16 @@ impl BlocklistAIActionModel {
             // `should_upload = false`.
             if let Some(finalization) = finalize_recording_for_conversation(
                 conversation_id,
-                FinalizeReason::Cancelled,
+                FinalizeReason::RunCancelled,
                 false,
                 ctx,
             ) {
                 ctx.spawn(
                     async move { finalization.resolve().await },
-                    |_model, result, _ctx| {
+                    |_model, (result, actual_reason), _ctx| {
                         log::info!(
-                            "Recording finalization after conversation cancellation completed: {result:?}"
+                            "Recording finalization after conversation cancellation completed \
+                             (reason={actual_reason:?}): {result:?}"
                         );
                     },
                 );

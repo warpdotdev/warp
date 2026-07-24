@@ -86,6 +86,15 @@ impl TuiBlockingChild {
             Self::Orchestration(view) => view.id(),
         }
     }
+
+    /// Converts the blocking child into its renderable view element.
+    pub(super) fn view_element(self) -> Box<dyn TuiElement> {
+        match self {
+            Self::AskQuestion(view) => TuiChildView::new(&view).finish(),
+            Self::Permission(view) => TuiChildView::new(&view).finish(),
+            Self::Orchestration(view) => TuiChildView::new(&view).finish(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
