@@ -8,10 +8,10 @@
 //! transcript/loading-indicator usage row next — CODE-1832).
 
 use warp::settings::TuiUsageDisplayMode;
-use warp::tui_export::{format_credits, ConversationUsageTotals};
-use warpui_core::elements::tui::{TuiElement, TuiEventContext, TuiHoverable, TuiText};
-use warpui_core::elements::MouseStateHandle;
+use warp::tui_export::{ConversationUsageTotals, format_credits};
 use warpui_core::AppContext;
+use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{TuiElement, TuiEventContext, TuiHoverable, TuiText};
 
 use crate::tui_builder::TuiUiBuilder;
 

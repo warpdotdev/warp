@@ -19,6 +19,9 @@ impl HarnessSupportCommand {
         match self {
             HarnessSupportCommand::Ping => "harness-support ping",
             HarnessSupportCommand::ReportArtifact(_) => "harness-support report-artifact",
+            HarnessSupportCommand::ReportExternalReference(_) => {
+                "harness-support report-external-reference"
+            }
             HarnessSupportCommand::NotifyUser(_) => "harness-support notify-user",
             HarnessSupportCommand::FinishTask(_) => "harness-support finish-task",
             HarnessSupportCommand::ReportShutdown(_) => "harness-support report-shutdown",
@@ -34,6 +37,11 @@ pub enum HarnessSupportCommand {
 
     /// Report an artifact back to the Oz platform.
     ReportArtifact(ReportArtifactArgs),
+
+    /// Report a URL-addressable external reference (e.g. a filed Linear issue, a spec
+    /// document, a deployed preview) back to the Oz platform as an `EXTERNAL_REFERENCE`
+    /// artifact.
+    ReportExternalReference(ReportExternalReferenceArgs),
 
     /// Send a progress notification to the task's originating platform (Slack, Linear, etc.).
     NotifyUser(NotifyUserArgs),
@@ -66,6 +74,25 @@ pub struct PullRequestArtifactArgs {
     /// Branch name associated with the pull request.
     #[arg(long)]
     pub branch: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ReportExternalReferenceArgs {
+    /// URL of the external reference (required, max 2048 chars).
+    #[arg(long)]
+    pub url: String,
+
+    /// Reference type (required, max 256 chars, e.g. "LINEAR_ISSUE", "GITHUB_PR").
+    #[arg(long = "reference-type")]
+    pub reference_type: String,
+
+    /// Optional human-readable title.
+    #[arg(long)]
+    pub title: Option<String>,
+
+    /// Optional metadata as a JSON object string (e.g. '{"key":"val"}').
+    #[arg(long)]
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

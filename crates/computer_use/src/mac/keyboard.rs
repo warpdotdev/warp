@@ -25,6 +25,9 @@ pub struct Keyboard {
     /// a shortcut sent as discrete events (e.g. Command-down, n-down, n-up, Command-up) arrives as
     /// a plain "n" and is treated as text rather than as Cmd+N.
     current_flags: CGEventFlags,
+    /// The owner (client conversation id) of the background session, tagged onto window
+    /// activations so teardown can be scoped to this session. `None` when unowned.
+    session_owner: Option<String>,
 }
 
 impl Keyboard {
@@ -34,7 +37,13 @@ impl Keyboard {
             post_target: target,
             window_context: None,
             current_flags: CGEventFlags::empty(),
+            session_owner: None,
         }
+    }
+
+    /// Sets the owner tagged onto background-window activations triggered by this keyboard.
+    pub fn set_session_owner(&mut self, owner: Option<String>) {
+        self.session_owner = owner;
     }
 
     /// Sets where subsequent synthesized key events are delivered. Called per-action so typing
@@ -107,7 +116,7 @@ impl Keyboard {
             return;
         };
         if let Some(info) = window::window_by_id(window_id) {
-            activation::ensure_activated(pid, &info);
+            activation::ensure_activated(pid, &info, self.session_owner.as_deref());
         }
     }
 

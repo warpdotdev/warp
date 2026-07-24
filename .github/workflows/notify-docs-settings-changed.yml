@@ -1,0 +1,61 @@
+name: Notify docs of Settings UI changes
+
+# Fires when any Settings view source file is merged to master, signalling
+# that valid_paths.json in warpdotdev/docs may need to be refreshed.
+#
+# If this job fails:
+#   1. GitHub will email the commit author automatically.
+#   2. If SLACK_BOT_TOKEN is configured in this repo's secrets, a message
+#      is also posted to #growth-docs.
+#   3. To trigger the refresh manually, go to:
+#      warpdotdev/docs > Actions > Refresh UI paths snapshot > Run workflow
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'app/src/settings_view/**'
+
+# This workflow does not use GITHUB_TOKEN, but we set an explicit empty
+# permissions block to satisfy CodeQL and follow least-privilege conventions.
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Dispatch settings-ui-changed to docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send repository_dispatch to warpdotdev/docs
+        id: dispatch
+        uses: peter-evans/repository-dispatch@v4
+        with:
+          repository: warpdotdev/docs
+          token: ${{ secrets.DOCS_REPOSITORY_DISPATCH_TOKEN }}
+          event-type: settings-ui-changed
+          client-payload: |
+            {
+              "sha": "${{ github.sha }}",
+              "ref": "${{ github.ref }}"
+            }
+
+      # Optional Slack alert on failure. Only fires if SLACK_BOT_TOKEN is
+      # configured as a repository secret. If it's not set, this step is
+      # skipped silently (GitHub will still send email to the commit author).
+      - name: Notify Slack on dispatch failure
+        if: failure()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "SLACK_BOT_TOKEN not configured — skipping Slack alert."
+            echo "Trigger the docs refresh manually: warpdotdev/docs > Actions > Refresh UI paths snapshot > Run workflow"
+            exit 0
+          fi
+          curl -s -X POST \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://slack.com/api/chat.postMessage \
+            -d "{
+              \"channel\": \"C09BVK0PL3Y\",
+              \"text\": \":warning: *notify-docs-settings-changed* failed for <https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA|$GITHUB_SHA>.\\n\\nThe \`valid_paths.json\` snapshot in the docs repo was *not* refreshed automatically.\\n\\n:point_right: Trigger it manually: <https://github.com/warpdotdev/docs/actions/workflows/refresh-ui-paths.yml|Refresh UI paths snapshot workflow>\"
+            }"

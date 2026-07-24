@@ -2,12 +2,12 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::tui_collapsible;
+use crate::elements::MouseStateHandle;
 use crate::elements::tui::test_support::{dispatch_presented_event, with_paint_surface};
 use crate::elements::tui::{
     Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiLayoutContext,
     TuiPoint, TuiRect, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
-use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
 use crate::presenter::tui::TuiPresenter;
 use crate::{App, EntityIdMap};

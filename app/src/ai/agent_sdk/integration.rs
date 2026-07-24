@@ -1,7 +1,7 @@
 use futures::future;
+use warp_cli::GlobalOptions;
 use warp_cli::integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs};
 use warp_cli::provider::ProviderType;
-use warp_cli::GlobalOptions;
 use warp_graphql::mutations::create_simple_integration::CreateSimpleIntegrationOutput;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::get_simple_integrations::SimpleIntegrationsOutput;
@@ -116,6 +116,7 @@ impl IntegrationCommandRunner {
                     // TODO(REMOTE-1134): Support harness selection for integrations.
                     harness: None,
                     harness_auth_secrets: None,
+                    additional_source_repos: None,
                 },
             );
 
@@ -430,6 +431,7 @@ impl IntegrationCommandRunner {
                     // TODO(REMOTE-1134): Support harness selection for integrations.
                     harness: None,
                     harness_auth_secrets: None,
+                    additional_source_repos: None,
                 },
             );
 

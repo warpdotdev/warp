@@ -2,12 +2,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use ai::agent::action::{LifecycleEventType as StartAgentLifecycleEventType, ReadSkillRequest};
-use ai::agent::action_result::StartAgentVersion;
-use ai::agent::convert::ToolToAIAgentActionError;
 use ai::agent::UnknownCitationTypeError;
+use ai::agent::action::ReadSkillRequest;
+use ai::agent::convert::ToolToAIAgentActionError;
 use ai::skills::{
-    skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref, SkillPathOrigin,
+    SkillPathOrigin, skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref,
 };
 use api::ask_user_question::question::QuestionType;
 use warp_core::channel::ChannelState;
@@ -23,9 +22,9 @@ use crate::ai::agent::util::parse_markdown_into_text_and_code_sections;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, AIAgentAttachment, AIAgentCitation, AIAgentInput,
     AIAgentOutputMessage, AIAgentText, AIAgentTodo, ArtifactCreatedData, CloneRepositoryURL,
-    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
-    StartAgentExecutionMode, SubagentCall, SubagentType, SuggestedAgentModeWorkflow, SuggestedRule,
-    Suggestions, SummarizationType, TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
+    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest, SubagentCall,
+    SubagentType, SuggestedAgentModeWorkflow, SuggestedRule, Suggestions, SummarizationType,
+    TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
 };
 use crate::ai::artifact_download::sanitized_basename;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -77,21 +76,6 @@ pub(crate) fn convert_user_query_mode(mode: Option<&api::UserQueryMode>) -> User
     }
 }
 
-fn convert_start_agent_lifecycle_event_type(
-    event_type: i32,
-) -> Option<StartAgentLifecycleEventType> {
-    let event_type = StartAgentLifecycleEventType::try_from(event_type).ok()?;
-    (event_type != StartAgentLifecycleEventType::Unspecified).then_some(event_type)
-}
-
-fn convert_start_agent_v2_harness_type(
-    harness: Option<api::start_agent_v2::execution_mode::Harness>,
-) -> Option<String> {
-    harness
-        .map(|harness| harness.r#type)
-        .filter(|harness_type| !harness_type.trim().is_empty())
-}
-
 /// Maps the proto `Harness` oneof to a client-side string identifier
 /// (e.g. "oz", "claude"). Returns `None` for an unset variant.
 pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Option<String> {
@@ -108,29 +92,19 @@ pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Opti
     )
 }
 
-fn convert_start_agent_execution_mode(
-    execution_mode: Option<api::start_agent::ExecutionMode>,
-) -> StartAgentExecutionMode {
-    match execution_mode.and_then(|execution_mode| execution_mode.mode) {
-        Some(api::start_agent::execution_mode::Mode::Remote(remote)) => {
-            StartAgentExecutionMode::remote_with_defaults(remote.environment_id)
-        }
-        Some(api::start_agent::execution_mode::Mode::Local(_)) | None => {
-            StartAgentExecutionMode::local_with_defaults()
-        }
-    }
-}
-
 fn convert_run_agents_execution_mode(
-    execution_mode: Option<api::run_agents::ExecutionMode>,
+    execution_mode: Option<api::run_agents::ExecutionModeOneOf>,
 ) -> RunAgentsExecutionMode {
     match execution_mode {
-        Some(api::run_agents::ExecutionMode::Remote(remote)) => RunAgentsExecutionMode::Remote {
-            environment_id: remote.environment_id,
-            worker_host: remote.worker_host,
-            computer_use_enabled: remote.computer_use_enabled,
-        },
-        Some(api::run_agents::ExecutionMode::Local(_)) | None => RunAgentsExecutionMode::Local,
+        Some(api::run_agents::ExecutionModeOneOf::Remote(remote)) => {
+            RunAgentsExecutionMode::Remote {
+                environment_id: remote.environment_id,
+                worker_host: remote.worker_host,
+                computer_use_enabled: remote.computer_use_enabled,
+                runner_id: remote.runner_id,
+            }
+        }
+        Some(api::run_agents::ExecutionModeOneOf::Local(_)) | None => RunAgentsExecutionMode::Local,
     }
 }
 
@@ -165,6 +139,7 @@ fn convert_run_agents(
                 prompt: config.prompt,
                 title: config.title,
                 agent_identity_uid: config.agent_identity_uid,
+                model_id: config.model_id,
             })
             .collect(),
         plan_id,
@@ -173,44 +148,6 @@ fn convert_run_agents(
         // before Accept. The proto does not carry it.
         harness_auth_secret_name: None,
     })
-}
-
-fn convert_start_agent_v2_execution_mode(
-    execution_mode: Option<api::start_agent_v2::ExecutionMode>,
-    skill_path_origin: &SkillPathOrigin,
-) -> StartAgentExecutionMode {
-    match execution_mode.and_then(|execution_mode| execution_mode.mode) {
-        Some(api::start_agent_v2::execution_mode::Mode::Remote(remote)) => {
-            StartAgentExecutionMode::Remote {
-                environment_id: remote.environment_id,
-                skill_references: remote
-                    .skills
-                    .into_iter()
-                    .filter_map(|skill| {
-                        skill_reference_from_api_skill_ref(skill, skill_path_origin)
-                    })
-                    .collect(),
-                model_id: remote.model_id,
-                computer_use_enabled: remote.computer_use_enabled,
-                worker_host: remote.worker_host,
-                harness_type: convert_start_agent_v2_harness_type(remote.harness)
-                    .unwrap_or_default(),
-                title: remote.title,
-                // Auth secret is plumbed client-side via `RunAgentsRequest`;
-                // StartAgentV2 from the server never carries it.
-                auth_secret_name: None,
-                // Agent identity is plumbed client-side via `RunAgentsRequest`;
-                // StartAgentV2 from the server never carries it.
-                agent_identity_uid: None,
-            }
-        }
-        Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {
-            convert_start_agent_v2_harness_type(local.harness)
-                .map(StartAgentExecutionMode::local_harness)
-                .unwrap_or_else(StartAgentExecutionMode::local_with_defaults)
-        }
-        None => StartAgentExecutionMode::local_with_defaults(),
-    }
 }
 
 /// Unexpected errors when trying to convert an [`api::Message`] to an [`AIAgentOutputMessage`].
@@ -782,8 +719,8 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(stop_recording.into())
             }
             api::message::tool_call::Tool::Subagent(subagent) => {
-                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 use api::message::tool_call::subagent::Metadata;
+                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 let subagent_type = match subagent.metadata {
                     Some(Metadata::Cli(_)) => SubagentType::Cli,
                     Some(Metadata::Research(_)) => SubagentType::Research,
@@ -824,43 +761,6 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                     task_id: subagent.task_id,
                     subagent_type,
                 }))
-            }
-            api::message::tool_call::Tool::StartAgent(start_agent) => {
-                create_standard_action(AIAgentActionType::StartAgent {
-                    version: StartAgentVersion::V1,
-                    name: start_agent.name,
-                    prompt: start_agent.prompt,
-                    execution_mode: convert_start_agent_execution_mode(start_agent.execution_mode),
-                    lifecycle_subscription: start_agent.lifecycle_subscription.map(
-                        |subscription| {
-                            subscription
-                                .event_types
-                                .into_iter()
-                                .filter_map(convert_start_agent_lifecycle_event_type)
-                                .collect()
-                        },
-                    ),
-                })
-            }
-            api::message::tool_call::Tool::StartAgentV2(start_agent) => {
-                create_standard_action(AIAgentActionType::StartAgent {
-                    version: StartAgentVersion::V2,
-                    name: start_agent.name,
-                    prompt: start_agent.prompt,
-                    execution_mode: convert_start_agent_v2_execution_mode(
-                        start_agent.execution_mode,
-                        params.skill_path_origin,
-                    ),
-                    lifecycle_subscription: start_agent.lifecycle_subscription.map(
-                        |subscription| {
-                            subscription
-                                .event_types
-                                .into_iter()
-                                .filter_map(convert_start_agent_lifecycle_event_type)
-                                .collect()
-                        },
-                    ),
-                })
             }
             api::message::tool_call::Tool::RunAgents(orchestrate) => {
                 create_standard_action(convert_run_agents(orchestrate, params.skill_path_origin))

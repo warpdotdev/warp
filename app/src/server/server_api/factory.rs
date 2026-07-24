@@ -1,7 +1,4 @@
-// We don't manage runners from agent run CLI flows on WASM, so this code is unused there.
-#![cfg_attr(target_family = "wasm", expect(dead_code))]
-
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
@@ -21,6 +18,9 @@ use crate::server::graphql::{get_request_context, get_user_facing_error_message}
 
 /// The result of upserting a runner: the resulting [`Runner`] plus whether the
 /// operation updated an existing runner (vs. creating a new one).
+// `upsert_runner`/`delete_runner` back CLI commands that aren't built for wasm, so
+// this type is unused there while `get_runners` still powers the runner picker.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub struct UpsertedRunner {
     pub runner: Runner,
     pub is_update: bool,
@@ -36,9 +36,11 @@ pub trait FactoryClient: 'static + Send + Sync {
 
     /// Create or update a runner. `input.uid` is `None` for a create and
     /// `Some(_)` for an update; this single method backs both CLI commands.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     async fn upsert_runner(&self, input: UpsertRunnerInput) -> Result<UpsertedRunner>;
 
     /// Delete a runner by UID, returning the deleted UID on success.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     async fn delete_runner(&self, uid: String) -> Result<String>;
 }
 

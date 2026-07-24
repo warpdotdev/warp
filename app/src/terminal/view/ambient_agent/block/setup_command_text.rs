@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warpui::elements::ParentElement;
 use warpui::prelude::{
     ConstrainedBox, Container, CrossAxisAlignment, Cursor, Flex, Hoverable, MouseStateHandle, Text,
@@ -119,14 +119,13 @@ impl CloudModeSetupTextBlock {
                         conversation_id: updated_conversation_id,
                         ..
                     } = event
+                        && *updated_conversation_id == conversation_id
                     {
-                        if *updated_conversation_id == conversation_id {
-                            me.ambient_agent_view_model.update(ctx, |model, ctx| {
-                                model.finish_setup_command_group(me.group_id, ctx);
-                                model.set_setup_command_group_visibility(me.group_id, false, ctx);
-                            });
-                            ctx.unsubscribe_to_model(&history_model);
-                        }
+                        me.ambient_agent_view_model.update(ctx, |model, ctx| {
+                            model.finish_setup_command_group(me.group_id, ctx);
+                            model.set_setup_command_group_visibility(me.group_id, false, ctx);
+                        });
+                        ctx.unsubscribe_to_model(&history_model);
                     }
                 },
             );

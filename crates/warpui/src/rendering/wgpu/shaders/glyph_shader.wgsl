@@ -51,7 +51,7 @@ struct GlyphVertexShaderOutput {
     @location(2) texture_coordinate: vec2<f32>,
     @location(3) fade_alpha: f32,
     @location(4) color: vec4<f32>,
-    @location(5) is_emoji: i32,
+    @location(5) @interpolate(flat) is_emoji: i32,
 }
 
 @vertex

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::{language_by_filename, language_by_local_filename, load_language, SUPPORTED_LANGUAGES};
+use crate::{SUPPORTED_LANGUAGES, language_by_filename, language_by_local_filename, load_language};
 
 /// Validate that every supported language can be loaded successfully.
 /// This catches invalid node types, syntax errors, and other issues in .scm query files

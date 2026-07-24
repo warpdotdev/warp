@@ -18,11 +18,11 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::{Event as TerminalViewEvent, TerminalView};
 
@@ -381,10 +381,10 @@ impl OrchestrationViewerModel {
             // Suppress server-side status reporting (viewer-side); also
             // disambiguates viewer-spawned children downstream.
             history.set_viewing_shared_session_for_conversation(conversation_id, true);
-            if let Some(conversation) = history.conversation_mut(&conversation_id) {
-                if !fallback_title.is_empty() {
-                    conversation.set_fallback_display_title(fallback_title);
-                }
+            if let Some(conversation) = history.conversation_mut(&conversation_id)
+                && !fallback_title.is_empty()
+            {
+                conversation.set_fallback_display_title(fallback_title);
             }
             // Stamp run_id/task_id and populate the agent_id index so
             // transcript references resolve to this child.

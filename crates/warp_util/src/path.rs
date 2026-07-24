@@ -375,14 +375,14 @@ pub fn convert_msys2_to_windows_native_path(
         [TypedComponent::Unix(UnixComponent::Normal(component)), ..] if *component == b"~" => {
             unix_path.with_windows_encoding()
         }
-        [TypedComponent::Windows(WindowsComponent::Prefix(prefix)), ..]
-            if prefix.as_bytes().starts_with(b"//wsl$/") =>
-        {
-            unix_path.to_path_buf()
-        }
-        [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(bytes))]
-            if DIRS_IN_MSYS2_ROOT.contains(bytes) =>
-        {
+        [
+            TypedComponent::Windows(WindowsComponent::Prefix(prefix)),
+            ..,
+        ] if prefix.as_bytes().starts_with(b"//wsl$/") => unix_path.to_path_buf(),
+        [
+            TypedComponent::Unix(UnixComponent::RootDir),
+            TypedComponent::Unix(UnixComponent::Normal(bytes)),
+        ] if DIRS_IN_MSYS2_ROOT.contains(bytes) => {
             let mut windows_path = msys2_root.to_typed_path_buf();
             for component in unix_path.with_windows_encoding().components().skip(1) {
                 windows_path.push(component.as_bytes());
@@ -391,9 +391,10 @@ pub fn convert_msys2_to_windows_native_path(
         }
         // Check if the prefix is "/c/" or similar, which is how MSYS2 refers to Windows drive
         // "C:\". Valid drive names are a..=z, which are bytes 97..=122.
-        [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(bytes))]
-            if bytes.len() == 1 && (97..=122).contains(&bytes[0]) =>
-        {
+        [
+            TypedComponent::Unix(UnixComponent::RootDir),
+            TypedComponent::Unix(UnixComponent::Normal(bytes)),
+        ] if bytes.len() == 1 && (97..=122).contains(&bytes[0]) => {
             let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push([*bytes, b":\\"].concat());
             for component in unix_path.with_windows_encoding().components().skip(2) {
@@ -403,9 +404,11 @@ pub fn convert_msys2_to_windows_native_path(
         }
         // WSL paths from within MSYS2, e.g. you can do `ls //wsl$/Ubuntu/home`. The 2 slashes
         // in the beginning are required.
-        [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(bytes))]
-            if String::from_utf8(bytes.to_vec())
-                .is_ok_and(|s| s.to_lowercase().starts_with("wsl")) =>
+        [
+            TypedComponent::Unix(UnixComponent::RootDir),
+            TypedComponent::Unix(UnixComponent::Normal(bytes)),
+        ] if String::from_utf8(bytes.to_vec())
+            .is_ok_and(|s| s.to_lowercase().starts_with("wsl")) =>
         {
             let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push([b"\\\\", *bytes].concat());
@@ -459,9 +462,11 @@ pub fn convert_wsl_to_windows_host_path(
     match prefix.as_slice() {
         // Check if the prefix is "/mnt/c/" or similar, which is how WSL refers to Windows drive
         // "C:\". Valid drive names are a..=z, which are bytes 97..=122.
-        [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(b"mnt")), TypedComponent::Unix(UnixComponent::Normal(bytes))]
-            if bytes.len() == 1 && (97..=122).contains(&bytes[0]) =>
-        {
+        [
+            TypedComponent::Unix(UnixComponent::RootDir),
+            TypedComponent::Unix(UnixComponent::Normal(b"mnt")),
+            TypedComponent::Unix(UnixComponent::Normal(bytes)),
+        ] if bytes.len() == 1 && (97..=122).contains(&bytes[0]) => {
             windows_path.push([*bytes, b":\\"].concat());
             for component in unix_path.with_windows_encoding().components().skip(3) {
                 windows_path.push(component.as_bytes());
@@ -584,10 +589,10 @@ pub fn to_relative_path(is_wsl: bool, absolute_path: &Path, cwd: &Path) -> Optio
         });
 
         // If both paths have drive prefixes but they're different, return None
-        if let (Some(abs_prefix), Some(cwd_prefix)) = (abs_drive, cwd_drive) {
-            if abs_prefix != cwd_prefix {
-                return None;
-            }
+        if let (Some(abs_prefix), Some(cwd_prefix)) = (abs_drive, cwd_drive)
+            && abs_prefix != cwd_prefix
+        {
+            return None;
         }
     }
 

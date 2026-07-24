@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::{RectF, RectI};
-use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2f, vec2i};
 
 use crate::accessibility::AccessibilityContent;
 use crate::clipboard::InMemoryClipboard;
@@ -24,7 +24,7 @@ use crate::platform::{
 use crate::text_layout::TextAlignment;
 use crate::windowing::WindowCallbacks;
 use crate::{
-    geometry, ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId,
+    ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId, geometry,
 };
 
 pub struct AppDelegate {

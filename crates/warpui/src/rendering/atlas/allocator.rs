@@ -1,5 +1,5 @@
 use pathfinder_geometry::rect::{RectF, RectI};
-use pathfinder_geometry::vector::{vec2f, vec2i, Vector2I};
+use pathfinder_geometry::vector::{Vector2I, vec2f, vec2i};
 
 use crate::rendering::atlas::{AllocatedRegion, AllocationError};
 

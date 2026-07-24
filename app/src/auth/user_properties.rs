@@ -1,7 +1,7 @@
 use warp_graphql::queries::get_user::UserOutput as GqlUserOutput;
 
-use super::user::User;
 use super::UserUid;
+use super::user::User;
 use crate::convert_to_server_experiment;
 use crate::server::experiments::ServerExperiment;
 

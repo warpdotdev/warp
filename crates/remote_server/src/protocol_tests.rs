@@ -2,9 +2,9 @@ use prost::Message;
 
 use super::*;
 use crate::proto::{
-    client_message, remote_skill_proto, server_message, session_scoped_request,
     BundledSkillMetadata, ClientMessage, HomeSkillMetadata, Initialize, InitializeResponse,
     RemoteAgentContextSnapshot, RemoteContextFileProto, RemoteSkillProto, ServerMessage,
+    client_message, remote_skill_proto, server_message, session_scoped_request,
 };
 
 #[tokio::test]

@@ -48,28 +48,28 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use instant::Instant;
 use opentelemetry::trace::{
     Span as _, SpanBuilder, SpanContext, Status, Tracer as _, TracerProvider as _,
 };
 use opentelemetry::{Context as OtelContext, KeyValue, Value};
 use opentelemetry_otlp::{Protocol, WithExportConfig as _, WithHttpConfig as _};
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
 use opentelemetry_sdk::trace::{
     SdkTracer, SdkTracerProvider, Span as SdkSpan, SpanData, SpanExporter,
 };
-use opentelemetry_sdk::Resource;
 use tracing::subscriber;
-use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
 use url::{Host, Url};
 use warp_managed_secrets::client::ManagedSecretsClient;
 use warpui::AppContext;
 
-use super::cloud_agent_auth::{self, AuthContext};
 use super::Initialization;
+use super::cloud_agent_auth::{self, AuthContext};
 use crate::channel::ChannelState;
 use crate::tracing::install_no_subscriber;
 

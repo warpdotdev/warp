@@ -109,6 +109,7 @@ fn merge_precedence_cli_over_file_and_merges_mcp() {
         computer_use_enabled: None,
         harness: None,
         harness_auth_secrets: None,
+        additional_source_repos: None,
     };
 
     let merged = super::merge_with_precedence(Some(&loaded), cli);

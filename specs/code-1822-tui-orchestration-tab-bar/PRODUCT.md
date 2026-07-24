@@ -49,7 +49,7 @@ The Warp TUI shows a tab bar for an orchestration tree so users can see and swit
 12. Reordering never changes the active conversation by itself.
 
 ### Entering and leaving keyboard focus
-13. While an orchestration tab bar is available and the input is focused, the normal footer shows the `Shift + ↑ sub-agents` hint from the design.
+13. While an orchestration tab bar is available, an empty agent-mode input places `Shift + ↑ for other agents` after the `Ask the agent anything` lead-in and before its ghost-text shortcuts. The normal footer remains available for model, working-directory, usage, and diff status.
 14. `Shift+Up` focuses the tab bar only when:
    - The input cursor is on the first visual row of the wrapped input (display row zero), and
    - The input has no active text selection.

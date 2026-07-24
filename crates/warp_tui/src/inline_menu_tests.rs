@@ -1,11 +1,11 @@
 use warp::appearance::Appearance;
-use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
-use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::App;
+use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiRect};
+use warpui_core::presenter::tui::TuiPresenter;
 
 use super::{
-    render_inline_menu, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab,
+    TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, TuiInlineMenuTab, render_inline_menu,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -30,6 +30,40 @@ fn render_at_height(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String>
 fn render(snapshot: TuiInlineMenuSnapshot) -> Vec<String> {
     render_at_height(snapshot, 12)
 }
+fn rendered_labels(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String> {
+    let mut lines = render_at_height(snapshot, height)
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .collect::<Vec<_>>();
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+fn rows_snapshot(
+    row_count: usize,
+    selected_index: usize,
+    scroll_offset: usize,
+    max_visible_rows: usize,
+) -> TuiInlineMenuSnapshot {
+    TuiInlineMenuSnapshot {
+        header: None,
+        rows: (0..row_count)
+            .map(|index| TuiInlineMenuRow {
+                title: format!("Conversation {index}"),
+                description: None,
+                state_suffix: None,
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::Default,
+            })
+            .collect(),
+        selected_index: Some(selected_index),
+        scroll_offset,
+        max_visible_rows,
+        status: None,
+    }
+}
 
 fn status_snapshot(status: TuiInlineMenuStatus) -> TuiInlineMenuSnapshot {
     TuiInlineMenuSnapshot {
@@ -47,40 +81,89 @@ fn renders_loading_and_empty_statuses() {
     let loading = render(status_snapshot(TuiInlineMenuStatus::Loading(
         "Loading conversations…".to_owned(),
     )));
-    assert!(loading
-        .iter()
-        .any(|line| line.contains("Loading conversations…")));
+    assert!(
+        loading
+            .iter()
+            .any(|line| line.contains("Loading conversations…"))
+    );
 
     let empty = render(status_snapshot(TuiInlineMenuStatus::Empty(
         "No conversations found".to_owned(),
     )));
-    assert!(empty
-        .iter()
-        .any(|line| line.contains("No conversations found")));
+    assert!(
+        empty
+            .iter()
+            .any(|line| line.contains("No conversations found"))
+    );
 }
 
 #[test]
 fn renders_only_the_visible_row_window() {
-    let lines = render(TuiInlineMenuSnapshot {
-        header: None,
-        rows: (0..5)
-            .map(|index| TuiInlineMenuRow {
-                title: format!("Conversation {index}"),
-                description: None,
-                is_selectable: true,
-                style: TuiInlineMenuRowStyle::Default,
-            })
-            .collect(),
-        selected_index: Some(3),
-        scroll_offset: 2,
-        max_visible_rows: 2,
-        status: None,
-    });
-    let rendered = lines.join("\n");
-    assert!(!rendered.contains("Conversation 1"));
-    assert!(rendered.contains("Conversation 2"));
-    assert!(rendered.contains("Conversation 3"));
-    assert!(!rendered.contains("Conversation 4"));
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 3, 2, 2), 12),
+        vec!["Conversation 2", "Conversation 3"]
+    );
+}
+
+#[test]
+fn fitting_rows_render_without_overflow_indicators() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(3, 1, 0, 4), 4),
+        vec!["Conversation 0", "Conversation 1", "Conversation 2"]
+    );
+}
+
+#[test]
+fn lower_overflow_renders_a_down_arrow_as_the_last_row() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 1, 0, 4), 4),
+        vec!["Conversation 0", "Conversation 1", "Conversation 2", "↓"]
+    );
+}
+#[test]
+fn multiline_conversation_title_is_ellipsized_without_hiding_lower_overflow() {
+    let mut snapshot = rows_snapshot(5, 0, 0, 4);
+    snapshot.rows[0].title = "Conversation 0\ncontinued title".to_owned();
+
+    assert_eq!(
+        rendered_labels(snapshot, 4),
+        vec!["Conversation 0...", "Conversation 1", "Conversation 2", "↓"]
+    );
+}
+
+#[test]
+fn upper_overflow_renders_an_up_arrow_as_the_first_row() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 4, 3, 4), 4),
+        vec!["↑", "Conversation 2", "Conversation 3", "Conversation 4"]
+    );
+}
+
+#[test]
+fn overflow_in_both_directions_renders_both_arrows_and_keeps_selection_visible() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(7, 4, 0, 5), 5),
+        vec![
+            "↑",
+            "Conversation 2",
+            "Conversation 3",
+            "Conversation 4",
+            "↓"
+        ]
+    );
+}
+
+#[test]
+fn short_viewport_prioritizes_three_real_rows_over_scroll_indicators() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(7, 3, 0, 4), 4),
+        vec![
+            "Conversation 0",
+            "Conversation 1",
+            "Conversation 2",
+            "Conversation 3"
+        ]
+    );
 }
 
 #[test]
@@ -103,12 +186,14 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
             TuiInlineMenuRow {
                 title: "Current project".to_owned(),
                 description: Some("2 minutes ago".to_owned()),
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::Default,
             },
             TuiInlineMenuRow {
                 title: "Archived".to_owned(),
                 description: None,
+                state_suffix: None,
                 is_selectable: false,
                 style: TuiInlineMenuRowStyle::Default,
             },
@@ -147,6 +232,7 @@ fn conversation_like_snapshot_keeps_selection_visible_within_production_height()
                 .map(|index| TuiInlineMenuRow {
                     title: format!("Conversation {index}"),
                     description: None,
+                    state_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::Default,
                 })
@@ -181,12 +267,14 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                     TuiInlineMenuRow {
                         title: "/agent".to_owned(),
                         description: Some("Start a new agent conversation".to_owned()),
+                        state_suffix: Some("(currently on)".to_owned()),
                         is_selectable: true,
                         style: TuiInlineMenuRowStyle::InlineMenuItem,
                     },
                     TuiInlineMenuRow {
                         title: "/plan".to_owned(),
                         description: Some("Create a plan".to_owned()),
+                        state_suffix: Some("(currently off)".to_owned()),
                         is_selectable: true,
                         style: TuiInlineMenuRowStyle::InlineMenuItem,
                     },
@@ -199,20 +287,25 @@ fn slash_command_rows_match_figma_layout_and_colors() {
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 render_inline_menu(&snapshot, &builder),
-                TuiRect::new(0, 0, 50, 2),
+                TuiRect::new(0, 0, 80, 2),
                 ctx,
             );
             let lines = frame.buffer.to_lines();
 
-            assert!(lines[0].starts_with("/agent                       Start"));
+            assert!(lines[0].starts_with(
+                "/agent                       Start a new agent conversation (currently on)"
+            ));
             assert!(lines[1].starts_with("/plan                        Create"));
-            assert!(!lines
-                .iter()
-                .any(|line| line.chars().any(|glyph| "┌┐└┘─│".contains(glyph))));
+            assert!(
+                !lines
+                    .iter()
+                    .any(|line| line.chars().any(|glyph| "┌┐└┘─│".contains(glyph)))
+            );
             assert_eq!(
                 frame.buffer[(0, 0)].bg,
                 builder.slash_command_selection_background()
             );
+            assert_eq!(frame.buffer[(0, 0)].bg, Color::Rgb(208, 209, 254));
             assert_eq!(
                 frame.buffer[(0, 0)].fg,
                 builder
@@ -235,6 +328,30 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                     .fg
                     .expect("slash-command descriptions use primary text")
             );
+            let suffix_column = lines[0]
+                .find("(currently on)")
+                .expect("state suffix should render");
+            assert_eq!(
+                frame.buffer[(u16::try_from(suffix_column).unwrap(), 0)].fg,
+                builder
+                    .slash_command_selection_state_suffix_style()
+                    .fg
+                    .expect("selected state suffix should use muted theme green")
+            );
+            let unselected_suffix_column = lines[1]
+                .find("(currently off)")
+                .expect("unselected state suffix should render");
+            assert_eq!(
+                frame.buffer[(u16::try_from(unselected_suffix_column).unwrap(), 1)].fg,
+                builder
+                    .success_glyph_style()
+                    .fg
+                    .expect("unselected state suffix should use theme green")
+            );
+            assert_eq!(
+                frame.buffer[(u16::try_from(unselected_suffix_column).unwrap(), 1)].fg,
+                Color::Rgb(180, 250, 114)
+            );
         });
     });
 }
@@ -246,6 +363,7 @@ fn long_slash_command_titles_are_ellipsized_before_the_description() {
         rows: vec![TuiInlineMenuRow {
             title: "/respond-to-pr-comments-in-blocklist".to_owned(),
             description: Some("Walk users through PR review comments".to_owned()),
+            state_suffix: None,
             is_selectable: true,
             style: TuiInlineMenuRowStyle::InlineMenuItem,
         }],
@@ -266,6 +384,7 @@ fn wide_slash_command_rows_expand_to_show_long_titles() {
             rows: vec![TuiInlineMenuRow {
                 title: "/respond-to-pr-comments-in-blocklist".to_owned(),
                 description: Some("Walk users through PR review comments".to_owned()),
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],
@@ -278,8 +397,11 @@ fn wide_slash_command_rows_expand_to_show_long_titles() {
         1,
     );
 
-    assert!(lines[0]
-        .starts_with("/respond-to-pr-comments-in-blocklist Walk users through PR review comments"));
+    assert!(
+        lines[0].starts_with(
+            "/respond-to-pr-comments-in-blocklist Walk users through PR review comments"
+        )
+    );
 }
 
 #[test]
@@ -290,6 +412,7 @@ fn boundary_width_preserves_useful_title_and_description_columns() {
             rows: vec![TuiInlineMenuRow {
                 title: "/agent".to_owned(),
                 description: Some("Start a new agent conversation".to_owned()),
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],
@@ -313,6 +436,7 @@ fn narrow_slash_command_rows_use_the_full_width_for_titles() {
             rows: vec![TuiInlineMenuRow {
                 title: "/12345678901234567890".to_owned(),
                 description: Some("Description hidden at narrow widths".to_owned()),
+                state_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],
@@ -347,6 +471,16 @@ fn shared_list_navigation_wraps_skips_disabled_rows_and_scrolls() {
 
     list.select_previous(2, |row| *row);
     assert_eq!(list.selected_index(), Some(3));
+    assert_eq!(list.scroll_offset(), 2);
+}
+
+#[test]
+fn shared_list_reserves_space_for_scroll_indicators() {
+    let mut list = TuiInlineMenuListState::default();
+
+    list.replace_rows(vec![(); 11], false, Some(10), 10, |_| true);
+
+    assert_eq!(list.selected_index(), Some(10));
     assert_eq!(list.scroll_offset(), 2);
 }
 

@@ -6,7 +6,7 @@ use crate::platform::{
     NotificationInfo, RequestNotificationPermissionsCallback, SendNotificationErrorCallback,
 };
 use crate::windowing::winit::app::CustomEvent;
-use crate::{notification, WindowId};
+use crate::{WindowId, notification};
 
 #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]

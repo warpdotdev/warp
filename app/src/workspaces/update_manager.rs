@@ -1,5 +1,5 @@
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use anyhow::{Context, Result};
 use futures::channel::oneshot::{self, Receiver};
@@ -7,7 +7,7 @@ use futures::stream::AbortHandle;
 use warp_errors::{report_error, report_if_error};
 use warpui::r#async::Timer;
 use warpui::{
-    duration_with_jitter, Entity, ModelContext, ModelHandle, RequestState, SingletonEntity,
+    Entity, ModelContext, ModelHandle, RequestState, SingletonEntity, duration_with_jitter,
 };
 
 use super::team_tester::{TeamTesterStatus, TeamTesterStatusEvent};
@@ -26,8 +26,8 @@ use crate::server::ids::ServerId;
 use crate::server::retry_strategies::{
     OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
 };
-use crate::server::server_api::team::TeamClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::TeamClient;
 
 pub enum TeamUpdateManagerEvent {
     LeaveSuccess,
@@ -171,10 +171,8 @@ impl TeamUpdateManager {
                 // Only signal once there are no more retries left.
                 let is_final = !request_state.has_pending_retries();
                 update_manager.handle_workspace_metadata_with_request_state(request_state, ctx);
-                if is_final {
-                    if let Some(sender) = tx.take() {
-                        let _ = sender.send(());
-                    }
+                if is_final && let Some(sender) = tx.take() {
+                    let _ = sender.send(());
                 }
             },
         );
@@ -258,9 +256,11 @@ impl TeamUpdateManager {
         let model_event_sender = self.model_event_sender.clone();
         if let Some(model_event_sender) = &model_event_sender {
             for event in events {
-                report_if_error!(model_event_sender
-                    .send(event)
-                    .context("Unable to save teams metadata to sqlite"));
+                report_if_error!(
+                    model_event_sender
+                        .send(event)
+                        .context("Unable to save teams metadata to sqlite")
+                );
             }
         }
     }
@@ -358,11 +358,11 @@ impl TeamUpdateManager {
                 // Check if the current workspace is still in the list of workspaces.
                 // If it's not, then set the current workspace to the first workspace in the list.
                 if let Some(current_workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
-                    if !workspaces.iter().any(|w| w.uid == current_workspace.uid) {
-                        if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
-                            self.set_current_workspace_uid(workspace_uid, ctx);
-                        };
-                    }
+                    if !workspaces.iter().any(|w| w.uid == current_workspace.uid)
+                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid)
+                    {
+                        self.set_current_workspace_uid(workspace_uid, ctx);
+                    };
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);
                 }
@@ -451,7 +451,9 @@ impl TeamUpdateManager {
                 );
             }
             RequestState::RequestFailed(err) => {
-                log::info!("get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted.");
+                log::info!(
+                    "get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted."
+                );
             }
         }
     }
@@ -475,11 +477,11 @@ impl TeamUpdateManager {
                 // Check if the current workspace is still in the list of workspaces.
                 // If it's not, then set the current workspace to the first workspace in the list.
                 if let Some(current_workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
-                    if !workspaces.iter().any(|w| w.uid == current_workspace.uid) {
-                        if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
-                            self.set_current_workspace_uid(workspace_uid, ctx);
-                        };
-                    }
+                    if !workspaces.iter().any(|w| w.uid == current_workspace.uid)
+                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid)
+                    {
+                        self.set_current_workspace_uid(workspace_uid, ctx);
+                    };
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);
                 }

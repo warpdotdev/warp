@@ -5,21 +5,34 @@
 //! Composition and layout stay with the views and the element library; the
 //! builder only owns styles.
 
+use std::f32::consts::TAU;
+use std::time::Duration;
+
 use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
-use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::Opacity;
+use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
-    tui_collapsible, Color, Modifier, TuiElement, TuiEventContext, TuiStyle,
+    Color, Modifier, TuiElement, TuiEventContext, TuiStyle, tui_collapsible,
 };
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
-use warpui_core::AppContext;
 
-use crate::orchestrated_agent_identity_styling::{agent_identity_palette, AgentIdentity};
+use crate::orchestrated_agent_identity_styling::{AgentIdentity, agent_identity_palette};
 use crate::tab_bar::TuiTabBarStyles;
 use crate::terminal_background::probed_colors;
+
+#[derive(Clone, Copy)]
+pub(crate) struct CloudRunMarkStyles {
+    pub(crate) base: TuiStyle,
+    pub(crate) light: TuiStyle,
+    pub(crate) lighter: TuiStyle,
+    pub(crate) bright: TuiStyle,
+    pub(crate) brightest: TuiStyle,
+    pub(crate) ansi_bright: TuiStyle,
+}
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
 /// `UiBuilder` (minus fonts, which terminal cells don't have). Cheap to
@@ -117,15 +130,40 @@ impl TuiUiBuilder {
 
     /// Full-strength accent text, distinct from translucent accent borders.
     pub(crate) fn accent_text_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
+        TuiStyle::default().fg(self.accent_color())
+    }
+
+    /// The accent/cyan color as a raw `Color`, for contexts that need it
+    /// directly (e.g. the zero-state animation glow).
+    pub(crate) fn accent_color(&self) -> Color {
+        cell_color(ThemeFill::from(
             self.warp_theme.terminal_colors().normal.cyan,
-        )))
+        ))
     }
 
     /// Theme-blue link text, matching linked filenames in tool-call headers.
     pub(crate) fn link_text_style(&self) -> TuiStyle {
         TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
     }
+
+    pub(crate) fn cloud_run_mark_styles(&self) -> CloudRunMarkStyles {
+        let blue = ThemeFill::from(self.warp_theme.terminal_colors().normal.blue);
+        let foreground = self.warp_theme.foreground();
+        let blend = |opacity| {
+            TuiStyle::default().fg(cell_color(blue.blend(&foreground.with_opacity(opacity))))
+        };
+        CloudRunMarkStyles {
+            base: TuiStyle::default().fg(cell_color(blue)),
+            light: blend(25),
+            lighter: blend(50),
+            bright: blend(80),
+            brightest: blend(90),
+            ansi_bright: TuiStyle::default().fg(cell_color(ThemeFill::from(
+                self.warp_theme.terminal_colors().bright.blue,
+            ))),
+        }
+    }
+
     /// Blue command-name text used by the slash-command menu and recognized
     /// slash-command prefixes in the input.
     pub(crate) fn slash_command_text_style(&self) -> TuiStyle {
@@ -148,6 +186,18 @@ impl TuiUiBuilder {
             .bg(cell_color(background_fill))
             .add_modifier(Modifier::BOLD)
     }
+
+    /// Muted green state suffix over the slash-command selection background.
+    pub(crate) fn slash_command_selection_state_suffix_style(&self) -> TuiStyle {
+        let background = self.warp_theme.background().into_solid();
+        let green = ThemeFill::from(self.warp_theme.terminal_colors().normal.green).into_solid();
+        TuiStyle::default()
+            .fg(cell_color(ThemeFill::Solid(rounded_midpoint_color(
+                background, green,
+            ))))
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// Bold accent prompt marker over the submitted-input background.
     pub(crate) fn input_prefix_style(&self) -> TuiStyle {
         self.accent_text_style()
@@ -163,6 +213,28 @@ impl TuiUiBuilder {
                 .blend(&accent.with_opacity(10))
                 .blend(&accent.with_opacity(10)),
         )
+    }
+
+    /// Pale-green overlay behind shell command rows in the transcript.
+    /// Pre-blended because terminal cells cannot preserve alpha.
+    pub(crate) fn shell_command_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().bright.green);
+        cell_color(self.base_background().blend(&accent.with_opacity(10)))
+    }
+
+    /// Pale-green accent shared by shell command markers and shell-mode labels.
+    pub(crate) fn shell_command_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().bright.green,
+        )))
+    }
+
+    /// Bold pale-green `!` marker for a shell command row, over the same
+    /// [`Self::shell_command_background`] the rest of the row uses.
+    pub(crate) fn shell_command_prefix_style(&self) -> TuiStyle {
+        self.shell_command_accent_style()
+            .bg(self.shell_command_background())
+            .add_modifier(Modifier::BOLD)
     }
     /// Blue-overlay background for inline plan bodies, matching the TUI
     /// design's `blue_overlay_1` treatment.
@@ -181,15 +253,39 @@ impl TuiUiBuilder {
             None => self.warp_theme.background(),
         }
     }
+    fn cyan_overlay_2(&self) -> ThemeFill {
+        let cyan = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        self.base_background().blend(&cyan.with_opacity(50))
+    }
 
     /// Accent-colored border style for focused/primary containers. The design
     /// uses the cyan token at 50%; pre-blend it because terminal cells do not
     /// preserve alpha.
     pub(crate) fn accent_border_style(&self) -> TuiStyle {
-        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
-        TuiStyle::default().fg(cell_color(
-            self.base_background().blend(&accent.with_opacity(50)),
-        ))
+        TuiStyle::default().fg(cell_color(self.cyan_overlay_2()))
+    }
+
+    /// Fixed themed cyan for voice-input status text. Terminal foreground
+    /// colors cannot preserve the alpha from `cyan_overlay_2`, so use the
+    /// corresponding opaque color instead of pre-blending it into gray.
+    pub(crate) fn voice_input_status_style(&self) -> TuiStyle {
+        self.accent_text_style()
+    }
+
+    /// Smoothly pulsing border between the themed equivalents of
+    /// `cyan_overlay_2` and `Lilac-600`.
+    pub(crate) fn voice_input_border_style(&self, elapsed: Duration) -> TuiStyle {
+        const PERIOD: Duration = Duration::from_secs(2);
+
+        let phase = elapsed.as_secs_f32() / PERIOD.as_secs_f32();
+        let intensity = (1.0 - (phase * TAU).cos()) * 0.5;
+        let lilac_600 = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        let cyan_overlay_2 = self.cyan_overlay_2().into_solid();
+        let color = cyan_overlay_2
+            .to_f32()
+            .lerp(lilac_600.into_solid().to_f32(), intensity)
+            .to_u8();
+        TuiStyle::default().fg(Color::Rgb(color.r, color.g, color.b))
     }
 
     /// Style in the shell-mode accent color (the same blue the GUI uses for
@@ -292,6 +388,17 @@ impl TuiUiBuilder {
             .bg(self.orchestration_surface_background())
     }
 
+    /// Solid selection style shared by editors and transcript viewports.
+    /// Uses the theme foreground as the selection background and the
+    /// terminal background as the selection foreground, giving a consistent
+    /// solid highlight instead of per-cell reversal.
+    pub(crate) fn selection_style(&self) -> TuiStyle {
+        TuiStyle::default()
+            .fg(cell_color(self.base_background()))
+            .bg(cell_color(self.warp_theme.foreground()))
+            .remove_modifier(Modifier::REVERSED)
+    }
+
     /// The deterministic agent identity palette for this theme. See
     /// [`crate::orchestrated_agent_identity_styling`].
     pub(crate) fn agent_identity_palette(&self) -> Vec<AgentIdentity> {
@@ -304,8 +411,23 @@ impl TuiUiBuilder {
 
     /// Accent-tinted surface behind an interactive ask-question card.
     pub(crate) fn question_surface_background(&self) -> Color {
+        self.permission_surface_background()
+    }
+
+    /// Accent-tinted body background for standard permission cards.
+    pub(crate) fn permission_surface_background(&self) -> Color {
         let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
         cell_color(self.base_background().blend(&accent.with_opacity(10)))
+    }
+
+    /// Stronger accent tint for standard permission-card title rows.
+    pub(crate) fn permission_header_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        cell_color(
+            self.base_background()
+                .blend(&accent.with_opacity(10))
+                .blend(&accent.with_opacity(10)),
+        )
     }
 
     /// Collapsible-header style while the pointer hovers it.
@@ -376,6 +498,19 @@ impl TuiUiBuilder {
 /// Converts a theme fill into a terminal-cell color.
 fn cell_color(fill: ThemeFill) -> Color {
     CoreFill::from(fill).into()
+}
+
+fn rounded_midpoint_color(first: ColorU, second: ColorU) -> ColorU {
+    let channel_midpoint = |first, second| {
+        u8::try_from((u16::from(first) + u16::from(second)).div_ceil(2))
+            .expect("the midpoint of two color channels fits in u8")
+    };
+    ColorU::new(
+        channel_midpoint(first.r, second.r),
+        channel_midpoint(first.g, second.g),
+        channel_midpoint(first.b, second.b),
+        u8::MAX,
+    )
 }
 
 #[cfg(test)]

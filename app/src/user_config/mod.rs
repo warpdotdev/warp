@@ -294,13 +294,13 @@ pub(crate) fn materialize_default_worktree_config(
 
     replace_default_worktree_placeholders(&mut toml_value, repo_path, pane_type, &worktree_path);
 
-    if let Some(doc) = toml_value.as_table_mut() {
-        if let Some(params) = doc.get_mut("params").and_then(toml::Value::as_table_mut) {
-            params.remove("repo");
-            params.remove("pane_type");
-            if params.is_empty() {
-                doc.remove("params");
-            }
+    if let Some(doc) = toml_value.as_table_mut()
+        && let Some(params) = doc.get_mut("params").and_then(toml::Value::as_table_mut)
+    {
+        params.remove("repo");
+        params.remove("pane_type");
+        if params.is_empty() {
+            doc.remove("params");
         }
     }
 

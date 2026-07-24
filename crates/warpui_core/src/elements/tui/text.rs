@@ -34,8 +34,8 @@ use ratatui::widgets::{Paragraph, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    text_width, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
-    TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
+    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle, text_width,
 };
 use crate::AppContext;
 
@@ -119,10 +119,10 @@ impl TuiText {
             let mut parts = content.split('\n');
             // `split` always yields at least one part; parts after the first
             // are each preceded by a newline, i.e. a completed line.
-            if let Some(first) = parts.next() {
-                if !first.is_empty() {
-                    current_line.push(Span::styled(first, *style));
-                }
+            if let Some(first) = parts.next()
+                && !first.is_empty()
+            {
+                current_line.push(Span::styled(first, *style));
             }
             for part in parts {
                 lines.push(Line::from(mem::take(&mut current_line)));
@@ -143,10 +143,10 @@ impl TuiText {
         let mut current_line = Vec::new();
         for (content, style) in &self.spans {
             let mut parts = content.split('\n');
-            if let Some(first) = parts.next() {
-                if !first.is_empty() {
-                    current_line.push((first.to_owned(), *style));
-                }
+            if let Some(first) = parts.next()
+                && !first.is_empty()
+            {
+                current_line.push((first.to_owned(), *style));
             }
             for part in parts {
                 source_lines.push(mem::take(&mut current_line));

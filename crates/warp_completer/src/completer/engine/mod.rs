@@ -76,33 +76,41 @@ impl<'s> Flatten<'s> {
     fn expression(&self, e: &Spanned<ParsedExpression>) -> Vec<CompletionLocation> {
         match e.item.expression() {
             Expression::Command => {
-                vec![LocationType::Command {
-                    is_recognized: true,
-                    parsed_token: e.item.value().to_owned(),
-                }
-                .spanned(e.span)]
+                vec![
+                    LocationType::Command {
+                        is_recognized: true,
+                        parsed_token: e.item.value().to_owned(),
+                    }
+                    .spanned(e.span),
+                ]
             }
             Expression::Literal => {
-                vec![LocationType::Argument {
-                    command_name: self.command.clone(),
-                    argument_name: self.flag.clone(),
-                    parsed_token: e.item.value().clone(),
-                }
-                .spanned(e.span)]
+                vec![
+                    LocationType::Argument {
+                        command_name: self.command.clone(),
+                        argument_name: self.flag.clone(),
+                        parsed_token: e.item.value().clone(),
+                    }
+                    .spanned(e.span),
+                ]
             }
             Expression::ValidatableArgument(_) => {
-                vec![LocationType::Argument {
-                    command_name: self.command.clone(),
-                    argument_name: self.flag.clone(),
-                    parsed_token: e.item.value().to_owned(),
-                }
-                .spanned(e.span)]
+                vec![
+                    LocationType::Argument {
+                        command_name: self.command.clone(),
+                        argument_name: self.flag.clone(),
+                        parsed_token: e.item.value().to_owned(),
+                    }
+                    .spanned(e.span),
+                ]
             }
             Expression::Unknown => Vec::new(),
-            Expression::Variable => vec![LocationType::Variable {
-                parsed_token: e.item.value().to_owned(),
-            }
-            .spanned(e.span)],
+            Expression::Variable => vec![
+                LocationType::Variable {
+                    parsed_token: e.item.value().to_owned(),
+                }
+                .spanned(e.span),
+            ],
         }
     }
 
@@ -384,11 +392,13 @@ pub fn completion_location(
         // If there's no command--treat the completion location as a single foreign command to
         // surface top level commands.
         None => {
-            return vec![LocationType::Command {
-                is_recognized: false,
-                parsed_token: ParsedToken::empty(),
-            }
-            .spanned(Span::default())]
+            return vec![
+                LocationType::Command {
+                    is_recognized: false,
+                    parsed_token: ParsedToken::empty(),
+                }
+                .spanned(Span::default()),
+            ];
         }
     };
 
@@ -401,11 +411,13 @@ pub fn completion_location(
     let locations = completion_engine.completion_locations(command, ctx.command_case_sensitivity());
 
     if locations.is_empty() {
-        vec![LocationType::Command {
-            is_recognized: false,
-            parsed_token: ParsedToken::empty(),
-        }
-        .spanned(Span::default())]
+        vec![
+            LocationType::Command {
+                is_recognized: false,
+                parsed_token: ParsedToken::empty(),
+            }
+            .spanned(Span::default()),
+        ]
     } else {
         let mut command = None;
         let mut prev = None;
@@ -454,11 +466,13 @@ pub fn completion_location(
             // is after some character that would imply we're in the command position.
             let start = prev.span.end();
             if line[start..].contains(BEFORE_COMMAND_CHARS) {
-                vec![LocationType::Command {
-                    is_recognized: true,
-                    parsed_token: ParsedToken::empty(),
-                }
-                .spanned(Span::new(line.len(), line.len()))]
+                vec![
+                    LocationType::Command {
+                        is_recognized: true,
+                        parsed_token: ParsedToken::empty(),
+                    }
+                    .spanned(Span::new(line.len(), line.len())),
+                ]
             } else if let Some(command) = command {
                 let arg_location = LocationType::Argument {
                     command_name: command.clone(),
@@ -479,11 +493,13 @@ pub fn completion_location(
             }
         } else {
             // Cursor is before any possible completion location, so must be a command
-            vec![LocationType::Command {
-                is_recognized: true,
-                parsed_token: ParsedToken::empty(),
-            }
-            .spanned(Span::new(line.len(), line.len()))]
+            vec![
+                LocationType::Command {
+                    is_recognized: true,
+                    parsed_token: ParsedToken::empty(),
+                }
+                .spanned(Span::new(line.len(), line.len())),
+            ]
         }
     }
 }

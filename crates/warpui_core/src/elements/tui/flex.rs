@@ -47,8 +47,8 @@ use super::{
     TuiPaintSurface, TuiPresentationContext, TuiRect, TuiRectExt, TuiScreenPoint,
     TuiScreenPosition, TuiSize,
 };
-use crate::elements::{Axis, CrossAxisAlignment};
 use crate::AppContext;
+use crate::elements::{Axis, CrossAxisAlignment};
 
 /// A child of a [`TuiFlex`] plus whether it fills leftover main-axis space.
 struct FlexChild {

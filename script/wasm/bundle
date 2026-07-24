@@ -134,6 +134,23 @@ if [ -n "${FEATURES_OVERRIDE+x}" ]; then
   FEATURES="$FEATURES_OVERRIDE"
 fi
 
+# These cargo features were removed and replaced by environment variables read
+# by warp-channel-config. Intercept them here so that existing --features
+# invocations keep working.
+for mapping in \
+    "with_local_server:WITH_LOCAL_SERVER" \
+    "with_local_session_sharing_server:WITH_LOCAL_SESSION_SHARING_SERVER" \
+    "with_sandbox_telemetry:WITH_SANDBOX_TELEMETRY"; do
+    feature="${mapping%%:*}"
+    env_var="${mapping##*:}"
+    if [[ ",$FEATURES," =~ ,"$feature", ]]; then
+        export "$env_var"=1
+        FEATURES="$(echo "$FEATURES" | sed "s/,$feature,/,/; s/^$feature,//; s/,$feature$//; s/^$feature$//")"
+        FEATURES="$(echo "$FEATURES" | sed 's/,,*/,/g; s/^,//; s/,$//')"
+        echo "Note: '$feature' is no longer a cargo feature; setting $env_var=1 instead."
+    fi
+done
+
 # If we only want to check that compilation will succeed, perform the checks
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.

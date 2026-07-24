@@ -1,10 +1,10 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ::ai::index::full_source_code_embedding::SyncProgress;
 use ::ai::index::full_source_code_embedding::manager::{
     CodebaseIndexFinishedStatus, CodebaseIndexStatus as LocalCodebaseIndexStatus,
 };
-use ::ai::index::full_source_code_embedding::SyncProgress;
 
 use super::proto::{CodebaseIndexStatus, CodebaseIndexStatusState};
 

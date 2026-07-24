@@ -26,15 +26,15 @@ use crate::drive::CloudObjectTypeAndId;
 use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId};
-use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::sync_queue::{
     CreationFailureReason, GenericStringObjectToCreate, QueueItemId, SerializedModel,
     SyncQueueEvent,
 };
 use crate::system::SystemStats;
-use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::workflows::CloudWorkflowModel;
+use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::{NetworkStatus, QueueItem, SyncQueue};
 
 #[derive(Default)]
@@ -1591,9 +1591,11 @@ fn test_sync_queue_bulk_generic_string_object_update_waits_for_matching_create()
                 sync_queue.queue_dependencies().get(&update_b_id).unwrap(),
                 &HashSet::<QueueDependency>::new()
             );
-            assert!(!sync_queue
-                .in_flight_bulk_create_objects
-                .contains_key(&bulk_create_id));
+            assert!(
+                !sync_queue
+                    .in_flight_bulk_create_objects
+                    .contains_key(&bulk_create_id)
+            );
             let queued_revision = sync_queue.queue().iter().find_map(|(_, item)| match item {
                 QueueItem::UpdateAIFact { id, revision, .. }
                     if *id == SyncId::ClientId(client_id_b) =>

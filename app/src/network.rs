@@ -76,7 +76,7 @@ impl NetworkStatus {
 
     /// Returns a future that resolves immediately if online, or waits until the next online
     /// transition if currently offline.
-    pub fn wait_until_online(&self) -> impl Future<Output = ()> {
+    pub fn wait_until_online(&self) -> impl Future<Output = ()> + use<> {
         let condition = self.pending_reconnect.clone();
         async move {
             if let Some(cond) = condition {

@@ -8,10 +8,10 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _, ParentOffsetBounds,
-    Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect, SavePosition,
-    Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, DropShadow, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _,
+    ParentOffsetBounds, Percentage, PositionedElementAnchor, PositionedElementOffsetBounds, Radius,
+    Rect, SavePosition, Stack, Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
@@ -26,9 +26,9 @@ const SIDECAR_POSITION_ID: &str = "model_sidecar_panel";
 
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::color::{coloru_with_opacity, Opacity};
-use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::color::{Opacity, coloru_with_opacity};
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 
 use crate::ai::blocklist::prompt::PromptIconButtonTheme;
 use crate::ai::blocklist::{
@@ -36,18 +36,19 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::custom_model_routers::is_custom_router_id;
+use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::model_menu_items::{
     available_model_menu_items, has_reasoning_variants, is_auto,
 };
 use crate::ai::execution_profiles::profiles::{
-    AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
+    AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
 use crate::ai::harness_availability::{
     HarnessAvailabilityEvent, HarnessAvailabilityModel, HarnessModelInfo,
 };
 use crate::ai::llms::{
-    byo_key_source_for_model, dedupe_model_display_names, should_show_key_icon_for_model,
     ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec,
+    byo_key_source_for_model, dedupe_model_display_names, should_show_key_icon_for_model,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::model::generic_string_model::StringModel;
@@ -55,9 +56,9 @@ use crate::context_chips::display_chip::{udi_font_size, udi_icon_size};
 use crate::context_chips::spacing;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::SettingsSection;
+use crate::terminal::TerminalModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
-use crate::terminal::TerminalModel;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme,
@@ -193,7 +194,7 @@ pub enum ProfileModelSelectorEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileModelSelectorAction {
-    SelectProfile(ClientProfileId),
+    SelectProfile(ExecutionProfileId),
     SelectModel(LLMId),
     SelectAutoModel,
     SelectReasoningModel(String),
@@ -853,9 +854,9 @@ impl ProfileModelSelector {
         ];
 
         for profile_id in all_profile_ids {
-            if let Some(profile_info) = profiles_model.get_profile_by_id(profile_id, ctx) {
+            if let Some(profile_info) = profiles_model.get_profile_by_id(&profile_id, ctx) {
                 let profile = profile_info.data();
-                let is_active = *active_profile.id() == profile_id;
+                let is_active = active_profile.id() == &profile_id;
 
                 let mut fields = MenuItemFields::new(profile.display_name());
                 if is_active {
@@ -878,7 +879,8 @@ impl ProfileModelSelector {
 
         self.profile_dropdown.update(ctx, |menu, ctx| {
             menu.set_items(menu_items, ctx);
-            let active_action = ProfileModelSelectorAction::SelectProfile(*active_profile.id());
+            let active_action =
+                ProfileModelSelectorAction::SelectProfile(active_profile.id().clone());
             menu.set_selected_by_action(&active_action, ctx);
         });
     }
@@ -2139,7 +2141,11 @@ impl TypedActionView for ProfileModelSelector {
         match action {
             ProfileModelSelectorAction::SelectProfile(profile_id) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_active_profile(self.terminal_view_id, *profile_id, ctx);
+                    profiles_model.set_active_profile(
+                        self.terminal_view_id,
+                        profile_id.clone(),
+                        ctx,
+                    );
                 });
 
                 // Remove any LLM override when switching profiles

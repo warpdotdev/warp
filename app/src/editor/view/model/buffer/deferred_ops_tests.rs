@@ -3,8 +3,8 @@ use string_offset::CharOffset;
 
 use super::super::time::{Global, Lamport};
 use super::{DeferredOperations, Operation};
-use crate::editor::view::model::buffer::time::ReplicaId;
 use crate::editor::view::model::buffer::EditOperation;
+use crate::editor::view::model::buffer::time::ReplicaId;
 
 fn edit_operation(lamport: Lamport) -> Operation {
     Operation::Edit(EditOperation {

@@ -1,9 +1,9 @@
-use ui_components::{button, keyboard_shortcut, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button, keyboard_shortcut};
 use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
 use warpui_core::elements::{
     Align, ClippedScrollStateHandle, ConstrainedBox, Container, CrossAxisAlignment, Flex,
     MouseStateHandle, ParentElement, Shrinkable,
@@ -97,19 +97,18 @@ impl ProjectSlide {
 
         // Only show the "Initialize project automatically" checkbox when AgentView is NOT enabled.
         // When AgentView is enabled, initialization is handled differently through the callout flow.
-        if !agent_modality_enabled {
-            if let ProjectOnboardingSettings::Project {
+        if !agent_modality_enabled
+            && let ProjectOnboardingSettings::Project {
                 initialize_projects_automatically,
                 ..
             } = settings
-            {
-                children.push(
-                    Align::new(
-                        self.render_project_options(*initialize_projects_automatically, appearance),
-                    )
-                    .finish(),
-                );
-            }
+        {
+            children.push(
+                Align::new(
+                    self.render_project_options(*initialize_projects_automatically, appearance),
+                )
+                .finish(),
+            );
         }
 
         let bottom_nav = Align::new(self.render_bottom_nav(appearance, settings)).finish();

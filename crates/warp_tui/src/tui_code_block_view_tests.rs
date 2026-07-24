@@ -7,8 +7,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{TuiView, ViewHandle};
 
 use super::{
-    bounded_fallback_text, TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent,
-    MAX_CODE_LINES, MAX_HIGHLIGHT_BYTES, TRUNCATION_NOTICE,
+    MAX_CODE_LINES, MAX_HIGHLIGHT_BYTES, TRUNCATION_NOTICE, TuiCodeBlockPayload, TuiCodeBlockView,
+    TuiCodeBlockViewEvent, bounded_fallback_text,
 };
 use crate::test_fixtures::TestHostView;
 
@@ -129,10 +129,10 @@ fn syntax_highlights_apply_only_to_the_latest_editor_revision() {
         app.update(|ctx| {
             let mut tx = Some(tx);
             ctx.subscribe_to_view(&view, move |_, event, _| {
-                if matches!(event, TuiCodeBlockViewEvent::SyntaxUpdated) {
-                    if let Some(tx) = tx.take() {
-                        let _ = tx.send(());
-                    }
+                if matches!(event, TuiCodeBlockViewEvent::SyntaxUpdated)
+                    && let Some(tx) = tx.take()
+                {
+                    let _ = tx.send(());
                 }
             });
             view.update(ctx, |view, ctx| {

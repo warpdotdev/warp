@@ -1,4 +1,4 @@
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use serde::{Deserialize, Serialize};
 
 /// Determine if `from` starts with `partial` in a case insensitive manner.

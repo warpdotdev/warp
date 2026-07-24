@@ -306,9 +306,11 @@ fn is_not_installed_via_trait_without_codex_plugin() {
     let dir = tempfile::tempdir().unwrap();
     write_plugin_config(dir.path(), super::PLUGIN_KEY, true);
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).is_installed();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(!result);
 }
@@ -320,9 +322,11 @@ fn is_installed_via_trait_with_codex_home_env() {
     let dir = tempfile::tempdir().unwrap();
     write_plugin_config(dir.path(), super::PLUGIN_KEY, true);
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).is_installed();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(result);
 }
@@ -334,9 +338,11 @@ fn is_platform_plugin_installed_via_trait_with_codex_home_env() {
     let dir = tempfile::tempdir().unwrap();
     write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, true);
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).is_platform_plugin_installed();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(result);
 }
@@ -348,9 +354,11 @@ fn is_platform_plugin_not_installed_via_trait_without_codex_plugin() {
     let dir = tempfile::tempdir().unwrap();
     write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, true);
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).is_platform_plugin_installed();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(!result);
 }
@@ -363,9 +371,11 @@ fn needs_update_via_trait_with_codex_home_env() {
     write_plugin_config(dir.path(), super::PLUGIN_KEY, true);
     write_cache_manifest(dir.path(), super::PLUGIN_NAME, "0.2.0");
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).needs_update();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(result);
 }
@@ -378,9 +388,11 @@ fn does_not_need_update_via_trait_when_version_current() {
     write_plugin_config(dir.path(), super::PLUGIN_KEY, true);
     write_cache_manifest(dir.path(), super::PLUGIN_NAME, "0.4.0");
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).needs_update();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(!result);
 }
@@ -393,9 +405,11 @@ fn does_not_need_update_without_codex_plugin() {
     write_plugin_config(dir.path(), super::PLUGIN_KEY, true);
     write_cache_manifest(dir.path(), super::PLUGIN_NAME, "0.2.0");
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).needs_update();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(!result);
 }
@@ -406,9 +420,11 @@ fn does_not_need_update_when_not_enabled() {
     let _guard = FeatureFlag::CodexPlugin.override_enabled(true);
     let dir = tempfile::tempdir().unwrap();
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).needs_update();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(!result);
 }
@@ -420,10 +436,12 @@ fn does_not_need_update_for_non_git_marketplace_override() {
     let dir = tempfile::tempdir().unwrap();
     write_marketplace_config(dir.path(), "directory");
 
-    std::env::set_var("CODEX_HOME", dir.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("CODEX_HOME", dir.path()) };
     let result = CodexPluginManager::new(None, None, None).needs_update();
     let has_override = CodexPluginManager::new(None, None, None).has_local_marketplace_override();
-    std::env::remove_var("CODEX_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CODEX_HOME") };
 
     assert!(!result);
     assert!(has_override);

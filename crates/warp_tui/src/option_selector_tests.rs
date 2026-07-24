@@ -1,6 +1,8 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
+use string_offset::CharOffset;
 use warp::tui_export::{
     Appearance, OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
 };
@@ -14,12 +16,12 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext, TuiView as _, TypedActionView as _, ViewHandle};
 
 use super::{
-    OptionSelectorHeader, OptionSelectorPage, SelectorItem, TuiOptionSelector,
-    TuiOptionSelectorAction, TuiOptionSelectorEvent,
+    OptionSelectorHeader, OptionSelectorPage, SELECTOR_NAVIGATION_ACTIVE, SelectorFocusZone,
+    SelectorItem, TuiOptionSelector, TuiOptionSelectorAction, TuiOptionSelectorEvent,
 };
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::TuiEditorCommand;
-use crate::editor_view::TuiEditorViewAction;
+use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
 use crate::test_fixtures::TestHostView;
 use crate::tui_builder::TuiUiBuilder;
 
@@ -32,6 +34,120 @@ fn row(id: &str) -> OptionRow {
         badge: None,
         disabled_reason: None,
     }
+}
+
+#[test]
+fn focus_zone_tracks_each_selector_surface() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::None
+        );
+
+        set_page(&mut app, &selector, snapshot(&["a"], Some("a")));
+        selector.update(&mut app, |_, ctx| ctx.focus_self());
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::List
+        );
+
+        set_searchable_page(&mut app, &selector, snapshot(&["a"], Some("a")));
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveUp);
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::Search
+        );
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+
+        let mut with_footer = snapshot(&["a"], Some("a"));
+        with_footer.footer = Some(OptionFooter::CustomText {
+            label: "Other".to_string(),
+        });
+        set_page(&mut app, &selector, with_footer);
+        act(&mut app, &selector, TuiOptionSelectorAction::SelectItem(1));
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::CustomText
+        );
+        set_page(&mut app, &selector, snapshot(&["next"], Some("next")));
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::List
+        );
+
+        let leading_editor = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(selector.window_id(ctx), |ctx| {
+                TuiEditorView::single_line(ctx)
+            })
+        });
+        selector.update(&mut app, |selector, ctx| {
+            selector.set_leading_editor(leading_editor.clone(), ctx);
+            ctx.focus(&leading_editor);
+        });
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::LeadingEditor
+        );
+    });
+}
+
+#[test]
+fn leading_editor_arrows_move_within_multiline_before_list_handoff() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        let leading_editor = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(selector.window_id(ctx), |ctx| {
+                TuiEditorView::multiline(4, ctx)
+            })
+        });
+        leading_editor.update(&mut app, |editor, ctx| {
+            editor.set_text("first\nsecond\nthird", ctx);
+        });
+        selector.update(&mut app, |selector, ctx| {
+            selector.set_leading_editor(leading_editor.clone(), ctx);
+            selector.set_page(page(snapshot(&["a", "b"], Some("a")), false), ctx);
+            ctx.focus(&leading_editor);
+        });
+        leading_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+        render_lines(&app, &selector, 60);
+
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+        assert!(leading_editor.read(&app, |editor, _| editor.is_focused()));
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+        assert!(leading_editor.read(&app, |editor, _| editor.is_focused()));
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+        assert_eq!(
+            selector.read(&app, |selector, ctx| selector.focus_zone(ctx)),
+            SelectorFocusZone::List
+        );
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.highlighted_index()),
+            Some(0)
+        );
+
+        leading_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: 1.into(),
+                }),
+                ctx,
+            );
+            ctx.focus_self();
+        });
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveUp);
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.highlighted_index()),
+            Some(1)
+        );
+    });
 }
 
 /// Builds a disabled row carrying `reason`.
@@ -67,6 +183,7 @@ fn page(snapshot: OptionSnapshot, searchable: bool) -> OptionSelectorPage {
         }),
         snapshot,
         searchable,
+        row_shortcuts: Default::default(),
     }
 }
 
@@ -112,6 +229,42 @@ fn set_page(app: &mut App, selector: &ViewHandle<TuiOptionSelector>, snapshot: O
         selector.set_page(page(snapshot, false), ctx);
     });
 }
+
+#[test]
+fn set_page_preserves_external_focus() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        let other = app.update(|ctx| ctx.add_tui_view(selector.window_id(ctx), |_| TestHostView));
+        other.update(&mut app, |_, ctx| ctx.focus_self());
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(selector.window_id(ctx))),
+            Some(other.id()),
+        );
+
+        set_page(&mut app, &selector, snapshot(&["a", "b"], Some("a")));
+
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(selector.window_id(ctx))),
+            Some(other.id()),
+        );
+        assert!(!selector.read(&app, |selector, _| selector.focused));
+    });
+}
+
+#[test]
+fn unfocused_selector_ignores_navigation_and_confirmation_keys() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        set_page(&mut app, &selector, snapshot(&["a", "b"], Some("a")));
+        let other = app.update(|ctx| ctx.add_tui_view(selector.window_id(ctx), |_| TestHostView));
+        other.update(&mut app, |_, ctx| ctx.focus_self());
+        assert!(!selector.read(&app, |selector, _| selector.focused));
+
+        for key in ["up", "down", "enter", "numpadenter", "escape"] {
+            assert!(!dispatch(&app, &selector, &key_down(key)), "{key}");
+        }
+    });
+}
 #[test]
 fn search_editor_is_created_only_for_searchable_pages() {
     App::test((), |mut app| async move {
@@ -134,9 +287,11 @@ fn searchable_page_starts_on_the_selected_row_and_digits_still_confirm() {
             snapshot(&["auto", "gpt-5", "claude"], Some("gpt-5")),
         );
         assert!(selected_line(&app, &selector).contains("(2) gpt-5"));
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Search:")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Search:"))
+        );
 
         act(
             &mut app,
@@ -163,25 +318,56 @@ fn up_from_top_focuses_search_and_down_returns_to_first_row() {
         );
 
         act(&mut app, &selector, TuiOptionSelectorAction::MoveUp);
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .search_field
-            .as_ref()
-            .expect("searchable page has an editor")
-            .as_ref(ctx)
-            .is_focused()));
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .interaction
-            .selection
-            .selected_index()
-            .is_none()));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .search_field
+                .as_ref()
+                .expect("searchable page has an editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .interaction
+                .selection
+                .selected_index()
+                .is_none()
+        }));
 
         act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
         assert!(selected_line(&app, &selector).contains("(1) auto"));
     });
 }
 
+#[test]
+fn select_item_without_confirm_moves_focus_to_an_arbitrary_option() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        let leading_editor = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(selector.window_id(ctx), TuiEditorView::single_line)
+        });
+        selector.update(&mut app, |selector, ctx| {
+            selector.set_leading_editor(leading_editor.clone(), ctx);
+            selector.set_page(page(snapshot(&["yes", "no"], Some("yes")), false), ctx);
+            selector.focus_leading_editor(ctx);
+        });
+        assert!(leading_editor.read(&app, |editor, _| editor.is_focused()));
+
+        act(
+            &mut app,
+            &selector,
+            TuiOptionSelectorAction::SelectItemWithoutConfirm(1),
+        );
+        assert!(!leading_editor.read(&app, |editor, _| editor.is_focused()));
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.highlighted_index()),
+            Some(1)
+        );
+        assert!(primary_events(&events).is_empty());
+    });
+}
 #[test]
 fn search_and_last_option_wrap_in_both_directions() {
     App::test((), |mut app| async move {
@@ -200,19 +386,23 @@ fn search_and_last_option_wrap_in_both_directions() {
 
         // Down from the last option returns to Search.
         act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .search_field
-            .as_ref()
-            .expect("searchable page has an editor")
-            .as_ref(ctx)
-            .is_focused()));
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .interaction
-            .selection
-            .selected_index()
-            .is_none()));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .search_field
+                .as_ref()
+                .expect("searchable page has an editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .interaction
+                .selection
+                .selected_index()
+                .is_none()
+        }));
     });
 }
 #[test]
@@ -228,7 +418,7 @@ fn focused_search_filters_including_digits_and_enter_confirms_top_match() {
         edit_search(
             &mut app,
             &selector,
-            TuiEditorAction::InsertText("gpt-5".to_string()),
+            TuiEditorAction::PasteText("gpt-5".to_string()),
         );
 
         let lines = render_lines(&app, &selector, 60);
@@ -258,13 +448,15 @@ fn typing_a_letter_from_the_list_focuses_and_seeds_search() {
             &selector,
             TuiOptionSelectorAction::FocusSearchAndInsert('g'),
         );
-        assert!(app.read(|ctx| selector
-            .as_ref(ctx)
-            .search_field
-            .as_ref()
-            .expect("searchable page has an editor")
-            .as_ref(ctx)
-            .is_focused()));
+        assert!(app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .search_field
+                .as_ref()
+                .expect("searchable page has an editor")
+                .as_ref(ctx)
+                .is_focused()
+        }));
         assert_eq!(
             app.read(|ctx| selector
                 .as_ref(ctx)
@@ -275,9 +467,11 @@ fn typing_a_letter_from_the_list_focuses_and_seeds_search() {
                 .text(ctx)),
             "g"
         );
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("gpt-5")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("gpt-5"))
+        );
     });
 }
 
@@ -297,7 +491,7 @@ fn search_no_matches_and_escape_clear_are_rendered_without_moving_the_field() {
         edit_search(
             &mut app,
             &selector,
-            TuiEditorAction::InsertText("zzz".to_string()),
+            TuiEditorAction::PasteText("zzz".to_string()),
         );
         let lines = render_lines(&app, &selector, 60);
         assert!(lines.iter().any(|line| line.contains("Search:")));
@@ -393,6 +587,9 @@ fn laid_out_element(
     );
     if let Some(search_field) = selector_ref.search_field.as_ref() {
         rendered_views.insert(search_field.id(), search_field.as_ref(app).render(app));
+    }
+    if let Some(leading_editor) = selector_ref.leading_editor.as_ref() {
+        rendered_views.insert(leading_editor.id(), leading_editor.as_ref(app).render(app));
     }
     let mut element = selector_ref.render(app);
     let size = {
@@ -519,6 +716,45 @@ fn normal_selector_selected_row_does_not_depend_on_question_selected_ids() {
 }
 
 #[test]
+fn selected_custom_answer_number_is_not_highlighted_after_the_cursor_moves_away() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        let mut with_selected_other = snapshot(&["a", "b"], Some("Canary"));
+        with_selected_other.footer = Some(OptionFooter::CustomText {
+            label: "Other".to_string(),
+        });
+        set_page(&mut app, &selector, with_selected_other);
+        selector.update(&mut app, |selector, ctx| {
+            selector.set_question_state(HashSet::new(), true, ctx);
+            selector.select_item_without_confirm(0, ctx);
+        });
+
+        let buffer = render_buffer(&app, &selector, 60);
+        let builder = app.read(TuiUiBuilder::from_app);
+        let number = &buffer[(0, 5)];
+        let label = &buffer[(8, 5)];
+        assert_eq!(number.symbol(), "(");
+        assert_eq!(label.symbol(), "C");
+        assert_eq!(
+            number.fg,
+            builder
+                .muted_text_style()
+                .fg
+                .expect("muted text has a foreground")
+        );
+        assert_eq!(
+            label.fg,
+            builder
+                .question_option_selected_style()
+                .fg
+                .expect("selected question options have a foreground")
+        );
+        assert!(!number.modifier.contains(Modifier::BOLD));
+        assert!(label.modifier.contains(Modifier::BOLD));
+    });
+}
+
+#[test]
 fn up_and_down_move_the_selection_and_enter_confirms_it() {
     App::test((), |mut app| async move {
         let (selector, events) = add_selector(&mut app);
@@ -558,6 +794,35 @@ fn digits_confirm_the_corresponding_visible_row() {
 }
 
 #[test]
+fn custom_row_shortcut_renders_and_confirms_instead_of_its_digit() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        selector.update(&mut app, |selector, ctx| {
+            let mut page = page(snapshot(&["yes", "no", "edit command"], Some("yes")), false);
+            page.row_shortcuts.insert("edit command".to_owned(), 'e');
+            selector.set_page(page, ctx);
+            ctx.focus_self();
+        });
+
+        let lines = render_lines(&app, &selector, 60);
+        assert!(lines.iter().any(|line| line.contains("(e) edit command")));
+        assert!(!lines.iter().any(|line| line.contains("(3) edit command")));
+        assert!(dispatch(&app, &selector, &key_down("e")));
+
+        act(
+            &mut app,
+            &selector,
+            TuiOptionSelectorAction::SelectShortcut('e'),
+        );
+        assert_eq!(
+            primary_events(&events),
+            [TuiOptionSelectorEvent::Confirmed {
+                id: "edit command".to_owned()
+            }],
+        );
+    });
+}
+#[test]
 fn digits_are_viewport_relative_in_scrolled_lists() {
     App::test((), |mut app| async move {
         let (selector, events) = add_selector(&mut app);
@@ -567,9 +832,11 @@ fn digits_are_viewport_relative_in_scrolled_lists() {
         // Scroll two rows down; digit 1 now confirms the third row,
         // and the clipped top renders an overflow marker.
         act(&mut app, &selector, TuiOptionSelectorAction::ScrollBy(2));
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.trim() == "↑"));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.trim() == "↑")
+        );
         act(
             &mut app,
             &selector,
@@ -596,9 +863,11 @@ fn navigation_scrolls_to_keep_the_selection_visible() {
         }
         // The selection scrolled beyond the first viewport.
         assert!(selected_line(&app, &selector).contains("row-9"));
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.trim() == "↑"));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.trim() == "↑")
+        );
     });
 }
 
@@ -663,18 +932,22 @@ fn loading_and_empty_states_render_non_selectable_status_rows() {
         let mut loading = snapshot(&["Skip (advanced)"], None);
         loading.status = OptionSourceStatus::Loading;
         set_page(&mut app, &selector, loading);
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Loading…")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Loading…"))
+        );
 
         let mut empty = snapshot_of(Vec::new(), None);
         empty.status = OptionSourceStatus::Empty {
             message: "No harnesses available".to_string(),
         };
         set_page(&mut app, &selector, empty);
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("No harnesses available")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("No harnesses available"))
+        );
         // Nothing is confirmable in an empty list.
         confirm(&mut app, &selector);
         assert!(primary_events(&events).is_empty());
@@ -691,9 +964,11 @@ fn failed_state_offers_a_retry_row_that_emits_retry_requested() {
         };
         set_page(&mut app, &selector, failed);
         let lines = render_lines(&app, &selector, 60);
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Unable to load secrets")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Unable to load secrets"))
+        );
         assert!(lines.iter().any(|line| line.contains("Retry")));
         // The Retry row is reachable by keyboard.
         act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
@@ -715,9 +990,11 @@ fn custom_text_editor_trims_validates_and_submits() {
         });
         set_page(&mut app, &selector, with_footer);
         // The footer renders and confirming it opens the one-line editor.
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Custom host…")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Custom host…"))
+        );
         act(&mut app, &selector, TuiOptionSelectorAction::SelectItem(1));
         assert!(custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
 
@@ -730,9 +1007,11 @@ fn custom_text_editor_trims_validates_and_submits() {
         );
         confirm(&mut app, &selector);
         assert!(primary_events(&events).is_empty());
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Enter a value to continue.")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Enter a value to continue."))
+        );
 
         // Valid input is trimmed and submitted.
         for c in "my-host ".chars() {
@@ -761,9 +1040,11 @@ fn custom_text_editor_trims_validates_and_submits() {
 
         // Editing the custom option again starts from the submitted value.
         confirm(&mut app, &selector);
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .any(|line| line.contains("Custom host…: my-host")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .any(|line| line.contains("Custom host…: my-host"))
+        );
     });
 }
 
@@ -787,9 +1068,8 @@ fn back_cancels_custom_text_editing_before_leaving_the_page() {
     });
 }
 
-/// Arrow navigation leaves list state untouched while custom text owns focus.
 #[test]
-fn arrows_do_not_navigate_the_list_while_editing_custom_text() {
+fn arrows_leave_custom_text_and_navigate_adjacent_options() {
     App::test((), |mut app| async move {
         let (selector, _) = add_selector(&mut app);
         let mut with_footer = snapshot(&["a", "b", "c", "d", "e", "f", "g", "h"], Some("a"));
@@ -798,33 +1078,28 @@ fn arrows_do_not_navigate_the_list_while_editing_custom_text() {
         });
         set_page(&mut app, &selector, with_footer);
         let custom_text_index = 8;
-
-        for action in [
-            TuiOptionSelectorAction::MoveUp,
-            TuiOptionSelectorAction::MoveDown,
+        for (action, expected_index) in [
+            (TuiOptionSelectorAction::MoveUp, 7),
+            (TuiOptionSelectorAction::MoveDown, 0),
         ] {
             act(
                 &mut app,
                 &selector,
                 TuiOptionSelectorAction::SelectItem(custom_text_index),
             );
-            let before = selector.read(&app, |selector, _| {
-                (
-                    selector.interaction.selection.selected_index(),
-                    selector.interaction.scroll_offset,
-                )
-            });
+            assert!(selector.read(&app, |selector, ctx| {
+                selector
+                    .keymap_context(ctx)
+                    .set
+                    .contains(SELECTOR_NAVIGATION_ACTIVE)
+            }));
 
             act(&mut app, &selector, action);
-
-            let after = selector.read(&app, |selector, _| {
-                (
-                    selector.interaction.selection.selected_index(),
-                    selector.interaction.scroll_offset,
-                )
-            });
-            assert_eq!(after, before);
-            assert!(custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
+            assert_eq!(
+                selector.read(&app, |selector, _| selector.highlighted_index()),
+                Some(expected_index)
+            );
+            assert!(!custom_text_field(&app, &selector).read(&app, |field, _| field.is_focused()));
         }
     });
 }
@@ -838,9 +1113,11 @@ fn create_new_auth_secret_footer_is_ignored() {
         set_page(&mut app, &selector, with_footer);
         // Resource creation is out of scope in the TUI: the
         // footer contributes no navigable item.
-        assert!(render_lines(&app, &selector, 60)
-            .iter()
-            .all(|line| !line.contains("New API key")));
+        assert!(
+            render_lines(&app, &selector, 60)
+                .iter()
+                .all(|line| !line.contains("New API key"))
+        );
     });
 }
 
@@ -852,9 +1129,11 @@ fn set_page_invalidates_layout() {
 
         set_page(&mut app, &selector, snapshot(&["a"], Some("a")));
 
-        assert!(events
-            .borrow()
-            .contains(&TuiOptionSelectorEvent::LayoutInvalidated));
+        assert!(
+            events
+                .borrow()
+                .contains(&TuiOptionSelectorEvent::LayoutInvalidated)
+        );
     });
 }
 #[test]
@@ -872,9 +1151,11 @@ fn layout_invalidated_is_emitted_only_when_overflow_markers_toggle() {
         for _ in 0..5 {
             act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
         }
-        assert!(!events
-            .borrow()
-            .contains(&TuiOptionSelectorEvent::LayoutInvalidated));
+        assert!(
+            !events
+                .borrow()
+                .contains(&TuiOptionSelectorEvent::LayoutInvalidated)
+        );
 
         // Scrolling past the viewport reveals the `↑` marker: one event.
         act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
@@ -903,9 +1184,11 @@ fn layout_invalidated_is_emitted_when_the_custom_text_error_row_toggles() {
 
         // An empty submit adds the validation-error row.
         confirm(&mut app, &selector);
-        assert!(events
-            .borrow()
-            .contains(&TuiOptionSelectorEvent::LayoutInvalidated));
+        assert!(
+            events
+                .borrow()
+                .contains(&TuiOptionSelectorEvent::LayoutInvalidated)
+        );
         events.borrow_mut().clear();
 
         // Typing clears the error row.
@@ -914,9 +1197,11 @@ fn layout_invalidated_is_emitted_when_the_custom_text_error_row_toggles() {
             &selector,
             TuiEditorViewAction::Editor(TuiEditorAction::InsertChar('x')),
         );
-        assert!(events
-            .borrow()
-            .contains(&TuiOptionSelectorEvent::LayoutInvalidated));
+        assert!(
+            events
+                .borrow()
+                .contains(&TuiOptionSelectorEvent::LayoutInvalidated)
+        );
     });
 }
 
@@ -1005,6 +1290,7 @@ fn enter_and_numpad_enter_are_consumed_by_the_selector_element() {
     App::test((), |mut app| async move {
         let (selector, _) = add_selector(&mut app);
         set_page(&mut app, &selector, snapshot(&["a"], Some("a")));
+        selector.update(&mut app, |_, ctx| ctx.focus_self());
         for key in ["enter", "numpadenter"] {
             assert!(dispatch(&app, &selector, &key_down(key)), "{key}");
         }

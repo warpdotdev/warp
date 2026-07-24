@@ -39,8 +39,8 @@ use websocket::{Message, Sink, Stream, WebsocketMessage as _};
 use crate::auth::auth_state::AuthState;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
-use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::auth::AuthClient;
 use crate::server::telemetry::telemetry_context;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::BlockId;
@@ -49,7 +49,7 @@ use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
 };
 use crate::terminal::shared_session::{
-    connect_endpoint, EventNumber, SharedSessionSource, SELECTION_THROTTLE_PERIOD,
+    EventNumber, SELECTION_THROTTLE_PERIOD, SharedSessionSource, connect_endpoint,
 };
 use crate::terminal::{TerminalModel, TerminalView};
 use crate::throttle::throttle;
@@ -324,8 +324,10 @@ impl Network {
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Got error from shared session viewer websocket"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Got error from shared session viewer websocket")
+                    );
                 }
             },
             |network, ctx| {
@@ -342,27 +344,34 @@ impl Network {
         );
 
         // Send messages back up the websocket to the server.
-        ctx.spawn(async move {
-            let mut ws_proxy_rx = pin!(ws_proxy_rx);
-            while let Some(message) = ws_proxy_rx.next().await {
-                let serialized = message.to_json();
-                match serialized {
-                    Ok(serialized) => {
-                        if let Err(e) = sink.send(Message::new(serialized)).await {
-                            log::warn!("Failed to send message over shared session websocket: {e}");
-                            break;
+        ctx.spawn(
+            async move {
+                let mut ws_proxy_rx = pin!(ws_proxy_rx);
+                while let Some(message) = ws_proxy_rx.next().await {
+                    let serialized = message.to_json();
+                    match serialized {
+                        Ok(serialized) => {
+                            if let Err(e) = sink.send(Message::new(serialized)).await {
+                                log::warn!(
+                                    "Failed to send message over shared session websocket: {e}"
+                                );
+                                break;
+                            }
                         }
+                        Err(e) => log::warn!(
+                            "Failed to serialize message to send over shared session websocket: {e}"
+                        ),
                     }
-                    Err(e) => log::warn!("Failed to serialize message to send over shared session websocket: {e}")
                 }
-            }
-            log::info!("Closing websocket to session sharing server as viewer");
-            if let Err(e) = sink.close().await {
-                report_error!(
-                    anyhow::Error::new(e).context("Failed to close session sharing websocket")
-                );
-            }
-        }, |_, _, _| {});
+                log::info!("Closing websocket to session sharing server as viewer");
+                if let Err(e) = sink.close().await {
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to close session sharing websocket")
+                    );
+                }
+            },
+            |_, _, _| {},
+        );
     }
 
     fn start_websocket(
@@ -603,7 +612,9 @@ impl Network {
             }
             DownstreamMessage::RejoinedSuccessfully { participant_list } => {
                 if matches!(self.stage, Stage::JoinedSuccessfully) {
-                    log::warn!("Received unexpected RejoinedSuccessfully message when we've already joined");
+                    log::warn!(
+                        "Received unexpected RejoinedSuccessfully message when we've already joined"
+                    );
                     return;
                 }
                 log::info!("Successfully reconnected to shared session as viewer.");
@@ -1033,10 +1044,10 @@ impl Network {
         update: UniversalDeveloperInputContextUpdate,
     ) {
         // Skip update if nothing would change
-        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context {
-            if !update.changes_cached_context(cached) {
-                return;
-            }
+        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context
+            && !update.changes_cached_context(cached)
+        {
+            return;
         }
 
         self.apply_context_update_to_cache(update.clone());

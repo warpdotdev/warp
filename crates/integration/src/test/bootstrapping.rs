@@ -9,7 +9,7 @@ use warp::integration_testing::input::{
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::tab::tab_title_step;
 use warp::integration_testing::terminal::util::{
-    current_shell_starter_and_version, ExpectedExitStatus,
+    ExpectedExitStatus, current_shell_starter_and_version,
 };
 use warp::integration_testing::terminal::{
     assert_active_block_command_for_single_terminal_in_tab,
@@ -24,10 +24,10 @@ use warp::terminal::shell::{self, ShellType};
 use warp::workspace::Workspace;
 use warpui_core::clipboard::ClipboardContent;
 use warpui_core::integration::TestStep;
-use warpui_core::{async_assert, async_assert_eq, ViewHandle};
+use warpui_core::{ViewHandle, async_assert, async_assert_eq};
 
-use super::{new_builder, Builder};
-use crate::util::{write_all_rc_files_for_test, write_rc_files_for_test, ShellRcType};
+use super::{Builder, new_builder};
+use crate::util::{ShellRcType, write_all_rc_files_for_test, write_rc_files_for_test};
 
 /// Ensures that config files are only sourced once when bootstrapping a new session.
 pub fn test_rc_files_only_sourced_once_during_bootstrapping() -> Builder {

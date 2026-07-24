@@ -2,7 +2,7 @@
 name = "warp_completer"
 authors = ["Warp Team <dev@warp.dev>"]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Warp completions engine"
 publish.workspace = true
 license.workspace = true

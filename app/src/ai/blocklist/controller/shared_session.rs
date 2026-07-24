@@ -9,7 +9,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::message::Message;
-use warp_multi_agent_api::response_event::{stream_finished, ClientActions};
+use warp_multi_agent_api::response_event::{ClientActions, stream_finished};
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
@@ -17,7 +17,7 @@ use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
 use crate::ai::attachment_utils::{
-    build_file_attachment_map, download_file, sanitize_filename, DownloadedAttachment,
+    DownloadedAttachment, build_file_attachment_map, download_file, sanitize_filename,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -330,8 +330,11 @@ impl BlocklistAIController {
                 &skill_path_origin,
                 ctx,
             ) {
-                report_error!(anyhow::Error::new(e)
-                    .context("Failed to apply client actions to conversation for shared session"));
+                report_error!(
+                    anyhow::Error::new(e).context(
+                        "Failed to apply client actions to conversation for shared session"
+                    )
+                );
             }
         });
         let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id) else {
@@ -385,24 +388,24 @@ impl BlocklistAIController {
                             _ => None,
                         };
 
-                        if let Some(input_ctx) = ctx_opt {
-                            if let Some(dir) = &input_ctx.directory {
-                                self.context_model.update(ctx, |context_model, ctx| {
-                                    context_model.update_directory_context(
-                                        if dir.pwd.is_empty() {
-                                            None
-                                        } else {
-                                            Some(dir.pwd.clone())
-                                        },
-                                        if dir.home.is_empty() {
-                                            None
-                                        } else {
-                                            Some(dir.home.clone())
-                                        },
-                                        ctx,
-                                    );
-                                });
-                            }
+                        if let Some(input_ctx) = ctx_opt
+                            && let Some(dir) = &input_ctx.directory
+                        {
+                            self.context_model.update(ctx, |context_model, ctx| {
+                                context_model.update_directory_context(
+                                    if dir.pwd.is_empty() {
+                                        None
+                                    } else {
+                                        Some(dir.pwd.clone())
+                                    },
+                                    if dir.home.is_empty() {
+                                        None
+                                    } else {
+                                        Some(dir.home.clone())
+                                    },
+                                    ctx,
+                                );
+                            });
                         }
                     }
                 }

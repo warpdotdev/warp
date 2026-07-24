@@ -184,9 +184,11 @@ fn test_possible_file_paths_in_word_accepts_token_at_word_length_cap() {
 #[test]
 fn test_possible_file_paths_in_word_skips_token_with_too_many_separators() {
     let too_many_separators = ":".repeat(MAX_SEPARATORS_PER_WORD + 1);
-    assert!(possible_file_paths_in_word(&too_many_separators)
-        .next()
-        .is_none());
+    assert!(
+        possible_file_paths_in_word(&too_many_separators)
+            .next()
+            .is_none()
+    );
 }
 
 #[test]

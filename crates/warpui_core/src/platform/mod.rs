@@ -40,8 +40,8 @@ use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
 use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
 use crate::windowing::WindowCallbacks;
 use crate::{
-    geometry, rendering, AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx,
-    OptionalPlatformWindow, Scene, WindowId,
+    AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx, OptionalPlatformWindow,
+    Scene, WindowId, geometry, rendering,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -216,7 +216,7 @@ pub trait Delegate: 'static {
 
     /// Retrieve the absolute path of given application's bundle and its executable.
     fn application_bundle_info(&self, bundle_identifier: &str)
-        -> Option<ApplicationBundleInfo<'_>>;
+    -> Option<ApplicationBundleInfo<'_>>;
 
     /// Create a window showing a modal dialog native to the platform. The modal will synchronously
     /// block all other interactions with the app until dismissed. The [`ModalId`] is a handle to

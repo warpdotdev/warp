@@ -19,12 +19,14 @@ fn git_context_converts_repository_and_pull_request_metadata() {
         AIAgentContext::Repository {
             name: "warp-internal".to_string(),
             owner: Some("warpdotdev".to_string()),
+            host: Some("github.com".to_string()),
         },
         AIAgentContext::PullRequest {
             number: 42,
             state: "OPEN".to_string(),
             draft: true,
             base_branch: "main".to_string(),
+            url: "https://github.com/warpdotdev/warp-internal/pull/42".to_string(),
         },
     ];
 
@@ -36,6 +38,7 @@ fn git_context_converts_repository_and_pull_request_metadata() {
     let repository = git.repository.expect("expected repository context");
     assert_eq!(repository.name, "warp-internal");
     assert_eq!(repository.owner, "warpdotdev");
+    assert_eq!(repository.host, "github.com");
 
     let pull_request = git.pull_request.expect("expected pull request context");
     assert_eq!(pull_request.number, 42);
@@ -44,6 +47,10 @@ fn git_context_converts_repository_and_pull_request_metadata() {
         api::input_context::git::pull_request::State::OpenDraft as i32
     );
     assert_eq!(pull_request.base_branch, "main");
+    assert_eq!(
+        pull_request.url,
+        "https://github.com/warpdotdev/warp-internal/pull/42"
+    );
 }
 
 #[test]
@@ -59,6 +66,7 @@ fn git_context_skips_pull_request_metadata_with_invalid_number() {
                 state: "OPEN".to_string(),
                 draft: false,
                 base_branch: "main".to_string(),
+                url: "https://github.com/warpdotdev/warp-internal/pull/1".to_string(),
             },
         ];
 
@@ -82,6 +90,7 @@ fn git_context_skips_pull_request_metadata_with_unknown_state() {
             state: "SOMETHING_ELSE".to_string(),
             draft: false,
             base_branch: "main".to_string(),
+            url: "https://github.com/warpdotdev/warp-internal/pull/42".to_string(),
         },
     ];
 

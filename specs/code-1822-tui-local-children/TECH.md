@@ -54,12 +54,12 @@ orchestration derives it from the requesting parent session. The factory's
 explicit startup-directory parameter preserves the parent's current directory
 for child shells (`crates/warp_tui/src/session.rs (190-243)`).
 ### Model selection
-TUI `agents.model` remains the default model for ordinary TUI surfaces.
-Explicit child model selections remain pinned per surface even when they
-currently equal the GUI profile or TUI file-backed fallback, so later default
-changes cannot alter a running child. Installing or changing that pin persists
-the selection, but emits the existing active-model event only when the
-surface's effective model changes (`app/src/ai/llms.rs (844-878, 1470-1542)`).
+The active execution profile's `base_model` is the default model for ordinary
+TUI surfaces. Explicit child model selections remain pinned per surface even
+when they currently equal the profile default, so later profile changes cannot
+alter a running child. Installing or changing that pin persists the selection,
+but emits the existing active-model event only when the surface's effective
+model changes (`app/src/ai/llms.rs (844-878, 1470-1542)`).
 ### Streamer and session ownership
 The coordinator stores only orchestration runtime bookkeeping
 (`crates/warp_tui/src/orchestration_model.rs (31-39)`):
@@ -165,7 +165,7 @@ types remain behind their respective boundaries.
   constructing, pending, blocked, running, and terminal presentation covered
   independently of conversation lifecycle state.
 - `app/src/ai/llms_tests.rs (936-1035)` verifies explicit child pins preserve GUI pane behavior,
-  suppress redundant model-change events, and precede the TUI file-backed default.
+  suppress redundant model-change events, and precede the execution-profile default.
 - `app/src/ai/blocklist/history_model_tests.rs (1930-1991)` verifies that removing a conversation
   cleans both its incoming child reference and its outgoing parent index.
 

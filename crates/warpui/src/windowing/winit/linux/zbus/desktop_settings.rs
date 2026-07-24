@@ -9,9 +9,9 @@ use warp_errors::report_error;
 use winit::event_loop::EventLoopProxy;
 use zbus::{proxy, zvariant};
 
-use crate::platform::SystemTheme;
 use crate::r#async::executor::Background;
-use crate::r#async::{block_on, FutureExt as _};
+use crate::r#async::{FutureExt as _, block_on};
+use crate::platform::SystemTheme;
 use crate::windowing::winit::app::CustomEvent;
 
 const COLOR_SCHEME_SETTINGS_NAMESPACE: &str = "org.freedesktop.appearance";

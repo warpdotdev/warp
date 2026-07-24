@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use instant::Instant;
 
-use super::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
+use super::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
 
 #[test]
 fn starts_disarmed() {

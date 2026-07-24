@@ -4,7 +4,7 @@ use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui_core::elements::{CornerRadius, Fill, Point, Radius};
 use warpui_core::event::DispatchedEvent;
 use warpui_core::geometry::rect::RectF;
-use warpui_core::geometry::vector::{vec2f, Vector2F};
+use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::image_cache::{AnimatedImageBehavior, CacheOption, FitType, Image, ImageCache};
 use warpui_core::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,

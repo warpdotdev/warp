@@ -5,8 +5,8 @@ use std::path::PathBuf;
 #[path = "upload_artifact_tests.rs"]
 mod tests;
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle};
@@ -143,6 +143,7 @@ impl UploadArtifactExecutor {
                         path: resolved_path,
                         run_id: None,
                         conversation_id: Some(server_conversation_token),
+                        title: None,
                         description,
                     };
                     let association = uploader.resolve_upload_association(&request).await?;

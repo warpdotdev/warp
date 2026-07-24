@@ -2,11 +2,11 @@ use warpui::{EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{CLIAgentEvent, CLIAgentSessionsModel};
 use crate::features::FeatureFlag;
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::event::{
-    parse_event, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
+    CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType, parse_event,
 };
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::CLIAgent;
 
 /// Per-agent handler that filters and transforms parsed CLI agent events.
 /// Each CLI agent can have a different implementation depending on which events
@@ -46,6 +46,7 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Auggie
             | CLIAgent::Droid
             | CLIAgent::Pi
+            | CLIAgent::OhMyPi
     )
 }
 
@@ -54,17 +55,17 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
     match agent {
         // Auggie and Pi are supported via community-maintained plugins
         // (https://github.com/augmentmoogi/auggie-warp,
-        // https://github.com/badlogic/pi-mono), which emit the same
-        // structured OSC 777 events as the first-party Claude/OpenCode/Gemini
-        // plugins. Droid can be supported by user-configured hooks or future
-        // integrations that emit the same structured OSC 777 events. We don't
-        // ship install flows for these agents here — we just listen.
+        // https://github.com/badlogic/pi-mono). OhMyPi emits these structured
+        // OSC 777 events natively. Droid can be supported by user-configured
+        // hooks or future integrations that emit the same events. We don't ship
+        // install flows for these agents here — we just listen.
         CLIAgent::Claude
         | CLIAgent::OpenCode
         | CLIAgent::Gemini
         | CLIAgent::Auggie
         | CLIAgent::Droid
-        | CLIAgent::Pi => Some(Box::new(DefaultSessionListener)),
+        | CLIAgent::Pi
+        | CLIAgent::OhMyPi => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
         CLIAgent::Hermes
         | CLIAgent::Amp

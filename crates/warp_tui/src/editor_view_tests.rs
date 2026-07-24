@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use string_offset::CharOffset;
 use warp::tui_export::Appearance;
-use warp_editor::model::CoreEditorModel;
+use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityIdMap};
 use warpui_core::elements::tui::{
@@ -14,7 +14,9 @@ use warpui_core::{App, TuiView as _, TypedActionView as _};
 
 use super::{TuiEditorView, TuiEditorViewAction};
 use crate::editor_element::TuiEditorAction;
-use crate::editor_interaction::TuiEditorCommand;
+use crate::editor_interaction::{
+    TuiEditorClipboardAction, TuiEditorCommand, apply_editor_clipboard_action_for_test,
+};
 use crate::test_fixtures::TestHostView;
 
 /// Renders an editor view to trimmed lines.
@@ -38,7 +40,7 @@ fn layout_clamps_stale_scroll_after_resize_and_text_replacement() {
         render_lines_at_width(&app, &editor, 3);
         editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
-                &TuiEditorViewAction::Editor(TuiEditorAction::InsertText("abcdef".to_string())),
+                &TuiEditorViewAction::Editor(TuiEditorAction::PasteText("abcdef".to_string())),
                 ctx,
             );
         });
@@ -123,7 +125,7 @@ fn single_line_paste_discards_later_lines() {
 
         editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
-                &TuiEditorViewAction::Editor(TuiEditorAction::InsertText(
+                &TuiEditorViewAction::Editor(TuiEditorAction::PasteText(
                     "first\nsecond".to_string(),
                 )),
                 ctx,
@@ -182,6 +184,133 @@ fn kill_and_yank_are_shared_with_the_generic_editor() {
 }
 
 #[test]
+fn clipboard_actions_copy_and_cut_only_the_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_text("hello world", ctx);
+            for _ in 0..5 {
+                editor.handle_action(
+                    &TuiEditorViewAction::Command(TuiEditorCommand::SelectLeft),
+                    ctx,
+                );
+            }
+
+            let mut copied = None;
+            assert!(
+                apply_editor_clipboard_action_for_test(
+                    &editor.model,
+                    TuiEditorClipboardAction::Copy,
+                    |text| {
+                        copied = Some(text.to_owned());
+                        Ok(())
+                    },
+                    ctx,
+                )
+                .expect("copy succeeds")
+            );
+            assert_eq!(copied.as_deref(), Some("world"));
+            assert_eq!(editor.text(ctx), "hello world");
+
+            let mut cut = None;
+            assert!(
+                apply_editor_clipboard_action_for_test(
+                    &editor.model,
+                    TuiEditorClipboardAction::Cut,
+                    |text| {
+                        cut = Some(text.to_owned());
+                        Ok(())
+                    },
+                    ctx,
+                )
+                .expect("cut succeeds")
+            );
+            assert_eq!(cut.as_deref(), Some("world"));
+            assert_eq!(editor.text(ctx), "hello ");
+        });
+    });
+}
+
+#[test]
+fn cut_without_a_selection_is_a_noop() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_text("hello", ctx);
+            assert!(
+                !apply_editor_clipboard_action_for_test(
+                    &editor.model,
+                    TuiEditorClipboardAction::Cut,
+                    |_| panic!("clipboard should not be written without a selection"),
+                    ctx,
+                )
+                .expect("no-selection cut succeeds")
+            );
+            assert_eq!(editor.text(ctx), "hello");
+        });
+    });
+}
+
+#[test]
+fn failed_cut_preserves_the_selection_and_text() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_text("hello", ctx);
+            editor.handle_action(
+                &TuiEditorViewAction::Command(TuiEditorCommand::SelectLeft),
+                ctx,
+            );
+            let result = apply_editor_clipboard_action_for_test(
+                &editor.model,
+                TuiEditorClipboardAction::Cut,
+                |_| anyhow::bail!("clipboard unavailable"),
+                ctx,
+            );
+            assert!(result.is_err());
+            assert_eq!(editor.text(ctx), "hello");
+            assert_eq!(
+                editor
+                    .model
+                    .as_ref(ctx)
+                    .read_selected_text_as_clipboard_content(ctx)
+                    .plain_text,
+                "o"
+            );
+        });
+    });
+}
+#[test]
 fn editor_follows_cursor_within_its_one_row_viewport() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -198,7 +327,7 @@ fn editor_follows_cursor_within_its_one_row_viewport() {
 
         editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
-                &TuiEditorViewAction::Editor(TuiEditorAction::InsertText("abcd".to_string())),
+                &TuiEditorViewAction::Editor(TuiEditorAction::PasteText("abcd".to_string())),
                 ctx,
             );
         });
@@ -264,9 +393,11 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
         let expected = HashSet::from(["home".to_string(), "ctrl-a".to_string()]);
         assert_eq!(triggers_for("tui:input:move_to_line_start"), expected);
         assert_eq!(triggers_for("tui:editor:move_to_line_start"), expected);
+        let kill_to_line_end = HashSet::from(["ctrl-k".to_string()]);
+        assert_eq!(triggers_for("tui:input:kill_to_line_end"), kill_to_line_end);
         assert_eq!(
             triggers_for("tui:editor:kill_to_line_end"),
-            HashSet::from(["ctrl-k".to_string()])
+            kill_to_line_end
         );
         assert_eq!(
             triggers_for("tui:input:insert_newline"),
@@ -276,8 +407,52 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
                 "alt-enter".to_string(),
             ])
         );
-        assert!(triggers_for("tui:editor:insert_newline").is_empty());
+        assert_eq!(
+            triggers_for("tui:editor:insert_newline"),
+            HashSet::from([
+                "shift-enter".to_string(),
+                "ctrl-j".to_string(),
+                "alt-enter".to_string(),
+            ])
+        );
+        let copy = HashSet::from(["ctrl-shift-C".to_string(), "alt-w".to_string()]);
+        assert_eq!(triggers_for("tui:input:copy"), copy);
+        assert_eq!(triggers_for("tui:editor:copy"), copy);
+        let cut = HashSet::from(["ctrl-x".to_string()]);
+        assert_eq!(triggers_for("tui:input:cut"), cut);
+        assert_eq!(triggers_for("tui:editor:cut"), cut);
         assert!(app.read(|ctx| ctx.get_binding_by_name("tui:editor:move_up").is_none()));
+    });
+}
+
+/// `cmd-delete` is not portable terminal input and must not be registered on
+/// either TUI editor surface. `alt-delete` remains a forward-word deletion.
+#[test]
+fn cmd_delete_is_unbound_and_alt_delete_binds_delete_word_forward() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+
+        let triggers_for = |name: &str| {
+            app.read(|ctx| {
+                ctx.get_key_bindings()
+                    .filter(|binding| binding.name == name)
+                    .filter_map(|binding| match binding.trigger {
+                        Trigger::Keystrokes(keys) => keys.first().map(|key| key.normalized()),
+                        Trigger::Empty | Trigger::Standard(_) | Trigger::Custom(_) => None,
+                    })
+                    .collect::<HashSet<_>>()
+            })
+        };
+        for target in ["input", "editor"] {
+            assert!(
+                !triggers_for(&format!("tui:{target}:kill_to_line_end")).contains("cmd-delete"),
+                "cmd-delete must not be registered for the TUI {target} editor"
+            );
+            assert!(
+                triggers_for(&format!("tui:{target}:delete_word_forward")).contains("alt-delete"),
+                "alt-delete must remain registered for the TUI {target} editor"
+            );
+        }
     });
 }
 
@@ -325,7 +500,7 @@ fn actions_edit_the_single_line_buffer() {
         });
         editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
-                &TuiEditorViewAction::Editor(TuiEditorAction::InsertText("gen".to_string())),
+                &TuiEditorViewAction::Editor(TuiEditorAction::PasteText("gen".to_string())),
                 ctx,
             );
             editor.handle_action(

@@ -923,6 +923,7 @@ input CreateFileArtifactUploadTargetInput {
   mimeType: String
   runId: ID
   sizeBytes: Int
+  title: String
 }
 
 type CreateFileArtifactUploadTargetOutput implements Response {
@@ -1333,6 +1334,8 @@ enum Experiment {
   FREE_USER_NO_AI_CONTROL
   FREE_USER_NO_AI_EXPERIMENT
   LINUX_LAUNCH_EXPERIMENT
+  MACOS_RUNNERS_CONTROL
+  MACOS_RUNNERS_EXPERIMENT
   MULTI_AGENT_CONTROL
   MULTI_AGENT_EXPERIMENT
   MULTI_ARM_REVERSE_AI_TRIAL_CONTROL

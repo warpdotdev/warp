@@ -1,7 +1,7 @@
 //! Tips for cloud mode loading screen.
 
-use warpui::keymap::Keystroke;
 use warpui::AppContext;
+use warpui::keymap::Keystroke;
 
 use crate::ai::agent_tips::AITip;
 

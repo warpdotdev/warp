@@ -11,19 +11,19 @@ use warpui::{AppContext, SingletonEntity};
 
 use super::config_state::{AuthSecretSelection, OrchestrationConfigState};
 use super::providers::{
+    ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_RUNNER_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
     get_base_model_choices, resolve_default_host_slug, resolve_recent_host_slug,
-    ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
 };
+use crate::LLMPreferences;
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
 use crate::ai::local_harness_setup::{
-    local_harness_is_product_enabled, local_harness_setup_state, LocalHarnessSetupState,
+    LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::cloud_object::CloudObjectLookup as _;
-use crate::LLMPreferences;
 
 const DEFAULT_MODEL_LABEL: &str = "Default model";
 /// Label shown in the auth secret picker when no secret is selected
@@ -237,10 +237,10 @@ fn build_harness_snapshot(
         if selected_id.is_none() {
             if harness_str.eq_ignore_ascii_case(initial_harness) {
                 selected_id = Some(harness_str.clone());
-            } else if let Some(target_display) = &target_display {
-                if &entry.display_name == target_display {
-                    selected_id = Some(harness_str.clone());
-                }
+            } else if let Some(target_display) = &target_display
+                && &entry.display_name == target_display
+            {
+                selected_id = Some(harness_str.clone());
             }
         }
         rows.push(OptionRow {
@@ -519,16 +519,15 @@ fn build_host_snapshot(
     }
     // `recent_host` already comes from the persisted last selection. Only add
     // its row when the same slug was not emitted from a higher-priority source.
-    if let Some(slug) = recent_host.filter(|s| !s.trim().is_empty()) {
-        if !added_slugs
+    if let Some(slug) = recent_host.filter(|s| !s.trim().is_empty())
+        && !added_slugs
             .iter()
             .any(|known| known.eq_ignore_ascii_case(&slug))
-        {
-            rows.push(OptionRow {
-                badge: Some(OptionBadge::Recent),
-                ..OptionRow::new(slug.clone(), slug)
-            });
-        }
+    {
+        rows.push(OptionRow {
+            badge: Some(OptionBadge::Recent),
+            ..OptionRow::new(slug.clone(), slug)
+        });
     }
     OptionSnapshot {
         rows,
@@ -570,6 +569,42 @@ fn build_environment_snapshot(envs: Vec<(String, String)>, current: &str) -> Opt
         rows.push(OptionRow::new(env_id, env_name));
     }
     OptionSnapshot::ready(rows, selected_id)
+}
+
+// ── Runner ──────────────────────────────────────────────────────────
+
+/// Builds the runner options: a "Use environment default" clear row plus
+/// the supplied runners (already sorted by name). Runners are not cached
+/// client-side like environments, so the caller fetches them via
+/// `FactoryClient::get_runners` and passes them in along with the current
+/// load state; while `loading` is true the snapshot reports
+/// [`OptionSourceStatus::Loading`] so the picker can show a spinner.
+pub fn build_runner_snapshot(
+    runners: Vec<(String, String)>,
+    current: &str,
+    loading: bool,
+) -> OptionSnapshot {
+    let mut rows = vec![OptionRow::new(
+        String::new(),
+        ORCHESTRATION_RUNNER_NONE_LABEL,
+    )];
+    let mut selected_id = current.is_empty().then(String::new);
+    for (runner_id, runner_name) in runners {
+        if runner_id == current {
+            selected_id = Some(runner_id.clone());
+        }
+        rows.push(OptionRow::new(runner_id, runner_name));
+    }
+    OptionSnapshot {
+        rows,
+        selected_id,
+        status: if loading {
+            OptionSourceStatus::Loading
+        } else {
+            OptionSourceStatus::Ready
+        },
+        footer: None,
+    }
 }
 
 #[cfg(test)]

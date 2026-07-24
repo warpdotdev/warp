@@ -33,6 +33,7 @@ ai = { path = "crates/ai" }
 app-installation-detection = { path = "crates/app-installation-detection" }
 asset_cache = { path = "crates/asset_cache" }
 asset_macro = { path = "crates/asset_macro" }
+build_cache = { path = "crates/build_cache" }
 channel_versions = { path = "crates/channel_versions", default-features = false }
 command = { path = "crates/command" }
 command-signatures-v2 = { path = "crates/command-signatures-v2" }
@@ -158,6 +159,7 @@ font-kit = { git = "https://github.com/warpdotdev/font-kit", rev = "a04b225ecb63
 futures = { version = "0.3", features = ["executor", "thread-pool"] }
 futures-lite = "1.13.0"
 futures-util = { version = "0.3", default-features = false }
+fs4 = { version = "0.13.1", features = ["sync"] }
 get-size = { version = "0.1.4", features = ["derive"] }
 globset = "0.4.18"
 gloo = { version = "0.11.0", default-features = false, features = [
@@ -192,6 +194,7 @@ jsonschema = { version = "0.45", default-features = false }
 lasso = { version = "0.7.3", features = ["multi-threaded"] }
 lazy_static = "1.4.0"
 libc = "0.2.81"
+libtest-mimic = "0.8.2"
 line-ending = "1.4.0"
 log = { version = "0.4", features = ["serde", "std"] }
 mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev = "8d3f789c2eb49335d7bf247a06bb649f59b6d4ed" }
@@ -342,7 +345,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "d0e6727" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "b0886a9523e2e05d102f61bd0a212dc15ade4835" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -366,7 +369,7 @@ web-sys = { version = "0.3.69", features = [
 # Disable default features to disable support for WebGPU, which does not yet
 # have wide browser support.  We enable all other default feature of wgpu,
 # though.
-wgpu = { version = "29.0.1", default-features = false, features = [
+wgpu = { version = "30.0.0", default-features = false, features = [
   "dx12",
   "gles",
   "metal",
@@ -509,6 +512,17 @@ codegen-units = 1
 # dev/local channel CLI bundles.
 [profile.release-cli-debug_assertions]
 inherits = "release-cli"
+debug-assertions = true
+
+# Release profile for the standalone TUI. Strip debug-map entries while
+# retaining function symbols so local backtraces and profiles remain readable.
+[profile.release-tui]
+inherits = "release-cli"
+strip = "debuginfo"
+
+# Packaged local/dev TUI builds retain the release profile's debug assertions.
+[profile.release-tui-debug-assertions]
+inherits = "release-tui"
 debug-assertions = true
 
 [profile.release-wasm]

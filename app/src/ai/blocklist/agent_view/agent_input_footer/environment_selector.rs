@@ -21,9 +21,9 @@ use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::appearance::Appearance;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::CloudObjectLookup as _;
 use crate::context_chips::display_menu::{
     ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
 };
@@ -393,9 +393,11 @@ impl EnvironmentSelector {
     /// Saves the selected environment ID to settings.
     fn save_selected_environment_to_settings(&self, env_id: SyncId, ctx: &mut ViewContext<Self>) {
         CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .last_selected_environment_id
-                .set_value(Some(env_id), ctx));
+            report_if_error!(
+                settings
+                    .last_selected_environment_id
+                    .set_value(Some(env_id), ctx)
+            );
         });
     }
 

@@ -1,7 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 use ai::agent::action_result::StopRecordingResult;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, ModelContext};
@@ -12,11 +12,11 @@ use crate::ai::agent::AIAgentActionType;
 use crate::ai::{
     agent::AIAgentActionResultType,
     blocklist::{
+        BlocklistAIHistoryModel,
         action_model::{
             recording_controller::{RecordingController, StopRecordingControllerError},
-            recording_finalize::{finalize_recording_by_id, FinalizeReason},
+            recording_finalize::{FinalizeReason, finalize_recording_by_id},
         },
-        BlocklistAIHistoryModel,
     },
 };
 
@@ -55,18 +55,23 @@ impl StopRecordingExecutor {
                 action,
                 conversation_id,
             } = input;
-            let AIAgentActionType::StopRecording { recording_id } = &action.action else {
+            let AIAgentActionType::StopRecording {
+                recording_id,
+                should_persist,
+            } = &action.action
+            else {
                 return ActionExecution::<()>::InvalidAction.into();
             };
-            // Explicit stop remains retry-safe while the conversation is
+            // A persisting stop remains retry-safe while the conversation is
             // syncing: do not claim the handle until it can be associated with
-            // the conversation. Automatic terminal paths may instead use the
-            // ambient run association so they can upload before teardown.
+            // the conversation for upload. A discard needs no upload
+            // association or server token, so it proceeds regardless of sync
+            // state.
             let conversation_is_synced = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&conversation_id)
                 .and_then(|conversation| conversation.server_conversation_token())
                 .is_some();
-            if !conversation_is_synced {
+            if *should_persist && !conversation_is_synced {
                 return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
                     StopRecordingResult::Error(
                         StopRecordingControllerError::ConversationNotSynced.to_string(),
@@ -78,18 +83,20 @@ impl StopRecordingExecutor {
             // Atomically claim an active recording, join an upload another
             // terminal path already started, or read the retained result. The
             // controller owns the actual stop/upload task in every case.
-            let finalization =
-                match finalize_recording_by_id(recording_id, FinalizeReason::StoppedByAgent, ctx) {
-                    Ok(finalization) => finalization,
-                    Err(error) => {
-                        return ActionExecution::<()>::Sync(
-                            AIAgentActionResultType::StopRecording(StopRecordingResult::Error(
-                                error.to_string(),
-                            )),
-                        )
-                        .into();
-                    }
-                };
+            let finalization = match finalize_recording_by_id(
+                recording_id,
+                FinalizeReason::StoppedByAgent,
+                *should_persist,
+                ctx,
+            ) {
+                Ok(finalization) => finalization,
+                Err(error) => {
+                    return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
+                        StopRecordingResult::Error(error.to_string()),
+                    ))
+                    .into();
+                }
+            };
             let recording_id = recording_id.clone();
 
             // Consume `Finalized` only from the completion callback, after the

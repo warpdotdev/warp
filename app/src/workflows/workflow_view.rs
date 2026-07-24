@@ -36,8 +36,8 @@ use warpui::{
 use super::aliases::WorkflowAliases;
 use super::command_parser::WorkflowCommandDisplayData;
 use super::{CloudWorkflowModel, WorkflowSource, WorkflowType, WorkflowViewMode};
-use crate::ai::blocklist::secret_redaction::find_secrets_in_text;
 use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::secret_redaction::find_secrets_in_text;
 use crate::appearance::Appearance;
 use crate::auth::auth_state::AuthState;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -76,28 +76,28 @@ use crate::server::cloud_objects::update_manager::{
     UpdateManagerEvent,
 };
 use crate::server::ids::{ClientId, ServerId, SyncId};
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::AIClient;
 use crate::server::telemetry::{
     CloudObjectTelemetryMetadata, SharingDialogSource, TelemetryCloudObjectType, TelemetryEvent,
 };
+use crate::settings::AISettings;
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
-use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::ui_components::breadcrumb::{render_breadcrumbs, BreadcrumbState};
+use crate::ui_components::breadcrumb::{BreadcrumbState, render_breadcrumbs};
 use crate::ui_components::buttons::{accent_icon_button, icon_button};
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::ui_components::icons::Icon;
 #[cfg(target_family = "wasm")]
 use crate::uri::web_intent_parser::open_url_on_desktop;
 use crate::util::bindings::CustomAction;
 use crate::view_components::{DismissibleToast, ToastLink, ToastType};
-use crate::workflows::workflow::{Argument, Workflow};
 use crate::workflows::CloudWorkflow;
+use crate::workflows::workflow::{Argument, Workflow};
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::{send_telemetry_from_ctx, FeatureFlag, UserWorkspaces};
+use crate::{FeatureFlag, UserWorkspaces, send_telemetry_from_ctx};
 
 mod alias_argument_selector;
 mod alias_bar;
@@ -557,51 +557,47 @@ impl WorkflowView {
 
         if let (ObjectOperation::Create { .. }, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
+            && self.workflow_id.into_client() == result.client_id
         {
-            if self.workflow_id.into_client() == result.client_id {
-                let server_id = result
-                    .server_id
-                    .expect("Expect server id on success creation");
+            let server_id = result
+                .server_id
+                .expect("Expect server id on success creation");
 
-                // The aliases were created with the old client sync id.  Update them to the new server id.
-                WorkflowAliases::handle(ctx).update(ctx, |aliases, ctx| {
-                    if let Result::Err(e) =
-                        aliases.update_workflow_id(self.workflow_id, server_id.into(), ctx)
-                    {
-                        report_error!(e.context("Failed to update aliases after workflow creation"));
-                    }
-                });
-
-                if let Some(workflow) =
-                    CloudModel::as_ref(ctx).get_workflow_by_uid(&server_id.uid())
+            // The aliases were created with the old client sync id.  Update them to the new server id.
+            WorkflowAliases::handle(ctx).update(ctx, |aliases, ctx| {
+                if let Result::Err(e) =
+                    aliases.update_workflow_id(self.workflow_id, server_id.into(), ctx)
                 {
-                    self.load(
-                        workflow.clone(),
-                        &OpenWarpDriveObjectSettings::default(),
-                        self.workflow_view_mode,
-                        ctx,
-                    );
+                    report_error!(e.context("Failed to update aliases after workflow creation"));
                 }
-                ctx.notify();
+            });
+
+            if let Some(workflow) = CloudModel::as_ref(ctx).get_workflow_by_uid(&server_id.uid()) {
+                self.load(
+                    workflow.clone(),
+                    &OpenWarpDriveObjectSettings::default(),
+                    self.workflow_view_mode,
+                    ctx,
+                );
             }
+            ctx.notify();
         }
 
         if let (ObjectOperation::Update, OperationSuccessType::Success) =
             (&result.operation, &result.success_type)
+            && let Some(workflow) = self.get_cloud_workflow(ctx)
         {
-            if let Some(workflow) = self.get_cloud_workflow(ctx) {
-                // This makes sure we get the correct updated revision_ts. So our subsequent
-                // updates don't fail
-                if self.workflow_id.into_client() == result.client_id
-                    || self.workflow_id.uid() == result.server_id.unwrap_or_default().uid()
-                {
-                    self.load(
-                        workflow,
-                        &OpenWarpDriveObjectSettings::default(),
-                        self.workflow_view_mode,
-                        ctx,
-                    );
-                }
+            // This makes sure we get the correct updated revision_ts. So our subsequent
+            // updates don't fail
+            if self.workflow_id.into_client() == result.client_id
+                || self.workflow_id.uid() == result.server_id.unwrap_or_default().uid()
+            {
+                self.load(
+                    workflow,
+                    &OpenWarpDriveObjectSettings::default(),
+                    self.workflow_view_mode,
+                    ctx,
+                );
             }
         }
     }
@@ -1285,16 +1281,15 @@ impl WorkflowView {
 
             // Check to see if we have enum data for this id, then create a request for it
             for enum_id in type_selector.get_created_enums() {
-                if !sent_requests.contains(&enum_id) {
-                    if let Some(enum_data) = self.all_workflow_enums.get(&enum_id) {
-                        if enum_data.new_data.is_some() {
-                            workflow_arg_type_helpers::save_enum(enum_data, owner, ctx);
+                if !sent_requests.contains(&enum_id)
+                    && let Some(enum_data) = self.all_workflow_enums.get(&enum_id)
+                    && enum_data.new_data.is_some()
+                {
+                    workflow_arg_type_helpers::save_enum(enum_data, owner, ctx);
 
-                            // Make sure we aren't sending duplicate requests.
-                            // If an enum is used in multiple arguments, we'll only save it once
-                            sent_requests.insert(enum_id);
-                        }
-                    }
+                    // Make sure we aren't sending duplicate requests.
+                    // If an enum is used in multiple arguments, we'll only save it once
+                    sent_requests.insert(enum_id);
                 }
             }
 
@@ -2483,37 +2478,37 @@ impl WorkflowView {
         }
 
         // If on the web, then show a button to run this workflow on the desktop.
-        if !ContextFlag::RunWorkflow.is_enabled() && self.can_open_on_desktop(app) {
-            if let Some(url) = self
+        if !ContextFlag::RunWorkflow.is_enabled()
+            && self.can_open_on_desktop(app)
+            && let Some(url) = self
                 .workflow_link(app)
                 .and_then(|link| Url::parse(&link).ok())
-            {
-                let run_on_desktop_button = self
-                    .build_footer_button(
-                        ButtonVariant::Accent,
-                        RUN_ON_DESKTOP_BUTTON_TEXT.to_string(),
-                        Some((Icon::Laptop, TextAndIconAlignment::IconFirst)),
-                        // Reuse the execute button's handle since it's only shown if running workflows is
-                        // supported.
-                        self.ui_state_handles.execute_command_mouse_state.clone(),
-                        appearance,
-                    )
-                    .with_style(UiComponentStyles {
-                        width: Some(RUN_ON_DESKTOP_BUTTON_WIDTH),
-                        ..Default::default()
-                    })
-                    .build()
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(WorkflowAction::OpenLinkOnDesktop(url.clone()))
-                    })
-                    .finish();
-                button_row.add_child(
-                    Container::new(run_on_desktop_button)
-                        .with_margin_left(8.)
-                        .finish(),
-                );
-            }
+        {
+            let run_on_desktop_button = self
+                .build_footer_button(
+                    ButtonVariant::Accent,
+                    RUN_ON_DESKTOP_BUTTON_TEXT.to_string(),
+                    Some((Icon::Laptop, TextAndIconAlignment::IconFirst)),
+                    // Reuse the execute button's handle since it's only shown if running workflows is
+                    // supported.
+                    self.ui_state_handles.execute_command_mouse_state.clone(),
+                    appearance,
+                )
+                .with_style(UiComponentStyles {
+                    width: Some(RUN_ON_DESKTOP_BUTTON_WIDTH),
+                    ..Default::default()
+                })
+                .build()
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkflowAction::OpenLinkOnDesktop(url.clone()))
+                })
+                .finish();
+            button_row.add_child(
+                Container::new(run_on_desktop_button)
+                    .with_margin_left(8.)
+                    .finish(),
+            );
         }
 
         Flex::column()
@@ -3194,17 +3189,16 @@ impl BackingView for WorkflowView {
             );
         }
 
-        if self.can_open_on_desktop(ctx) {
-            if let Some(link) = self.workflow_link(ctx) {
-                if let Ok(url) = Url::parse(&link) {
-                    menu_items.push(
-                        MenuItemFields::new("Open on Desktop")
-                            .with_on_select_action(WorkflowAction::OpenLinkOnDesktop(url))
-                            .with_icon(Icon::Laptop)
-                            .into_item(),
-                    );
-                }
-            }
+        if self.can_open_on_desktop(ctx)
+            && let Some(link) = self.workflow_link(ctx)
+            && let Ok(url) = Url::parse(&link)
+        {
+            menu_items.push(
+                MenuItemFields::new("Open on Desktop")
+                    .with_on_select_action(WorkflowAction::OpenLinkOnDesktop(url))
+                    .with_icon(Icon::Laptop)
+                    .into_item(),
+            );
         }
 
         let space = CloudViewModel::as_ref(ctx).object_space(&self.workflow_id.uid(), ctx);

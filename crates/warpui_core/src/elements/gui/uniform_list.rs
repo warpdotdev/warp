@@ -5,15 +5,15 @@ use std::sync::Arc;
 use async_channel::Sender;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 use super::{
-    try_rect_with_z, AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext,
-    PaintContext, Point, ScrollData, ScrollableElement, SizeConstraint, ZIndex,
+    AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
+    Point, ScrollData, ScrollableElement, SizeConstraint, ZIndex, try_rect_with_z,
 };
+use crate::ClipBounds;
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::units::{IntoLines, IntoPixels, Lines, Pixels};
-use crate::ClipBounds;
 
 #[derive(Clone)]
 pub struct UniformListState(Arc<Mutex<StateInner>>);

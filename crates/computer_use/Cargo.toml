@@ -29,6 +29,7 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 command.workspace = true
+dispatch2.workspace = true
 image.workspace = true
 # `instant` is already provided by the common [dependencies] table above.
 libc.workspace = true

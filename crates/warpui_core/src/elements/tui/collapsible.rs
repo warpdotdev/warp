@@ -10,8 +10,8 @@
 //! header click, leaving the caller to flip its own state and re-render.
 
 use super::{TuiElement, TuiEventContext, TuiFlex, TuiHoverable, TuiStyle, TuiText};
-use crate::elements::MouseStateHandle;
 use crate::AppContext;
+use crate::elements::MouseStateHandle;
 
 /// Disclosure glyph shown when the section is collapsed.
 const CHEVRON_COLLAPSED: &str = "▸";

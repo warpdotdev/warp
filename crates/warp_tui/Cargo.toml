@@ -1,7 +1,7 @@
 [package]
 name = "warp_tui"
-edition = "2021"
-description = "Headless terminal-UI front-end for Warp"
+edition = "2024"
+description = "Warp Agent CLI"
 authors.workspace = true
 publish.workspace = true
 license.workspace = true
@@ -38,12 +38,14 @@ anyhow.workspace = true
 async-channel.workspace = true
 async-fs.workspace = true
 base64.workspace = true
+blocking.workspace = true
 channel_versions.workspace = true
 clap.workspace = true
 command.workspace = true
 dirs.workspace = true
 futures.workspace = true
 futures-lite.workspace = true
+fs4.workspace = true
 http_client.workspace = true
 instant.workspace = true
 itertools.workspace = true
@@ -55,26 +57,44 @@ pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
 rangemap.workspace = true
 serde_json.workspace = true
+shell-words = "1.1.0"
 similar.workspace = true
 string-offset.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 sum_tree.workspace = true
+tokio.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 vec1.workspace = true
-warp = { workspace = true, features = ["tui"] }
+warp = { workspace = true, features = ["image_as_context", "tui", "voice_input"] }
 warp_channel_config.workspace = true
+warp_completer.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
 warp_editor.workspace = true
 warp_files.workspace = true
+warp_logging.workspace = true
 warp_search_core.workspace = true
 warp_terminal.workspace = true
 warp_util.workspace = true
 warpui.workspace = true
 warpui_core = { workspace = true, features = ["tui"] }
 uuid.workspace = true
+
+# Native OS-clipboard transport for local TUI runs (copy-out only, text-only).
+# OSC 52 (see `src/clipboard.rs`) remains the transport for remote/SSH sessions
+# and the local fallback. `arboard` supports macOS/Linux/FreeBSD/Windows, so it
+# is added for all desktop targets to give a single cross-platform native path.
+# The workspace dep is `default-features = false`; Linux/FreeBSD additionally
+# enable `wayland-data-control` so native copies work on Wayland sessions
+# (otherwise they fall back to X11 only, and pure-Wayland copies miss the native
+# path). macOS/Windows have no such backend feature and stay text-only.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+arboard = { workspace = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+arboard = { workspace = true, features = ["wayland-data-control"] }
 
 [dev-dependencies]
 tempfile.workspace = true

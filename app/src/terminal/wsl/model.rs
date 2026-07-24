@@ -74,8 +74,10 @@ impl WslInfo {
                 let distribution_key = key
                     .open(&uuid)
                     .map_err(|err| {
-                        report_error!(anyhow::Error::new(err)
-                            .context("Could not open distribution registry key"))
+                        report_error!(
+                            anyhow::Error::new(err)
+                                .context("Could not open distribution registry key")
+                        )
                     })
                     .ok()?;
                 let name = distribution_key

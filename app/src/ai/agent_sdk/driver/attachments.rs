@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use base64::engine::general_purpose;
 use base64::Engine;
-use futures::future::join_all;
+use base64::engine::general_purpose;
 use futures::TryStreamExt as _;
+use futures::future::join_all;
 use mime_guess::from_path;
 use tokio::fs;
 use tokio_util::io::StreamReader;
@@ -13,12 +13,12 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
-use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::{AttachmentInput, TaskAttachment};
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
+use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::presigned_upload::HttpStatusError;
-use crate::server::server_api::ServerApi;
 use crate::util::image::MIN_IMAGE_HEADER_SIZE;
 
 /// Maximum number of file attachments for a cloud agent task.

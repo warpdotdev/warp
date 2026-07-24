@@ -8,6 +8,7 @@ use warp_editor::selection::{TextDirection, TextUnit};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, ModelHandle};
 
+use crate::clipboard::copy_to_clipboard;
 use crate::editor_element::TuiEditorAction;
 
 /// Editing commands shared by TUI text fields.
@@ -33,6 +34,8 @@ pub enum TuiEditorCommand {
     SelectWordLeft,
     SelectWordRight,
     SelectAll,
+    Copy,
+    Cut,
     KillToLineEnd,
     KillToLineStart,
     Yank,
@@ -95,6 +98,14 @@ impl TuiEditorBehavior {
 pub(crate) enum TuiEditorInteractionOutcome {
     FollowCursor,
     PreserveViewport,
+    Clipboard(TuiEditorClipboardAction),
+}
+
+/// Clipboard operation requested by a shared TUI editor command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TuiEditorClipboardAction {
+    Copy,
+    Cut,
 }
 
 /// Selects stable user-configurable names for each binding consumer.
@@ -125,7 +136,7 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
     EditorBindingSpec {
         command: TuiEditorCommand::InsertNewline,
         input_name: Some("tui:input:insert_newline"),
-        editor_name: None,
+        editor_name: Some("tui:editor:insert_newline"),
         description: "Insert a newline",
         keys: &["shift-enter", "ctrl-j", "alt-enter"],
     },
@@ -261,6 +272,20 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         editor_name: Some("tui:editor:select_all"),
         description: "Select all text",
         keys: &["ctrl-shift-A"],
+    },
+    EditorBindingSpec {
+        command: TuiEditorCommand::Copy,
+        input_name: Some("tui:input:copy"),
+        editor_name: Some("tui:editor:copy"),
+        description: "Copy selected text",
+        keys: &["ctrl-shift-C", "alt-w"],
+    },
+    EditorBindingSpec {
+        command: TuiEditorCommand::Cut,
+        input_name: Some("tui:input:cut"),
+        editor_name: Some("tui:editor:cut"),
+        description: "Cut selected text",
+        keys: &["ctrl-x"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::KillToLineEnd,
@@ -435,6 +460,12 @@ impl TuiEditorState {
             TuiEditorCommand::SelectAll => {
                 model.update(ctx, |model, ctx| model.select_all(ctx));
             }
+            TuiEditorCommand::Copy => {
+                return TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Copy);
+            }
+            TuiEditorCommand::Cut => {
+                return TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Cut);
+            }
             TuiEditorCommand::KillToLineEnd => {
                 if let Some(killed) = model.update(ctx, |model, ctx| {
                     model.kill_to_char_cell_visual_row_end(ctx)
@@ -467,6 +498,46 @@ impl TuiEditorState {
     }
 }
 
+/// Copies the current editor selection and, for a cut, deletes it only after
+/// the clipboard write succeeds. Returns `false` when there is no selection.
+pub(crate) fn apply_editor_clipboard_action(
+    model: &ModelHandle<CodeEditorModel>,
+    action: TuiEditorClipboardAction,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    apply_editor_clipboard_action_with(model, action, copy_to_clipboard, ctx)
+}
+
+fn apply_editor_clipboard_action_with(
+    model: &ModelHandle<CodeEditorModel>,
+    action: TuiEditorClipboardAction,
+    copy: impl FnOnce(&str) -> anyhow::Result<()>,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    let selected_text = model
+        .as_ref(ctx)
+        .read_selected_text_as_clipboard_content(ctx)
+        .plain_text;
+    if selected_text.is_empty() {
+        return Ok(false);
+    }
+
+    copy(&selected_text)?;
+    if action == TuiEditorClipboardAction::Cut {
+        model.update(ctx, |model, ctx| model.backspace(ctx));
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+pub(crate) fn apply_editor_clipboard_action_for_test(
+    model: &ModelHandle<CodeEditorModel>,
+    action: TuiEditorClipboardAction,
+    copy: impl FnOnce(&str) -> anyhow::Result<()>,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    apply_editor_clipboard_action_with(model, action, copy, ctx)
+}
 /// Applies an element-originated action and reports the required viewport work.
 pub(crate) fn apply_editor_action(
     model: &ModelHandle<CodeEditorModel>,
@@ -478,7 +549,7 @@ pub(crate) fn apply_editor_action(
         TuiEditorAction::InsertChar(c) => {
             model.update(ctx, |model, ctx| model.user_insert(&c.to_string(), ctx));
         }
-        TuiEditorAction::InsertText(text) => {
+        TuiEditorAction::PasteText(text) => {
             let text = behavior.normalize_text(text);
             model.update(ctx, |model, ctx| model.user_insert(text, ctx));
         }

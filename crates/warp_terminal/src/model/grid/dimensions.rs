@@ -38,11 +38,11 @@ impl Dimensions for (usize, usize) {
 #[cfg(test)]
 impl Dimensions for (crate::model::VisibleRow, usize) {
     fn total_rows(&self) -> usize {
-        self.0 .0
+        self.0.0
     }
 
     fn visible_rows(&self) -> usize {
-        self.0 .0
+        self.0.0
     }
 
     fn columns(&self) -> usize {

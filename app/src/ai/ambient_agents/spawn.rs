@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use futures::{select, FutureExt, Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt, select};
 use session_sharing_protocol::common::SessionId;
 
 use super::{AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState};
@@ -275,8 +275,8 @@ fn poll_run_until_joinable_session(
                                 return;
                             }
 
-                            if task.state == AmbientAgentTaskState::InProgress {
-                                if let Some(session_join_info) = SessionJoinInfo::from_task(&task) {
+                            if task.state == AmbientAgentTaskState::InProgress
+                                && let Some(session_join_info) = SessionJoinInfo::from_task(&task) {
                                     let has_new_session = match &mode {
                                         RunPollMode::InitialRun
                                         | RunPollMode::Followup {
@@ -296,7 +296,6 @@ fn poll_run_until_joinable_session(
                                         return;
                                     }
                                 }
-                            }
                         }
                         Err(err) => {
                             yield Err(err);

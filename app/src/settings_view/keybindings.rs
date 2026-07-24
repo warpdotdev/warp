@@ -18,24 +18,24 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use super::settings_page::{
-    render_sub_header, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
-    SettingsPageViewHandle, SettingsWidget,
-};
 use super::SettingsSection;
+use super::settings_page::{
+    LocalOnlyIconState, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, render_sub_header,
+};
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextOptions,
 };
-use crate::keyboard::{write_custom_keybinding, UserDefinedKeybinding};
+use crate::keyboard::{UserDefinedKeybinding, write_custom_keybinding};
 use crate::search_bar::SearchBar;
 use crate::settings::CloudPreferencesSettings;
 use crate::util::bindings::{
-    filter_bindings_including_keystroke, reset_keybinding_to_default, set_custom_keybinding,
-    CommandBinding,
+    CommandBinding, filter_bindings_including_keystroke, reset_keybinding_to_default,
+    set_custom_keybinding,
 };
-use crate::{send_telemetry_from_ctx, themes, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx, themes};
 
 const FONT_DELTA: f32 = 2.;
 const CANCEL_SAVE_BUTTONS_SPACING: f32 = 4.0;
@@ -109,10 +109,10 @@ struct ConflictMap {
 
 impl ConflictMap {
     fn update(&mut self, old: &Option<Keystroke>, new: Option<Keystroke>) {
-        if let Some(old) = old {
-            if let Some(old_conflict_count) = self.map.get_mut(old) {
-                *old_conflict_count = old_conflict_count.saturating_sub(1);
-            }
+        if let Some(old) = old
+            && let Some(old_conflict_count) = self.map.get_mut(old)
+        {
+            *old_conflict_count = old_conflict_count.saturating_sub(1);
         }
 
         if let Some(new) = new {

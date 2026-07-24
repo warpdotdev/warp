@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use mockall::predicate::eq;
@@ -76,10 +76,12 @@ async fn hydrator_ignores_events_for_other_runs() {
     let hydrator = MessageHydrator::new(ai_client);
     let event = make_run_event(7, "new_message", "other-run", Some("msg-123"));
 
-    assert!(hydrator
-        .hydrate_event_for_recipient(&event, "child-run")
-        .await
-        .is_none());
+    assert!(
+        hydrator
+            .hydrate_event_for_recipient(&event, "child-run")
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]

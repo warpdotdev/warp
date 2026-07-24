@@ -3,9 +3,9 @@
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "local_fs")]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_lite::StreamExt;
 use ignore::gitignore::Gitignore;
@@ -607,10 +607,10 @@ fn evaluate_entry(
         match options.ignored_path_strategy {
             IgnoredPathStrategy::Exclude => return Err(BuildTreeError::Ignored),
             IgnoredPathStrategy::IncludeOnly(patterns) => {
-                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str()) {
-                    if !patterns.iter().any(|pattern| file_name == pattern) {
-                        return Err(BuildTreeError::Ignored);
-                    }
+                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str())
+                    && !patterns.iter().any(|pattern| file_name == pattern)
+                {
+                    return Err(BuildTreeError::Ignored);
                 }
             }
             IgnoredPathStrategy::IncludeLazy => {

@@ -1,22 +1,27 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
+use warp::terminal::model::ansi::{self, Handler};
+use warp::terminal::model::session::SessionInfo;
+use warp::terminal::shell::ShellType;
 use warp::tui_export::{TermMode, TerminalModel};
 use warp_terminal::model::escape_sequences::{
-    ModeProvider, BRACKETED_PASTE_END, BRACKETED_PASTE_START,
+    BRACKETED_PASTE_END, BRACKETED_PASTE_START, ModeProvider,
 };
-use warpui::EntityIdMap;
+use warpui::{EntityId, EntityIdMap};
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
-    TuiPoint, TuiScreenPoint, TuiScreenPosition, TuiScreenRect, TuiSize, TuiZIndex,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPoint, TuiScene, TuiScreenPoint, TuiScreenPosition, TuiScreenRect, TuiSize,
+    TuiZIndex,
 };
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
 use warpui_core::{App, AppContext};
 
 use super::{
-    mouse_event_to_pty_bytes, paste_bytes, pty_bytes_for_event, MouseReportPolicy,
-    TuiTerminalContentElement,
+    ForwardedPtyInput, MouseReportPolicy, TuiTerminalContentElement, forwarded_pty_input_for_event,
+    mouse_event_to_pty_bytes, normalize_paste_text, paste_bytes_from_normalized,
 };
 
 /// Builds retained screen bounds anchored at `(x, y)`.
@@ -34,6 +39,28 @@ impl ModeProvider for MouseModeProvider {
     fn is_term_mode_set(&self, _mode: TermMode) -> bool {
         false
     }
+}
+
+fn forwarded_input<'a>(
+    event: &'a TuiEvent,
+    model: &Arc<FairMutex<TerminalModel>>,
+) -> Option<ForwardedPtyInput<'a>> {
+    forwarded_pty_input_for_event(event, &mut model.lock())
+}
+
+fn dispatch_pty_input(
+    event: &TuiEvent,
+    model: Arc<FairMutex<TerminalModel>>,
+    app: &AppContext,
+) -> bool {
+    let (resize_tx, _) = async_channel::unbounded();
+    let mut element =
+        TuiTerminalContentElement::new(resize_tx, FillElement { size: None }.finish())
+            .with_pty_input(model);
+    let mut rendered_views = EntityIdMap::default();
+    let mut event_ctx = TuiEventContext::new(Rc::new(TuiScene::default()), &mut rendered_views);
+    event_ctx.set_origin_view(Some(EntityId::new()));
+    element.dispatch_event(event, &mut event_ctx, app)
 }
 
 /// Builds a reporting policy with the given per-category flags.
@@ -101,6 +128,34 @@ fn key_down(key: &str, chars: &str, ctrl: bool) -> TuiEvent {
     }
 }
 
+fn input_matching_model() -> Arc<FairMutex<TerminalModel>> {
+    let mut model = TerminalModel::mock(None, None);
+    let shell = ShellType::from_name("bash").unwrap();
+    let session_info = SessionInfo::create_pending(
+        shell,
+        ansi::InitShellValue {
+            shell: "bash".into(),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        None,
+    )
+    .merge_from_bootstrapped_value(ansi::BootstrappedValue {
+        shell: "bash".into(),
+        shell_version: Some("3.2".into()),
+        ..Default::default()
+    });
+    model
+        .block_list_mut()
+        .early_output_mut()
+        .init_session(&session_info);
+    model.simulate_long_running_block("sleep 5", "");
+    model.finish_block();
+    Arc::new(FairMutex::new(model))
+}
+
 #[test]
 fn layout_measures_and_after_layout_publishes_the_size() {
     App::test((), |app| async move {
@@ -134,23 +189,66 @@ fn layout_measures_and_after_layout_publishes_the_size() {
 }
 
 #[test]
-fn key_events_use_terminal_aware_pty_encoding() {
+fn forwarded_input_preserves_bytes_and_reports_only_echoable_text() {
     let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    let cases = [
+        (key_down("enter", "", false), vec![b'\r'], Some("\r")),
+        (key_down("d", "d", true), vec![0x04], None),
+        (
+            key_down("é", "é", false),
+            "é".as_bytes().to_vec(),
+            Some("é"),
+        ),
+        (
+            TuiEvent::Paste {
+                text: "first\nsecond\r\nthird".to_owned(),
+            },
+            b"first\rsecond\rthird".to_vec(),
+            Some("first\rsecond\rthird"),
+        ),
+    ];
 
-    assert_eq!(
-        pty_bytes_for_event(&key_down("enter", "", false), &model),
-        Some(vec![b'\r'])
-    );
-    assert_eq!(
-        pty_bytes_for_event(&key_down("d", "d", true), &model),
-        Some(vec![0x04])
-    );
-    assert_eq!(
-        pty_bytes_for_event(&key_down("é", "é", false), &model),
-        Some("é".as_bytes().to_vec())
-    );
+    for (event, expected_bytes, expected_typeahead) in cases {
+        let input = forwarded_input(&event, &model).unwrap();
+        assert_eq!(input.bytes, expected_bytes);
+        assert_eq!(input.possible_typeahead.as_deref(), expected_typeahead);
+    }
 }
 
+#[test]
+fn dispatch_reports_only_input_that_can_echo_as_typeahead() {
+    App::test((), |app| async move {
+        app.read(|app| {
+            let control_model = input_matching_model();
+            assert!(dispatch_pty_input(
+                &key_down("d", "d", true),
+                control_model.clone(),
+                app,
+            ));
+            control_model.lock().block_list_mut().input('d');
+            assert_eq!(
+                control_model.lock().block_list().early_output().typeahead(),
+                "",
+            );
+
+            let printable_model = input_matching_model();
+            assert!(dispatch_pty_input(
+                &key_down("é", "é", false),
+                printable_model.clone(),
+                app,
+            ));
+            printable_model.lock().block_list_mut().input('é');
+            assert_eq!(
+                printable_model
+                    .lock()
+                    .block_list()
+                    .early_output()
+                    .typeahead(),
+                "é",
+            );
+        });
+    });
+}
 #[test]
 fn sgr_mouse_events_use_area_relative_coordinates() {
     let area = bounds(10, 5, 20, 10);
@@ -335,17 +433,19 @@ fn composing_key_event_is_not_forwarded() {
     };
     *is_composing = true;
 
-    assert_eq!(pty_bytes_for_event(&event, &model), None);
+    assert!(forwarded_input(&event, &model).is_none());
 }
 
 #[test]
 fn paste_normalizes_newlines_and_optionally_adds_bracket_markers() {
+    let normalized = normalize_paste_text("first\nsecond\r\nthird\r");
     assert_eq!(
-        paste_bytes("first\nsecond\r\nthird\r", false),
+        paste_bytes_from_normalized(&normalized, false),
         b"first\rsecond\rthird\r"
     );
 
-    let bytes = paste_bytes("first\nsecond", true);
+    let normalized = normalize_paste_text("first\nsecond");
+    let bytes = paste_bytes_from_normalized(&normalized, true);
     assert!(bytes.starts_with(BRACKETED_PASTE_START));
     assert!(bytes.ends_with(BRACKETED_PASTE_END));
     assert_eq!(

@@ -21,7 +21,11 @@ impl ProjectDataSource {
         }
     }
 
-    pub fn top_n(&self, limit: usize, app: &AppContext) -> impl Iterator<Item = ProjectSearchItem> {
+    pub fn top_n(
+        &self,
+        limit: usize,
+        app: &AppContext,
+    ) -> impl Iterator<Item = ProjectSearchItem> + use<> {
         // Create search items and sort them using the Ord implementation
         self.project_model
             .as_ref(app)

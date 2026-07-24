@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::Duration;
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
+use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedText;
@@ -14,9 +14,9 @@ use num_traits::SaturatingSub;
 use regex::Regex;
 use string_offset::CharOffset;
 use url::Url;
-use vec1::{vec1, Vec1};
-use warp_core::features::FeatureFlag;
+use vec1::{Vec1, vec1};
 use warp_core::r#async::debounce;
+use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::content::buffer::{
     AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
@@ -42,10 +42,10 @@ use warpui::{
 };
 
 use super::super::telemetry::SelectionMode as TelemetrySelectionMode;
+use super::NotebookWorkflow;
 use super::embedding_model::NotebookEmbed;
 use super::interaction_state_model::InteractionStateModel;
 use super::notebook_command::NotebookCommand;
-use super::NotebookWorkflow;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::editor::InteractionState;
 use crate::notebooks::editor::interaction_state_model::InteractionStateModelEvent;
@@ -418,11 +418,11 @@ impl NotebooksEditorModel {
     }
 
     fn handle_content_model_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
-        if let Some(window_id) = self.rte_window_id {
-            if !ctx.is_window_open(window_id) {
-                log::debug!("Ignoring content event for closed window");
-                return;
-            }
+        if let Some(window_id) = self.rte_window_id
+            && !ctx.is_window_open(window_id)
+        {
+            log::debug!("Ignoring content event for closed window");
+            return;
         }
 
         let can_edit = matches!(self.interaction_state(ctx), InteractionState::Editable);

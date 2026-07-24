@@ -274,7 +274,7 @@ impl Args {
                     }
                 }
 
-                if !FeatureFlag::CloudAgentRunnerCLICommands.is_enabled() {
+                if !FeatureFlag::CloudAgentRunners.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "runner" {
                         eprintln!("error: unrecognized subcommand 'runner'\n");
@@ -403,7 +403,7 @@ impl Args {
         }
 
         // Hide the runner subcommand from help text.
-        if !FeatureFlag::CloudAgentRunnerCLICommands.is_enabled() {
+        if !FeatureFlag::CloudAgentRunners.is_enabled() {
             command = command.mut_subcommand("runner", |c| c.hide(true));
         }
 

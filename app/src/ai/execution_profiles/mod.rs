@@ -1,7 +1,7 @@
 pub use cloud_object_models::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, CloudAIExecutionProfile,
-    CloudAIExecutionProfileModel, ComputerUsePermission, RunAgentsPermission, WriteToPtyPermission,
-    PROFILE_NAME_MAX_LENGTH,
+    CloudAIExecutionProfileModel, ComputerUsePermission, PROFILE_NAME_MAX_LENGTH,
+    RunAgentsPermission, WriteToPtyPermission,
 };
 use markdown_parser::{FormattedTextFragment, FormattedTextInline};
 use warp_core::features::FeatureFlag;
@@ -29,9 +29,11 @@ pub(crate) fn long_context_pricing_warning_title() -> FormattedTextInline {
     ]
 }
 
+mod config;
 pub mod editor;
 pub mod model_menu_items;
 pub mod profiles;
+pub use config::{ExecutionProfileId, ExecutionProfilesConfig};
 
 /// Result of resolving the cloud agent computer use setting.
 /// Contains both the effective value and whether it's forced by organization policy.
@@ -91,6 +93,22 @@ pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentCom
 
 #[cfg(not(feature = "agent_mode_evals"))]
 pub fn create_default_from_legacy_settings(app: &AppContext) -> AIExecutionProfile {
+    create_default_from_legacy_settings_with_profile(AIExecutionProfile::default(), app)
+}
+
+#[cfg(not(feature = "agent_mode_evals"))]
+fn create_default_for_tui_from_legacy_settings(app: &AppContext) -> AIExecutionProfile {
+    create_default_from_legacy_settings_with_profile(
+        AIExecutionProfile::default_profile_for_tui(),
+        app,
+    )
+}
+
+#[cfg(not(feature = "agent_mode_evals"))]
+fn create_default_from_legacy_settings_with_profile(
+    default_profile: AIExecutionProfile,
+    app: &AppContext,
+) -> AIExecutionProfile {
     // Note that the legacy "Autonomy" and "Code Access" settings are not imported here.
     // The "Code Access" setting defaulted to "Always Ask", which is the most restrictive, so
     // it's impossible for us to infer some hesitancy about autonomy from the setting and we should
@@ -109,7 +127,7 @@ pub fn create_default_from_legacy_settings(app: &AppContext) -> AIExecutionProfi
             .cloned()
             .collect(),
         directory_allowlist: ai_settings.agent_mode_coding_file_read_allowlist.clone(),
-        ..Default::default()
+        ..default_profile
     }
 }
 

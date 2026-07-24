@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::view::AnyTuiView;
 use crate::core::view::AnyViewHandle;
 use crate::core::{AnyView, BlurContext, FocusContext};
-use crate::{keymap, AccessibilityData, AppContext, CursorInfo, EntityId, EntityIdMap};
+use crate::{AccessibilityData, AppContext, CursorInfo, EntityId, EntityIdMap, keymap};
 
 /// A unique identifier for a window.
 ///

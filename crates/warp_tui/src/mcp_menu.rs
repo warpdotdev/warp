@@ -6,8 +6,8 @@ use warp_search_core::inline_menu::InlineMenuSelection;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
 use crate::inline_menu::{
-    keep_selected_visible, result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, keep_selected_visible, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::ui::abbreviate_home_prefix;
@@ -185,6 +185,7 @@ impl TuiMcpMenuModel {
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
                     description: row.description.clone(),
+                    state_suffix: None,
                     is_selectable: row.action.is_some(),
                     style: TuiInlineMenuRowStyle::Default,
                 })

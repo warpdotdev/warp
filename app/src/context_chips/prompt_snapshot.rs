@@ -4,7 +4,7 @@ use warpui::{AppContext, SingletonEntity};
 
 use super::current_prompt::CurrentPrompt;
 use super::prompt::Prompt;
-use super::{chips_to_string, ChipResult, ChipValue};
+use super::{ChipResult, ChipValue, chips_to_string};
 use crate::context_chips::ContextChipKind;
 use crate::settings::WarpPromptSeparator;
 

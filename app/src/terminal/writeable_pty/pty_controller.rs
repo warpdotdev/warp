@@ -12,6 +12,7 @@ use warpui::r#async::block_on;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::Message;
+use crate::SessionSettings;
 use crate::ai::agent::AIAgentPtyWriteMode;
 use crate::terminal::input::CommandExecutionSource;
 use crate::terminal::line_editor_status::{LineEditorStatus, LineEditorStatusEvent};
@@ -20,14 +21,13 @@ use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::session::{
     ExecutorCommandEvent, InBandCommandCancelledEvent, SessionInfo, Sessions,
 };
-use crate::terminal::model::{escape_sequences, StartCommandOutcome};
+use crate::terminal::model::{StartCommandOutcome, escape_sequences};
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::LINEFEED_REGEX;
 #[cfg(not(target_family = "wasm"))]
-use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
-use crate::terminal::{bootstrap, SizeUpdate, TerminalModel};
-use crate::SessionSettings;
+use crate::terminal::writeable_pty::bootstrap_file::{TempBootstrapFile, permanent_bootstrap_file};
+use crate::terminal::{SizeUpdate, TerminalModel, bootstrap};
 
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];
@@ -317,14 +317,12 @@ impl<T: EventLoopSender> PtyController<T> {
             before_write_fn: Some(Box::new(move || {
                 let mut terminal_model = terminal_model.lock();
                 let outcome = terminal_model.start_in_band_command_execution();
-                if !outcome.is_accepted() {
-                    if let Err(err) = block_on(cancel_tx.send(InBandCommandCancelledEvent {
+                if !outcome.is_accepted()
+                    && let Err(err) = block_on(cancel_tx.send(InBandCommandCancelledEvent {
                         command_id: callback_command_id.clone(),
-                    })) {
-                        log::warn!(
-                            "Pty Controller failed to cancel rejected in band command: {err:?}"
-                        );
-                    }
+                    }))
+                {
+                    log::warn!("Pty Controller failed to cancel rejected in band command: {err:?}");
                 }
                 outcome
             })),
@@ -424,21 +422,24 @@ impl<T: EventLoopSender> PtyController<T> {
             // reduces the amount of reformatting that Fish tries to do and so improves
             // bootstrap speed. We need to add an explicit leading space, since Fish
             // automatically trims the input when performing a bracketed paste.
-            if let Some(file) = create_bootstrap_file(&bootstrap, shell_type, wsl_distribution) {
-                if let Some(path) = file.path_as_bytes() {
-                    self.source_bootstrap_script(path, shell_type, ctx);
-                } else {
-                    self.write_terminating_bootstrap_bytes(ctx);
-                    report_error!("Could not convert bootstrap script file path to str");
-                }
+            match create_bootstrap_file(&bootstrap, shell_type, wsl_distribution) {
+                Some(file) => {
+                    if let Some(path) = file.path_as_bytes() {
+                        self.source_bootstrap_script(path, shell_type, ctx);
+                    } else {
+                        self.write_terminating_bootstrap_bytes(ctx);
+                        report_error!("Could not convert bootstrap script file path to str");
+                    }
 
-                self.bootstrap_file = Some(file);
-            } else {
-                self.write_bytes(&b" "[..], ctx);
-                self.write_bytes(escape_sequences::BRACKETED_PASTE_START, ctx);
-                self.write_bytes(bootstrap, ctx);
-                self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
-                self.write_terminating_bootstrap_bytes(ctx);
+                    self.bootstrap_file = Some(file);
+                }
+                _ => {
+                    self.write_bytes(&b" "[..], ctx);
+                    self.write_bytes(escape_sequences::BRACKETED_PASTE_START, ctx);
+                    self.write_bytes(bootstrap, ctx);
+                    self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
+                    self.write_terminating_bootstrap_bytes(ctx);
+                }
             }
         } else if bootstrap::is_container_subshell(pending_session_info) {
             // Write in 4KB chunks with 50ms delays to avoid overwhelming
@@ -688,10 +689,10 @@ impl<T: EventLoopSender> PtyController<T> {
             return false;
         }
 
-        if let Some(on_write_fn) = on_write_fn {
-            if !on_write_fn().is_accepted() {
-                return false;
-            }
+        if let Some(on_write_fn) = on_write_fn
+            && !on_write_fn().is_accepted()
+        {
+            return false;
         }
 
         if is_for_command {

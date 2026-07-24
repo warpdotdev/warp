@@ -5,7 +5,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::imageops::FilterType;
@@ -933,12 +933,12 @@ impl ImageCache {
                 // If it is already in the image cache at the target size and fit, return it.
                 let cache = if should_cache_rendered_image {
                     let cache = self.images.upgradable_read();
-                    if let Some(inner_map) = cache.get(&cache_key) {
-                        if let Some(image) = inner_map.get(&rendered_image_cache_key) {
-                            return AssetState::Loaded {
-                                data: image.clone(),
-                            };
-                        }
+                    if let Some(inner_map) = cache.get(&cache_key)
+                        && let Some(image) = inner_map.get(&rendered_image_cache_key)
+                    {
+                        return AssetState::Loaded {
+                            data: image.clone(),
+                        };
                     }
                     Some(cache)
                 } else {

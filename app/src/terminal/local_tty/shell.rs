@@ -11,11 +11,11 @@ use warp_core::session_id::SessionId;
 use warp_errors::report_error;
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
 
+use crate::terminal::ShellLaunchData;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::bootstrap::{generate_session_id, init_shell_script_for_shell};
 use crate::terminal::local_tty::docker_sandbox::DockerSandboxShellStarter;
 use crate::terminal::shell::{ShellName, ShellType};
-use crate::terminal::ShellLaunchData;
 use crate::util::path::resolve_executable;
 #[cfg(windows)]
 use crate::util::windows::{powershell_5_path, powershell_7_path, wsl_path};
@@ -116,7 +116,7 @@ impl ShellStarter {
                 ShellLaunchData::WSL { distro } => {
                     return Some(ShellStarterSourceOrWslName::WSLName {
                         distro_name: distro,
-                    })
+                    });
                 }
                 ShellLaunchData::MSYS2 {
                     executable_path,

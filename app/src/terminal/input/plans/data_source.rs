@@ -7,11 +7,11 @@ use warpui::{AppContext, Entity, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::SyncDataSource;
-use crate::terminal::input::plans::search_item::PlanSearchItem;
 use crate::terminal::input::plans::AcceptPlan;
+use crate::terminal::input::plans::search_item::PlanSearchItem;
 
 pub struct PlanMenuDataSource {
     conversation_id: AIConversationId,

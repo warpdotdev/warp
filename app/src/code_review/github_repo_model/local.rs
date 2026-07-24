@@ -12,8 +12,8 @@ use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel}
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
 use crate::util::git::{
-    get_pr_for_branch, get_repository_info, is_gh_auth_error, is_gh_missing_error, PrInfo,
-    RepositoryInfo,
+    PrInfo, RepositoryInfo, get_pr_for_branch, get_repository_info, is_gh_auth_error,
+    is_gh_missing_error,
 };
 
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -314,9 +314,11 @@ impl LocalGitHubRepoModel {
         let current = *SessionSettings::as_ref(ctx).github_pr_chip_default_validation;
         if current != GithubPrPromptChipDefaultValidation::Suppressed {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .github_pr_chip_default_validation
-                    .set_value(GithubPrPromptChipDefaultValidation::Suppressed, ctx));
+                report_if_error!(
+                    settings
+                        .github_pr_chip_default_validation
+                        .set_value(GithubPrPromptChipDefaultValidation::Suppressed, ctx)
+                );
             });
         }
     }
@@ -325,9 +327,11 @@ impl LocalGitHubRepoModel {
         let current = *SessionSettings::as_ref(ctx).github_pr_chip_default_validation;
         if current != GithubPrPromptChipDefaultValidation::Validated {
             SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .github_pr_chip_default_validation
-                    .set_value(GithubPrPromptChipDefaultValidation::Validated, ctx));
+                report_if_error!(
+                    settings
+                        .github_pr_chip_default_validation
+                        .set_value(GithubPrPromptChipDefaultValidation::Validated, ctx)
+                );
             });
         }
     }

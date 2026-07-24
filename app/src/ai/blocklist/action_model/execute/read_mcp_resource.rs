@@ -1,5 +1,5 @@
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle};
@@ -11,8 +11,8 @@ use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::{
     agent::{AIAgentActionResultType, ReadMCPResourceResult},
     blocklist::{
-        action_model::{AIAgentAction, AIAgentActionType},
         BlocklistAIPermissions,
+        action_model::{AIAgentAction, AIAgentActionType},
     },
 };
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -78,7 +78,7 @@ impl ReadMCPResourceExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         #[cfg(target_family = "wasm")]
         {
             ActionExecution::<()>::InvalidAction

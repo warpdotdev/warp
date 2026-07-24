@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use axum::Router;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::Response;
-use axum::Router;
 use clap::Parser;
 use tower::ServiceBuilder;
 use tower_http::services::{ServeDir, ServeFile};

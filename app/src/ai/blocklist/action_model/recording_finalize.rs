@@ -96,48 +96,81 @@ async fn finalize_recording(
     uploader: FileArtifactUploader,
     server_conversation_token: Option<crate::ai::agent::api::ServerConversationToken>,
 ) -> StopRecordingResult {
-    // Conversation cancellation discards the recording instead of publishing
-    // it. Dropping the handle kill-on-drops the ffmpeg process and removes the
-    // partial output, so there is nothing to finalize or upload.
+    // A no-upload finalization discards the recording without publishing: it
+    // drops the whole `ActiveRecording` (kill-on-drops ffmpeg, removes the
+    // partial capture). The reason distinguishes an agent-requested discard
+    // (`Discarded`) from a conversation cancellation (`Cancelled`), which the
+    // agent turn treats differently. This check comes first so it holds even
+    // when no action group was committed.
     if !should_upload {
         drop(recording);
-        return StopRecordingResult::Cancelled;
+        return match reason {
+            FinalizeReason::StoppedByAgent => StopRecordingResult::Discarded,
+            _ => StopRecordingResult::Cancelled,
+        };
     }
+    if recording.actions.is_empty() {
+        drop(recording);
+        return StopRecordingResult::Error(
+            "Recording contained no committed actions; no video artifact was published."
+                .to_string(),
+        );
+    }
+    let ActiveRecording {
+        handle,
+        actions,
+        frame_rate,
+        ..
+    } = recording;
     let recorder = computer_use::create_recorder();
-    let actions = recording.actions;
-    let output = match recorder.stop(recording.handle).await {
+    let output = match recorder.stop(handle).await {
         Ok(output) => output,
         Err(error) => return StopRecordingResult::Error(error.to_string()),
     };
 
     let local_path = output.path.clone();
 
-    // Burn keyboard action pills into the video before upload. Best-effort: on
-    // any failure the original capture is uploaded unannotated (a no-labels
-    // video beats no video). The overlay file, when produced, is a sibling of
-    // the mp4.
+    // Apply the post-stop smart cut (keep real action windows at 1x, drop
+    // blocked/thinking gaps) and burn the remapped overlay pills into the video
+    // before upload. Best-effort: on any failure the original 1x capture is
+    // uploaded unannotated (a no-cut video beats no video). The cut/overlay
+    // file, when produced, is a sibling of the mp4.
     let mut upload_path = local_path.clone();
     let mut overlay_path: Option<std::path::PathBuf> = None;
-    if !actions.is_empty() {
-        match computer_use::burn_in_action_log(&local_path, &actions, (output.width, output.height))
-            .await
-        {
-            Ok(path) if path != local_path => {
-                overlay_path = Some(path.clone());
-                upload_path = path;
-            }
-            Ok(_) => {}
-            Err(error) => {
-                log::warn!("Recording overlay burn-in failed; uploading original: {error}");
-            }
+    match computer_use::post_process_recording(
+        &local_path,
+        &actions,
+        (output.width, output.height),
+        output.duration,
+        frame_rate,
+    )
+    .await
+    {
+        Ok(path) if path != local_path => {
+            overlay_path = Some(path.clone());
+            upload_path = path;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("Recording cut/overlay burn-in failed; uploading original: {error}");
         }
     }
+    let duration = match computer_use::finalized_video_duration(&upload_path).await {
+        Ok(duration) => duration,
+        Err(error) => {
+            log::warn!(
+                "Failed to inspect finalized recording duration; using capture duration: {error}"
+            );
+            output.duration
+        }
+    };
 
     let request = FileArtifactUploadRequest {
         path: upload_path,
         run_id: None,
         conversation_id: server_conversation_token,
-        description: None,
+        title: recording.summary.clone(),
+        description: recording.description.clone(),
     };
     let upload_result = async {
         let association = uploader.resolve_upload_association(&request).await?;
@@ -155,10 +188,10 @@ async fn finalize_recording(
     match upload_result {
         Ok(upload) => StopRecordingResult::Success(RecordingStopped {
             artifact_uid: upload.artifact.artifact_uid,
-            duration: output.duration,
+            duration,
             width_px: output.width as i32,
             height_px: output.height as i32,
-            size_bytes: output.size_bytes as i64,
+            size_bytes: upload.size_bytes,
             completion_status: output.completion_status,
             termination_reason: reason.termination_reason(output.completion_status),
         }),
@@ -175,7 +208,7 @@ fn build_finalize_future(
     ctx: &AppContext,
 ) -> (
     String,
-    impl Future<Output = StopRecordingResult> + Send + 'static,
+    impl Future<Output = StopRecordingResult> + Send + 'static + use<>,
 ) {
     let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
         .conversation(&recording.conversation_id)
@@ -244,12 +277,13 @@ fn start_or_join_finalization<T: Entity>(
 pub(crate) fn finalize_recording_by_id<T: Entity>(
     recording_id: &str,
     reason: FinalizeReason,
+    should_persist: bool,
     ctx: &mut ModelContext<T>,
 ) -> Result<RecordingFinalization, StopRecordingControllerError> {
     let claim = RecordingController::handle(ctx).update(ctx, |controller, _| {
         controller.claim_finalization_by_id(recording_id)
     });
-    start_or_join_finalization(claim, reason, true, ctx).ok_or_else(|| {
+    start_or_join_finalization(claim, reason, should_persist, ctx).ok_or_else(|| {
         StopRecordingControllerError::RecordingNotFound {
             recording_id: recording_id.to_string(),
         }

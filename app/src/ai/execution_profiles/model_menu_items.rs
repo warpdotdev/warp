@@ -11,9 +11,8 @@ use warpui::{Action, AppContext, Element};
 
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::llms::{
-    should_show_bedrock_icon_for_model,
+    DisableReason, LLMId, LLMInfo, should_show_bedrock_icon_for_model,
     should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
-    DisableReason, LLMId, LLMInfo,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
 

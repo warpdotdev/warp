@@ -5,10 +5,10 @@ use super::{
     DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
     ShareableLinkError,
 };
+use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::editor::{
     ExecutionProfileEditorManager, ExecutionProfileEditorView, ExecutionProfileEditorViewEvent,
 };
-use crate::ai::execution_profiles::profiles::ClientProfileId;
 use crate::app_state::LeafContents;
 
 pub struct ExecutionProfileEditorPane {
@@ -42,7 +42,7 @@ impl ExecutionProfileEditorPane {
         }
     }
 
-    pub fn new<V: View>(profile_id: ClientProfileId, ctx: &mut ViewContext<V>) -> Self {
+    pub fn new<V: View>(profile_id: ExecutionProfileId, ctx: &mut ViewContext<V>) -> Self {
         let view =
             ctx.add_typed_action_view(|ctx| ExecutionProfileEditorView::new(profile_id, ctx));
         Self::from_view(view, ctx)
@@ -74,7 +74,7 @@ impl PaneContent for ExecutionProfileEditorPane {
         let pane_id = self.id();
         let pane_group_id = ctx.view_id();
         let window_id = ctx.window_id();
-        let profile_id = exec_view_handle.as_ref(ctx).profile_id();
+        let profile_id = exec_view_handle.as_ref(ctx).profile_id().clone();
 
         ctx.subscribe_to_view(&exec_view_handle, move |pane_group, _, event, ctx| {
             let ExecutionProfileEditorViewEvent::Pane(pane_event) = event;
@@ -97,7 +97,10 @@ impl PaneContent for ExecutionProfileEditorPane {
     ) {
         // Always unsubscribe from views
         let execution_profile_editor_view = self.execution_profile_editor_view(ctx);
-        let profile_id = execution_profile_editor_view.as_ref(ctx).profile_id();
+        let profile_id = execution_profile_editor_view
+            .as_ref(ctx)
+            .profile_id()
+            .clone();
         ctx.unsubscribe_to_view(&execution_profile_editor_view);
         ctx.unsubscribe_to_view(&self.view);
 

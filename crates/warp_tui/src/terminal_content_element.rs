@@ -14,26 +14,27 @@
 //! pointer events. Keeping both responsibilities here ensures the subtree
 //! measured for the PTY is also the subtree that owns its input.
 
+use std::borrow::Cow;
 use std::ops::Deref as _;
 use std::sync::Arc;
 
 use async_channel::Sender;
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    should_intercept_mouse, should_intercept_scroll, KeystrokeWithDetails, TermMode, TerminalModel,
-    ToEscapeSequence as _,
+    KeystrokeWithDetails, TermMode, TerminalModel, ToEscapeSequence as _, should_intercept_mouse,
+    should_intercept_scroll,
 };
+use warp_terminal::model::Point;
 use warp_terminal::model::escape_sequences::{
-    alt_screen_scroll_to_pty_bytes, ModeProvider, BRACKETED_PASTE_END, BRACKETED_PASTE_START,
+    BRACKETED_PASTE_END, BRACKETED_PASTE_START, ModeProvider, alt_screen_scroll_to_pty_bytes,
 };
 use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
-use warp_terminal::model::Point;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
     TuiScreenRect, TuiSize,
 };
-use warpui_core::AppContext;
 
 use crate::terminal_session_view::TuiTerminalSessionAction;
 /// Which terminal mouse reports the active process and user settings allow.
@@ -139,11 +140,19 @@ impl TuiElement for TuiTerminalContentElement {
                     ..
                 }
                 | TuiEvent::Paste { .. } => {
-                    if let Some(bytes) = pty_bytes_for_event(event, model) {
-                        event_ctx.dispatch_typed_action(
-                            TuiTerminalSessionAction::ForwardUserPtyBytes(bytes),
-                        );
-                    }
+                    let bytes = {
+                        let mut model = model.lock();
+                        let Some(input) = forwarded_pty_input_for_event(event, &mut model) else {
+                            return true;
+                        };
+                        if let Some(possible_typeahead) = input.possible_typeahead.as_deref() {
+                            model.push_user_input(possible_typeahead);
+                        }
+                        input.bytes
+                    };
+                    event_ctx.dispatch_typed_action(TuiTerminalSessionAction::ForwardUserPtyBytes(
+                        bytes,
+                    ));
                     return true;
                 }
                 TuiEvent::KeyDown {
@@ -181,9 +190,17 @@ impl TuiElement for TuiTerminalContentElement {
     }
 }
 
-/// Converts one semantic TUI input event to bytes for the foreground process.
-/// Composing key and pointer events are handled separately.
-fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) -> Option<Vec<u8>> {
+struct ForwardedPtyInput<'a> {
+    bytes: Vec<u8>,
+    possible_typeahead: Option<Cow<'a, str>>,
+}
+
+/// Converts one semantic input event into the PTY bytes and any text that the
+/// shell may echo as typeahead.
+fn forwarded_pty_input_for_event<'a>(
+    event: &'a TuiEvent,
+    model: &mut TerminalModel,
+) -> Option<ForwardedPtyInput<'a>> {
     match event {
         TuiEvent::KeyDown {
             keystroke,
@@ -191,17 +208,36 @@ fn pty_bytes_for_event(event: &TuiEvent, model: &Arc<FairMutex<TerminalModel>>) 
             details,
             is_composing: false,
         } => {
-            let model = model.lock();
-            KeystrokeWithDetails {
+            let bytes = KeystrokeWithDetails {
                 keystroke,
                 key_without_modifiers: details.key_without_modifiers.as_deref(),
                 chars: Some(chars.as_str()),
             }
-            .to_pty_bytes(model.deref())
+            .to_pty_bytes(model)?;
+            let possible_typeahead = if !chars.is_empty()
+                && !keystroke.ctrl
+                && !keystroke.alt
+                && !keystroke.cmd
+                && !keystroke.meta
+                && bytes.as_slice() == chars.as_bytes()
+            {
+                Some(Cow::Borrowed(chars.as_str()))
+            } else if keystroke.key == "enter" && bytes.as_slice() == [b'\r'] {
+                Some(Cow::Borrowed("\r"))
+            } else {
+                None
+            };
+            Some(ForwardedPtyInput {
+                bytes,
+                possible_typeahead,
+            })
         }
         TuiEvent::Paste { text } => {
-            let needs_bracketed_paste = model.lock().needs_bracketed_paste();
-            Some(paste_bytes(text, needs_bracketed_paste))
+            let normalized = normalize_paste_text(text);
+            Some(ForwardedPtyInput {
+                bytes: paste_bytes_from_normalized(&normalized, model.needs_bracketed_paste()),
+                possible_typeahead: Some(Cow::Owned(normalized)),
+            })
         }
         TuiEvent::KeyDown {
             is_composing: true, ..
@@ -294,10 +330,13 @@ fn cell_point(position: TuiPoint, bounds: TuiScreenRect) -> Option<Point> {
     ))
 }
 
-fn paste_bytes(text: &str, needs_bracketed_paste: bool) -> Vec<u8> {
-    let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+fn normalize_paste_text(text: &str) -> String {
+    text.replace("\r\n", "\r").replace('\n', "\r")
+}
+
+fn paste_bytes_from_normalized(normalized: &str, needs_bracketed_paste: bool) -> Vec<u8> {
     if !needs_bracketed_paste {
-        return normalized.into_bytes();
+        return normalized.as_bytes().to_vec();
     }
 
     let mut bytes = Vec::with_capacity(

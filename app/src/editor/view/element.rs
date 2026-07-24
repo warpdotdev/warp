@@ -7,7 +7,7 @@ use std::{cmp, mem};
 use instant::Instant;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use smallvec::SmallVec;
 use vim::vim::{MotionType, VimMode};
 use warp_core::features::FeatureFlag;
@@ -16,18 +16,18 @@ use warp_errors::report_error;
 use warp_util::user_input::UserInput;
 use warpui::elements::{
     AfterLayoutContext, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Element, Event, EventContext, Flex, LayoutContext, PaintContext, ParentElement, Point, Radius,
-    SizeConstraint, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, Element, Event, EventContext, Flex, LayoutContext, PaintContext,
+    ParentElement, Point, Radius, SizeConstraint, Text,
 };
 use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
 use warpui::keymap::Keystroke;
 use warpui::platform::keyboard::KeyCode;
 use warpui::text_layout::{
-    self, ComputeBaselinePositionArgs, LayoutCache, DEFAULT_TOP_BOTTOM_RATIO,
+    self, ComputeBaselinePositionArgs, DEFAULT_TOP_BOTTOM_RATIO, LayoutCache,
 };
 use warpui::text_selection_utils::{
-    calculate_tick_width, create_newline_tick_rect, selection_crosses_newline_row_based,
-    NewlineTickParams,
+    NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
+    selection_crosses_newline_row_based,
 };
 use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, SingletonEntity, TaskId, ViewHandle};
@@ -36,15 +36,14 @@ use super::super::soft_wrap::{
     ClampDirection, DisplayPointAndClampDirection, FrameLayouts, SoftWrapPoint, SoftWrapState,
 };
 use super::model::MarkedTextState;
-use super::snapshot::{ViewSnapshot, VOICE_INPUT_ICON_CURSOR_GAP};
+use super::snapshot::{VOICE_INPUT_ICON_CURSOR_GAP, ViewSnapshot};
 use super::{
-    position_id_for_cached_point, position_id_for_cursor, CursorColors, DisplayPoint,
-    DrawableSelection, EditorAction, LocalDrawableSelectionData, ReplicaId, ScrollState,
-    SelectAction,
+    CursorColors, DisplayPoint, DrawableSelection, EditorAction, LocalDrawableSelectionData,
+    ReplicaId, ScrollState, SelectAction, position_id_for_cached_point, position_id_for_cursor,
 };
 use crate::appearance::Appearance;
 use crate::editor::accept_autosuggestion_keybinding_view::{
-    AcceptAutosuggestionKeybinding, AUTOSUGGESTION_HINT_MINIMUM_HEIGHT,
+    AUTOSUGGESTION_HINT_MINIMUM_HEIGHT, AcceptAutosuggestionKeybinding,
 };
 use crate::editor::autosuggestion_ignore_view::AutosuggestionIgnore;
 use crate::editor::position_id_for_first_cursor;
@@ -453,12 +452,12 @@ impl EditorElement {
         state: &KeyState,
         ctx: &mut EventContext,
     ) {
-        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code {
-            if *key_code == voice_input_toggle_key_code {
-                ctx.dispatch_typed_action(EditorAction::ToggleVoiceInput(
-                    voice_input::VoiceInputToggledFrom::Key { state: *state },
-                ));
-            }
+        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code
+            && *key_code == voice_input_toggle_key_code
+        {
+            ctx.dispatch_typed_action(EditorAction::ToggleVoiceInput(
+                voice_input::VoiceInputToggledFrom::Key { state: *state },
+            ));
         }
     }
 
@@ -478,15 +477,15 @@ impl EditorElement {
             .expect("paint should be set at event handling");
 
         let mut state_guard = self.mouse_state.lock().expect("mouse state lock");
-        if let Some(state) = &mut *state_guard {
-            if state.user_dismissed {
-                if (state.hover_point - position).length() < COMMAND_X_RAY_HOVER_THRESHOLD_PX {
-                    // Early exit if some user action has caused the x-ray tooltip to be dismissed
-                    // and the mouse hasn't moved.
-                    return false;
-                } else {
-                    return self.reset_x_ray(&mut state_guard, Some(position), ctx);
-                }
+        if let Some(state) = &mut *state_guard
+            && state.user_dismissed
+        {
+            if (state.hover_point - position).length() < COMMAND_X_RAY_HOVER_THRESHOLD_PX {
+                // Early exit if some user action has caused the x-ray tooltip to be dismissed
+                // and the mouse hasn't moved.
+                return false;
+            } else {
+                return self.reset_x_ray(&mut state_guard, Some(position), ctx);
             }
         }
 
@@ -856,26 +855,25 @@ impl EditorElement {
                 .with_corner_radius(CornerRadius::with_all(cursor_corner_radius));
 
             // Draw cursor avatars for remote selections
-            if !is_local {
-                if let Some(drawable_selections_data) =
+            if !is_local
+                && let Some(drawable_selections_data) =
                     remote_selections_data.get_mut(&cursor.replica_id)
-                {
-                    // Offset for avatar's x origin is calculated based on avatar's size, border and cursor width.
-                    // We include half of the cursor's width to ensure the avatar is centered with the cursor's center
-                    // and not just the cursor's x origin.
-                    let avatar_size = view_snapshot.cursor_avatar_size() + 2.;
-                    let avatar_offset = avatar_size / 2. - cursor_width / 2.;
-                    let avatar_origin = vec2f(
-                        cursor.origin.x() - avatar_offset,
-                        cursor.origin.y() - cursor_height,
-                    );
-                    // New layer is started so avatars are rendered over text and prompt
-                    ctx.scene.start_layer(warpui::ClipBounds::None);
-                    drawable_selections_data
-                        .avatar
-                        .paint(avatar_origin, ctx, app);
-                    ctx.scene.stop_layer();
-                }
+            {
+                // Offset for avatar's x origin is calculated based on avatar's size, border and cursor width.
+                // We include half of the cursor's width to ensure the avatar is centered with the cursor's center
+                // and not just the cursor's x origin.
+                let avatar_size = view_snapshot.cursor_avatar_size() + 2.;
+                let avatar_offset = avatar_size / 2. - cursor_width / 2.;
+                let avatar_origin = vec2f(
+                    cursor.origin.x() - avatar_offset,
+                    cursor.origin.y() - cursor_height,
+                );
+                // New layer is started so avatars are rendered over text and prompt
+                ctx.scene.start_layer(warpui::ClipBounds::None);
+                drawable_selections_data
+                    .avatar
+                    .paint(avatar_origin, ctx, app);
+                ctx.scene.stop_layer();
             }
 
             if let Some(element) = voice_input_icon {
@@ -995,7 +993,9 @@ impl EditorElement {
                     let cursor_row_layout = match layout.frame_layouts.get_line(index) {
                         Some(layout) => layout,
                         None => {
-                            log::warn!("Attempting to access line {index}, but there are fewer lines in the layout.");
+                            log::warn!(
+                                "Attempting to access line {index}, but there are fewer lines in the layout."
+                            );
                             continue;
                         }
                     };
@@ -1168,13 +1168,11 @@ impl EditorElement {
                             if let Some(start) = layout
                                 .frame_layouts
                                 .to_soft_wrap_point(start.point, start.clamp_direction)
-                            {
-                                if let Some(end) = layout
+                                && let Some(end) = layout
                                     .frame_layouts
                                     .to_soft_wrap_point(end.point, end.clamp_direction)
-                                {
-                                    visual_range = start..end;
-                                }
+                            {
+                                visual_range = start..end;
                             }
                         }
                     }
@@ -1327,28 +1325,27 @@ impl EditorElement {
 
             // Render first line of autosuggestion text, if it exists. If not, render
             // first line of placeholder text, if it exists.
-            if paint_autosuggestion_here {
-                if let Some(suggestion_line) =
+            if paint_autosuggestion_here
+                && let Some(suggestion_line) =
                     layout.placeholder_suggestion_text_line_layouts.first()
-                {
-                    let line_origin = line_origin + vec2f(line.width, 0.);
+            {
+                let line_origin = line_origin + vec2f(line.width, 0.);
 
-                    suggestion_line.paint_with_baseline_position(
-                        RectF::from_points(
-                            line_origin,
-                            self.bounds()
-                                .expect("layout() should have been called before paint()")
-                                .lower_right(),
-                        ),
-                        &Default::default(),
-                        self.text_colors.hint_color.into(),
-                        ctx.font_cache,
-                        ctx.scene,
-                        &baseline_position_fn,
-                    );
-                    if let Some(pos) = last_autosuggestion_glyph_position {
-                        *pos = line_origin + vec2f(suggestion_line.width, 0.);
-                    }
+                suggestion_line.paint_with_baseline_position(
+                    RectF::from_points(
+                        line_origin,
+                        self.bounds()
+                            .expect("layout() should have been called before paint()")
+                            .lower_right(),
+                    ),
+                    &Default::default(),
+                    self.text_colors.hint_color.into(),
+                    ctx.font_cache,
+                    ctx.scene,
+                    &baseline_position_fn,
+                );
+                if let Some(pos) = last_autosuggestion_glyph_position {
+                    *pos = line_origin + vec2f(suggestion_line.width, 0.);
                 }
             }
         }
@@ -2074,35 +2071,37 @@ impl Element for EditorElement {
 
         // These icons have tooltips in overlay layers, so they need to be dispatched before checking event.at_z_index below.
         // This is because event.at_z_index will filter the event due to the overlay layer above.
-        if let Some(icon) = &mut self.autosuggestion_shortcut_icon {
-            if icon.bounds().is_some() && icon.dispatch_event(event, ctx, app) {
-                return true;
-            }
+        if let Some(icon) = &mut self.autosuggestion_shortcut_icon
+            && icon.bounds().is_some()
+            && icon.dispatch_event(event, ctx, app)
+        {
+            return true;
         }
 
-        if let Some(ignore_icon) = &mut self.autosuggestion_ignore_icon {
-            if ignore_icon.bounds().is_some() && ignore_icon.dispatch_event(event, ctx, app) {
-                return true;
-            }
+        if let Some(ignore_icon) = &mut self.autosuggestion_ignore_icon
+            && ignore_icon.bounds().is_some()
+            && ignore_icon.dispatch_event(event, ctx, app)
+        {
+            return true;
         }
 
         // Since editor decorator elements may be clickable, we need to prioritize dispatching events from them.
-        if let Some(top_section) = &mut self.editor_decorator_elements.top_section {
-            if top_section.dispatch_event(event, ctx, app) {
-                return true;
-            }
+        if let Some(top_section) = &mut self.editor_decorator_elements.top_section
+            && top_section.dispatch_event(event, ctx, app)
+        {
+            return true;
         }
 
-        if let Some(left_notch) = &mut self.editor_decorator_elements.left_notch {
-            if left_notch.dispatch_event(event, ctx, app) {
-                return true;
-            }
+        if let Some(left_notch) = &mut self.editor_decorator_elements.left_notch
+            && left_notch.dispatch_event(event, ctx, app)
+        {
+            return true;
         }
 
-        if let Some(right_notch) = &mut self.editor_decorator_elements.right_notch {
-            if right_notch.dispatch_event(event, ctx, app) {
-                return true;
-            }
+        if let Some(right_notch) = &mut self.editor_decorator_elements.right_notch
+            && right_notch.dispatch_event(event, ctx, app)
+        {
+            return true;
         }
 
         let Some(event_at_z_index) = event.at_z_index(z_index, ctx) else {
@@ -2128,30 +2127,27 @@ impl Element for EditorElement {
                 .top_section
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
+                && top_section.dispatch_event(event, ctx, app)
             {
-                if top_section.dispatch_event(event, ctx, app) {
-                    return true;
-                }
+                return true;
             }
             if let Some(left_notch) = self
                 .editor_decorator_elements
                 .left_notch
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
+                && left_notch.dispatch_event(event, ctx, app)
             {
-                if left_notch.dispatch_event(event, ctx, app) {
-                    return true;
-                }
+                return true;
             }
             if let Some(right_notch) = self
                 .editor_decorator_elements
                 .right_notch
                 .as_mut()
                 .filter(|n| n.z_index().is_some())
+                && right_notch.dispatch_event(event, ctx, app)
             {
-                if right_notch.dispatch_event(event, ctx, app) {
-                    return true;
-                }
+                return true;
             }
         }
 

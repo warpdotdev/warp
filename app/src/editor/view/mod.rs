@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_fs;
-use base64::engine::general_purpose;
 use base64::Engine as _;
+use base64::engine::general_purpose;
 use element::CommandXRayMouseStateHandle;
 use figma_utils::is_figma_png;
 use itertools::{Either, Itertools};
@@ -37,7 +37,7 @@ use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
 use snapshot::{EditorHeightShrinkDelay, ViewSnapshot};
 use string_offset::{ByteOffset, CharOffset};
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use vim::vim::{
     BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
     InsertPosition, LineMotion, ModeTransition, MotionType, TextObjectInclusion, TextObjectType,
@@ -56,26 +56,26 @@ use warp_util::path::ShellFamily;
 use warp_util::user_input::UserInput;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::actions::StandardAction;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
-    MouseStateHandle, ParentElement, Radius, Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    ChildView, Container, CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Flex,
+    Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
 };
 use warpui::fonts::{Cache as FontCache, FamilyId, Properties, Weight};
 use warpui::keymap::{EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke};
 use warpui::platform::keyboard::KeyCode;
 use warpui::platform::{Cursor, FilePickerConfiguration, OperatingSystem};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::text::word_boundaries::WordBoundariesPolicy;
 use warpui::text::TextBuffer;
+use warpui::text::word_boundaries::WordBoundariesPolicy;
 use warpui::text_layout::TextStyle;
 use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::windowing::WindowManager;
 use warpui::{
-    elements, windowing, AppContext, BlurContext, CursorInfo, Element, Entity, EntityId,
-    FocusContext, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle, WindowId,
+    AppContext, BlurContext, CursorInfo, Element, Entity, EntityId, FocusContext, ModelAsRef,
+    ModelContext, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    WindowId, elements, windowing,
 };
 /// The editor interfaces that we publicly expose to consumers.
 /// This should be a very limited set; if you need to add something here,
@@ -90,16 +90,17 @@ pub use {
 };
 
 use self::model::{LocalSelections, Selection, UpdateBufferOption};
-use super::soft_wrap::{ClampDirection, DisplayPointAndClampDirection};
 use super::Point;
+use super::soft_wrap::{ClampDirection, DisplayPointAndClampDirection};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::ImageContext;
 use crate::ai::blocklist::{BlocklistAIContextModel, InputType, PendingAttachment, PendingFile};
 use crate::ai::predict::next_command_model::{NextCommandModel, NextCommandSuggestionState};
 use crate::appearance::Appearance;
 use crate::channel::{Channel, ChannelState};
+use crate::editor::RangeExt;
 use crate::editor::accept_autosuggestion_keybinding_view::AcceptAutosuggestionKeybinding;
 use crate::editor::autosuggestion_ignore_view::{AutosuggestionIgnore, AutosuggestionIgnoreEvent};
-use crate::editor::RangeExt;
 use crate::features::FeatureFlag;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::view::{
@@ -120,17 +121,16 @@ use crate::themes::theme::Fill;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons;
-use crate::util::bindings::{cmd_or_ctrl_shift, keybinding_name_to_keystroke, CustomAction};
+use crate::util::bindings::{CustomAction, cmd_or_ctrl_shift, keybinding_name_to_keystroke};
 use crate::util::clipboard::clipboard_content_with_escaped_paths;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
-use crate::util::image::{resize_image, MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES};
+use crate::util::image::{MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES, resize_image};
 use crate::util::merge_ranges;
 use crate::view_components::DismissibleToast;
 #[cfg(feature = "voice_input")]
 use crate::view_components::FeaturePopup;
 use crate::vim_registers::{RegisterContent, VimRegisters};
 use crate::workspace::{ToastStack, Workspace};
-use crate::BlocklistAIHistoryModel;
 
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 const DEFAULT_TAB_SIZE: usize = 4;
@@ -2301,8 +2301,18 @@ impl VimHandler for EditorView {
                                     editor_model.extend_selection_linewise(include_newline, ctx);
                                 }
                             }
-                            VimMotion::JumpToLine(_line_number) => {
-                                // Jumping to line number not supported
+                            VimMotion::JumpToLine(line_number) => {
+                                let max_row = editor_model.buffer(ctx).max_point().row;
+                                let row = (*line_number).saturating_sub(1).min(max_row);
+                                editor_model.move_cursor(
+                                    /* keep_selection */ true,
+                                    move |_, _| Point::new(row, 0),
+                                    ctx,
+                                );
+                                if *motion_type == MotionType::Linewise {
+                                    let include_newline = *operator != VimOperator::Change;
+                                    editor_model.extend_selection_linewise(include_newline, ctx);
+                                }
                             }
                         }
                     }
@@ -2466,8 +2476,13 @@ impl VimHandler for EditorView {
         });
     }
 
-    fn jump_to_line(&mut self, _line_number: u32, _ctx: &mut ViewContext<Self>) {
-        // Jumping to line number not supported
+    fn jump_to_line(&mut self, line_number: u32, ctx: &mut ViewContext<Self>) {
+        self.change_selections(ctx, |editor_model, ctx| {
+            let max_row = editor_model.buffer(ctx).max_point().row;
+            let row = line_number.saturating_sub(1).min(max_row);
+            let point = Point::new(row, 0);
+            editor_model.reset_selections_to_point(&point, ctx);
+        });
     }
 
     fn jump_to_matching_bracket(&mut self, ctx: &mut ViewContext<Self>) {
@@ -7618,15 +7633,15 @@ impl EditorView {
     /// TODO: ideally, this wouldn't be treated as a separate 'edit' from the 'edit' that was
     /// produced by the initial user-action.
     fn vim_maybe_enforce_cursor_line_cap(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(VimMode::Normal) = self.vim_mode(ctx) {
-            if self.editor_model.as_ref(ctx).vim_needs_line_capping(ctx) {
-                self.edit(
-                    ctx,
-                    Edits::new().with_change_selections(|model, ctx| {
-                        model.vim_enforce_cursor_line_cap(ctx);
-                    }),
-                );
-            }
+        if let Some(VimMode::Normal) = self.vim_mode(ctx)
+            && self.editor_model.as_ref(ctx).vim_needs_line_capping(ctx)
+        {
+            self.edit(
+                ctx,
+                Edits::new().with_change_selections(|model, ctx| {
+                    model.vim_enforce_cursor_line_cap(ctx);
+                }),
+            );
         }
     }
 
@@ -8743,15 +8758,16 @@ impl View for EditorView {
             .with_cursor(Cursor::IBeam)
             .finish();
 
-        if let Some(controls) = self.render_controls(ctx) {
-            let mut row = Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_cross_axis_alignment(CrossAxisAlignment::End);
-            row.add_child(Shrinkable::new(1., hoverable).finish());
-            row.add_child(controls);
-            row.finish()
-        } else {
-            hoverable
+        match self.render_controls(ctx) {
+            Some(controls) => {
+                let mut row = Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::End);
+                row.add_child(Shrinkable::new(1., hoverable).finish());
+                row.add_child(controls);
+                row.finish()
+            }
+            _ => hoverable,
         }
     }
 

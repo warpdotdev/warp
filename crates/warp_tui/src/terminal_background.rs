@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use warp::tui_export::{dark_theme, light_theme};
 use warp_core::ui::theme::WarpTheme;
-use warpui_core::runtime::{probe_terminal_colors, BackgroundLuminance, ProbedTerminalColors};
+use warpui_core::runtime::{BackgroundLuminance, ProbedTerminalColors, probe_terminal_colors};
 
 static PROBED_COLORS: OnceLock<ProbedTerminalColors> = OnceLock::new();
 

@@ -12,8 +12,8 @@
 use std::time::Duration;
 
 use warp::tui_export::{
-    parse_current_commands_and_tokens, tui_completion_context_has_exact_command,
-    tui_completion_session_context, InputType, SlashCommandDataSource as _,
+    InputType, SlashCommandDataSource as _, parse_current_commands_and_tokens,
+    tui_completion_context_has_exact_command, tui_completion_session_context,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
@@ -98,13 +98,14 @@ impl TuiTerminalSessionView {
         is_user_edit: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.handle_completion_editor_changed(ctx);
         self.abort_input_detection(ctx);
         if is_user_edit {
             self.schedule_input_detection(ctx);
         }
     }
 
-    fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(super) fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(future) = self.input_detection.future.take() {
             future.abort();
         }

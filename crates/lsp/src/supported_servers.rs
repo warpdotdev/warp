@@ -9,13 +9,13 @@ use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::CommandBuilder;
 use crate::servers::clangd::ClangdCandidate;
 use crate::servers::go::GoPlsCandidate;
 use crate::servers::pyright::PyrightCandidate;
 use crate::servers::rust::RustAnalyzerCandidate;
 use crate::servers::typescript_language_server::TypeScriptLanguageServerCandidate;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::CommandBuilder;
 use crate::{LanguageId, LanguageServerCandidate};
 
 /// Configuration for a custom LSP binary installation.

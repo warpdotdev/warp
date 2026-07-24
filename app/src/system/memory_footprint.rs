@@ -28,7 +28,7 @@ mod platform {
 
     use mach2::kern_return::KERN_SUCCESS;
     use mach2::task::task_info;
-    use mach2::task_info::{task_vm_info, TASK_VM_INFO};
+    use mach2::task_info::{TASK_VM_INFO, task_vm_info};
     use mach2::traps::mach_task_self;
 
     /// Calls `task_info(TASK_VM_INFO)` and returns the populated struct on
@@ -46,11 +46,7 @@ mod platform {
                 &mut info as *mut _ as *mut i32,
                 &mut count,
             );
-            if kr == KERN_SUCCESS {
-                Some(info)
-            } else {
-                None
-            }
+            if kr == KERN_SUCCESS { Some(info) } else { None }
         }
     }
 

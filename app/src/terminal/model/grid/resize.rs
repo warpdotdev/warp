@@ -3,13 +3,13 @@
 
 use string_offset::ByteOffset;
 use warp_errors::report_error;
-use warp_terminal::model::grid::cell::{self, LineLength as _};
 use warp_terminal::model::grid::Dimensions as _;
+use warp_terminal::model::grid::cell::{self, LineLength as _};
 use warp_terminal::model::{Point, VisiblePoint, VisibleRow};
 
 use super::{FullGridClearBehavior, GridHandler};
-use crate::terminal::model::grid::Cursor;
 use crate::terminal::SizeInfo;
+use crate::terminal::model::grid::Cursor;
 
 impl GridHandler {
     /// Resize terminal to new dimensions.

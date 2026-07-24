@@ -4,6 +4,7 @@ use warpui::{App, EntityId};
 use super::*;
 use crate::ai::blocklist::handoff::HandoffLaunchAttachments;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
+use crate::server::server_api::ClientError;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 fn attachment() -> AttachmentInput {
@@ -251,9 +252,13 @@ fn github_auth_url_for_initial_run_includes_focus_cloud_mode_next() {
                 kind: SessionStartupKind::InitialRun,
             };
             model.request = Some(retry_request("fix tests"));
-            model.handle_needs_github_auth(
-                "https://example.com/oauth/connect/github?scheme=warpdev".to_string(),
-                "auth required".to_string(),
+            model.handle_ambient_agent_stream_error(
+                anyhow::Error::new(ClientError {
+                    error: "auth required".to_string(),
+                    auth_url: Some(
+                        "https://example.com/oauth/connect/github?scheme=warpdev".to_string(),
+                    ),
+                }),
                 ctx,
             );
         });

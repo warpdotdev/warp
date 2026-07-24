@@ -8,8 +8,8 @@ use strum::IntoEnumIterator;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
 use warpui::elements::{
     Align, Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Fill, Flex,
@@ -22,22 +22,23 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use crate::ToastStack;
 use crate::ai::mcp::gallery::MCPGalleryManagerEvent;
 use crate::ai::mcp::templatable::{GalleryData, TemplatableMCPServer};
 use crate::ai::mcp::templatable_manager::{
     TemplatableMCPServerManager, TemplatableMCPServerManagerEvent,
 };
+use crate::ai::mcp::{
+    FileBasedMCPManager, MCPGalleryManager, MCPProvider, MCPServerUpdate,
+    TemplatableMCPServerInstallation, logs,
+};
 #[cfg(feature = "local_fs")]
 use crate::ai::mcp::{
+    FileMCPWatcher,
+    FileMCPWatcherEvent,
     // Import events for file-based manager and watcher conditionally
     // since their WASM variants don't export events.
     file_based_manager::FileBasedMCPManagerEvent,
-    FileMCPWatcher,
-    FileMCPWatcherEvent,
-};
-use crate::ai::mcp::{
-    logs, FileBasedMCPManager, MCPGalleryManager, MCPProvider, MCPServerUpdate,
-    TemplatableMCPServerInstallation,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
@@ -55,19 +56,18 @@ use crate::settings_view::mcp_servers::server_card::{
     ServerCardEvent, ServerCardOptions, ServerCardStatus, ServerCardView, TitleChip,
 };
 use crate::settings_view::mcp_servers::update_modal::{UpdateModalBody, UpdateModalBodyEvent};
-use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::settings_view::mcp_servers::{ServerCardItemId, style};
 use crate::settings_view::mcp_servers_page::InstallOrigin;
 use crate::settings_view::settings_page::{
-    build_toggle_element, render_body_item_label, LocalOnlyIconState, ToggleState,
+    LocalOnlyIconState, ToggleState, build_toggle_element, render_body_item_label,
 };
 use crate::ui_components::blended_colors;
 use crate::util::truncation::truncate_from_end;
-use crate::view_components::action_button::{ActionButton, NakedTheme};
 use crate::view_components::DismissibleToast;
+use crate::view_components::action_button::{ActionButton, NakedTheme};
 use crate::workflows::local_workflows::tail_command_for_shell;
 use crate::workspace::Workspace;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::ToastStack;
 
 const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
 
@@ -1532,10 +1532,10 @@ impl MCPServersListPageView {
 
     fn file_based_root_chip_text(root_path: &PathBuf) -> Option<String> {
         // If the path is the user's home directory, set the text to "global".
-        if let Some(home_dir) = dirs::home_dir() {
-            if root_path == &home_dir {
-                return Some("global".to_string());
-            }
+        if let Some(home_dir) = dirs::home_dir()
+            && root_path == &home_dir
+        {
+            return Some("global".to_string());
         }
 
         // If the path is the Warp data directory (e.g. ~/.warp or ~/.warp_dev), set the text to

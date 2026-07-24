@@ -5,12 +5,12 @@ use warpui::{AppContext, SingletonEntity};
 
 use super::WorkflowSearchItem;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::search::QueryFilter;
 use crate::search::async_snapshot_data_source::AsyncSnapshotDataSource;
 use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{BoxFuture, DataSourceRunErrorWrapper};
 use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
-use crate::search::QueryFilter;
 use crate::server::ids::SyncId;
 use crate::settings::AISettings;
 use crate::workflows::{CloudWorkflowModel, WorkflowSource};
@@ -30,8 +30,8 @@ pub(crate) struct CloudWorkflowsSnapshot {
 }
 
 /// Creates an async data source for cloud workflows (i.e. those that exist in Warp Drive).
-pub fn cloud_workflows_data_source(
-) -> AsyncSnapshotDataSource<CloudWorkflowsSnapshot, CommandSearchItemAction> {
+pub fn cloud_workflows_data_source()
+-> AsyncSnapshotDataSource<CloudWorkflowsSnapshot, CommandSearchItemAction> {
     AsyncSnapshotDataSource::new(
         |query: &Query, app: &AppContext| {
             let is_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);

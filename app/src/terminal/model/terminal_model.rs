@@ -14,16 +14,17 @@ use session_sharing_protocol::common::{
     AICommandMetadata, OrderedTerminalEventType, ParticipantId,
 };
 use session_sharing_protocol::sharer::SessionSourceType;
+use string_offset::CharOffset;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_errors::report_error;
 pub use warp_terminal::model::BlockIndex;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::assets::asset_cache::Asset;
-use warpui::image_cache::ImageType;
-use warpui::r#async::executor::Background;
 use warpui::AppContext;
+use warpui::assets::asset_cache::Asset;
+use warpui::r#async::executor::Background;
+use warpui::image_cache::ImageType;
 
 use super::super::{AltScreen, BlockList};
 use super::ansi::{BootstrappedValue, FinishUpdateValue, InputBufferValue, Mode, PendingHook};
@@ -32,15 +33,15 @@ use super::block::{
     BlocklistEnvVarMetadata, SerializedBlock,
 };
 use super::blockgrid::BlockGrid;
-use super::blocks::ActiveBlockCompletion;
+use super::blocks::{ActiveBlockCompletion, BlockFilter};
 use super::grid::grid_handler::{
     ContainsPoint, FragmentBoundary, GridHandler, Link, PossiblePath, TermMode,
 };
 use super::image_map::StoredImageMetadata;
 use super::index::Point;
 use super::kitty::{
-    create_kitty_error_reply, create_kitty_ok_reply, DeletionType, KittyAction, KittyChunk,
-    KittyMessage, KittyResponse, PendingKittyMessage,
+    DeletionType, KittyAction, KittyChunk, KittyMessage, KittyResponse, PendingKittyMessage,
+    create_kitty_error_reply, create_kitty_ok_reply,
 };
 use super::lifecycle::{
     BlockLifecycleCoordinator, CommandStartKind, IgnoreReason, LifecycleAction, LifecycleInput,
@@ -82,8 +83,8 @@ use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::shell::{ShellName, ShellType};
 use crate::terminal::ssh::util::{InteractiveSshCommand, SshLoginState};
 use crate::terminal::{
-    color, ssh, BlockPadding, ShellHost, ShellLaunchData, ShellLaunchState, SizeUpdate,
-    SizeUpdateReason,
+    BlockPadding, ShellHost, ShellLaunchData, ShellLaunchState, SizeUpdate, SizeUpdateReason,
+    color, ssh,
 };
 
 /// Max size of the window title stack.
@@ -590,7 +591,7 @@ impl SelectedBlockRange {
     pub fn range(
         &self,
         sort_direction: Option<BlockSortDirection>,
-    ) -> impl Iterator<Item = BlockIndex> {
+    ) -> impl Iterator<Item = BlockIndex> + use<> {
         let range = self.start().0..=self.end().0;
         // Note we need the heap allocation through the box because we
         // can't return .rev() and not .rev() iterators without it.
@@ -614,7 +615,7 @@ impl SelectedBlockRange {
     pub fn intersection(
         &self,
         other: &RangeInclusive<BlockIndex>,
-    ) -> impl Iterator<Item = BlockIndex> {
+    ) -> impl Iterator<Item = BlockIndex> + use<> {
         (max(self.start().0, other.start().0)..=min(self.end().0, other.end().0))
             .map(BlockIndex::from)
     }
@@ -1273,10 +1274,10 @@ impl TerminalModel {
             return;
         }
 
-        if let Some(tx) = &self.write_to_pty_events_for_shared_session_tx {
-            if let Err(e) = tx.try_send(bytes) {
-                log::warn!("Failed to send write to pty events: {e}");
-            }
+        if let Some(tx) = &self.write_to_pty_events_for_shared_session_tx
+            && let Err(e) = tx.try_send(bytes)
+        {
+            log::warn!("Failed to send write to pty events: {e}");
         }
     }
 
@@ -1320,29 +1321,24 @@ impl TerminalModel {
     }
 
     pub fn send_agent_conversation_replay_started_for_shared_session(&mut self) {
-        if self.shared_session_status().is_sharer() {
-            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-                if let Err(e) =
-                    tx.try_send(OrderedTerminalEventType::AgentConversationReplayStarted)
-                {
-                    log::warn!(
-                        "Failed to send OrderedTerminalEventType::AgentConversationReplayStarted: {e}"
-                    );
-                }
-            }
+        if self.shared_session_status().is_sharer()
+            && let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
+            && let Err(e) = tx.try_send(OrderedTerminalEventType::AgentConversationReplayStarted)
+        {
+            log::warn!(
+                "Failed to send OrderedTerminalEventType::AgentConversationReplayStarted: {e}"
+            );
         }
     }
 
     pub fn send_agent_conversation_replay_ended_for_shared_session(&mut self) {
-        if self.shared_session_status().is_sharer() {
-            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-                if let Err(e) = tx.try_send(OrderedTerminalEventType::AgentConversationReplayEnded)
-                {
-                    log::warn!(
-                        "Failed to send OrderedTerminalEventType::AgentConversationReplayEnded: {e}"
-                    );
-                }
-            }
+        if self.shared_session_status().is_sharer()
+            && let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
+            && let Err(e) = tx.try_send(OrderedTerminalEventType::AgentConversationReplayEnded)
+        {
+            log::warn!(
+                "Failed to send OrderedTerminalEventType::AgentConversationReplayEnded: {e}"
+            );
         }
     }
 
@@ -1352,14 +1348,11 @@ impl TerminalModel {
     /// Viewers use this to clear `BlockList::is_executing_oz_environment_startup_commands`
     /// and tear down the "Running setup commands…" chip.
     pub fn send_cloud_mode_setup_phase_ended_for_shared_session(&mut self) {
-        if self.shared_session_status().is_sharer() {
-            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-                if let Err(e) = tx.try_send(OrderedTerminalEventType::CloudModeSetupPhaseEnded) {
-                    log::warn!(
-                        "Failed to send OrderedTerminalEventType::CloudModeSetupPhaseEnded: {e}"
-                    );
-                }
-            }
+        if self.shared_session_status().is_sharer()
+            && let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
+            && let Err(e) = tx.try_send(OrderedTerminalEventType::CloudModeSetupPhaseEnded)
+        {
+            log::warn!("Failed to send OrderedTerminalEventType::CloudModeSetupPhaseEnded: {e}");
         }
     }
 
@@ -1663,6 +1656,11 @@ impl TerminalModel {
         &mut self.block_list
     }
 
+    /// Clears all completed blocks and resets the active block's screen.
+    pub fn clear_blocks(&mut self) {
+        self.block_list.clear_screen(ansi::ClearMode::ResetAndClear);
+    }
+
     pub fn remove_image_id_to_metadata_entry(&mut self, image_id: u32) {
         self.image_id_to_metadata.remove(&image_id);
     }
@@ -1710,13 +1708,13 @@ impl TerminalModel {
 
         // If this is a sharer, send an event to indicate the start of the command execution
         // along with the identity of the participant that ran the command.
-        if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-            if let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionStarted {
+        if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
+            && let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionStarted {
                 participant_id,
                 ai_metadata: agent_metadata.as_ref().map(Self::ai_metadata_to_protocol),
-            }) {
-                log::warn!("Failed to send OrderedTerminalEventType::CommandExecutionStarted: {e}");
-            }
+            })
+        {
+            log::warn!("Failed to send OrderedTerminalEventType::CommandExecutionStarted: {e}");
         }
         outcome
     }
@@ -1906,7 +1904,7 @@ impl TerminalModel {
     pub fn possible_file_paths_at_point(
         &self,
         point: WithinModel<Point>,
-    ) -> impl Iterator<Item = WithinModel<PossiblePath>> {
+    ) -> impl Iterator<Item = WithinModel<PossiblePath>> + use<> {
         match point {
             WithinModel::AltScreen(inner_point) => Either::Left(
                 self.alt_screen
@@ -2083,15 +2081,15 @@ impl TerminalModel {
         if size_update.rows_or_columns_changed() {
             let num_rows = size_update.new_size.rows();
             let num_cols = size_update.new_size.columns();
-            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-                if let Err(e) = tx.try_send(OrderedTerminalEventType::Resize {
+            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
+                && let Err(e) = tx.try_send(OrderedTerminalEventType::Resize {
                     window_size: session_sharing_protocol::common::WindowSize {
                         num_rows,
                         num_cols,
                     },
-                }) {
-                    log::warn!("Failed to send OrderedTerminalEventType::Resize: {e}");
-                }
+                })
+            {
+                log::warn!("Failed to send OrderedTerminalEventType::Resize: {e}");
             }
         }
     }
@@ -2297,6 +2295,30 @@ impl TerminalModel {
         }
     }
 
+    /// Takes accumulated typeahead that should be inserted into a front-end input editor.
+    pub fn take_typeahead_for_input(&mut self) -> Option<(String, CharOffset)> {
+        let completed_block_index = self.block_list.prev_matching_block_from_index(
+            BlockFilter {
+                include_hidden: true,
+                include_background: false,
+            },
+            self.block_list.active_block_index(),
+        );
+        let was_entered_during_agent_requested_command =
+            completed_block_index.is_some_and(|index| {
+                self.block_list
+                    .block_at(index)
+                    .is_some_and(|block| block.agent_interaction_metadata().is_some())
+            });
+        if was_entered_during_agent_requested_command {
+            return None;
+        }
+
+        let (typeahead, previously_inserted) =
+            self.block_list.early_output_mut().advance_typeahead()?;
+        Some((typeahead.to_owned(), previously_inserted))
+    }
+
     fn emit_handler_event(&mut self, event: HandlerEvent) {
         self.event_proxy.send_handler_event(event);
     }
@@ -2324,12 +2346,12 @@ impl TerminalModel {
         let active_block_completion = self.block_list.complete_active_block_and_advance(data);
 
         if active_block_completion == ActiveBlockCompletion::NewlyFinished {
-            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-                if let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionFinished {
+            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
+                && let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionFinished {
                     next_block_id: block_id.into(),
-                }) {
-                    log::warn!("Failed to send OrderedTerminalEventType::CommandFinished: {e}");
-                }
+                })
+            {
+                log::warn!("Failed to send OrderedTerminalEventType::CommandFinished: {e}");
             }
 
             self.emit_handler_event(HandlerEvent::CommandFinished {
@@ -2470,7 +2492,7 @@ impl TerminalModel {
 /// the provided method call on the active handler, either the block_list or the
 /// alt_screen if it is active.
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         if $self.alt_screen_active {
             $self.alt_screen.$method($( $arg ),*)
         } else {
@@ -3241,7 +3263,9 @@ impl ansi::Handler for TerminalModel {
                 self.is_receiving_in_band_command_output = IsReceivingInBandCommandOutput::No;
             }
             IsReceivingInBandCommandOutput::No => {
-                log::warn!("Received 'end_in_band_command_output' while not expecting to read in-band command output.");
+                log::warn!(
+                    "Received 'end_in_band_command_output' while not expecting to read in-band command output."
+                );
             }
         }
 
@@ -3255,14 +3279,13 @@ impl ansi::Handler for TerminalModel {
         if let Some(SshLogin {
             notification_state, ..
         }) = &self.notify_on_end_of_ssh_login
-        {
-            if matches!(
+            && matches!(
                 notification_state,
                 SshLoginNotificationState::Monitoring
                     | SshLoginNotificationState::SentInitialNotification
-            ) {
-                self.check_for_end_of_ssh_login(false);
-            }
+            )
+        {
+            self.check_for_end_of_ssh_login(false);
         }
 
         let bytes = input.bytes();
@@ -3275,14 +3298,14 @@ impl ansi::Handler for TerminalModel {
         // both when the frame is flushed and when we initially process the raw bytes (the ordering of the two
         // depends on whether we receive the start and end markers in the same batch of bytes). We only want to send
         // the raw bytes to viewers, not the flushed frame - they'll handle the synchronized output framing themselves.
-        if !input.is_synchronized_output_frame() && self.shared_session_status().is_sharer() {
-            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-                if let Err(e) = tx.try_send(OrderedTerminalEventType::PtyBytesRead {
-                    bytes: bytes.to_owned(),
-                }) {
-                    log::warn!("Failed to send OrderedTerminalEventType::PtyBytesRead: {e}");
-                }
-            }
+        if !input.is_synchronized_output_frame()
+            && self.shared_session_status().is_sharer()
+            && let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx
+            && let Err(e) = tx.try_send(OrderedTerminalEventType::PtyBytesRead {
+                bytes: bytes.to_owned(),
+            })
+        {
+            log::warn!("Failed to send OrderedTerminalEventType::PtyBytesRead: {e}");
         }
 
         delegate!(self.on_finish_byte_processing(input))
@@ -3344,7 +3367,9 @@ impl ansi::Handler for TerminalModel {
                 if let Some(last_item) = output.last_mut() {
                     last_item.update(completion_update);
                 } else {
-                    log::warn!("Received update last completion result OSC before any completion results have been received");
+                    log::warn!(
+                        "Received update last completion result OSC before any completion results have been received"
+                    );
                 }
             }
             IsReceivingCompletionsOutput::Yes {
@@ -3406,7 +3431,9 @@ impl ansi::Handler for TerminalModel {
                 self.handle_completed_iterm_image(pending);
             }
             IsReceivingITermImageData::No => {
-                log::warn!("Received 'end_iterm_image_receiving' while not expecting to read iTerm image chunks.")
+                log::warn!(
+                    "Received 'end_iterm_image_receiving' while not expecting to read iTerm image chunks."
+                )
             }
         }
     }
@@ -3473,7 +3500,9 @@ impl ansi::Handler for TerminalModel {
         );
 
         let IsReceivingKittyActionData::Yes { mut pending } = is_receiving_kitty_image_data else {
-            log::warn!("Received 'end_kitty_action_receiving' while not expecting to read kitty image chunks.");
+            log::warn!(
+                "Received 'end_kitty_action_receiving' while not expecting to read kitty image chunks."
+            );
             return;
         };
 
@@ -3493,10 +3522,10 @@ impl ansi::Handler for TerminalModel {
             Ok(message) => message,
             Err(err) => {
                 log::warn!("{err:?}");
-                if let Some(message_id) = message_id {
-                    if verbosity.send_error() {
-                        let _ = writer.write_all(&create_kitty_error_reply(message_id, err.into()));
-                    }
+                if let Some(message_id) = message_id
+                    && verbosity.send_error()
+                {
+                    let _ = writer.write_all(&create_kitty_error_reply(message_id, err.into()));
                 }
                 return;
             }
@@ -3568,19 +3597,18 @@ impl ansi::Handler for TerminalModel {
 
                 match self.handle_completed_kitty_action(action.clone(), &mut HashMap::new()) {
                     Some(Ok(_)) => {
-                        if let Some(message_id) = message_id {
-                            if verbosity.send_ok() {
-                                let _ = writer.write_all(&create_kitty_ok_reply(message_id));
-                            }
+                        if let Some(message_id) = message_id
+                            && verbosity.send_ok()
+                        {
+                            let _ = writer.write_all(&create_kitty_ok_reply(message_id));
                         }
                     }
                     Some(Err(err)) => {
                         log::warn!("{err:?}");
-                        if let Some(message_id) = message_id {
-                            if verbosity.send_error() {
-                                let _ =
-                                    writer.write_all(&create_kitty_error_reply(message_id, err));
-                            }
+                        if let Some(message_id) = message_id
+                            && verbosity.send_error()
+                        {
+                            let _ = writer.write_all(&create_kitty_error_reply(message_id, err));
                         }
                     }
                     None => {}
@@ -3588,10 +3616,10 @@ impl ansi::Handler for TerminalModel {
             }
             Err(err) => {
                 log::warn!("{err:?}");
-                if let Some(message_id) = message_id {
-                    if verbosity.send_error() {
-                        let _ = writer.write_all(&create_kitty_error_reply(message_id, err));
-                    }
+                if let Some(message_id) = message_id
+                    && verbosity.send_error()
+                {
+                    let _ = writer.write_all(&create_kitty_error_reply(message_id, err));
                 }
             }
         };
@@ -3693,7 +3721,9 @@ enum InBandCommandOutputDecodingError {
     NoContentLengthHeader,
     #[error("DCS content length header is corrupted: {0:?}")]
     ContentLengthHeaderCorrupted(ParseIntError),
-    #[error("Content length header does not match length of received content. Actual: {actual_length}, expected: {expected_length}")]
+    #[error(
+        "Content length header does not match length of received content. Actual: {actual_length}, expected: {expected_length}"
+    )]
     ContentLengthMismatch {
         actual_length: usize,
         expected_length: usize,

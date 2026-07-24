@@ -1,6 +1,6 @@
 use std::slice;
 
-use cocoa::base::{id, BOOL};
+use cocoa::base::{BOOL, id};
 use cocoa::foundation::NSUInteger;
 use objc2::rc::Retained;
 use objc2_foundation::{NSArray, NSNumber, NSString};
@@ -13,7 +13,7 @@ pub const SHIFT_KEY: u16 = 512;
 pub const OPTION_KEY: u16 = 2048;
 pub const CONTROL_KEY: u16 = 4096;
 
-extern "C" {
+unsafe extern "C" {
     fn charToKeyCodes(keyChar: id) -> id;
     fn keyCodeToChar(keyCode: NSUInteger, shifted: BOOL) -> id;
 }
@@ -43,7 +43,7 @@ impl Keycode {
 
     // There could have multiple keycodes mapping to one virtual key. Return an iterator
     // to all possible values of keycode here.
-    pub fn keycodes_from_key_name(key_name: &str) -> impl Iterator<Item = Keycode> {
+    pub fn keycodes_from_key_name(key_name: &str) -> impl Iterator<Item = Keycode> + use<> {
         let key_name = NSString::from_str(key_name);
         // `charToKeyCodes` borrows the string only for the duration of the call
         // and returns an autoreleased array of NSNumber keycodes.

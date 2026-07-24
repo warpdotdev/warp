@@ -1,10 +1,18 @@
-use warp::tui_export::{
-    AIAgentActionId, AIConversationId, AgentInteractionMetadata, BlockId, TerminalModel,
-    TranscriptScope,
-};
-use warpui_core::elements::tui::TuiSize;
+use std::sync::Arc;
 
-use super::{should_render_terminal_block, terminal_block_cursor};
+use parking_lot::FairMutex;
+use warp::tui_export::{
+    AIAgentActionId, AIConversationId, AgentInteractionMetadata, Appearance, BlockId,
+    TerminalModel, TranscriptScope,
+};
+use warpui::App;
+use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiElement, TuiRect, TuiSize};
+use warpui_core::presenter::tui::TuiPresenter;
+
+use super::{
+    TerminalBlockElement, block_content_rows, should_render_terminal_block, terminal_block_cursor,
+};
+use crate::tui_builder::TuiUiBuilder;
 
 /// Builds a mock model with a single simulated (started + finished) block and
 /// returns the model together with that block's id.
@@ -102,6 +110,122 @@ fn user_command_block_is_rendered_at_top_level() {
 
     assert!(!block.is_agent_requested_command());
     assert!(should_render_terminal_block(block, block_list));
+}
+
+#[test]
+fn top_level_shell_command_row_uses_tinted_background() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (model, block_id) = model_with_finished_block("echo hi");
+        let rows = block_content_rows(
+            model
+                .block_list()
+                .block_with_id(&block_id)
+                .expect("block should exist"),
+        );
+        let model = Arc::new(FairMutex::new(model));
+
+        app.read(|ctx| {
+            let height = rows.end.saturating_sub(rows.start) as u16;
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                TerminalBlockElement::visible_rows(model, block_id, rows, 12).finish(),
+                TuiRect::new(0, 0, 12, height),
+                ctx,
+            );
+            let lines = frame.buffer.to_lines();
+            let command_row = lines
+                .iter()
+                .position(|line| line.contains("echo hi"))
+                .expect("rendered command row");
+            let output_row = lines
+                .iter()
+                .position(|line| line.contains("output"))
+                .expect("rendered output row");
+            assert_eq!(lines[command_row].trim_end(), "! echo hi");
+            assert_eq!(lines[output_row].trim_end(), "output");
+            let builder = TuiUiBuilder::from_app(ctx);
+            let background = builder.shell_command_background();
+            let prefix_style = builder.shell_command_prefix_style();
+
+            for column in 0..12 {
+                assert_eq!(frame.buffer[(column, command_row as u16)].bg, background);
+                assert_eq!(frame.buffer[(column, output_row as u16)].bg, Color::Reset);
+            }
+            let prefix = &frame.buffer[(0, command_row as u16)];
+            assert_eq!(prefix.symbol(), "!");
+            assert_eq!(Some(prefix.fg), prefix_style.fg);
+            assert!(prefix.modifier.contains(Modifier::BOLD));
+            assert_eq!(frame.buffer[(1, command_row as u16)].symbol(), " ");
+            assert_eq!(frame.buffer[(2, command_row as u16)].symbol(), "e");
+            assert_eq!(frame.buffer[(0, output_row as u16)].symbol(), "o");
+        });
+    });
+}
+
+#[test]
+fn inline_shell_command_content_keeps_terminal_background() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (model, block_id) = model_with_finished_block("echo hi");
+        let rows = block_content_rows(
+            model
+                .block_list()
+                .block_with_id(&block_id)
+                .expect("block should exist"),
+        );
+        let height = rows.end.saturating_sub(rows.start) as u16;
+        let model = Arc::new(FairMutex::new(model));
+
+        app.read(|ctx| {
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                TerminalBlockElement::content(model, block_id).finish(),
+                TuiRect::new(0, 0, 12, height),
+                ctx,
+            );
+            let lines = frame.buffer.to_lines();
+            let command_row = lines
+                .iter()
+                .position(|line| line.contains("echo hi"))
+                .expect("rendered command row");
+            assert_eq!(lines[command_row].trim_end(), "echo hi");
+
+            for column in 0..12 {
+                assert_eq!(frame.buffer[(column, command_row as u16)].bg, Color::Reset);
+            }
+        });
+    });
+}
+
+#[test]
+fn shell_command_prefix_handles_single_column_width() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (model, block_id) = model_with_finished_block("echo hi");
+        let rows = block_content_rows(
+            model
+                .block_list()
+                .block_with_id(&block_id)
+                .expect("block should exist"),
+        );
+        let model = Arc::new(FairMutex::new(model));
+
+        app.read(|ctx| {
+            let height = rows.end.saturating_sub(rows.start) as u16;
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                TerminalBlockElement::visible_rows(model, block_id, rows, 1).finish(),
+                TuiRect::new(0, 0, 1, height),
+                ctx,
+            );
+            assert_eq!(frame.buffer.to_lines()[0], "!");
+            assert_eq!(
+                frame.buffer[(0, 0)].bg,
+                TuiUiBuilder::from_app(ctx).shell_command_background()
+            );
+        });
+    });
 }
 
 #[test]

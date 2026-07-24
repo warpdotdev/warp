@@ -4,20 +4,20 @@ use std::time::Duration;
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
-use warpui::keymap::Keystroke;
 use warpui::r#async::SpawnedFutureHandle;
+use warpui::keymap::Keystroke;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{DismissalStrategy, EphemeralMessage, EphemeralMessageModel};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::orchestration_topology::{
-    adjacent_orchestration_child_conversation_id, OrchestrationNavigationDirection,
+    OrchestrationNavigationDirection, adjacent_orchestration_child_conversation_id,
 };
+use crate::terminal::TerminalModel;
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::terminal::TerminalModel;
 use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::BlocklistAIHistoryModel;
 
 /// Error returned when entering the agent view fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

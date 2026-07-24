@@ -1,6 +1,6 @@
 use super::{TuiClipBounds, TuiScene, TuiScreenPoint, TuiScreenRect, TuiZIndex};
-use crate::elements::tui::{TuiPaintContext, TuiPoint, TuiSize};
 use crate::EntityIdMap;
+use crate::elements::tui::{TuiPaintContext, TuiPoint, TuiSize};
 
 #[test]
 fn visible_rect_intersects_the_active_clip() {

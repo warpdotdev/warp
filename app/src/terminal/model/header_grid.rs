@@ -20,12 +20,12 @@ use super::grid::{Cursor, Dimensions as _, RespectDisplayedOutput};
 use super::index::{Point, VisibleRow};
 use super::selection::ScrollDelta;
 use super::{ObfuscateSecrets, RespectObfuscatedSecrets};
+use crate::terminal::SizeInfo;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::SizeInfo;
 
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         match $self.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) => {
                 let mut retval = None;
@@ -50,7 +50,7 @@ macro_rules! delegate {
 /// Any methods which write responses back to the shell process cannot have double delegation, since
 /// that would result in extra responses being sent back to the shell.
 macro_rules! delegate_with_writer {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         match $self.receiving_chars_for_prompt {
             Some(ansi::PromptKind::Initial) => {
                 if $self.honor_ps1 {
@@ -657,101 +657,6 @@ impl HeaderGrid {
         }
     }
 
-    fn has_leading_prefix_redraw_artifact(command_grid_text: &str, preexec_command: &str) -> bool {
-        if preexec_command.is_empty()
-            || command_grid_text == preexec_command
-            || command_grid_text.len() <= preexec_command.len()
-        {
-            return false;
-        }
-
-        let Some(extra_prefix) = command_grid_text.strip_suffix(preexec_command) else {
-            return false;
-        };
-
-        !extra_prefix.is_empty() && preexec_command.starts_with(extra_prefix)
-    }
-
-    fn prompt_text_for_preexec_reconciliation(&self, include_escape_sequences: bool) -> String {
-        if !self.honor_ps1 {
-            return String::new();
-        }
-
-        self.prompt_to_string_internal(
-            include_escape_sequences,
-            RespectObfuscatedSecrets::No,
-            false, /* force_obfuscated_secrets */
-        )
-    }
-
-    fn should_reconcile_command_grid_with_preexec_command(&self, preexec_command: &str) -> bool {
-        let command_grid_text = self.command_with_secrets_unobfuscated(false);
-        if Self::has_leading_prefix_redraw_artifact(&command_grid_text, preexec_command) {
-            return true;
-        }
-
-        let prompt = self.prompt_text_for_preexec_reconciliation(false);
-        let combined = self.prompt_and_command_with_secrets_unobfuscated(false);
-        let Some(rendered_after_prompt) = combined.strip_prefix(&prompt) else {
-            return false;
-        };
-
-        Self::has_leading_prefix_redraw_artifact(rendered_after_prompt, preexec_command)
-    }
-
-    fn reconcile_command_grid_with_preexec_command(&mut self, preexec_command: &str) {
-        if !self.should_reconcile_command_grid_with_preexec_command(preexec_command) {
-            return;
-        }
-
-        let prompt = self.prompt_text_for_preexec_reconciliation(true);
-
-        self.prompt_and_command_grid.reset_state();
-        self.prompt_and_command_grid.start();
-        self.cached_prompt_end_point = None;
-        self.cached_command_start_point = None;
-
-        let mut processor = Processor::new();
-        Self::parse_logical_text_into_command_grid(
-            &mut self.prompt_and_command_grid,
-            &mut processor,
-            &prompt,
-        );
-        self.mark_and_cache_end_of_prompt();
-
-        self.prompt_and_command_grid.terminal_attribute(Attr::Bold);
-        Self::parse_logical_text_into_command_grid(
-            &mut self.prompt_and_command_grid,
-            &mut processor,
-            preexec_command,
-        );
-    }
-
-    fn parse_logical_text_into_command_grid(
-        grid: &mut BlockGrid,
-        processor: &mut Processor,
-        text: impl AsRef<str>,
-    ) {
-        let mut lines = text.as_ref().split('\n');
-        if let Some(line) = lines.next() {
-            processor.parse_bytes(
-                grid,
-                line.strip_suffix('\r').unwrap_or(line).as_bytes(),
-                &mut io::sink(),
-            );
-        }
-
-        for line in lines {
-            grid.carriage_return();
-            grid.linefeed();
-            processor.parse_bytes(
-                grid,
-                line.strip_suffix('\r').unwrap_or(line).as_bytes(),
-                &mut io::sink(),
-            );
-        }
-    }
-
     pub fn is_command_finished(&self) -> bool {
         self.prompt_and_command_grid.finished()
     }
@@ -931,7 +836,9 @@ impl HeaderGrid {
 
 impl ansi::Handler for HeaderGrid {
     fn set_title(&mut self, _: Option<String>) {
-        report_error!("Handler method HeaderGrid::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::set_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
@@ -1158,11 +1065,15 @@ impl ansi::Handler for HeaderGrid {
     }
 
     fn push_title(&mut self) {
-        report_error!("Handler method HeaderGrid::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::push_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn pop_title(&mut self) {
-        report_error!("Handler method HeaderGrid::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method HeaderGrid::pop_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn prompt_marker(&mut self, marker: ansi::PromptMarker) {
@@ -1242,25 +1153,25 @@ impl ansi::Handler for HeaderGrid {
     }
 
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
-        if let Some(honor_ps1) = data.honor_ps1 {
-            if honor_ps1 != self.honor_ps1 {
-                log::debug!(
-                    "Honor PS1 value changed from {} to {}",
-                    self.honor_ps1,
-                    honor_ps1
-                );
-                // We send a terminal event which will result in bindkeys being issued to the shell session, to
-                // switch the prompt mode via the $WARP_HONOR_PS1 environment variable.
-                self.event_proxy
-                    .send_terminal_event(Event::HonorPS1OutOfSync);
+        if let Some(honor_ps1) = data.honor_ps1
+            && honor_ps1 != self.honor_ps1
+        {
+            log::debug!(
+                "Honor PS1 value changed from {} to {}",
+                self.honor_ps1,
+                honor_ps1
+            );
+            // We send a terminal event which will result in bindkeys being issued to the shell session, to
+            // switch the prompt mode via the $WARP_HONOR_PS1 environment variable.
+            self.event_proxy
+                .send_terminal_event(Event::HonorPS1OutOfSync);
 
-                // We synchronize the state of our `honor_ps1` setting with the value passed from the shell.
-                // Note that we ALWAYS want this to be synced properly since the shell determines the prompt
-                // to be emitted. This may be de-synced from Warp settings in particular niche cases (which are
-                // bugs), however, we still want consistent behavior for the prompt in the blocklist (we want to
-                // avoid double prompt or empty prompt issues).
-                self.honor_ps1 = honor_ps1;
-            }
+            // We synchronize the state of our `honor_ps1` setting with the value passed from the shell.
+            // Note that we ALWAYS want this to be synced properly since the shell determines the prompt
+            // to be emitted. This may be de-synced from Warp settings in particular niche cases (which are
+            // bugs), however, we still want consistent behavior for the prompt in the blocklist (we want to
+            // avoid double prompt or empty prompt issues).
+            self.honor_ps1 = honor_ps1;
         }
 
         if let Some(ps1) = data.ps1 {
@@ -1308,13 +1219,7 @@ impl ansi::Handler for HeaderGrid {
         }
     }
 
-    fn preexec(&mut self, data: PreexecValue) {
-        // The command grid is built from the shell's line-editor echo stream before preexec.
-        // Some shells redraw a short command prefix before echoing the full multiline command.
-        // Finish the grid first so the full multiline text is inspectable, then use preexec's
-        // canonical command only when the grid is provably that command with a redrawn prefix.
-        self.finish_command_grid();
-        self.reconcile_command_grid_with_preexec_command(&data.command);
+    fn preexec(&mut self, _data: PreexecValue) {
         self.finish_command_grid();
     }
 

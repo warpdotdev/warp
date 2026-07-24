@@ -11,15 +11,15 @@ use warpui::units::Lines;
 use warpui::{App, SingletonEntity, ViewHandle};
 
 use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
+use crate::terminal::TerminalView;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::{BlockId, BlockState, SerializedBlock};
+use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::shared_session::tests::terminal_model_for_viewer;
 use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
 };
-use crate::terminal::shared_session::SharedSessionStatus;
-use crate::terminal::TerminalView;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
@@ -114,9 +114,9 @@ fn test_terminal_model_is_correct() {
         });
 
         // Before we receive any events, the block list only contains hidden blocks.
-        assert!(model.lock().block_list().blocks().iter().all(|block| block
-            .height(&crate::terminal::model::block::TranscriptScope::Terminal)
-            == Lines::zero()));
+        assert!(model.lock().block_list().blocks().iter().all(|block| {
+            block.height(&crate::terminal::model::block::TranscriptScope::Terminal) == Lines::zero()
+        }));
 
         // Load shared session scrollback.
         let scrollback = &[
@@ -931,10 +931,12 @@ fn test_cloud_mode_setup_phase_ended_clears_setup_state() {
         });
 
         // Sanity-check the seeded state.
-        assert!(model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
         terminal_view.read(&app, |view, ctx| {
             let setup_state = view
                 .ambient_agent_view_model()
@@ -957,10 +959,12 @@ fn test_cloud_mode_setup_phase_ended_clears_setup_state() {
             );
         });
 
-        assert!(!model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            !model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
         terminal_view.read(&app, |view, ctx| {
             let setup_state = view
                 .ambient_agent_view_model()
@@ -1004,10 +1008,12 @@ fn test_cloud_mode_setup_phase_ended_when_flag_already_false() {
         // BlockList flag starts at the default `false`; we intentionally do not
         // call set_is_executing_oz_environment_startup_commands(true) so the
         // marker arrives against a tree that never observed setup phase.
-        assert!(!model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            !model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
 
         let initial_group_id = terminal_view.read(&app, |view, ctx| {
             view.ambient_agent_view_model()
@@ -1029,10 +1035,12 @@ fn test_cloud_mode_setup_phase_ended_when_flag_already_false() {
 
         // Flag stays cleared, and the unconditional teardown leaves the
         // initial setup group finished and collapsed.
-        assert!(!model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            !model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
         terminal_view.read(&app, |view, ctx| {
             let setup_state = view
                 .ambient_agent_view_model()
@@ -1109,10 +1117,12 @@ fn test_cloud_mode_setup_phase_ended_is_idempotent() {
             );
         });
 
-        assert!(!model
-            .lock()
-            .block_list()
-            .is_executing_oz_environment_startup_commands());
+        assert!(
+            !model
+                .lock()
+                .block_list()
+                .is_executing_oz_environment_startup_commands()
+        );
         terminal_view.read(&app, |view, ctx| {
             let setup_state = view
                 .ambient_agent_view_model()

@@ -1,26 +1,26 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use dashmap::DashMap;
 use futures::channel::oneshot;
 use futures::io::{AsyncRead, AsyncWrite};
-use warpui_core::r#async::{executor, FutureExt as _};
+use warpui_core::r#async::{FutureExt as _, executor};
 
 use crate::codebase_index_proto::{
-    proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
-    RemoteCodebaseIndexStatus,
+    RemoteCodebaseIndexStatus, proto_to_codebase_index_status_updated,
+    proto_to_codebase_index_statuses_snapshot,
 };
 use crate::proto::{
-    notification, server_message, session_scoped_request, Abort, Authenticate, BufferEdit,
-    ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode, DiffStateFileDelta,
-    DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, GitStatusMetadata, Initialize,
-    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, PrInfo,
-    RemoteAgentContextSnapshot, RepositoryInfo, RunCommandRequest, RunCommandResponse,
-    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UpdateGitHubPrInfo,
-    UpdateGitHubRepoInfo, UpdateGitStatus,
+    Abort, Authenticate, BufferEdit, ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode,
+    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, GitStatusMetadata,
+    Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
+    NavigatedToDirectoryResponse, PrInfo, RemoteAgentContextSnapshot, RepositoryInfo,
+    RunCommandRequest, RunCommandResponse, ServerMessage, SessionBootstrapped, TextEdit,
+    UnsubscribeDiffState, UpdateGitHubPrInfo, UpdateGitHubRepoInfo, UpdateGitStatus, notification,
+    server_message, session_scoped_request,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -28,7 +28,7 @@ use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadat
 mod remote_server_log;
 #[cfg(not(target_family = "wasm"))]
 pub use remote_server_log::RemoteServerLog;
-use warp_core::{safe_error, safe_warn, SessionId};
+use warp_core::{SessionId, safe_error, safe_warn};
 use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::TransportStream;
@@ -1010,10 +1010,10 @@ impl RemoteServerClient {
                     let request_id = RequestId::from(msg.request_id.clone());
                     if request_id.is_empty() {
                         // Push message — convert to a domain event and forward.
-                        if let Some(event) = Self::push_message_to_event(msg) {
-                            if event_tx.send(event).await.is_err() {
-                                log::warn!("Event channel closed, dropping push message");
-                            }
+                        if let Some(event) = Self::push_message_to_event(msg)
+                            && event_tx.send(event).await.is_err()
+                        {
+                            log::warn!("Event channel closed, dropping push message");
                         }
                     } else if let Some((_, tx)) = pending_requests.remove(&request_id) {
                         // Session-scoped response — resolve the caller's oneshot.
@@ -1101,8 +1101,8 @@ pub fn spawn_stderr_forwarder(
     stderr: impl AsyncRead + TransportStream,
     executor: &executor::Background,
 ) -> RemoteServerLog {
-    use futures::io::AsyncBufReadExt;
     use futures::StreamExt;
+    use futures::io::AsyncBufReadExt;
 
     let tail = RemoteServerLog::new();
     let tail_writer = tail.clone();

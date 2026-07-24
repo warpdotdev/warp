@@ -6,14 +6,14 @@ use std::sync::Arc;
 use itertools::Itertools;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::util::EPSILON;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use string_offset::CharOffset;
 
 use super::{
     AfterLayoutContext, AppContext, Axis, ClickableCharRange, Element, EventContext, Fill,
     HoverableCharRange, LayoutContext, MouseStateHandle, PaintContext, PartialClickableElement,
-    Point, RectF, SecretRange, SelectableElement, Selection, SelectionFragment, SizeConstraint,
-    SELECTED_HIGHLIGHT_COLOR,
+    Point, RectF, SELECTED_HIGHLIGHT_COLOR, SecretRange, SelectableElement, Selection,
+    SelectionFragment, SizeConstraint,
 };
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::fonts::{Cache as FontCache, FamilyId, Properties};
@@ -21,12 +21,12 @@ use crate::platform::{Cursor, LineStyle};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{IsRect, SelectionDirection, SelectionType, TextBuffer};
 use crate::text_layout::{
-    ClipConfig, ComputeBaselinePositionFn, Line, StyleAndFont, TextFrame, TextStyle,
-    DEFAULT_TOP_BOTTOM_RATIO,
+    ClipConfig, ComputeBaselinePositionFn, DEFAULT_TOP_BOTTOM_RATIO, Line, StyleAndFont, TextFrame,
+    TextStyle,
 };
 use crate::text_selection_utils::{
-    calculate_tick_width, create_newline_tick_rect, selection_crosses_newline_row_based,
-    NewlineTickParams,
+    NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
+    selection_crosses_newline_row_based,
 };
 use crate::{Event, Scene};
 

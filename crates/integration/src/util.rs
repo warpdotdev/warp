@@ -1,4 +1,4 @@
-use std::fs::{create_dir_all, write, OpenOptions};
+use std::fs::{OpenOptions, create_dir_all, write};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -7,7 +7,7 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use version_compare::Version;
 use warp::integration_testing::terminal::util::{
-    current_shell_starter_and_version, default_histfile_directory, ExpectedOutput,
+    ExpectedOutput, current_shell_starter_and_version, default_histfile_directory,
 };
 use warp::integration_testing::view_getters;
 use warp::terminal::shell;

@@ -1,11 +1,11 @@
 use regex::Regex;
 
 use super::*;
+use crate::terminal::SizeInfo;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, Handler as _};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::secrets::RespectObfuscatedSecrets;
-use crate::terminal::SizeInfo;
 
 fn secret_ranges(grid_handler: &GridHandler) -> Vec<RangeInclusive<Point>> {
     grid_handler

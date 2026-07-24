@@ -165,8 +165,7 @@ fn test_compute_workflow_display_data_for_linked_history_command() {
     //
     // It passes "/opt/homebrew/bin/fish" for the {{shell_path}} parameter and
     // test_command_search_loads_history for the {{test_name}} parameter.
-    let linked_history_command =
-        "RUST_BACKTRACE=full WARP_SHELL_PATH=/opt/homebrew/bin/fish cargo run -p integration --bin \
+    let linked_history_command = "RUST_BACKTRACE=full WARP_SHELL_PATH=/opt/homebrew/bin/fish cargo run -p integration --bin \
         integration --features=with_real_display_in_integration_tests -- \
         test_command_search_loads_history";
     let display_data =
@@ -190,8 +189,8 @@ fn test_compute_workflow_display_data_for_linked_history_command() {
 }
 
 #[test]
-fn test_compute_workflow_display_data_for_linked_history_command_with_multiple_instances_same_parameter(
-) {
+fn test_compute_workflow_display_data_for_linked_history_command_with_multiple_instances_same_parameter()
+ {
     // This command should be parsed as a workflow-linked command.
     //
     // The workflow contains multiple instances of the same parameter
@@ -287,26 +286,29 @@ fn test_compute_workflow_display_data_for_unlinked_history_command() {
 #[test]
 fn test_compute_workflow_display_data_for_unlinked_history_command_with_no_parameters() {
     let unlinked_history_command = r#"echo foo"#;
-    assert!(compute_workflow_display_data_for_history_command(
-        unlinked_history_command,
-        &WORKFLOW_NO_PARAMETERS
-    )
-    .is_none());
+    assert!(
+        compute_workflow_display_data_for_history_command(
+            unlinked_history_command,
+            &WORKFLOW_NO_PARAMETERS
+        )
+        .is_none()
+    );
 }
 
 #[test]
 fn test_compute_workflow_display_data_for_similar_but_unlinked_history_command() {
     // This command is missing the "-p" from the workflow's command, so should not be linked to the
     // command.
-    let similar_but_unlinked_history_command =
-        "RUST_BACKTRACE=full WARP_SHELL_PATH=/opt/homebrew/bin/fish cargo run integration --bin \
+    let similar_but_unlinked_history_command = "RUST_BACKTRACE=full WARP_SHELL_PATH=/opt/homebrew/bin/fish cargo run integration --bin \
         integration --features=with_real_display_in_integration_tests -- \
         test_command_search_loads_history";
-    assert!(compute_workflow_display_data_for_history_command(
-        similar_but_unlinked_history_command,
-        &WORKFLOW
-    )
-    .is_none());
+    assert!(
+        compute_workflow_display_data_for_history_command(
+            similar_but_unlinked_history_command,
+            &WORKFLOW
+        )
+        .is_none()
+    );
 }
 
 #[test]

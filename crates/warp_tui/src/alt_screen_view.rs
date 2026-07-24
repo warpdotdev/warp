@@ -18,11 +18,11 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{TermMode, TerminalModel};
 use warp_terminal::model::grid::Dimensions as _;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
     TuiScreenPosition, TuiSize,
 };
-use warpui_core::AppContext;
 
 use crate::terminal_block::render_grid_handler;
 

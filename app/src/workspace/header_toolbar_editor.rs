@@ -3,16 +3,16 @@ use warp_errors::report_if_error;
 use warpui::keymap::FixedBinding;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
+use crate::Appearance;
 use crate::chip_configurator::{
-    render_chip_editor_modal, render_chip_editor_sections, ChipConfigurator,
-    ChipConfiguratorAction, ChipConfiguratorLayout, ChipEditorModalConfig, ChipEditorMouseHandles,
-    ChipEditorSectionsConfig, ConfigurableItem, ControlItemRenderer,
+    ChipConfigurator, ChipConfiguratorAction, ChipConfiguratorLayout, ChipEditorModalConfig,
+    ChipEditorMouseHandles, ChipEditorSectionsConfig, ConfigurableItem, ControlItemRenderer,
+    render_chip_editor_modal, render_chip_editor_sections,
 };
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::{
     HeaderToolbarChipSelection, TabSettings, TabSettingsChangedEvent,
 };
-use crate::Appearance;
 
 const MODAL_TITLE: &str = "Edit toolbar";
 
@@ -155,9 +155,11 @@ fn save_toolbar_selection<V: View>(
     };
 
     TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-        report_if_error!(settings
-            .header_toolbar_chip_selection
-            .set_value(selection, ctx));
+        report_if_error!(
+            settings
+                .header_toolbar_chip_selection
+                .set_value(selection, ctx)
+        );
     });
 }
 
@@ -171,9 +173,11 @@ fn sync_show_hide_settings<V: View>(
     let code_review_placed = placed.contains(&&HeaderToolbarItemKind::CodeReview);
     if *TabSettings::as_ref(ctx).show_code_review_button.value() != code_review_placed {
         TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .show_code_review_button
-                .set_value(code_review_placed, ctx));
+            report_if_error!(
+                settings
+                    .show_code_review_button
+                    .set_value(code_review_placed, ctx)
+            );
         });
     }
 }

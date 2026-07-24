@@ -10,15 +10,15 @@ use warp_util::file::FileId;
 #[cfg(not(target_family = "wasm"))]
 use warp_util::file::FileSaveError;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::elements::ChildView;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
+use warpui::elements::ChildView;
 use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::diff_viewer::{DiffViewer, DisplayMode};
+use super::editor::NavBarBehavior;
 use super::editor::scroll::{ScrollPosition, ScrollTrigger};
 use super::editor::view::{CodeEditorEvent, CodeEditorView};
-use super::editor::NavBarBehavior;
 use crate::ai::blocklist::diff_storage::SaveFuture;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::diff_types::DiffSessionType;

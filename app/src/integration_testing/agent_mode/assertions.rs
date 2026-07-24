@@ -5,9 +5,10 @@
 
 use warp_multi_agent_api as api;
 use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
-use warpui::{integration_assert, EntityId, SingletonEntity as _};
+use warpui::{EntityId, SingletonEntity as _, integration_assert};
 
 use super::llm_judge::{LLMJudge, LLMJudgeConfig};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -17,7 +18,6 @@ use crate::ai::agent::{
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::integration_testing::view_getters::terminal_view;
-use crate::BlocklistAIHistoryModel;
 
 type TextAssertion = Box<dyn Fn(&str) -> bool + 'static>;
 type ActionAssertion = Box<dyn Fn(&AIAgentActionType) -> bool + 'static>;
@@ -391,12 +391,11 @@ pub fn assert_no_requested_command(
                 };
                 for action in output.get().actions() {
                     if let AIAgentActionType::RequestCommandOutput { command, .. } = &action.action
+                        && forbidden_predicate(command)
                     {
-                        if forbidden_predicate(command) {
-                            return AssertionOutcome::immediate_failure(format!(
-                                "Found forbidden command: {command}"
-                            ));
-                        }
+                        return AssertionOutcome::immediate_failure(format!(
+                            "Found forbidden command: {command}"
+                        ));
                     }
                 }
             }
@@ -617,15 +616,14 @@ pub fn assert_task_is_blocked(conversation_target: ConversationTarget) -> Assert
 fn check_for_api_error_in_latest_exchange(
     conversation: &AIConversation,
 ) -> Option<AssertionOutcome> {
-    if let Some(latest_exchange) = conversation.latest_exchange() {
-        if let AIAgentOutputStatus::Finished {
+    if let Some(latest_exchange) = conversation.latest_exchange()
+        && let AIAgentOutputStatus::Finished {
             finished_output: FinishedAIAgentOutput::Error { error, .. },
         } = &latest_exchange.output_status
-        {
-            return Some(AssertionOutcome::immediate_failure(format!(
-                "Conversation ended with API error: {error:?}"
-            )));
-        }
+    {
+        return Some(AssertionOutcome::immediate_failure(format!(
+            "Conversation ended with API error: {error:?}"
+        )));
     }
     None
 }
@@ -843,13 +841,11 @@ pub fn assert_conversation_contains_no_actions(
                 if let AIAgentOutputStatus::Finished {
                     finished_output: FinishedAIAgentOutput::Success { output },
                 } = &exchange.output_status
+                    && output.get().actions().next().is_some()
                 {
-                    if output.get().actions().next().is_some() {
-                        return AssertionOutcome::immediate_failure(
-                            "Expected no actions in conversation, but found at least one"
-                                .to_owned(),
-                        );
-                    }
+                    return AssertionOutcome::immediate_failure(
+                        "Expected no actions in conversation, but found at least one".to_owned(),
+                    );
                 }
             }
 
@@ -1234,13 +1230,13 @@ pub fn assert_no_md_file_edits() -> AssertionCallback {
                         {
                             // Check if any file edit is for a .md file
                             for file_edit in file_edits {
-                                if let Some(file_path) = file_edit.file() {
-                                    if file_path.ends_with(".md") {
-                                        return AssertionOutcome::immediate_failure(format!(
-                                            "Found .md file edit request: {}",
-                                            file_path
-                                        ));
-                                    }
+                                if let Some(file_path) = file_edit.file()
+                                    && file_path.ends_with(".md")
+                                {
+                                    return AssertionOutcome::immediate_failure(format!(
+                                        "Found .md file edit request: {}",
+                                        file_path
+                                    ));
                                 }
                             }
                         }

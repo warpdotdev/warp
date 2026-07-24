@@ -198,12 +198,12 @@ impl<P: BackingView> PaneView<P> {
     /// Handles events from the pane stack model.
     fn handle_pane_stack_event(&mut self, event: &PaneStackEvent<P>, ctx: &mut ViewContext<Self>) {
         // Set the focus handle for newly added views
-        if let PaneStackEvent::ViewAdded(view) = event {
-            if let Some(focus_handle) = &self.focus_handle {
-                view.update(ctx, |child, ctx| {
-                    child.set_focus_handle(focus_handle.clone(), ctx);
-                });
-            }
+        if let PaneStackEvent::ViewAdded(view) = event
+            && let Some(focus_handle) = &self.focus_handle
+        {
+            view.update(ctx, |child, ctx| {
+                child.set_focus_handle(focus_handle.clone(), ctx);
+            });
         }
 
         let new_child = self.child(ctx);

@@ -1,11 +1,11 @@
 use vec1::vec1;
 
 use super::{LocalUndoStack, UndoHistory};
+use crate::editor::PlainTextEditorViewAction;
+use crate::editor::view::model::buffer::ReplicaId;
 use crate::editor::view::model::buffer::time::{Global, Lamport, LamportValue};
 use crate::editor::view::model::buffer::undo::UNDO_REDO_BATCH_TIMER;
-use crate::editor::view::model::buffer::ReplicaId;
 use crate::editor::view::model::{Anchor, LocalSelection, LocalSelections};
-use crate::editor::PlainTextEditorViewAction;
 
 fn local_selections(start: Anchor, end: Anchor) -> LocalSelections {
     LocalSelections {

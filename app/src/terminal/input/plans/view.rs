@@ -11,8 +11,8 @@ use crate::search::data_source::Query;
 use crate::search::mixer::SearchMixer;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::inline_menu::{InlineMenuEvent, InlineMenuPositioner, InlineMenuView};
-use crate::terminal::input::plans::data_source::PlanMenuDataSource;
 use crate::terminal::input::plans::AcceptPlan;
+use crate::terminal::input::plans::data_source::PlanMenuDataSource;
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };

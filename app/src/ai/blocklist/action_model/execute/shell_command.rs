@@ -6,7 +6,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Local};
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
-use futures::{select, FutureExt};
+use futures::{FutureExt, select};
 use futures_lite::pin;
 use itertools::Itertools;
 use parking_lot::FairMutex;
@@ -22,18 +22,18 @@ use crate::ai::agent::{
     ReadShellCommandOutputResult, RequestCommandOutputResult, ShellCommandDelay, ShellCommandError,
     TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
-use crate::ai::blocklist::permissions::CommandExecutionPermission;
 use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::permissions::CommandExecutionPermission;
 use crate::ai::execution_profiles::WriteToPtyPermission;
+use crate::terminal::TerminalModel;
 use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::{
-    formatted_terminal_contents_for_input, Block, BlockId, CURSOR_MARKER,
+    Block, BlockId, CURSOR_MARKER, formatted_terminal_contents_for_input,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
-use crate::terminal::TerminalModel;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct ShellCommandExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -139,12 +139,9 @@ impl ShellCommandExecutor {
                         ctx
                     );
                 } else if let CommandExecutionPermission::Denied(reason) = autoexecution_permission
+                    && AppExecutionMode::as_ref(ctx).is_autonomous()
                 {
-                    if AppExecutionMode::as_ref(ctx).is_autonomous() {
-                        log::warn!(
-                            "Command denied during autonomous execution, reason: {reason:?}"
-                        );
-                    }
+                    log::warn!("Command denied during autonomous execution, reason: {reason:?}");
                 }
                 autoexecution_permission.is_allowed()
             }
@@ -211,7 +208,7 @@ impl ShellCommandExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let model = self.terminal_model.lock();
 
         // Determine the action we want to take based on the input.
@@ -517,7 +514,7 @@ impl ShellCommandExecutor {
         &mut self,
         block_selector: BlockSelector,
         delay: Option<ShellCommandDelay>,
-    ) -> impl Spawnable<Output = ActionResult> {
+    ) -> impl Spawnable<Output = ActionResult> + use<> {
         // Create a channel to notify us when we receive block metadata.
         let (block_metadata_received_tx, block_metadata_received_rx) = oneshot::channel();
         self.block_finished_senders
@@ -591,7 +588,8 @@ impl ShellCommandExecutor {
             // At this point, we've either received block metadata or we've timed out.
             // Check the current state of the block and produce a result accordingly.
             let model = terminal_model.lock();
-            let result = match block_selector.get_block(&model) {
+
+            match block_selector.get_block(&model) {
                 Some(block) => {
                     if block.finished() {
                         ActionResult::CommandFinished {
@@ -626,9 +624,7 @@ impl ShellCommandExecutor {
                     }
                 }
                 None => ActionResult::BlockNotFound,
-            };
-
-            result
+            }
         }
     }
 
@@ -673,10 +669,10 @@ impl ShellCommandExecutor {
             .cloned();
         drop(terminal_model);
 
-        if let Some(selector) = matching_selector {
-            if let Some(sender) = self.force_refresh_senders.remove(&selector) {
-                let _ = sender.send(());
-            }
+        if let Some(selector) = matching_selector
+            && let Some(sender) = self.force_refresh_senders.remove(&selector)
+        {
+            let _ = sender.send(());
         }
     }
 

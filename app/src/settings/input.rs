@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use settings::Setting as _;
 /// TODO: move alias_expansion setting into this group.
-use settings::{define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud, define_settings_group};
 use warpui::{AppContext, SingletonEntity};
 
 use crate::terminal::input::inline_menu::InlineMenuType;

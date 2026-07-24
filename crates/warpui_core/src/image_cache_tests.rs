@@ -4,8 +4,8 @@ use std::rc::Rc;
 use rust_embed::RustEmbed;
 
 use super::*;
-use crate::r#async::executor::{Background, Foreground};
 use crate::AssetProvider;
+use crate::r#async::executor::{Background, Foreground};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "test_data"]
@@ -495,10 +495,12 @@ fn test_svg_text_rasterizes_with_loaded_system_fonts() {
         panic!("Expected static image");
     };
 
-    assert!(image
-        .rgba_bytes()
-        .chunks_exact(4)
-        .any(|pixel| pixel[3] != 0));
+    assert!(
+        image
+            .rgba_bytes()
+            .chunks_exact(4)
+            .any(|pixel| pixel[3] != 0)
+    );
 }
 
 #[test]
@@ -532,10 +534,12 @@ fn test_svg_text_rasterizes_with_bundled_sans_serif_fallback() {
         panic!("Expected static image");
     };
 
-    assert!(image
-        .rgba_bytes()
-        .chunks_exact(4)
-        .any(|pixel| pixel[3] != 0));
+    assert!(
+        image
+            .rgba_bytes()
+            .chunks_exact(4)
+            .any(|pixel| pixel[3] != 0)
+    );
 }
 
 #[test]

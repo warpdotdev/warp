@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use futures::channel::oneshot;
 use futures::StreamExt;
+use futures::channel::oneshot;
 use warpui_core::r#async::executor::Background;
 
 use super::*;

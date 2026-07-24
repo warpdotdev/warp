@@ -4,7 +4,7 @@ use mio::event::Source;
 use mio::{Interest, Registry, Token};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Threading::{
-    RegisterWaitForSingleObject, UnregisterWait, INFINITE, WT_EXECUTEINWAITTHREAD,
+    INFINITE, RegisterWaitForSingleObject, UnregisterWait, WT_EXECUTEINWAITTHREAD,
     WT_EXECUTEONLYONCE,
 };
 

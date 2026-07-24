@@ -14,7 +14,7 @@ use crate::terminal::model::ansi::{
 };
 use crate::terminal::model::blocks::BlockList;
 use crate::terminal::model::test_utils::TestBlockListBuilder;
-use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
+use crate::terminal::shared_session::presence_manager::{PRESET_COLORS, PresenceManager};
 
 fn viewer_with_uid(uid: &str, is_present: bool) -> Viewer {
     Viewer {

@@ -10,10 +10,10 @@ use {
     crate::server::server_api::ServerApiProvider,
 };
 
+use crate::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
-use crate::AIExecutionProfilesModel;
 
 /// Server-side state prepared before a frontend creates the child's surface.
 #[cfg(not(target_family = "wasm"))]
@@ -30,7 +30,7 @@ pub fn prepare_local_oz_child_launch(
     prompt: &str,
     parent_run_id: Option<&str>,
     ctx: &AppContext,
-) -> impl Future<Output = anyhow::Result<PreparedLocalOzChildLaunch>> + 'static {
+) -> impl Future<Output = anyhow::Result<PreparedLocalOzChildLaunch>> + 'static + use<> {
     let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
     let agent_name = normalize_orchestrator_agent_name(name);
     let conversation_name = agent_name.clone().unwrap_or_default();
@@ -62,9 +62,10 @@ pub fn inherit_child_agent_settings(
     child_surface_id: EntityId,
     ctx: &mut AppContext,
 ) {
-    let parent_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+    let parent_profile_id = AIExecutionProfilesModel::as_ref(ctx)
         .active_profile(Some(parent_surface_id), ctx)
-        .id();
+        .id()
+        .clone();
     AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
         profiles.set_active_profile(child_surface_id, parent_profile_id, ctx);
     });

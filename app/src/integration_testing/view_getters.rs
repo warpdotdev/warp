@@ -6,7 +6,7 @@
 //! See https://github.com/warpdotdev/warp-internal/pull/4785#issue-1634862270
 
 use warpui::integration::AssertionCallback;
-use warpui::{async_assert, App, Entity, View, ViewHandle, WindowId};
+use warpui::{App, Entity, View, ViewHandle, WindowId, async_assert};
 
 use crate::ai_assistant::panel::AIAssistantPanelView;
 use crate::input_suggestions::InputSuggestions;
@@ -16,12 +16,12 @@ use crate::root_view::RootView;
 use crate::search::command_palette::{self};
 use crate::search::command_search::view::CommandSearchView;
 use crate::settings_view::keybindings::KeybindingsView;
-use crate::terminal::input::Input;
 use crate::terminal::TerminalView;
+use crate::terminal::input::Input;
 use crate::themes::theme_chooser::ThemeChooser;
 use crate::view_components::find::{Find, FindEvent, FindModel};
-use crate::workflows::workflow_view::WorkflowView;
 use crate::workflows::CategoriesView;
+use crate::workflows::workflow_view::WorkflowView;
 use crate::workspace::Workspace;
 
 /// This identifier is useful when you'd like to weakly identify a terminal view
@@ -257,6 +257,9 @@ fn singleton_view_of_type<T: View>(app: &App, window_id: WindowId) -> ViewHandle
         .views_of_type(window_id)
         .expect("there's at least one view of type");
     let num_views_of_type = views_of_type.len();
-    assert_eq!(num_views_of_type, 1, "window_id={window_id} doesn't have a single view of type T. Has {num_views_of_type} views instead");
+    assert_eq!(
+        num_views_of_type, 1,
+        "window_id={window_id} doesn't have a single view of type T. Has {num_views_of_type} views instead"
+    );
     views_of_type.first().unwrap().clone()
 }

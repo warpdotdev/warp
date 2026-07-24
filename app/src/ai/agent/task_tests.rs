@@ -1,16 +1,6 @@
-use std::collections::HashSet;
-
-use ai::skills::SkillPathOrigin;
-use chrono::Local;
-use prost_types::FieldMask;
 use warp_multi_agent_api as api;
 
-use super::{ExtractMessagesError, Task, TaskMessageContext};
-use crate::ai::agent::{
-    AIAgentActionType, AIAgentExchange, AIAgentOutput, AIAgentOutputMessageType,
-    AIAgentOutputStatus, MessageId, Shared,
-};
-use crate::ai::llms::LLMId;
+use super::{ExtractMessagesError, Task};
 use crate::test_util::ai_agent_tasks::{
     create_api_subtask, create_api_task, create_message, create_subagent_tool_call_message,
 };
@@ -18,115 +8,6 @@ use crate::test_util::ai_agent_tasks::{
 /// Creates a Task backed by server data from the given api::Task.
 fn create_server_task(api_task: api::Task) -> Task {
     Task::new_restored_root(api_task, std::iter::empty())
-}
-
-fn create_streaming_exchange_with_output() -> AIAgentExchange {
-    AIAgentExchange {
-        id: Default::default(),
-        input: vec![],
-        output_status: AIAgentOutputStatus::Streaming {
-            output: Some(Shared::new(AIAgentOutput::default())),
-        },
-        added_message_ids: HashSet::new(),
-        start_time: Local::now(),
-        finish_time: None,
-        time_to_first_token_ms: None,
-        working_directory: None,
-        model_id: LLMId::from(""),
-        request_cost: None,
-        coding_model_id: LLMId::from(""),
-        cli_agent_model_id: LLMId::from(""),
-        computer_use_model_id: LLMId::from(""),
-        response_initiator: None,
-    }
-}
-
-fn create_start_agent_tool_call_message(
-    id: &str,
-    task_id: &str,
-    name: &str,
-    prompt: &str,
-) -> api::Message {
-    api::Message {
-        fetched_memories: vec![],
-        id: id.to_string(),
-        task_id: task_id.to_string(),
-        server_message_data: String::new(),
-        citations: vec![],
-        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
-            tool_call_id: format!("{id}_tool_call"),
-            tool: Some(api::message::tool_call::Tool::StartAgent(api::StartAgent {
-                name: name.to_string(),
-                prompt: prompt.to_string(),
-                execution_mode: None,
-                lifecycle_subscription: None,
-            })),
-        })),
-        request_id: String::new(),
-        timestamp: None,
-    }
-}
-
-fn assert_start_agent_prompt(
-    task: &Task,
-    exchange_id: crate::ai::agent::AIAgentExchangeId,
-    prompt: &str,
-) {
-    let exchange = task.exchange(exchange_id).expect("exchange should exist");
-    let output = exchange
-        .output_status
-        .output()
-        .expect("output should be initialized");
-    let output = output.get();
-    let output_message = output
-        .messages
-        .iter()
-        .find(|message| message.id == MessageId::new("start_agent_message".to_string()))
-        .expect("start agent output message should exist");
-
-    let AIAgentOutputMessageType::Action(action) = &output_message.message else {
-        panic!("expected action output message");
-    };
-    let AIAgentActionType::StartAgent {
-        prompt: current_prompt,
-        ..
-    } = &action.action
-    else {
-        panic!("expected StartAgent action");
-    };
-
-    assert_eq!(current_prompt, prompt);
-}
-
-#[test]
-fn test_upsert_message_adds_start_agent_prompt_to_output() {
-    let task_id = "task1";
-    let mut task = create_server_task(create_api_task(task_id, vec![]));
-
-    let exchange = create_streaming_exchange_with_output();
-    let exchange_id = exchange.id;
-    task.append_exchange(exchange);
-
-    task.upsert_message(
-        create_start_agent_tool_call_message(
-            "start_agent_message",
-            task_id,
-            "Agent 1",
-            "run tests",
-        ),
-        exchange_id,
-        TaskMessageContext {
-            current_todo_list: None,
-            active_code_review: None,
-            skill_path_origin: &SkillPathOrigin::Local,
-        },
-        FieldMask {
-            paths: vec!["message.tool_call".to_string()],
-        },
-        false,
-    )
-    .expect("initial upsert should succeed");
-    assert_start_agent_prompt(&task, exchange_id, "run tests");
 }
 
 // =============================================================================

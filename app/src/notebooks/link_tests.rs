@@ -89,12 +89,11 @@ async fn resolve(app: &App, links: &ModelHandle<NotebookLinks>, link: &str) -> L
 /// Ensure a file exists, creating its parents if necessary.
 async fn touch(path: impl AsRef<Path>) {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        if let Err(err) = async_fs::create_dir_all(parent).await {
-            if err.kind() != ErrorKind::AlreadyExists {
-                panic!("Creating parent {} failed: {}", parent.display(), err);
-            }
-        }
+    if let Some(parent) = path.parent()
+        && let Err(err) = async_fs::create_dir_all(parent).await
+        && err.kind() != ErrorKind::AlreadyExists
+    {
+        panic!("Creating parent {} failed: {}", parent.display(), err);
     }
 
     async_fs::File::create(path)

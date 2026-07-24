@@ -1,19 +1,19 @@
 use std::cell::RefCell;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::task::{Context, Poll};
 
 use anyhow::Result;
-use futures_util::{stream, Stream};
+use futures_util::{Stream, stream};
 use parking_lot::Mutex;
 
 use super::*;
-use crate::elements::*;
-use crate::keymap::macros::*;
-use crate::keymap::Keystroke;
 use crate::r#async::Timer;
+use crate::elements::*;
+use crate::keymap::Keystroke;
+use crate::keymap::macros::*;
 
 #[path = "transfer_view_tests.rs"]
 mod transfer_view_tests;
@@ -1385,7 +1385,9 @@ fn test_dispatch_action() {
 
         assert_eq!(
             *actions.borrow(),
-            vec!["4 d", "4 c", "3 b", "3 a", "2 d", "2 c", "1 b", "1 a", "global b", "global a"]
+            vec![
+                "4 d", "4 c", "3 b", "3 a", "2 d", "2 c", "1 b", "1 a", "global b", "global a"
+            ]
         );
 
         // Remove view_1, which doesn't propagate the action.
@@ -1399,7 +1401,9 @@ fn test_dispatch_action() {
 
         assert_eq!(
             *actions.borrow(),
-            vec!["4 d", "4 c", "3 b", "3 a", "2 d", "2 c", "global b", "global a"]
+            vec![
+                "4 d", "4 c", "3 b", "3 a", "2 d", "2 c", "global b", "global a"
+            ]
         );
 
         actions.borrow_mut().clear();

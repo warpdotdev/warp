@@ -5,9 +5,9 @@ use std::iter::Peekable;
 use itertools::Either;
 use string_offset::CharOffset;
 
+use super::TextBuffer;
 use super::point::Point;
 use super::words::is_default_word_boundary;
-use super::TextBuffer;
 
 /// This enum configures how the WordBoundaries iterator defines a "word"
 #[derive(Clone, Debug)]

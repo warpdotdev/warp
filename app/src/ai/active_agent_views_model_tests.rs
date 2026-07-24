@@ -244,9 +244,11 @@ fn ambient_session_unregister_keeps_task_open_until_last_terminal_is_removed() {
                 model.get_terminal_view_id_for_ambient_task(task),
                 Some(terminal_b)
             );
-            assert!(model
-                .last_opened_times
-                .contains_key(&ConversationOrTaskId::TaskId(task)));
+            assert!(
+                model
+                    .last_opened_times
+                    .contains_key(&ConversationOrTaskId::TaskId(task))
+            );
         });
 
         model.update(&mut app, |model, ctx| {
@@ -255,9 +257,11 @@ fn ambient_session_unregister_keeps_task_open_until_last_terminal_is_removed() {
 
         model.read(&app, |model, _| {
             assert_eq!(model.get_terminal_view_id_for_ambient_task(task), None);
-            assert!(!model
-                .last_opened_times
-                .contains_key(&ConversationOrTaskId::TaskId(task)));
+            assert!(
+                !model
+                    .last_opened_times
+                    .contains_key(&ConversationOrTaskId::TaskId(task))
+            );
         });
     });
 }

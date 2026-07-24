@@ -5,8 +5,8 @@ use anyhow::Error;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors::neutral_4;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors::neutral_4;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseState, MouseStateHandle, ParentElement, Radius,
@@ -18,8 +18,8 @@ use warpui::{
     ViewHandle,
 };
 
-use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::CloudObject;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::editor::{
     EditOrigin, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions, ValidInputType,
@@ -29,7 +29,7 @@ use crate::server::telemetry::TelemetrySpace;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::workflows::aliases::{WorkflowAlias, WorkflowAliases};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 /// Width of the alias name editor.
 const ALIAS_EDITOR_WIDTH: f32 = 100.;
@@ -201,26 +201,25 @@ impl AliasBar {
         if let Some(alias) = self
             .selected_alias
             .and_then(|index| self.aliases.get_mut(index))
+            && alias.env_vars != sync_id
         {
-            if alias.env_vars != sync_id {
-                alias.env_vars = sync_id;
-                self.mark_dirty(true, ctx);
+            alias.env_vars = sync_id;
+            self.mark_dirty(true, ctx);
 
-                let env_vars_space = sync_id
-                    .and_then(|id| CloudModel::as_ref(ctx).get_env_var_collection(&id))
-                    .map(|env_vars| env_vars.space(ctx))
-                    .map(Into::into);
+            let env_vars_space = sync_id
+                .and_then(|id| CloudModel::as_ref(ctx).get_env_var_collection(&id))
+                .map(|env_vars| env_vars.space(ctx))
+                .map(Into::into);
 
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::WorkflowAliasEnvVarsAttached {
-                        workflow_id: self.workflow_id.into_server().map(Into::into),
-                        workflow_space: self.workflow_space(ctx),
-                        env_vars_id: sync_id.and_then(|id| id.into_server()).map(Into::into),
-                        env_vars_space,
-                    },
-                    ctx
-                );
-            }
+            send_telemetry_from_ctx!(
+                TelemetryEvent::WorkflowAliasEnvVarsAttached {
+                    workflow_id: self.workflow_id.into_server().map(Into::into),
+                    workflow_space: self.workflow_space(ctx),
+                    env_vars_id: sync_id.and_then(|id| id.into_server()).map(Into::into),
+                    env_vars_space,
+                },
+                ctx
+            );
         }
     }
 

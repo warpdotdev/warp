@@ -3,10 +3,10 @@ use std::path::Path;
 
 use thiserror::Error;
 use warp_util::path::TargetDirError;
-use windows::core::{s, HRESULT, HSTRING, PCWSTR};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Console::{COORD, HPCON};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows::core::{HRESULT, HSTRING, PCWSTR, s};
 
 const CREATE_PSUEDOCONSOLE_FN_NAME: &str = "CreatePsuedoConsole";
 const RESIZE_PSUEDOCONSOLE_FN_NAME: &str = "ResizePsuedoConsole";
@@ -57,7 +57,7 @@ impl ConptyApi {
         let hstring = HSTRING::from("conpty.dll");
         let dll_file_path = PCWSTR::from_raw(hstring.as_ptr());
 
-        let conpty_module = match LoadLibraryW(dll_file_path) {
+        let conpty_module = match unsafe { LoadLibraryW(dll_file_path) } {
             Ok(conpty_module) => conpty_module,
             Err(windows_error) => {
                 let dll_file_exists = Path::new("./conpty.dll").try_exists();
@@ -67,36 +67,42 @@ impl ConptyApi {
                 });
             }
         };
-        let Some(create) = GetProcAddress(conpty_module, s!("CreatePseudoConsole"))
-            .map(|create_fn| transmute::<LoadedFn, CreatePseudoConsoleFn>(create_fn))
+        let Some(create) = unsafe { GetProcAddress(conpty_module, s!("CreatePseudoConsole")) }
+            .map(|create_fn| unsafe { transmute::<LoadedFn, CreatePseudoConsoleFn>(create_fn) })
         else {
             return Err(ConptyApiError::GetProcAddressFailed {
                 fn_name: CREATE_PSUEDOCONSOLE_FN_NAME.to_string(),
             });
         };
-        let Some(resize) = GetProcAddress(conpty_module, s!("ResizePseudoConsole"))
-            .map(|resize_fn| transmute::<LoadedFn, ResizePseudoConsoleFn>(resize_fn))
+        let Some(resize) = unsafe { GetProcAddress(conpty_module, s!("ResizePseudoConsole")) }
+            .map(|resize_fn| unsafe { transmute::<LoadedFn, ResizePseudoConsoleFn>(resize_fn) })
         else {
             return Err(ConptyApiError::GetProcAddressFailed {
                 fn_name: RESIZE_PSUEDOCONSOLE_FN_NAME.to_string(),
             });
         };
-        let Some(close) = GetProcAddress(conpty_module, s!("ClosePseudoConsole"))
-            .map(|close_fn| transmute::<LoadedFn, ClosePseudoConsoleFn>(close_fn))
+        let Some(close) = unsafe { GetProcAddress(conpty_module, s!("ClosePseudoConsole")) }
+            .map(|close_fn| unsafe { transmute::<LoadedFn, ClosePseudoConsoleFn>(close_fn) })
         else {
             return Err(ConptyApiError::GetProcAddressFailed {
                 fn_name: CLOSE_PSUEDOCONSOLE_FN_NAME.to_string(),
             });
         };
-        let Some(show_hide) = GetProcAddress(conpty_module, s!("ConptyShowHidePseudoConsole"))
-            .map(|show_hide_fn| transmute::<LoadedFn, ShowHidePseudoConsoleFn>(show_hide_fn))
+        let Some(show_hide) =
+            unsafe { GetProcAddress(conpty_module, s!("ConptyShowHidePseudoConsole")) }.map(
+                |show_hide_fn| unsafe {
+                    transmute::<LoadedFn, ShowHidePseudoConsoleFn>(show_hide_fn)
+                },
+            )
         else {
             return Err(ConptyApiError::GetProcAddressFailed {
                 fn_name: SHOW_HIDE_PSUEDOCONSOLE_FN_NAME.to_string(),
             });
         };
-        let Some(release) = GetProcAddress(conpty_module, s!("ConptyReleasePseudoConsole"))
-            .map(|release_fn| transmute::<LoadedFn, ReleasePseudoConsoleFn>(release_fn))
+        let Some(release) =
+            unsafe { GetProcAddress(conpty_module, s!("ConptyReleasePseudoConsole")) }.map(
+                |release_fn| unsafe { transmute::<LoadedFn, ReleasePseudoConsoleFn>(release_fn) },
+            )
         else {
             return Err(ConptyApiError::GetProcAddressFailed {
                 fn_name: RELEASE_PSUEDOCONSOLE_FN_NAME.to_string(),
@@ -118,12 +124,14 @@ impl ConptyApi {
         flags: u32,
     ) -> Result<HPCON, windows::core::Error> {
         let mut pty_handle = HPCON::default();
-        let result = (self.create)(size, pipe, pipe, flags, &mut pty_handle)
+        let result = unsafe { (self.create)(size, pipe, pipe, flags, &mut pty_handle) }
             .ok()
             .map(|_| pty_handle);
         // Explicitly free our end of the pipe, giving the pseudoconsole sole
         // ownership of it.
-        windows::core::Free::free(&mut pipe);
+        unsafe {
+            windows::core::Free::free(&mut pipe);
+        }
         result
     }
 
@@ -132,11 +140,11 @@ impl ConptyApi {
         pty_handle: HPCON,
         size: COORD,
     ) -> Result<(), windows::core::Error> {
-        (self.resize)(pty_handle, size).ok()
+        unsafe { (self.resize)(pty_handle, size).ok() }
     }
 
     pub(super) unsafe fn close(&self, pty_handle: HPCON) {
-        (self.close)(pty_handle)
+        unsafe { (self.close)(pty_handle) }
     }
 
     pub(super) unsafe fn show_hide(
@@ -144,10 +152,10 @@ impl ConptyApi {
         pty_handle: HPCON,
         visible: bool,
     ) -> windows::core::Result<()> {
-        (self.show_hide)(pty_handle, visible).ok()
+        unsafe { (self.show_hide)(pty_handle, visible).ok() }
     }
 
     pub(super) unsafe fn release(&self, pty_handle: HPCON) -> windows::core::Result<()> {
-        (self.release)(pty_handle).ok()
+        unsafe { (self.release)(pty_handle).ok() }
     }
 }

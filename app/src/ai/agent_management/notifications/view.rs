@@ -9,16 +9,16 @@ use warpui::elements::{
     ScrollToPositionMode, ScrollbarWidth, Shrinkable,
 };
 use warpui::fonts::Weight;
-use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
+use warpui::keymap::macros::id;
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use crate::ai::agent_management::notifications::item::NotificationFilter;
 use crate::ai::agent_management::notifications::item_rendering::{
-    create_notification_artifact_buttons_view, handle_notification_artifact_buttons_event,
-    render_notification_item_content, NotificationRenderContext,
+    NotificationRenderContext, create_notification_artifact_buttons_view,
+    handle_notification_artifact_buttons_event, render_notification_item_content,
 };
 use crate::ai::agent_management::notifications::{
     NotificationId, NotificationItem, NotificationItems,
@@ -214,10 +214,10 @@ impl NotificationMailboxView {
         // Clamp selection to valid range after list contents change.
         if self.filtered_ids.is_empty() {
             self.selected_index = None;
-        } else if let Some(idx) = self.selected_index {
-            if idx >= self.filtered_ids.len() {
-                self.selected_index = Some(self.filtered_ids.len() - 1);
-            }
+        } else if let Some(idx) = self.selected_index
+            && idx >= self.filtered_ids.len()
+        {
+            self.selected_index = Some(self.filtered_ids.len() - 1);
         }
     }
 
@@ -321,10 +321,10 @@ impl TypedActionView for NotificationMailboxView {
                 self.set_active_filter(next_filter, ctx);
             }
             NotificationMailboxViewAction::ActivateSelected => {
-                if let Some(idx) = self.selected_index {
-                    if let Some(id) = self.filtered_ids.get(idx).copied() {
-                        self.activate_notification(id, ctx);
-                    }
+                if let Some(idx) = self.selected_index
+                    && let Some(id) = self.filtered_ids.get(idx).copied()
+                {
+                    self.activate_notification(id, ctx);
                 }
             }
         }

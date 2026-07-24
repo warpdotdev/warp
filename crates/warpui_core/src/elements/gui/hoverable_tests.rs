@@ -5,13 +5,13 @@ use std::rc::Rc;
 use pathfinder_geometry::vector::vec2f;
 
 use super::*;
+use crate::r#async::Timer;
 use crate::elements::{
     ChildAnchor, ConstrainedBox, DispatchEventResult, EventHandler, OffsetPositioning,
     ParentAnchor, ParentElement, ParentOffsetBounds, Rect, Stack, Text,
 };
 use crate::fonts::FamilyId;
 use crate::platform::WindowStyle;
-use crate::r#async::Timer;
 use crate::{
     App, AppContext, Entity, EntityIdSet, Event, Presenter, TypedActionView, ViewContext,
     WindowInvalidation,

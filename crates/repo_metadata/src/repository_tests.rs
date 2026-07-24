@@ -10,7 +10,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::Timer;
 use warpui_core::{App, ModelContext};
 
-use super::{merge_repository_updates, Repository, RepositorySubscriber, TrackedRemoteRef};
+use super::{Repository, RepositorySubscriber, TrackedRemoteRef, merge_repository_updates};
 use crate::repositories::stub_git_repository;
 use crate::watcher::DirectoryWatcher;
 use crate::{RepositoryUpdate, TargetFile};
@@ -183,9 +183,10 @@ fn merge_repository_updates_preserves_remote_ref_updates() {
     merge_repository_updates(&mut acc, &incoming);
 
     assert!(acc.remote_ref_updated);
-    assert!(acc
-        .added
-        .contains(&TargetFile::new(PathBuf::from("/repo/file.txt"), false)));
+    assert!(
+        acc.added
+            .contains(&TargetFile::new(PathBuf::from("/repo/file.txt"), false))
+    );
 }
 
 #[test]

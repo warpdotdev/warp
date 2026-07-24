@@ -1,19 +1,19 @@
 //! Rich TUI rendering for messages received from orchestration participants.
 
 use warp::tui_export::{
-    orchestrator_agent_id_for_conversation, resolve_orchestration_participant, AIConversationId,
-    BlocklistAIHistoryModel, ConversationStatus, MessageId, OrchestrationParticipantKind,
-    ReceivedMessageDisplay,
+    AIConversationId, BlocklistAIHistoryModel, ConversationStatus, MessageId,
+    OrchestrationParticipantKind, ReceivedMessageDisplay, orchestrator_agent_id_for_conversation,
+    resolve_orchestration_participant,
 };
 use warpui::SingletonEntity;
-use warpui_core::elements::tui::{
-    tui_collapsible, Modifier, TuiContainer, TuiElement, TuiStyle, TuiText,
-};
 use warpui_core::AppContext;
+use warpui_core::elements::tui::{
+    Modifier, TuiContainer, TuiElement, TuiStyle, TuiText, tui_collapsible,
+};
 
 use crate::agent_block::{CollapsibleSectionStates, TuiAIBlockAction};
 use crate::orchestrated_agent_identity_styling::{
-    assign_agent_identity_indices, stable_hash, AgentIdentity,
+    AgentIdentity, assign_agent_identity_indices, stable_hash,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -25,7 +25,7 @@ struct AgentMessagePresentation {
 }
 
 /// Compact glyph for a conversation's lifecycle status.
-fn conversation_status_glyph(status: &ConversationStatus) -> &'static str {
+pub(crate) fn conversation_status_glyph(status: &ConversationStatus) -> &'static str {
     match status {
         ConversationStatus::InProgress
         | ConversationStatus::TransientError
@@ -37,7 +37,7 @@ fn conversation_status_glyph(status: &ConversationStatus) -> &'static str {
 }
 
 /// Semantic theme style for a conversation's lifecycle glyph.
-fn conversation_status_glyph_style(
+pub(crate) fn conversation_status_glyph_style(
     status: &ConversationStatus,
     builder: &TuiUiBuilder,
 ) -> TuiStyle {

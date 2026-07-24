@@ -3,7 +3,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use markdown_parser::{parse_html, parse_markdown, FormattedText};
+use markdown_parser::{FormattedText, parse_html, parse_markdown};
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use warp_editor::content::anchor::Anchor;
@@ -21,6 +21,7 @@ use warp_util::user_input::UserInput;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::actions::StandardAction;
 use warpui::assets::asset_cache::{AssetCache, AssetHandle, AssetState};
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     AnchorPair, Axis, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
@@ -35,7 +36,6 @@ use warpui::image_cache::ImageType;
 use warpui::keymap::{EditableBinding, FixedBinding, PerPlatformKeystroke};
 use warpui::platform::{Cursor, OperatingSystem};
 use warpui::presenter::ChildView;
-use warpui::r#async::SpawnedFutureHandle;
 #[cfg(feature = "local_fs")]
 use warpui::text::word_boundaries::WordBoundariesPolicy;
 use warpui::ui_components::button::ButtonVariant;
@@ -43,8 +43,8 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
 use warpui::windowing::WindowManager;
 use warpui::{
-    windowing, AppContext, BlurContext, CursorInfo, Element, Entity, FocusContext, ModelHandle,
-    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
+    AppContext, BlurContext, CursorInfo, Element, Entity, FocusContext, ModelHandle,
+    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle, windowing,
 };
 
 use super::block_insertion_menu::{BlockInsertionMenuState, BlockInsertionSource};
@@ -53,7 +53,7 @@ use super::keys::NotebookKeybindings;
 use super::link_editor::{LinkEditor, LinkEditorEvent};
 use super::model::{NotebooksEditorModel, RichTextEditorModelEvent};
 use super::omnibar::{Omnibar, OmnibarEvent};
-use super::{rich_text_styles, BlockType, NotebookWorkflow};
+use super::{BlockType, NotebookWorkflow, rich_text_styles};
 use crate::appearance::Appearance;
 use crate::cmd_or_ctrl_shift;
 use crate::editor::InteractionState;
@@ -70,9 +70,9 @@ use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::ui_components::icons::ICON_DIMENSIONS;
 use crate::util::bindings::CustomAction;
 #[cfg(feature = "local_fs")]
-use crate::util::link_detection::{detect_file_paths, get_word_range_at_offset, DetectedLinkType};
+use crate::util::link_detection::{DetectedLinkType, detect_file_paths, get_word_range_at_offset};
 use crate::util::tooltips::{
-    render_tooltip, should_show_open_in_warp_link, TooltipLink, TooltipRedaction,
+    TooltipLink, TooltipRedaction, render_tooltip, should_show_open_in_warp_link,
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::WorkspaceAction;
@@ -1387,20 +1387,23 @@ impl RichTextEditorView {
                 .insert(handle.clone())
             {
                 let asset_cache = AssetCache::as_ref(ctx);
-                if let Some(future) = handle.when_loaded(asset_cache) {
-                    ctx.spawn(future, move |me, (), ctx| {
-                        me.pending_layout_affecting_asset_loads.remove(&handle);
-                        me.model.update(ctx, |model, ctx| {
-                            if Self::should_rebuild_layout_after_layout_affecting_asset_load(
-                                model.interaction_state(ctx),
-                            ) {
-                                model.rebuild_layout(ctx);
-                            }
+                match handle.when_loaded(asset_cache) {
+                    Some(future) => {
+                        ctx.spawn(future, move |me, (), ctx| {
+                            me.pending_layout_affecting_asset_loads.remove(&handle);
+                            me.model.update(ctx, |model, ctx| {
+                                if Self::should_rebuild_layout_after_layout_affecting_asset_load(
+                                    model.interaction_state(ctx),
+                                ) {
+                                    model.rebuild_layout(ctx);
+                                }
+                            });
+                            ctx.notify();
                         });
-                        ctx.notify();
-                    });
-                } else {
-                    self.pending_layout_affecting_asset_loads.remove(&handle);
+                    }
+                    _ => {
+                        self.pending_layout_affecting_asset_loads.remove(&handle);
+                    }
                 }
             }
         }
@@ -1931,22 +1934,23 @@ impl RichTextEditorView {
         cmd: bool,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if let Some(hovered_file_path) = &self.hovered_file_path {
-            if hovered_file_path.range.start <= offset && offset <= hovered_file_path.range.end {
-                // In read-only comment chips (Selectable), open the file directly
-                // on click instead of showing a tooltip.
-                if cmd || matches!(self.interaction_state(ctx), InteractionState::Selectable) {
-                    ctx.emit(EditorViewEvent::OpenFile {
-                        path: hovered_file_path.path.clone(),
-                        line_and_column_num: hovered_file_path.line_and_column_num,
-                        force_open_in_warp: false,
-                    });
-                } else {
-                    self.open_file_path = Some(hovered_file_path.clone());
-                    ctx.notify();
-                }
-                return true;
+        if let Some(hovered_file_path) = &self.hovered_file_path
+            && hovered_file_path.range.start <= offset
+            && offset <= hovered_file_path.range.end
+        {
+            // In read-only comment chips (Selectable), open the file directly
+            // on click instead of showing a tooltip.
+            if cmd || matches!(self.interaction_state(ctx), InteractionState::Selectable) {
+                ctx.emit(EditorViewEvent::OpenFile {
+                    path: hovered_file_path.path.clone(),
+                    line_and_column_num: hovered_file_path.line_and_column_num,
+                    force_open_in_warp: false,
+                });
+            } else {
+                self.open_file_path = Some(hovered_file_path.clone());
+                ctx.notify();
             }
+            return true;
         }
         false
     }
@@ -2042,10 +2046,10 @@ impl RichTextEditorView {
 
     /// Cuts the current selection.
     pub fn cut(&mut self, entrypoint: ActionEntrypoint, ctx: &mut ViewContext<Self>) {
-        if self.is_editable(ctx) {
-            if let Some(block) = self.model.update(ctx, |model, ctx| model.cut(ctx)) {
-                ctx.emit(EditorViewEvent::CopiedBlock { block, entrypoint });
-            }
+        if self.is_editable(ctx)
+            && let Some(block) = self.model.update(ctx, |model, ctx| model.cut(ctx))
+        {
+            ctx.emit(EditorViewEvent::CopiedBlock { block, entrypoint });
         }
     }
 
@@ -2179,10 +2183,11 @@ impl RichTextEditorView {
         };
 
         // Early return if char_offset is already on the hovered file path
-        if let Some(hovered) = &self.hovered_file_path {
-            if hovered.range.start <= char_offset && char_offset <= hovered.range.end {
-                return;
-            }
+        if let Some(hovered) = &self.hovered_file_path
+            && hovered.range.start <= char_offset
+            && char_offset <= hovered.range.end
+        {
+            return;
         }
 
         self.hovered_file_path = None;
@@ -2236,19 +2241,18 @@ impl RichTextEditorView {
                 // Adjust link_range which is relative to context_range to absolute buffer offsets
                 let absolute_range = search_start + CharOffset::from(link_range.start)
                     ..search_start + CharOffset::from(link_range.end);
-                if absolute_range.contains(&char_offset) {
-                    if let DetectedLinkType::FilePath {
+                if absolute_range.contains(&char_offset)
+                    && let DetectedLinkType::FilePath {
                         absolute_path,
                         line_and_column_num,
                     } = link_type
-                    {
-                        self.hovered_file_path = Some(SelectedFilePath {
-                            range: absolute_range,
-                            path: absolute_path,
-                            line_and_column_num,
-                        });
-                        break;
-                    }
+                {
+                    self.hovered_file_path = Some(SelectedFilePath {
+                        range: absolute_range,
+                        path: absolute_path,
+                        line_and_column_num,
+                    });
+                    break;
                 }
             }
         }
@@ -3556,14 +3560,13 @@ impl RichTextAction<RichTextEditorView> for EditorViewAction {
             clamped,
             ..
         } = location.clone()
+            && !clamped
         {
-            if !clamped {
-                actions_to_dispatch.push(EditorViewAction::MaybeOpenFileOrUrl {
-                    offset: char_offset + 1,
-                    link_in_text: link.map(UserInput::new),
-                    cmd,
-                });
-            }
+            actions_to_dispatch.push(EditorViewAction::MaybeOpenFileOrUrl {
+                offset: char_offset + 1,
+                link_in_text: link.map(UserInput::new),
+                cmd,
+            });
         }
 
         match view.as_ref(ctx).ongoing_mouse_state {
@@ -3590,11 +3593,7 @@ impl RichTextAction<RichTextEditorView> for EditorViewAction {
                 ..
             } = loc
             {
-                if !clamped {
-                    Some(*char_offset)
-                } else {
-                    None
-                }
+                if !clamped { Some(*char_offset) } else { None }
             } else {
                 None
             }

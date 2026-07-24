@@ -1,13 +1,13 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use comfy_table::Cell;
 use serde::Serialize;
+use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::runner::{
-    validate_os_config, CreateRunnerArgs, DeleteRunnerArgs, ListRunnersArgs, RunnerArchArg,
-    RunnerCommand, RunnerMacosVersionArg, RunnerOsArg, RunnerSortByArg, UpdateRunnerArgs,
+    CreateRunnerArgs, DeleteRunnerArgs, ListRunnersArgs, RunnerArchArg, RunnerCommand,
+    RunnerMacosVersionArg, RunnerOsArg, RunnerSortByArg, UpdateRunnerArgs, validate_os_config,
 };
-use warp_cli::GlobalOptions;
 use warp_graphql::mutations::upsert_runner::{
     LinuxConfigInput, MacOsConfigInput, RunnerInput, RunnerInstanceShapeInput, UpsertRunnerInput,
 };

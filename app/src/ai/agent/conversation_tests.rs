@@ -6,14 +6,14 @@ use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    artifact_from_fork_proto, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, ConversationUsageTotals,
-    RecordingSpanStatus, RestoreConversationError,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
+    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
 use crate::persistence::model::AgentConversationData;
 use crate::server::server_api::ServerApiProvider;
@@ -124,6 +124,7 @@ fn start_recording_tool_call() -> api::message::tool_call::Tool {
         summary: String::new(),
         playback_speed_multiplier: 0,
         target: None,
+        description: String::new(),
     })
 }
 
@@ -163,6 +164,7 @@ fn use_computer_tool_call(summary: &str) -> api::message::tool_call::Tool {
 fn stop_recording_tool_call(recording_id: &str) -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StopRecording(api::message::tool_call::StopRecording {
         recording_id: recording_id.to_string(),
+        discard: false,
     })
 }
 
@@ -409,9 +411,11 @@ fn recording_span_ignores_failed_start() {
         ),
     ]);
 
-    assert!(conversation
-        .recording_span_for_action(&"use".to_string().into(), None)
-        .is_none());
+    assert!(
+        conversation
+            .recording_span_for_action(&"use".to_string().into(), None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -482,9 +486,11 @@ fn recording_span_clears_when_stop_errors() {
         ),
     ]);
 
-    assert!(conversation
-        .recording_span_for_action(&"use".to_string().into(), None)
-        .is_none());
+    assert!(
+        conversation
+            .recording_span_for_action(&"use".to_string().into(), None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -1115,10 +1121,12 @@ fn is_done_only_includes_success_error_cancelled() {
     assert!(ConversationStatus::Cancelled.is_done());
 
     assert!(!ConversationStatus::InProgress.is_done());
-    assert!(!ConversationStatus::Blocked {
-        blocked_action: "approve".to_string()
-    }
-    .is_done());
+    assert!(
+        !ConversationStatus::Blocked {
+            blocked_action: "approve".to_string()
+        }
+        .is_done()
+    );
     assert!(!ConversationStatus::WaitingForEvents.is_done());
 }
 
@@ -1131,10 +1139,12 @@ fn is_waiting_for_events_returns_true_only_for_waiting_for_events_variant() {
     assert!(!ConversationStatus::Success.is_waiting_for_events());
     assert!(!ConversationStatus::Error.is_waiting_for_events());
     assert!(!ConversationStatus::Cancelled.is_waiting_for_events());
-    assert!(!ConversationStatus::Blocked {
-        blocked_action: "approve".to_string()
-    }
-    .is_waiting_for_events());
+    assert!(
+        !ConversationStatus::Blocked {
+            blocked_action: "approve".to_string()
+        }
+        .is_waiting_for_events()
+    );
 }
 
 /// A conversation that was yielded via `wait_for_events` at shutdown

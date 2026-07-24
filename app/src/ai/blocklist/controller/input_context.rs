@@ -25,9 +25,9 @@ use crate::cloud_object::{
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
+use crate::terminal::TerminalView;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::terminal::TerminalView;
 
 lazy_static! {
     // Regex to match <block:[block_id]> patterns
@@ -249,19 +249,18 @@ pub(super) fn parse_context_attachments(
     }
 
     // Add pending AI document as attachment if present
-    if let Some(document_id) = context_model.pending_document_id() {
-        if let Some(content) = AIDocumentModel::as_ref(ctx).get_document_content(&document_id, ctx)
-        {
-            let document_id_str = document_id.to_string();
-            let attachment = AIAgentAttachment::DocumentContent {
-                document_id: document_id_str.clone(),
-                content,
-                source: DocumentContentAttachmentSource::PlanEdited,
-                line_range: None,
-            };
-            // Use the document ID as the reference key
-            referenced_attachments.insert(document_id_str, attachment);
-        }
+    if let Some(document_id) = context_model.pending_document_id()
+        && let Some(content) = AIDocumentModel::as_ref(ctx).get_document_content(&document_id, ctx)
+    {
+        let document_id_str = document_id.to_string();
+        let attachment = AIAgentAttachment::DocumentContent {
+            document_id: document_id_str.clone(),
+            content,
+            source: DocumentContentAttachmentSource::PlanEdited,
+            line_range: None,
+        };
+        // Use the document ID as the reference key
+        referenced_attachments.insert(document_id_str, attachment);
     }
 
     referenced_attachments

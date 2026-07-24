@@ -1,4 +1,4 @@
-use enum_iterator::{all, Sequence};
+use enum_iterator::{Sequence, all};
 use itertools::{Either, Itertools};
 use warpui::elements::{
     Align, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
@@ -19,8 +19,8 @@ use super::section_views::{
     SECTION_HEADER_FONT_SIZE, SECTION_SPACING,
 };
 use super::utils::{
-    get_additional_keybindings, BLOCKS_KEYBINDINGS, FUNDAMENTALS_KEYBINDINGS,
-    INPUT_EDITOR_KEYBINDINGS, TERMINAL_KEYBINDINGS,
+    BLOCKS_KEYBINDINGS, FUNDAMENTALS_KEYBINDINGS, INPUT_EDITOR_KEYBINDINGS, TERMINAL_KEYBINDINGS,
+    get_additional_keybindings,
 };
 use crate::appearance::Appearance;
 use crate::command_palette::PRIORITIZED_KEYBINDINGS;
@@ -31,9 +31,9 @@ use crate::editor::{
 use crate::search_bar::SearchBar;
 use crate::settings_view;
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
-use crate::util::bindings::{filter_bindings_including_keystroke, CommandBinding};
-use crate::workspace::tab_settings::TabSettings;
+use crate::util::bindings::{CommandBinding, filter_bindings_including_keystroke};
 use crate::workspace::WorkspaceAction;
+use crate::workspace::tab_settings::TabSettings;
 
 const KEYBINDINGS_PAGE_SHORTCUT: &str = "workspace:toggle_keybindings_page";
 const LINK_WIDTH: f32 = 30.;
@@ -229,7 +229,7 @@ impl KeybindingsView {
     fn get_bindings_by_section(
         &self,
         section: KeybindingSection,
-    ) -> impl Iterator<Item = CommandBinding> {
+    ) -> impl Iterator<Item = CommandBinding> + use<> {
         let bindings = self
             .binding_results
             .as_ref()

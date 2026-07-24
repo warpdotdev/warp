@@ -2,11 +2,11 @@ use std::collections::HashSet;
 
 use warp::tui_export::{dark_theme, light_theme};
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
-use warpui_core::elements::tui::Color;
 use warpui_core::elements::Fill as CoreFill;
+use warpui_core::elements::tui::Color;
 
 use super::{
-    agent_identity_palette, assign_agent_identity_indices, stable_hash, AGENT_IDENTITY_GLYPHS,
+    AGENT_IDENTITY_GLYPHS, agent_identity_palette, assign_agent_identity_indices, stable_hash,
 };
 
 fn palette_len(theme: &WarpTheme) -> usize {

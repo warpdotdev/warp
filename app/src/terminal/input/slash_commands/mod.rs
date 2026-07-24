@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use ai::skills::SkillReference;
 pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
 pub use data_source::*;
-pub use mixer::{build_slash_command_mixer, slash_command_query, SlashCommandMixer};
+pub use mixer::{SlashCommandMixer, build_slash_command_mixer, slash_command_query};
 pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
@@ -24,6 +24,7 @@ use warp_util::path::{CleanPathResult, LineAndColumnArg};
 use warpui::clipboard::ClipboardContent;
 use warpui::{AppContext, SingletonEntity, ViewContext};
 
+use crate::TelemetryEvent;
 use crate::ai::agent::conversation::AIConversationId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -32,7 +33,7 @@ use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::blocklist::agent_view::{
-    AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage, ENTER_OR_EXIT_CONFIRMATION_WINDOW,
+    AgentViewEntryOrigin, DismissalStrategy, ENTER_OR_EXIT_CONFIRMATION_WINDOW, EphemeralMessage,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
@@ -43,11 +44,13 @@ use crate::ai::blocklist::{
 use crate::ai::conversation_rename::rename_conversation;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
-use crate::search::slash_command_menu::static_commands::Availability;
+#[cfg(not(target_family = "wasm"))]
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
+use crate::search::slash_command_menu::static_commands::{Availability, SlashCommandKind};
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::server::ids::SyncId;
-use crate::server::telemetry::SlashCommandAcceptedDetails;
+use crate::server::telemetry::{AgentModeAutoDetectionSettingOrigin, SlashCommandAcceptedDetails};
 use crate::settings::AISettings;
 use crate::tab::SelectedTabColor;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
@@ -68,7 +71,6 @@ use crate::view_components::DismissibleToast;
 use crate::workflows::command_parser::compute_workflow_display_data;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
-use crate::TelemetryEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcceptSlashCommandOrSavedPrompt {
@@ -124,55 +126,6 @@ pub fn should_close_slash_command_menu_for_exact_match(
     result_count < 2 || argument_started
 }
 
-/// Static slash commands that the TUI can execute.
-///
-/// Converting a registry command to this enum centralizes the supported-command policy and lets
-/// the TUI execution path match every supported command exhaustively.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TuiSlashCommand {
-    Agent,
-    New,
-    Compact,
-    Plan,
-    Conversations,
-    Model,
-    Skills,
-    CreateNewProject,
-    ExportToClipboard,
-    ExportToFile,
-    Mcp,
-    Exit,
-}
-
-impl TuiSlashCommand {
-    /// Classifies a registry command when the TUI supports it.
-    pub fn from_static_command(command: &StaticCommand) -> Option<Self> {
-        match command.name {
-            name if name == commands::AGENT.name => Some(Self::Agent),
-            name if name == commands::NEW.name => Some(Self::New),
-            name if name == commands::COMPACT.name => Some(Self::Compact),
-            name if name == commands::PLAN.name => Some(Self::Plan),
-            name if name == commands::CONVERSATIONS.name => Some(Self::Conversations),
-            name if name == commands::MODEL.name => Some(Self::Model),
-            name if name == commands::INVOKE_SKILL.name => Some(Self::Skills),
-            name if name == commands::CREATE_NEW_PROJECT.name => Some(Self::CreateNewProject),
-            name if name == commands::EXPORT_TO_CLIPBOARD.name => Some(Self::ExportToClipboard),
-            name if name == commands::EXPORT_TO_FILE.name => Some(Self::ExportToFile),
-            name if name == commands::MCP.name => Some(Self::Mcp),
-            name if name == commands::EXIT.name => Some(Self::Exit),
-            _ => None,
-        }
-    }
-}
-
-/// Returns whether TUI can execute or otherwise handle the static slash command today.
-///
-/// GUI-only actions such as opening settings panes or inline menus should stay hidden until the
-/// TUI has equivalent flows.
-pub fn slash_command_is_supported_in_tui(command: &StaticCommand) -> bool {
-    TuiSlashCommand::from_static_command(command).is_some()
-}
-
 /// Records a static slash command accepted from either the GUI or TUI surface.
 pub fn record_static_slash_command_accepted(
     command_name: &str,
@@ -185,6 +138,24 @@ pub fn record_static_slash_command_accepted(
                 command_name: command_name.to_owned(),
             },
             is_in_agent_view,
+        },
+        ctx
+    );
+}
+
+/// Records an input auto-detection setting toggle triggered from a TUI slash
+/// command (`/natural-language-detection`).
+///
+/// Mirrors the `SettingsPage` and `Banner` origins used by the GUI toggle paths,
+/// but reports the toggle as originating from a TUI slash command.
+pub fn record_autodetection_toggle_from_slash_command(
+    is_autodetection_enabled: bool,
+    ctx: &mut AppContext,
+) {
+    send_telemetry_from_ctx!(
+        TelemetryEvent::AgentModeToggleAutoDetectionSetting {
+            is_autodetection_enabled,
+            origin: AgentModeAutoDetectionSettingOrigin::SlashCommand,
         },
         ctx
     );
@@ -387,7 +358,7 @@ impl Input {
                     self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
                 }
 
-                if detected_command.command.name == commands::EDIT.name
+                if detected_command.command.kind == SlashCommandKind::Edit
                     && detected_command
                         .argument
                         .as_ref()
@@ -512,19 +483,17 @@ impl Input {
         }
 
         // Handle the slash command action based on its kind
-        match command.name {
-            add_mcp if command.name == commands::ADD_MCP.name => {
+        match command.kind {
+            SlashCommandKind::AddMcp => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddMCPPane);
             }
-            add_prompt if command.name == commands::ADD_PROMPT.name => {
+            SlashCommandKind::AddPrompt => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddPromptPane);
             }
-            add_rule if command.name == commands::ADD_RULE.name => {
+            SlashCommandKind::AddRule => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddRulePane);
             }
-            agent_or_new
-                if command.name == commands::NEW.name || command.name == commands::AGENT.name =>
-            {
+            SlashCommandKind::Agent | SlashCommandKind::New => {
                 if !self
                     .ai_context_model
                     .as_ref(ctx)
@@ -577,7 +546,7 @@ impl Input {
                     origin: AgentViewEntryOrigin::SlashCommand { trigger },
                 });
             }
-            cloud_agent if command.name == commands::CLOUD_AGENT.name => {
+            SlashCommandKind::CloudAgent => {
                 let prompt = argument.and_then(|argument| {
                     let trimmed = argument.trim();
                     if trimmed.is_empty() {
@@ -591,10 +560,10 @@ impl Input {
                     initial_prompt: prompt,
                 });
             }
-            create_docker_sandbox if command.name == commands::CREATE_DOCKER_SANDBOX.name => {
+            SlashCommandKind::CreateDockerSandbox => {
                 ctx.emit(Event::CreateDockerSandbox);
             }
-            conversations if command.name == commands::CONVERSATIONS.name => {
+            SlashCommandKind::Conversations => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.suggestions_mode_model.update(ctx, |model, ctx| {
                         model.set_mode(InputSuggestionsMode::Closed, ctx);
@@ -613,7 +582,7 @@ impl Input {
                     ctx.dispatch_typed_action(&TerminalAction::OpenConversationsPalette);
                 }
             }
-            rename_tab if command.name == commands::RENAME_TAB.name => {
+            SlashCommandKind::RenameTab => {
                 let Some(name) = argument
                     .map(|name| name.trim())
                     .filter(|name| !name.is_empty())
@@ -627,7 +596,7 @@ impl Input {
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
             }
-            _ if command.name == commands::RENAME_CONVERSATION.name => {
+            SlashCommandKind::RenameConversation => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -641,7 +610,7 @@ impl Input {
                 };
                 rename_conversation(conversation_id, argument.cloned().unwrap_or_default(), ctx);
             }
-            set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
+            SlashCommandKind::SetTabColor => {
                 let supported_options = || {
                     color_dot::TAB_COLOR_OPTIONS
                         .iter()
@@ -689,7 +658,7 @@ impl Input {
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabColor(color));
             }
-            create_env if command.name == commands::CREATE_ENVIRONMENT.name => {
+            SlashCommandKind::CreateEnvironment => {
                 // If the user included args after the slash command, treat them as repo paths/URLs.
                 let repos = argument
                     .map(|arg| {
@@ -702,7 +671,7 @@ impl Input {
 
                 ctx.emit(Event::TriggerEnvironmentSetup { repos });
             }
-            create_project if command.name == commands::CREATE_NEW_PROJECT.name => {
+            SlashCommandKind::CreateNewProject => {
                 if argument.is_none_or(|args| args.is_empty()) {
                     show_error_toast(
                         "Please describe the project you want to create after /create-new-project"
@@ -715,7 +684,7 @@ impl Input {
                 let args = argument.expect("args are Some()");
                 self.initiate_create_new_project(args.to_owned(), ctx);
             }
-            edit if command.name == commands::EDIT.name => {
+            SlashCommandKind::Edit => {
                 #[cfg(feature = "local_fs")]
                 match argument {
                     Some(args) if !args.is_empty() => {
@@ -799,7 +768,7 @@ impl Input {
                     return true;
                 }
             }
-            export_to_clipboard if command.name == commands::EXPORT_TO_CLIPBOARD.name => {
+            SlashCommandKind::ExportToClipboard => {
                 let history = BlocklistAIHistoryModel::handle(ctx);
                 let Some(conversation) = history
                     .as_ref(ctx)
@@ -824,7 +793,7 @@ impl Input {
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
-            export_to_file if command.name == commands::EXPORT_TO_FILE.name => {
+            SlashCommandKind::ExportToFile => {
                 #[cfg(not(target_family = "wasm"))]
                 {
                     self.export_conversation_to_file(
@@ -841,52 +810,49 @@ impl Input {
                     return true;
                 }
             }
-            index if command.name == commands::INDEX.name => {
+            SlashCommandKind::Index => {
                 ctx.dispatch_typed_action(&TerminalAction::IndexProjectSpeedbump);
             }
-            init if command.name == commands::INIT.name => {
+            SlashCommandKind::Init => {
                 ctx.dispatch_typed_action(&TerminalAction::InitProject);
             }
-            changelog if command.name == commands::CHANGELOG.name => {
+            SlashCommandKind::Changelog => {
                 if !FeatureFlag::Changelog.is_enabled() {
                     return false;
                 }
                 ctx.dispatch_typed_action(&WorkspaceAction::ViewLatestChangelog);
             }
-            feedback if command.name == commands::FEEDBACK.name => {
+            SlashCommandKind::Feedback => {
                 ctx.dispatch_typed_action(&WorkspaceAction::SendFeedback);
             }
-            open_code_review if command.name == commands::OPEN_CODE_REVIEW.name => {
+            SlashCommandKind::OpenCodeReview => {
                 ctx.dispatch_typed_action(&TerminalAction::ToggleCodeReviewPane {
                     entrypoint: CodeReviewPaneEntrypoint::SlashCommand,
                 });
             }
-            open_mcp_servers
-                if command.name == commands::OPEN_MCP_SERVERS.name
-                    || command.name == commands::MCP.name =>
-            {
+            SlashCommandKind::OpenMcpServers | SlashCommandKind::Mcp => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenViewMCPPane);
             }
-            open_settings_file if command.name == commands::OPEN_SETTINGS_FILE.name => {
+            SlashCommandKind::OpenSettingsFile => {
                 if !FeatureFlag::SettingsFile.is_enabled() || !cfg!(feature = "local_fs") {
                     return false;
                 }
                 ctx.dispatch_typed_action(&WorkspaceAction::OpenSettingsFile);
             }
-            open_project_rules if command.name == commands::OPEN_PROJECT_RULES.name => {
+            SlashCommandKind::OpenProjectRules => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenProjectRulesPane);
             }
-            open_rules if command.name == commands::OPEN_RULES.name => {
+            SlashCommandKind::OpenRules => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenRulesPane);
             }
-            edit_skill if command.name == commands::EDIT_SKILL.name => {
+            SlashCommandKind::EditSkill => {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return false;
                 }
                 // Open the skill selector menu - user will select a skill from the inline menu
                 self.open_skill_selector(ctx);
             }
-            invoke_skill if command.name == commands::INVOKE_SKILL.name => {
+            SlashCommandKind::InvokeSkill => {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return false;
                 }
@@ -897,7 +863,7 @@ impl Input {
                 // Open the skill selector menu for invocation - skill command will be inserted into buffer
                 self.open_invoke_skill_selector(ctx);
             }
-            host if command.name == commands::HOST.name => {
+            SlashCommandKind::Host => {
                 if !self.is_cloud_mode_input_v2_composing(ctx) {
                     return false;
                 }
@@ -915,7 +881,7 @@ impl Input {
                 self.open_v2_host_selector(ctx);
                 return true;
             }
-            harness if command.name == commands::HARNESS.name => {
+            SlashCommandKind::Harness => {
                 if !self.is_cloud_mode_input_v2_composing(ctx) {
                     // Defensive: the command is registered only when the V2 flag is on and its
                     // availability requires CLOUD_MODE_V2_COMPOSER, so this branch should be unreachable.
@@ -928,7 +894,7 @@ impl Input {
                 self.open_v2_harness_selector(ctx);
                 return true;
             }
-            environment if command.name == commands::ENVIRONMENT.name => {
+            SlashCommandKind::Environment => {
                 if !self.is_cloud_mode_input_v2_composing(ctx) {
                     return false;
                 }
@@ -939,7 +905,7 @@ impl Input {
                 self.open_v2_environment_selector(ctx);
                 return true;
             }
-            models if command.name == commands::MODEL.name => {
+            SlashCommandKind::Model => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.suggestions_mode_model.update(ctx, |model, ctx| {
                         model.set_mode(InputSuggestionsMode::Closed, ctx);
@@ -967,14 +933,14 @@ impl Input {
                     ctx.notify();
                 }
             }
-            profiles if command.name == commands::PROFILE.name => {
+            SlashCommandKind::Profile => {
                 if !FeatureFlag::InlineProfileSelector.is_enabled() {
                     return false;
                 }
 
                 self.open_profile_selector(ctx);
             }
-            prompts if command.name == commands::PROMPTS.name => {
+            SlashCommandKind::Prompts => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.apply_v2_slash_section_filter(CloudModeV2Section::Prompts, ctx);
                     return true;
@@ -985,13 +951,13 @@ impl Input {
                     return false;
                 }
             }
-            rewind if command.name == commands::REWIND.name => {
+            SlashCommandKind::Rewind => {
                 self.open_rewind_menu(ctx);
             }
-            usage if command.name == commands::USAGE.name => {
+            SlashCommandKind::Usage => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenBillingAndUsagePane);
             }
-            remote_control if command.name == commands::REMOTE_CONTROL.name => {
+            SlashCommandKind::RemoteControl => {
                 if !FeatureFlag::CreatingSharedSessions.is_enabled()
                     || !FeatureFlag::HOARemoteControl.is_enabled()
                 {
@@ -1008,7 +974,7 @@ impl Input {
                 }
                 ctx.emit(Event::StartRemoteControl);
             }
-            cost if command.name == commands::COST.name => {
+            SlashCommandKind::Cost => {
                 let history = BlocklistAIHistoryModel::handle(ctx);
                 let conversation = history
                     .as_ref(ctx)
@@ -1033,7 +999,7 @@ impl Input {
                 }
             }
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-            move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
+            SlashCommandKind::MoveToCloud => {
                 if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
                     return false;
                 }
@@ -1081,7 +1047,7 @@ impl Input {
                     );
                 }
             }
-            fork if command.name == commands::FORK.name => {
+            SlashCommandKind::Fork => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -1111,12 +1077,12 @@ impl Input {
                     destination,
                 });
             }
-            fork_from if command.name == commands::FORK_FROM.name => {
+            SlashCommandKind::ForkFrom => {
                 self.open_user_query_menu(UserQueryMenuAction::ForkFrom, ctx);
                 return true;
             }
             #[cfg(not(target_family = "wasm"))]
-            continue_locally if command.name == commands::CONTINUE_LOCALLY.name => {
+            SlashCommandKind::ContinueLocally => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -1163,7 +1129,7 @@ impl Input {
                     destination,
                 });
             }
-            fork_and_compact if command.name == commands::FORK_AND_COMPACT.name => {
+            SlashCommandKind::ForkAndCompact => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -1189,7 +1155,7 @@ impl Input {
                     destination,
                 });
             }
-            compact_and if command.name == commands::COMPACT_AND.name => {
+            SlashCommandKind::CompactAnd => {
                 let conversation_id = if is_queued_prompt {
                     let Some(conversation_id) = queued_conversation_id else {
                         report_error!("Queued /compact-and missing conversation id");
@@ -1230,7 +1196,7 @@ impl Input {
                     ctx.dispatch_typed_action(&summarize);
                 }
             }
-            queue if command.name == commands::QUEUE.name => {
+            SlashCommandKind::Queue => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -1276,28 +1242,36 @@ impl Input {
                     self.submit_user_query_now(prompt, ctx);
                 }
             }
-            open_repo if command.name == commands::OPEN_REPO.name => {
+            SlashCommandKind::OpenRepo => {
                 if !FeatureFlag::InlineRepoMenu.is_enabled() {
                     return false;
                 }
                 self.open_repos_menu(ctx);
             }
-            command_that_just_sends_ai_request_with_prefix
-                if slash_command_is_submitted_as_prompt(command) =>
-            {
+            SlashCommandKind::Compact | SlashCommandKind::Plan | SlashCommandKind::Orchestrate => {
                 // These slash commands just send AI requests with the slash command text as a
                 // prefix, and special handling is done downstream as an implementation detail
                 // of handling user queries with specific slash command prefixes.
                 return false;
             }
-            _ => {
+            SlashCommandKind::AutoApprove
+            | SlashCommandKind::ViewLogs
+            | SlashCommandKind::Voice
+            | SlashCommandKind::NaturalLanguageDetection
+            | SlashCommandKind::Exit
+            | SlashCommandKind::Logout
+            | SlashCommandKind::Version => {
                 debug_assert!(
                     false,
-                    "Attempted to execute slash command with no handler: {}",
+                    "Attempted to execute TUI-only slash command in the GUI: {}",
                     command.name
                 );
                 return false;
             }
+            #[cfg(any(not(feature = "local_fs"), target_family = "wasm"))]
+            SlashCommandKind::MoveToCloud => return false,
+            #[cfg(target_family = "wasm")]
+            SlashCommandKind::ContinueLocally => return false,
         }
 
         // Leave the buffer alone when re-sending a queued prompt (the user may have typed
@@ -1553,9 +1527,10 @@ impl Input {
 /// menu, etc.), so callers gating prompt queuing or shared-session forwarding should treat those
 /// as "run now".
 pub fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> bool {
-    command.name == commands::COMPACT.name
-        || command.name == commands::PLAN.name
-        || command.name == commands::ORCHESTRATE.name
+    matches!(
+        command.kind,
+        SlashCommandKind::Compact | SlashCommandKind::Plan | SlashCommandKind::Orchestrate
+    )
 }
 
 /// Returns true when the conversation with `conversation_id` is associated with an Oz

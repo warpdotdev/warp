@@ -132,10 +132,10 @@ impl Command {
         if command_call_info.ending_whitespace.is_some() {
             return ParsedToken::empty();
         }
-        if let Some(positionals) = &command_call_info.positionals {
-            if let Some(last) = positionals.last() {
-                return last.parsed_token.clone();
-            }
+        if let Some(positionals) = &command_call_info.positionals
+            && let Some(last) = positionals.last()
+        {
+            return last.parsed_token.clone();
         }
         command_call_info.command_name.parsed_token.clone()
     }

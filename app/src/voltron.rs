@@ -21,10 +21,11 @@ use vec1::Vec1;
 use warp_errors::report_error;
 use warpui::accessibility::AccessibilityContent;
 use warpui::elements::{
-    resizable_state_handle, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, Element, EventHandler, Flex,
-    Icon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, DispatchEventResult, Element, EventHandler, Flex, Icon,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Resizable, ResizableStateHandle, Shrinkable, Stack,
+    resizable_state_handle,
 };
 use warpui::geometry::vector::vec2f;
 use warpui::keymap::{Context, FixedBinding};
@@ -42,7 +43,7 @@ use crate::editor::{
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::terminal::input::MenuPositioning;
-use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_VOLTRON_WIDTH};
+use crate::terminal::resizable_data::{DEFAULT_VOLTRON_WIDTH, ModalType, ResizableData};
 use crate::util::bindings::{self, CustomAction};
 use crate::workflows::categories::CategoriesView;
 
@@ -260,14 +261,13 @@ impl Voltron {
     }
 
     fn placeholder(&mut self, ctx: &mut ViewContext<Self>) -> Option<&'static str> {
-        if let Some(current_feature) = self.current_feature() {
-            Some(match current_feature.feature_view_handle {
+        match self.current_feature() {
+            Some(current_feature) => Some(match current_feature.feature_view_handle {
                 VoltronFeatureViewHandle::Workflows(view_handle) => {
                     view_handle.read(ctx, |view, _| view.editor_placeholder_text())
                 }
-            })
-        } else {
-            None
+            }),
+            _ => None,
         }
     }
 
@@ -480,15 +480,16 @@ impl View for Voltron {
     /// Voltron by itself doesn't provide any a11y features. Instead it delegates it to the
     /// currently selected feature's a11y methods.
     fn accessibility_contents(&self, ctx: &AppContext) -> Option<AccessibilityContent> {
-        if let Some(current_feature) = self.current_feature() {
-            // TODO create a delegate macro rather than having all those matches everywhere
-            match current_feature.feature_view_handle {
-                VoltronFeatureViewHandle::Workflows(view_handle) => {
-                    view_handle.as_ref(ctx).accessibility_contents(ctx)
+        match self.current_feature() {
+            Some(current_feature) => {
+                // TODO create a delegate macro rather than having all those matches everywhere
+                match current_feature.feature_view_handle {
+                    VoltronFeatureViewHandle::Workflows(view_handle) => {
+                        view_handle.as_ref(ctx).accessibility_contents(ctx)
+                    }
                 }
             }
-        } else {
-            None
+            _ => None,
         }
     }
 

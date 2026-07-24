@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, sync_channel};
 
 use cloud_object_client::{MockObjectClient, ObjectClient};
 use settings::manager::SettingsManager;
@@ -8,8 +8,8 @@ use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, ModelHandle, SingletonEntity};
 
 use super::update_manager::UpdateManager;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::actions::ObjectActions;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::network::NetworkStatus;

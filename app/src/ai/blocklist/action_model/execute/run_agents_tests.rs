@@ -17,8 +17,8 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStatus};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::orchestration::populate_default_auth_secret_for_execution;
 use crate::appearance::Appearance;
@@ -85,6 +85,7 @@ fn persist_plan_config_with_harness(
                     execution_mode: OrchestrationExecutionMode::Remote {
                         environment_id: "env-1".to_string(),
                         worker_host: "warp".to_string(),
+                        runner_id: String::new(),
                     },
                 },
                 status,
@@ -101,6 +102,7 @@ fn should_autoexecute_duplicate_launched_agent_denial() {
                 state.conversation_id,
                 &[RunAgentsAgentOutcome {
                     name: "child".to_string(),
+                    resolved_model_id: String::new(),
                     kind: RunAgentsAgentOutcomeKind::Launched {
                         agent_id: "agent-123".to_string(),
                     },
@@ -132,6 +134,7 @@ fn execute_denies_duplicate_launched_agent() {
                 state.conversation_id,
                 &[RunAgentsAgentOutcome {
                     name: "child".to_string(),
+                    resolved_model_id: String::new(),
                     kind: RunAgentsAgentOutcomeKind::Launched {
                         agent_id: "agent-123".to_string(),
                     },
@@ -231,12 +234,14 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: false,
+                runner_id: String::new(),
             },
             agent_run_configs: vec![RunAgentsAgentRunConfig {
                 name: "child".to_string(),
                 prompt: "Help".to_string(),
                 title: String::new(),
                 agent_identity_uid: String::new(),
+                model_id: String::new(),
             }],
             plan_id: String::new(),
             harness_auth_secret_name: None,
@@ -260,6 +265,7 @@ fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
         prompt: "Investigate the failure".to_string(),
         title: String::new(),
         agent_identity_uid: String::new(),
+        model_id: String::new(),
     };
 
     let mode = run_agents_to_start_agent_mode(
@@ -593,8 +599,8 @@ fn cancel_during_plan_publication_does_not_dispatch_children() {
 
 fn set_run_agents_permission(app: &mut App, permission: RunAgentsPermission) {
     AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
-        let profile_id = *profiles.active_profile(None, ctx).id();
-        profiles.set_run_agents(profile_id, permission, ctx);
+        let profile_id = profiles.active_profile(None, ctx).id().clone();
+        profiles.set_run_agents(&profile_id, permission, ctx);
     });
 }
 
