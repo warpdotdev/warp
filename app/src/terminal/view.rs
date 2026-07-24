@@ -5455,17 +5455,19 @@ impl TerminalView {
                 let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
                 match action {
                     Some(AutofireAction::Submit { query_id, text }) => {
-                        self.input.update(ctx, |input, ctx| {
+                        let dispatched = self.input.update(ctx, |input, ctx| {
                             input.submit_queued_prompt_for_active_pane(
                                 text,
                                 conversation_id,
                                 query_id,
                                 ctx,
-                            );
+                            )
                         });
-                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                            model.remove_fired_row(conversation_id, query_id, ctx);
-                        });
+                        if dispatched {
+                            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                                model.remove_fired_row(conversation_id, query_id, ctx);
+                            });
+                        }
                     }
                     Some(AutofireAction::ExecuteCommand { query_id, command }) => {
                         let started = self.input.update(ctx, |input, ctx| {
@@ -5613,12 +5615,14 @@ impl TerminalView {
             .map(|row| (row.id(), row.text().to_owned()))
             .collect();
         for (query_id, text) in rows {
-            self.input.update(ctx, |input, ctx| {
-                input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
+            let dispatched = self.input.update(ctx, |input, ctx| {
+                input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx)
             });
-            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                model.remove_fired_row(conversation_id, query_id, ctx);
-            });
+            if dispatched {
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.remove_fired_row(conversation_id, query_id, ctx);
+                });
+            }
         }
     }
 

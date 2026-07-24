@@ -3987,8 +3987,7 @@ impl Input {
         let dispatched = if is_command {
             self.execute_queued_command(&text, conversation_id, ctx)
         } else {
-            self.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
-            true
+            self.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx)
         };
         if !dispatched {
             return;
@@ -4115,10 +4114,26 @@ impl Input {
                 }
                 true
             }
-            AIQueryRouting::NewCloudVm { .. } => {
+            AIQueryRouting::NewCloudVm { task_id } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled() {
                     let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-                    ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    let pending_attachments = self
+                        .ai_context_model
+                        .as_ref(ctx)
+                        .pending_attachments()
+                        .to_vec();
+                    if pending_attachments.is_empty() {
+                        ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    } else {
+                        self.freeze_input_in_loading_state(ctx);
+                        self.upload_files_then_submit_cloud_followup(
+                            task_id,
+                            prompt,
+                            pending_attachments,
+                            None,
+                            ctx,
+                        );
+                    }
                 } else {
                     // Cloud-to-cloud follow-up is unavailable; block rather than run locally.
                     self.show_ephemeral_error_toast(
@@ -7658,6 +7673,22 @@ impl Input {
         }
     }
 
+    /// Restores a VM-down cloud follow-up after an attachment upload fails. Unlike
+    /// [`Self::unfreeze_agent_input`], this path runs on a disconnected cloud pane rather than an
+    /// active shared-session viewer, so it must restore the visible prompt and editable state
+    /// directly.
+    fn restore_cloud_followup_input_after_upload_failure(
+        &mut self,
+        prompt: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(prompt, ctx);
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            let appearance: &Appearance = Appearance::as_ref(ctx);
+            editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
+        });
+    }
     pub fn reset_after_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) {
         self.editor.update(ctx, |editor, ctx| {
             editor.set_interaction_state(InteractionState::Editable, ctx);
@@ -13912,7 +13943,7 @@ impl Input {
         conversation_id: AIConversationId,
         query_id: QueuedQueryId,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         // Cloud follow-up path: the cloud run has ended an execution and the next queued
         // prompt should start a new one. Wins over the viewer path because the old shared
         // session is no longer live to receive a SendAgentPrompt.
@@ -13925,18 +13956,39 @@ impl Input {
                 });
 
         if is_ready_for_cloud_followup {
-            // Cloud follow-up does not support attachments; a queued row's attachments are dropped
-            // when the row is removed after dispatch.
-            let drops_attachments = !QueuedQueryModel::as_ref(ctx)
+            let pending_attachments = QueuedQueryModel::as_ref(ctx)
                 .attachments_for(conversation_id, query_id)
-                .is_empty();
-            if drops_attachments {
-                log::warn!(
-                    "Dropping attachments on a queued cloud follow-up prompt; cloud follow-up does not support attachments"
-                );
+                .to_vec();
+            let queued_query_retry = QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .iter()
+                .enumerate()
+                .find(|(_, query)| query.id() == query_id)
+                .map(|(index, query)| (conversation_id, index, query.clone()));
+
+            if pending_attachments.is_empty() {
+                ctx.emit(Event::SubmitCloudFollowup { prompt });
+            } else {
+                let task_id = self
+                    .ambient_agent_view_model()
+                    .and_then(|ambient_agent_model| ambient_agent_model.as_ref(ctx).task_id());
+                if let Some(task_id) = task_id {
+                    self.freeze_input_in_loading_state_with_text(&prompt, ctx);
+                    self.upload_files_then_submit_cloud_followup(
+                        task_id,
+                        prompt,
+                        pending_attachments,
+                        queued_query_retry,
+                        ctx,
+                    );
+                } else {
+                    log::warn!(
+                        "Cannot upload queued cloud follow-up attachments: no task_id available"
+                    );
+                    return false;
+                }
             }
-            ctx.emit(Event::SubmitCloudFollowup { prompt });
-            return;
+            return true;
         }
 
         // Shared-session viewer path (covers an in-flight cloud run from the owner's client).
@@ -13989,11 +14041,12 @@ impl Input {
                 queued_query_retry,
                 ctx,
             );
-            return;
+            return true;
         }
 
         // Local Agent Mode path.
         self.submit_queued_prompt(prompt, conversation_id, query_id, ctx);
+        true
     }
 
     /// Queues the current input instead of submitting it when the active conversation is
@@ -14457,6 +14510,125 @@ impl Input {
         );
 
         true
+    }
+
+    /// Upload pending attachments to the task definition before emitting the text-only cloud
+    /// follow-up event. A new VM execution downloads these attachments during startup.
+    fn upload_files_then_submit_cloud_followup(
+        &mut self,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        prompt: String,
+        pending_attachments: Vec<PendingAttachment>,
+        queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let server_api = ServerApiProvider::as_ref(ctx).get();
+
+        ctx.spawn(
+            async move {
+                let mut files_to_upload = Vec::with_capacity(pending_attachments.len());
+                for attachment in pending_attachments {
+                    let (file_name, mime_type, file_bytes) = match attachment {
+                        PendingAttachment::File(file) => {
+                            let bytes = std::fs::read(&file.file_path).map_err(|error| {
+                                format!(
+                                    "Failed to read attachment {}: {error}",
+                                    file.file_path.display()
+                                )
+                            })?;
+                            (file.file_name, file.mime_type, bytes)
+                        }
+                        PendingAttachment::Image(image) => {
+                            let bytes = base64::engine::general_purpose::STANDARD
+                                .decode(&image.data)
+                                .map_err(|error| {
+                                    format!(
+                                        "Failed to decode attachment {}: {error}",
+                                        image.file_name
+                                    )
+                                })?;
+                            (image.file_name, image.mime_type, bytes)
+                        }
+                    };
+
+                    if file_bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
+                        return Err(format!("{} exceeds the 10MB attachment limit", file_name));
+                    }
+                    files_to_upload.push((file_name, mime_type, file_bytes));
+                }
+
+                let file_infos: Vec<AttachmentFileInfo> = files_to_upload
+                    .iter()
+                    .map(|(filename, mime_type, _)| AttachmentFileInfo {
+                        filename: filename.clone(),
+                        mime_type: mime_type.clone(),
+                    })
+                    .collect();
+                let response = ai_client
+                    .prepare_attachments_for_upload(&task_id, &file_infos)
+                    .await
+                    .map_err(|error| format!("Failed to prepare attachment uploads: {error:#}"))?;
+
+                if response.attachments.len() != files_to_upload.len() {
+                    return Err(format!(
+                        "Attachment upload preparation returned {} targets for {} files",
+                        response.attachments.len(),
+                        files_to_upload.len()
+                    ));
+                }
+
+                for ((file_name, mime_type, file_bytes), upload_info) in
+                    files_to_upload.iter().zip(response.attachments.iter())
+                {
+                    let response = server_api
+                        .http_client()
+                        .put(&upload_info.upload_url)
+                        .header("Content-Type", mime_type.as_str())
+                        .body(file_bytes.clone())
+                        .send()
+                        .await
+                        .map_err(|error| {
+                            format!("Failed to upload attachment {file_name}: {error}")
+                        })?;
+                    if !response.status().is_success() {
+                        return Err(format!(
+                            "Failed to upload attachment {file_name}: HTTP {}",
+                            response.status()
+                        ));
+                    }
+                }
+
+                Ok::<(), String>(())
+            },
+            move |input, result, ctx| {
+                if let Err(error) = result {
+                    if let Some((conversation_id, insert_index, query)) = queued_query_retry.clone()
+                    {
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.restore_fired_row(conversation_id, insert_index, query, ctx);
+                        });
+                    }
+                    input.restore_cloud_followup_input_after_upload_failure(&prompt, ctx);
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("Couldn't upload attachment: {error}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+
+                if queued_query_retry.is_none() {
+                    input.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.clear_pending_attachments(ctx);
+                    });
+                }
+                ctx.emit(Event::SubmitCloudFollowup { prompt });
+            },
+        );
     }
 
     fn emit_input_buffer_submitted_telemetry(&self, ctx: &mut ViewContext<Self>) {
