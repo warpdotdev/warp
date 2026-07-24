@@ -3378,25 +3378,24 @@ impl RenderState {
             let mut cursor = content.cursor::<LineCount, CharOffset>();
 
             if let Some(items) = blocks.remove(&LineCount::zero()) {
-                for item in items {
-                    new_tree.push(item);
-                }
+                new_tree.extend(items);
             }
 
             cursor.descend_to_first_item(&content, |_| true);
+            // Collect items to batch-insert with extend instead of individual push calls.
+            let mut batch = Vec::new();
             while let Some(item) = cursor.item() {
                 if !matches!(item, BlockItem::TemporaryBlock { .. }) {
-                    new_tree.push(item.clone());
+                    batch.push(item.clone());
                 }
 
                 if let Some(items) = blocks.remove(&cursor.end_seek_position()) {
-                    for item in items {
-                        new_tree.push(item);
-                    }
+                    batch.extend(items);
                 }
 
                 cursor.next();
             }
+            new_tree.extend(batch);
         }
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&new_tree));
@@ -3444,18 +3443,31 @@ impl RenderState {
                 new_tree.describe()
             );
 
-            for item in pending_edit.laid_out_line {
-                let offset = new_tree.extent::<CharOffset>() + 1;
-                // If the item should be hidden (but it's not labelled as hidden), don't push it to the sumtree.
-                if !matches!(item, BlockItem::Hidden(_))
-                    && hidden_range_clone
-                        .as_ref()
-                        .map(|hr| hr.contains(&offset))
-                        .unwrap_or(false)
-                {
-                    continue;
-                }
-                new_tree.push(item);
+            // Batch items into the tree using `extend` instead of individual `push` calls.
+            // `extend` packs items into leaf nodes of 2*TREE_BASE (12) items each before
+            // inserting into the tree, dramatically reducing Arc allocations and tree
+            // restructuring compared to `push` which creates a single-item leaf per call.
+            {
+                let mut running_offset = new_tree.extent::<CharOffset>() + 1;
+                let filtered_items: Vec<_> = pending_edit
+                    .laid_out_line
+                    .into_iter()
+                    .filter(|item| {
+                        // If the item should be hidden (but it's not labelled as hidden),
+                        // don't include it in the sumtree.
+                        if !matches!(item, BlockItem::Hidden(_))
+                            && hidden_range_clone
+                                .as_ref()
+                                .map(|hr| hr.contains(&running_offset))
+                                .unwrap_or(false)
+                        {
+                            return false;
+                        }
+                        running_offset += item.content_length();
+                        true
+                    })
+                    .collect();
+                new_tree.extend(filtered_items);
             }
 
             // TODO(CLD-558): Ideally, we'd use the content-level offset as is.
