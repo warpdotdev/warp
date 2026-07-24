@@ -390,17 +390,40 @@ impl CLIAgent {
 
         let resolved_first_word = Self::extract_first_command(&resolved_command, escape_char)?;
 
-        // Check if resolved command matches any known CLI agent.
-        // Also matches `aifx agent run claude` as Claude for Uber employees,
-        // and the `vibe-acp` ACP-mode binary as Mistral Vibe.
-        enum_iterator::all::<CLIAgent>()
+        // Check multi-word special patterns first (e.g. `aifx agent run claude`).
+        if Self::is_aifx_agent_run_claude(&resolved_command, ctx) {
+            return Some(CLIAgent::Claude);
+        }
+
+        // Check if first word matches a known CLI agent directly.
+        // Also matches `vibe-acp` ACP-mode binary as Mistral Vibe.
+        let direct_match = enum_iterator::all::<CLIAgent>()
             .filter(|agent| !matches!(agent, CLIAgent::Unknown))
             .find(|agent| {
                 resolved_first_word == agent.command_prefix()
-                    || (matches!(agent, CLIAgent::Claude)
-                        && Self::is_aifx_agent_run_claude(&resolved_command, ctx))
                     || (matches!(agent, CLIAgent::Vibe) && resolved_first_word == "vibe-acp")
-            })
+            });
+
+        if direct_match.is_some() {
+            return direct_match;
+        }
+
+        // Scan the first few words for a known CLI agent. This handles wrapper
+        // commands like `headroom warp opencode` or `npx opencode` where the
+        // actual agent binary appears after launcher/subcommand words.
+        // Limited to 6 words to avoid false positives on unrelated commands.
+        let agent_prefixes: Vec<&str> = enum_iterator::all::<CLIAgent>()
+            .filter(|agent| !matches!(agent, CLIAgent::Unknown))
+            .map(|agent| agent.command_prefix())
+            .collect();
+        for word in resolved_command.split_whitespace().take(6).skip(1) {
+            if agent_prefixes.contains(&word) {
+                return enum_iterator::all::<CLIAgent>()
+                    .find(|agent| agent.command_prefix() == word);
+            }
+        }
+
+        None
     }
 
     /// Returns true if the resolved command is `aifx agent run claude` (Uber's

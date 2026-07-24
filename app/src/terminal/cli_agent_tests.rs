@@ -336,6 +336,42 @@ fn test_detect_no_match() {
             assert_eq!(CLIAgent::detect("ls -la", None, None, ctx), None);
             assert_eq!(CLIAgent::detect("vim", None, None, ctx), None);
             assert_eq!(CLIAgent::detect("claude_wrapper", None, None, ctx), None);
+            // Agent name appearing beyond the first 6 words is not detected
+            assert_eq!(
+                CLIAgent::detect("a b c d e f opencode", None, None, ctx),
+                None
+            );
+        });
+    });
+}
+
+#[test]
+fn test_detect_wrapper_commands() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            assert_eq!(
+                CLIAgent::detect("headroom warp opencode", None, None, ctx),
+                Some(CLIAgent::OpenCode),
+            );
+            assert_eq!(
+                CLIAgent::detect("npx opencode", None, None, ctx),
+                Some(CLIAgent::OpenCode),
+            );
+            assert_eq!(
+                CLIAgent::detect("some-wrapper claude --model opus", None, None, ctx),
+                Some(CLIAgent::Claude),
+            );
+            assert_eq!(
+                CLIAgent::detect("env VAR=1 gemini", None, None, ctx),
+                Some(CLIAgent::Gemini),
+            );
+            // Agent name within first 6 words is detected (caller filters by
+            // long-running status, so quick commands like `ls` won't trigger
+            // the agent UI in practice)
+            assert_eq!(
+                CLIAgent::detect("ls opencode", None, None, ctx),
+                Some(CLIAgent::OpenCode),
+            );
         });
     });
 }
