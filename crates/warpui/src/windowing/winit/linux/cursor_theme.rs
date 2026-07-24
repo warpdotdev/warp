@@ -46,7 +46,7 @@ struct CursorThemeCrawler {
     directories: Vec<PathBuf>,
 }
 
-fn non_empty_var(name: &str) -> Option<String> {
+pub(super) fn non_empty_var(name: &str) -> Option<String> {
     env::var(name).ok().filter(|val| !val.is_empty())
 }
 
