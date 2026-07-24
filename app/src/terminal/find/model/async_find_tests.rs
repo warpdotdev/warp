@@ -660,6 +660,49 @@ fn test_update_dirty_matches_clear_range() {
     assert_eq!(stored[1].start_row(), 25);
 }
 
+#[test]
+fn test_update_dirty_matches_keeps_order_across_row_boundary() {
+    // Regression test for a debug-build abort in `update_dirty_matches`.
+    //
+    // The splice window is chosen by row overlap, but `AbsoluteMatch` orders by
+    // full end/start *point* (row and column). A rescanned match that starts in
+    // the dirty range and extends onto the next row at a *later* column than a
+    // retained match on that same row used to be spliced in ahead of it,
+    // producing a list that was out of order by end column. That tripped the
+    // ascending-order `debug_assert!` and aborted debug builds (SIGABRT).
+    let mut results = BlockFindResults::default();
+    let block_index = BlockIndex(0);
+    let grid_type = GridType::Output;
+
+    // Existing, correctly-ordered matches: one ending on row 9, one on row 11
+    // ending at column 2.
+    results.terminal_matches.insert(
+        (block_index, grid_type),
+        vec![make_match_at(9, 0, 5), make_match_at(11, 0, 2)],
+    );
+
+    // Rescanning dirty row 10 yields a match that starts on row 10 and spans
+    // onto row 11, ending at column 4 — after the retained row-11 match's end
+    // column (2). The row-based splice inserts it between the two existing
+    // matches; without a re-sort the list becomes [row9, span(end 11,4),
+    // row11(end 11,2)], which is out of order.
+    let spanning = AbsoluteMatch {
+        start: AbsolutePoint { row: 10, col: 0 },
+        end: AbsolutePoint { row: 11, col: 4 },
+        is_filtered: false,
+    };
+    results.update_dirty_matches(block_index, grid_type, 10..=10, vec![spanning]);
+
+    let stored = results
+        .terminal_matches
+        .get(&(block_index, grid_type))
+        .unwrap();
+    assert!(
+        stored.windows(2).all(|w| w[0] <= w[1]),
+        "matches must remain in ascending order after update_dirty_matches, got {stored:?}"
+    );
+}
+
 fn assert_async_focused_order_matches_sync(block_sort_direction: BlockSortDirection) {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);

@@ -413,11 +413,20 @@ impl BlockFindResults {
 
         matches.splice(replace_range, new_matches);
 
-        // Assert that matches are still in ascending order.
-        debug_assert!(
-            matches.windows(2).all(|w| w[0] <= w[1]),
-            "Matches should be in ascending order after update_dirty_matches"
-        );
+        // The splice window above is computed from row overlap, but
+        // `AbsoluteMatch` orders by full end/start *point* (row *and* column).
+        // A match that spans rows, or shares a row across the dirty-range
+        // boundary, can land out of order at the seam between the spliced-in
+        // and retained matches. That previously tripped an ascending-order
+        // `debug_assert!` here (aborting debug builds) and left release builds
+        // with a mis-ordered list. Restore the ascending invariant that
+        // downstream count/traversal/highlight rendering rely on. Per-block
+        // match counts are bounded and updates are throttled, so the occasional
+        // re-sort is cheap; the already-sorted common case only pays for the
+        // `is_sorted` scan.
+        if !matches.is_sorted() {
+            matches.sort_unstable();
+        }
     }
 }
 
