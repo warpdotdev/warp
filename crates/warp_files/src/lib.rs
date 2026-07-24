@@ -33,6 +33,29 @@ use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 pub mod text_file_reader;
 pub use text_file_reader::{TextFileReadResult, TextFileSegment};
 
+/// Maximum size of a file that [`FileModel`] will read fully into memory as a
+/// `String`. Files larger than this are rejected up front instead of letting
+/// `std::fs::read_to_string` reserve a buffer equal to the file's size: on
+/// macOS that giant *virtual* reservation can succeed and balloon the process
+/// footprint (a single ~28 GiB `read_to_string` reservation tripped the
+/// excessive-memory monitor — see APP-4801).
+const MAX_IN_MEMORY_FILE_BYTES: u64 = 1 << 30; // 1 GiB
+
+/// Like [`async_fs::read_to_string`], but first checks the file's size and
+/// returns an error for files larger than [`MAX_IN_MEMORY_FILE_BYTES`] rather
+/// than attempting a single allocation the size of the whole file. This guards
+/// against a single pathological/oversized file inflating the process footprint
+/// by tens of GiB.
+async fn read_to_string_capped(path: &Path) -> io::Result<String> {
+    let len = async_fs::metadata(path).await?.len();
+    if len > MAX_IN_MEMORY_FILE_BYTES {
+        return Err(io::Error::other(format!(
+            "file is too large to load into memory: {len} bytes (limit {MAX_IN_MEMORY_FILE_BYTES} bytes)"
+        )));
+    }
+    async_fs::read_to_string(path).await
+}
+
 #[derive(Debug)]
 pub enum FileModelEvent {
     FileLoaded {
@@ -418,7 +441,7 @@ impl FileModel {
         let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
-                let contents = async_fs::read_to_string(&file_path_buf)
+                let contents = read_to_string_capped(&file_path_buf)
                     .await
                     .map_err(FileLoadError::from);
                 (file_id, contents)
@@ -474,7 +497,7 @@ impl FileModel {
         if !Self::file_exists(file_path).await {
             return Err(FileLoadError::DoesNotExist);
         }
-        async_fs::read_to_string(file_path)
+        read_to_string_capped(file_path)
             .await
             .map_err(FileLoadError::from)
     }
@@ -1108,7 +1131,7 @@ impl FileModel {
             async move {
                 let mut res = Vec::new();
                 for file_path in matching_files {
-                    if let Ok(content) = async_fs::read_to_string(&file_path).await {
+                    if let Ok(content) = read_to_string_capped(&file_path).await {
                         res.push((file_path, content));
                     }
                 }
