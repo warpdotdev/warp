@@ -456,7 +456,6 @@ fn restore_fired_row_reinserts_removed_row_for_retry() {
             model.remove_fired_row(conv, first_id, ctx);
         });
         events.borrow_mut().clear();
-
         model.update(&mut app, |model, ctx| {
             model.restore_fired_row(conv, retry_index, retry_query, ctx);
         });
@@ -477,6 +476,51 @@ fn restore_fired_row_reinserts_removed_row_for_retry() {
                 query_id
             }] if *conversation_id == conv && *query_id == first_id
         ));
+    });
+}
+
+#[test]
+fn queued_prompt_retains_attachments_through_fire_and_retry_restore() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let attachment = image_attachment("notes.png");
+        let query = QueuedQuery::new_with_attachments(
+            "summarize this".to_owned(),
+            QueuedQueryOrigin::QueueSlashCommand,
+            vec![attachment.clone()],
+        );
+        let query_id = query.id();
+        model.update(&mut app, |model, ctx| {
+            model.append(conv, query, ctx);
+        });
+
+        // The queued row owns its attachment while it is being fired, allowing the async upload
+        // path to read it before the row is removed.
+        model.read(&app, |model, _| {
+            assert_eq!(model.attachments_for(conv, query_id), &[attachment.clone()]);
+            assert!(matches!(
+                model.peek_autofire(conv),
+                Some(AutofireAction::Submit {
+                    query_id: id,
+                    text
+                }) if id == query_id && text == "summarize this"
+            ));
+        });
+
+        // A failed upload removes the fired row first, then restores the same row and attachments
+        // at its original position so the user can retry.
+        let fired_query = model.read(&app, |model, _| model.queue(conv)[0].clone());
+        model.update(&mut app, |model, ctx| {
+            model.remove_fired_row(conv, query_id, ctx);
+        });
+        model.update(&mut app, |model, ctx| {
+            model.restore_fired_row(conv, 0, fired_query, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(model.attachments_for(conv, query_id), &[attachment]);
+            assert_eq!(model.queue(conv)[0].text(), "summarize this");
+        });
     });
 }
 
