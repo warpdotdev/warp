@@ -3859,6 +3859,37 @@ impl Workspace {
     ) {
         let start_index = self.tabs.len();
 
+        // Recreate the config's tab groups with fresh runtime ids so member
+        // tabs below can be reattached by their template group index (#13898).
+        // Mirrors grouped-tab restoration in `configure_new_workspace`.
+        let group_ids: Vec<TabGroupId> = if FeatureFlag::GroupedTabs.is_enabled() {
+            window
+                .tab_groups
+                .iter()
+                .map(|group_template| {
+                    let group = TabGroup {
+                        id: TabGroupId::new(),
+                        name: group_template.name.clone(),
+                        color: group_template
+                            .color
+                            .map_or(SelectedTabColor::Unset, SelectedTabColor::Color),
+                        collapsed: group_template.collapsed.unwrap_or_default(),
+                        draggable_state: Default::default(),
+                        // Launch configs don't persist pinned state (for tabs or
+                        // groups): a config can open into a window that already
+                        // has unpinned tabs, and restoring a pinned group there
+                        // would break the pinned-region ordering invariant.
+                        pinned: false,
+                    };
+                    let group_id = group.id;
+                    self.tab_groups.insert(group_id, group);
+                    group_id
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         window
             .tabs
             .iter()
@@ -3873,6 +3904,12 @@ impl Workspace {
                 self.tabs[start_index + tab_index].selected_color = tab_template
                     .color
                     .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+                // Drop the group reference if its index doesn't resolve (e.g.
+                // hand-edited YAML or the GroupedTabs flag being disabled).
+                self.tabs[start_index + tab_index].group_id = tab_template
+                    .group
+                    .and_then(|group_index| group_ids.get(group_index))
+                    .copied();
             });
 
         if !window.tabs.is_empty() {

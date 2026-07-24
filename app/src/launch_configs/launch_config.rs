@@ -6,6 +6,7 @@ use crate::app_state::{
     AppState, LeafContents, PaneNodeSnapshot, SplitDirection as StateSplitDirection, TabSnapshot,
     WindowSnapshot,
 };
+use crate::tab::SelectedTabColor;
 use crate::themes::theme::AnsiColorIdentifier;
 
 #[cfg(test)]
@@ -38,7 +39,27 @@ impl LaunchConfig {
 pub struct WindowTemplate {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub active_tab_index: Option<usize>,
+    /// Tab groups in this window. Tabs reference a group via
+    /// [`TabTemplate::group`], an index into this list (#13898).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tab_groups: Vec<TabGroupTemplate>,
     pub tabs: Vec<TabTemplate>,
+}
+
+/// A tab group saved in a launch configuration.
+///
+/// Groups are referenced by member tabs through their index in
+/// [`WindowTemplate::tab_groups`]; runtime [`TabGroupId`]s are not serialized
+/// since they are per-session UUIDs — fresh ids are minted when the launch
+/// config opens.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct TabGroupTemplate {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub color: Option<AnsiColorIdentifier>,
+    #[serde(skip_serializing_if = "is_falsey", default)]
+    pub collapsed: Option<bool>,
 }
 
 impl From<WindowSnapshot> for WindowTemplate {
@@ -46,12 +67,35 @@ impl From<WindowSnapshot> for WindowTemplate {
         let mut active_tab_index = None;
         let mut num_valid_tabs = 0;
 
+        // Map each group's runtime id to its index in the serialized list so
+        // member tabs can reference it (#13898).
+        let group_index_by_id: std::collections::HashMap<_, _> = snapshot
+            .tab_groups
+            .iter()
+            .enumerate()
+            .map(|(index, group)| (group.id, index))
+            .collect();
+        let tab_groups = snapshot
+            .tab_groups
+            .iter()
+            .map(|group| TabGroupTemplate {
+                name: group.name.clone(),
+                color: match group.color {
+                    SelectedTabColor::Color(color) => Some(color),
+                    _ => None,
+                },
+                collapsed: group.collapsed.then_some(true),
+            })
+            .collect();
+
         let tabs = snapshot
             .tabs
             .into_iter()
             .enumerate()
             .filter_map(|(i, tab)| {
-                let tab = tab.try_into().ok()?;
+                let group_id = tab.group_id;
+                let mut tab: TabTemplate = tab.try_into().ok()?;
+                tab.group = group_id.and_then(|id| group_index_by_id.get(&id)).copied();
 
                 if i == snapshot.active_tab_index {
                     active_tab_index = Some(num_valid_tabs);
@@ -65,6 +109,7 @@ impl From<WindowSnapshot> for WindowTemplate {
 
         Self {
             active_tab_index,
+            tab_groups,
             tabs,
         }
     }
@@ -187,6 +232,10 @@ pub struct TabTemplate {
     pub commands: Vec<CommandTemplate>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color: Option<AnsiColorIdentifier>,
+    /// Index into [`WindowTemplate::tab_groups`] for the group this tab
+    /// belongs to, if any (#13898).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub group: Option<usize>,
 }
 
 impl TabTemplate {
@@ -238,6 +287,9 @@ impl TryFrom<TabSnapshot> for TabTemplate {
             layout: snapshot.root.try_into()?,
             commands: Vec::new(),
             color,
+            // Group membership is assigned by `WindowTemplate::from`, which owns
+            // the group-id → index mapping.
+            group: None,
         })
     }
 }
@@ -278,6 +330,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
         active_window_index: Some(0),
         windows: vec![WindowTemplate {
             active_tab_index: Some(0),
+            tab_groups: Vec::new(),
             tabs: vec![
                 TabTemplate {
                     title: Some("First Tab".to_string()),
@@ -290,6 +343,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
                     },
                     commands: Vec::new(),
                     color: None,
+                    group: None,
                 },
                 TabTemplate {
                     title: Some("Second Tab".to_string()),
@@ -302,6 +356,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
                     },
                     commands: Vec::new(),
                     color: None,
+                    group: None,
                 },
             ],
         }],

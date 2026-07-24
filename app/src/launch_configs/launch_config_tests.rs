@@ -1,12 +1,15 @@
 use std::path::PathBuf;
 
-use super::{CommandTemplate, LaunchConfig, PaneMode, PaneTemplateType};
+use super::{CommandTemplate, LaunchConfig, PaneMode, PaneTemplateType, TabGroupTemplate};
 use crate::app_state::{
     AppState, BranchSnapshot, LeafContents, LeafSnapshot, NotebookPaneSnapshot, PaneFlex,
-    PaneNodeSnapshot, SplitDirection, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+    PaneNodeSnapshot, SplitDirection, TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot,
+    WindowSnapshot,
 };
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::tab::SelectedTabColor;
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::workspace::tab_group::TabGroupId;
 
 fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
     AppState {
@@ -525,4 +528,132 @@ fn test_config_with_active_tab_being_filtered() {
 
     let template = LaunchConfig::from_snapshot("Test".into(), &state);
     assert_eq!(template.windows[0].active_tab_index, None)
+}
+
+fn terminal_tab_snapshot(group_id: Option<TabGroupId>) -> TabSnapshot {
+    TabSnapshot {
+        custom_title: None,
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![],
+                cwd: Some("/some/dir".into()),
+                is_active: true,
+                is_read_only: false,
+                shell_launch_data: None,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        left_panel: None,
+        right_panel: None,
+        group_id,
+        pinned: false,
+    }
+}
+
+/// Regression test for #13898: saving a window with grouped tabs as a launch
+/// configuration must persist the groups and each tab's group membership.
+#[test]
+fn test_config_from_snapshot_maps_tab_groups() {
+    let group_a = TabGroupId::new();
+    let group_b = TabGroupId::new();
+    let mut state = multi_tab_snapshot(
+        0,
+        vec![
+            terminal_tab_snapshot(Some(group_a)),
+            terminal_tab_snapshot(None),
+            terminal_tab_snapshot(Some(group_b)),
+        ],
+    );
+    state.windows[0].tab_groups = vec![
+        TabGroupSnapshot {
+            id: group_a,
+            name: Some("Backend".to_string()),
+            color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+            collapsed: true,
+            pinned: false,
+        },
+        TabGroupSnapshot {
+            id: group_b,
+            name: None,
+            color: SelectedTabColor::Unset,
+            collapsed: false,
+            pinned: false,
+        },
+    ];
+
+    let template = LaunchConfig::from_snapshot("Test".into(), &state);
+    let window = &template.windows[0];
+
+    assert_eq!(
+        window.tab_groups,
+        vec![
+            TabGroupTemplate {
+                name: Some("Backend".to_string()),
+                color: Some(AnsiColorIdentifier::Blue),
+                collapsed: Some(true),
+            },
+            TabGroupTemplate {
+                name: None,
+                color: None,
+                collapsed: None,
+            },
+        ],
+    );
+    assert_eq!(window.tabs[0].group, Some(0));
+    assert_eq!(window.tabs[1].group, None);
+    assert_eq!(window.tabs[2].group, Some(1));
+}
+
+/// Tab groups survive a YAML serialize → deserialize round trip (#13898).
+#[test]
+fn test_launch_config_yaml_round_trips_tab_groups() {
+    let group_a = TabGroupId::new();
+    let mut state = multi_tab_snapshot(
+        0,
+        vec![
+            terminal_tab_snapshot(Some(group_a)),
+            terminal_tab_snapshot(None),
+        ],
+    );
+    state.windows[0].tab_groups = vec![TabGroupSnapshot {
+        id: group_a,
+        name: Some("Frontend".to_string()),
+        color: SelectedTabColor::Unset,
+        collapsed: false,
+        pinned: false,
+    }];
+
+    let template = LaunchConfig::from_snapshot("Round Trip".into(), &state);
+    let yaml = serde_yaml::to_string(&template).expect("launch config should serialize");
+    let parsed: LaunchConfig = serde_yaml::from_str(&yaml).expect("launch config should parse");
+
+    assert_eq!(parsed.windows[0].tab_groups, template.windows[0].tab_groups);
+    assert_eq!(parsed.windows[0].tabs[0].group, Some(0));
+    assert_eq!(parsed.windows[0].tabs[1].group, None);
+}
+
+/// Launch configs written before tab groups existed still parse (#13898).
+#[test]
+fn test_launch_config_yaml_without_groups_parses() {
+    let config: LaunchConfig = serde_yaml::from_str(
+        r#"
+name: Legacy Config
+windows:
+  - tabs:
+      - layout:
+          cwd: /tmp
+"#,
+    )
+    .expect("legacy launch config should parse");
+
+    assert!(config.windows[0].tab_groups.is_empty());
+    assert_eq!(config.windows[0].tabs[0].group, None);
 }
