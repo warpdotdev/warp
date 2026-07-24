@@ -550,8 +550,12 @@ pub enum Event {
     OpenFileInWarp {
         /// The file path to open.
         path: LocalOrRemotePath,
-        /// The session that the path was opened from.
-        session: Arc<Session>,
+        /// The session that the path was opened from, if any. `None` when the link was opened in a
+        /// standalone Markdown viewer tab, which has no terminal session.
+        session: Option<Arc<Session>>,
+        /// A `#fragment` anchor to scroll to once the destination Markdown notebook loads, if the
+        /// originating link carried one. `None` for a plain file open.
+        anchor: Option<String>,
     },
     OpenWarpDriveLink {
         open_warp_drive_args: OpenWarpDriveObjectArgs,
@@ -1750,6 +1754,7 @@ impl PaneGroup {
                     } => Box::new(NotebookPane::restore(notebook_id, &settings, ctx)?),
                     NotebookPaneSnapshot::LocalFileNotebook { path } => Box::new(FilePane::new(
                         path.map(LocalOrRemotePath::Local),
+                        None,
                         None,
                         #[cfg(feature = "local_fs")]
                         None,
@@ -5041,7 +5046,7 @@ impl PaneGroup {
             }
         });
 
-        let file_pane = FilePane::new(Some(path), session, source, ctx);
+        let file_pane = FilePane::new(Some(path), session, None, source, ctx);
         let success = self.replace_pane(code_pane_id, file_pane, false, ctx);
 
         if !success {

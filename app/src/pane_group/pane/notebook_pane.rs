@@ -172,11 +172,16 @@ pub(super) fn subscribe_to_link_model(
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     ctx.subscribe_to_model(handle, move |pane_group, _, event, ctx| match event {
-        LinkEvent::OpenFileNotebook { path, session } => {
+        LinkEvent::OpenFileNotebook {
+            path,
+            session,
+            anchor,
+        } => {
             // Opening local files is delegated to the parent workspace.
             ctx.emit(crate::pane_group::Event::OpenFileInWarp {
                 path: crate::code::buffer_location::LocalOrRemotePath::Local(path.clone()),
                 session: session.clone(),
+                anchor: anchor.clone(),
             })
         }
         LinkEvent::OpenWarpDriveLink {

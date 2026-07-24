@@ -969,6 +969,24 @@ fn query_for_rewind_prefill(inputs: &[AIAgentInput]) -> Option<String> {
     inputs.iter().find_map(AIAgentInput::display_query)
 }
 
+/// Canonicalize a local file target so it compares equal to an open notebook's stored path
+/// during dedup. Open notebooks record their *canonical* path on load (via `CanonicalizedPath`,
+/// i.e. `dunce::canonicalize`), while a clicked link resolves to `base_directory.join(relative)`
+/// — which keeps `.`/`..` components and, on macOS, the `/tmp` vs `/private/tmp` symlink alias.
+/// Canonicalizing with the same function lets a self-referential link (`./this-doc.md`) and any
+/// other spelling of the same file dedup to the already-open pane instead of opening a duplicate.
+/// Remote paths and paths that can't be canonicalized (e.g. the file vanished between resolve and
+/// open) are returned unchanged.
+#[cfg(feature = "local_fs")]
+fn canonicalize_local_path_for_dedup(path: LocalOrRemotePath) -> LocalOrRemotePath {
+    match &path {
+        LocalOrRemotePath::Local(local) => dunce::canonicalize(local)
+            .map(LocalOrRemotePath::Local)
+            .unwrap_or(path),
+        LocalOrRemotePath::Remote(_) => path,
+    }
+}
+
 /// Snapshot of a tab used to move it between workspaces or into a new window.
 /// Built by `Workspace::tab_transfer_info_at_index` and consumed by
 /// `insert_transferred_tab_at_index`. Captures the pane group handle, visual
@@ -6278,6 +6296,7 @@ impl Workspace {
                     LocalOrRemotePath::Local(path.clone()),
                     session,
                     layout,
+                    None,
                     ctx,
                 );
             }
@@ -6391,7 +6410,7 @@ impl Workspace {
                             // Jupyter notebook) instead of always opening remote
                             // files as raw code in the editor.
                             if let FileTarget::MarkdownViewer(layout) = target {
-                                self.open_file_notebook(location.clone(), None, *layout, ctx);
+                                self.open_file_notebook(location.clone(), None, *layout, None, ctx);
                             } else {
                                 self.open_code(
                                     code_source,
@@ -8490,8 +8509,17 @@ impl Workspace {
         path: LocalOrRemotePath,
         session: Option<Arc<Session>>,
         layout: EditorLayout,
+        anchor: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Canonicalize a local target before the dedup lookup. An open notebook stores its
+        // *canonical* path (recorded on load via `CanonicalizedPath`), but a link resolves to
+        // `base_directory.join(relative)`, which keeps `.`/`..` components and, on macOS, the
+        // `/tmp` vs `/private/tmp` symlink alias. Without canonicalizing, a self-referential
+        // link (`./this-doc.md`) wouldn't match its own open tab and would open a duplicate.
+        // Matching to canonical form makes self-reference — and any two spellings of the same
+        // file — dedup to the same pane.
+        let path = canonicalize_local_path_for_dedup(path);
         let existing_file_pane = {
             let pane_group = self.active_tab_pane_group();
             pane_group
@@ -8501,18 +8529,25 @@ impl Workspace {
                     !pane_group.as_ref(ctx).is_pane_hidden_for_close(*pane_id)
                         && file_view.as_ref(ctx).path() == Some(&path)
                 })
-                .map(|(pane_id, _)| pane_id)
         };
 
-        if let Some(pane_id) = existing_file_pane {
+        if let Some((pane_id, file_view)) = existing_file_pane {
             self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                 pane_group.focus_pane_by_id(pane_id, ctx);
             });
+            // The tab is already open and laid out, so a cross-document anchor can scroll
+            // immediately — no deferral needed. A miss is a silent no-op.
+            if let Some(anchor) = anchor {
+                file_view.update(ctx, |view, ctx| {
+                    view.scroll_to_anchor(&anchor, ctx);
+                });
+            }
             return;
         }
         let pane = FilePane::new(
             Some(path),
             session,
+            anchor,
             #[cfg(feature = "local_fs")]
             None,
             ctx,
@@ -16159,11 +16194,21 @@ impl Workspace {
                 );
             }
             #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
-            pane_group::Event::OpenFileInWarp { path, session } => {
+            pane_group::Event::OpenFileInWarp {
+                path,
+                session,
+                anchor,
+            } => {
                 #[cfg(feature = "local_fs")]
                 {
                     let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
-                    self.open_file_notebook(path.clone(), Some(session.clone()), layout, ctx);
+                    self.open_file_notebook(
+                        path.clone(),
+                        session.clone(),
+                        layout,
+                        anchor.clone(),
+                        ctx,
+                    );
                 }
             }
             pane_group::Event::MoveToSpace {

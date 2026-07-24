@@ -245,7 +245,7 @@ impl FileNotebookView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let window_id = ctx.window_id();
         // Use the active session for links until we have something more specific.
-        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
+        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::active(window_id), ctx));
 
         let view_position_id = format!("file_notebook_view_{}", ctx.view_id());
 
@@ -433,6 +433,18 @@ impl FileNotebookView {
             // Set a temporary title until the context is available.
             self.pane_configuration.update(ctx, |pane_config, ctx| {
                 pane_config.set_title(local_path.display().to_string(), ctx);
+            });
+            // Even without a session, seed the link resolver with the document's own parent
+            // directory as a base-directory fallback, so a standalone viewer tab (e.g.
+            // `open -a Warp file.md`, which has no terminal session cwd) can still resolve this
+            // document's relative links against where the document actually lives.
+            let window_id = ctx.window_id();
+            let document_dir = local_path.parent().map(Path::to_path_buf);
+            self.links.update(ctx, |links, ctx| {
+                links.set_session_source(
+                    SessionSource::active_for_document(window_id, document_dir),
+                    ctx,
+                );
             });
         }
 
@@ -712,6 +724,30 @@ impl FileNotebookView {
     /// Model for resolving and opening links relative to this notebook.
     pub fn links(&self) -> ModelHandle<NotebookLinks> {
         self.links.clone()
+    }
+
+    /// Immediately scroll to a `#fragment` anchor's heading. Used when a cross-document link
+    /// targets a notebook whose tab is *already* open and laid out, so no deferral is needed.
+    /// A miss (no matching heading) is a silent no-op, matching same-document miss semantics.
+    pub fn scroll_to_anchor(&self, anchor: &str, ctx: &mut ViewContext<Self>) {
+        let fragment = format!("#{anchor}");
+        self.editor.update(ctx, |editor, ctx| {
+            editor.model().update(ctx, |model, ctx| {
+                model.scroll_to_matching_header(&fragment, ctx);
+            });
+        });
+    }
+
+    /// Queue a `#fragment` anchor to scroll to once this notebook's layout is first built. Used
+    /// when a cross-document link opens the target in a *new* tab: the heading offset does not
+    /// exist until the buffer parses and lays out. The pending anchor is drained on the first
+    /// `LayoutUpdated` inside the editor model.
+    pub fn queue_pending_anchor(&self, anchor: String, ctx: &mut ViewContext<Self>) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.model().update(ctx, |model, _| {
+                model.set_pending_anchor(anchor);
+            });
+        });
     }
 
     fn is_markdown_file(&self) -> bool {

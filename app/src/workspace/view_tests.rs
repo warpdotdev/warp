@@ -4687,3 +4687,54 @@ fn test_tools_panel_warp_drive_toggle_updates_available_views() {
         });
     });
 }
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_canonicalize_local_path_for_dedup_normalizes_self_reference() {
+    // Self-referential dedup relies on `canonicalize_local_path_for_dedup` producing the same
+    // path an open notebook stores (which is canonicalized on load). This exercises the two
+    // ways a self-link's resolved path diverges from the stored canonical path: `.`/`..`
+    // components from `base_directory.join("./doc.md")`, and the macOS `/tmp` vs `/private/tmp`
+    // symlink alias this test environment actually hits.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let doc = dir.path().join("doc.md");
+    std::fs::write(&doc, "# Doc\n").expect("write doc");
+
+    // The canonical form an open notebook would store for this file.
+    let canonical = dunce::canonicalize(&doc).expect("canonicalize doc");
+
+    // A `./`-relative resolution: base_directory + "./doc.md" keeps the `.` component.
+    let dot_relative = dir.path().join(".").join("doc.md");
+    assert_eq!(
+        canonicalize_local_path_for_dedup(LocalOrRemotePath::Local(dot_relative)),
+        LocalOrRemotePath::Local(canonical.clone()),
+        "A './'-relative self-link must canonicalize to the stored canonical path"
+    );
+
+    // A `..`-round-trip resolution: base + "sub/../doc.md" (sub need not exist for the string
+    // form, but canonicalize requires real components, so create it).
+    std::fs::create_dir(dir.path().join("sub")).expect("mkdir sub");
+    let dotdot_relative = dir.path().join("sub").join("..").join("doc.md");
+    assert_eq!(
+        canonicalize_local_path_for_dedup(LocalOrRemotePath::Local(dotdot_relative)),
+        LocalOrRemotePath::Local(canonical.clone()),
+        "A '..'-round-trip self-link must canonicalize to the stored canonical path"
+    );
+
+    // The raw tempdir path itself (which on macOS is under `/var/folders/.../T` or `/tmp`,
+    // possibly a symlink) must also canonicalize to the same target — guarding the symlink-alias
+    // case the addendum called out.
+    assert_eq!(
+        canonicalize_local_path_for_dedup(LocalOrRemotePath::Local(doc.clone())),
+        LocalOrRemotePath::Local(canonical),
+        "The as-resolved path must canonicalize to the stored canonical path (symlink alias)"
+    );
+
+    // A path that can't be canonicalized (does not exist) is returned unchanged, not dropped.
+    let missing = dir.path().join("does-not-exist.md");
+    assert_eq!(
+        canonicalize_local_path_for_dedup(LocalOrRemotePath::Local(missing.clone())),
+        LocalOrRemotePath::Local(missing),
+        "A non-existent path must pass through unchanged"
+    );
+}

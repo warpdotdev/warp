@@ -23,6 +23,7 @@ pub fn create_home_pane(ctx: &mut ViewContext<Workspace>) -> Box<dyn AnyPaneCont
     let pane = FilePane::new(
         None,
         None,
+        None,
         #[cfg(feature = "local_fs")]
         None,
         ctx,

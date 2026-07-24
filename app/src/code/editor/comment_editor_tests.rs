@@ -85,7 +85,7 @@ fn initialize_editor(
 
     let (window, test_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let window_id = ctx.window_id();
-        let _links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
+        let _links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::active(window_id), ctx));
         let editor = match mode {
             CommentEditorMode::Editable => create_editable_comment_markdown_editor(None, ctx),
             CommentEditorMode::Readonly => create_readonly_comment_markdown_editor(
