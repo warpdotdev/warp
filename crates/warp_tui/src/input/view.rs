@@ -38,7 +38,7 @@ use warpui_core::keymap::{self, EditableBinding};
 use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
-    ViewContext, ViewHandle,
+    ViewContext,
 };
 
 use crate::completion_menu::TuiCompletionAcceptance;
@@ -53,8 +53,7 @@ use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestions
 use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP,
 };
-use crate::terminal_session_view::state::TuiTerminalSessionState;
-use crate::transcript_view::TuiTranscriptView;
+use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
 
@@ -204,12 +203,9 @@ pub struct TuiInputView {
     /// the GUI's `EditorView::focused`. Snapshotted into the editor element
     /// so it only consumes typed text while the input is focused.
     focused: bool,
-    /// Source of truth for whether a rendered plan can be toggled. Production
-    /// construction always provides this; isolated input tests omit it.
-    transcript: Option<ViewHandle<TuiTranscriptView>>,
+    /// Session-owned source for hints and additive capabilities.
+    session_state: ModelHandle<TuiTerminalSessionStateModel>,
     keyboard_enhancement_supported: bool,
-    /// Consults the owner live for whether orchestration tabs are available.
-    orchestration_tabs_available: Rc<dyn Fn(&AppContext) -> bool>,
     /// Consults the owner live before an inline-menu Enter can accept an item.
     can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
     /// TUI voice state used for Escape routing and shell-gutter suppression.
@@ -239,8 +235,7 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
-        transcript: ViewHandle<TuiTranscriptView>,
-        orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
+        session_state: ModelHandle<TuiTerminalSessionStateModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         Self::new_internal(
@@ -248,8 +243,7 @@ impl TuiInputView {
             input_mode,
             suggestions_mode,
             inline_menus,
-            Some(transcript),
-            orchestration_tabs_available,
+            session_state,
             ctx,
         )
     }
@@ -263,13 +257,19 @@ impl TuiInputView {
         orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        let session_state = ctx.add_model(|_| {
+            TuiTerminalSessionStateModel::new_for_input(
+                &input_mode,
+                &suggestions_mode,
+                orchestration_tabs_available,
+            )
+        });
         Self::new_internal(
             model,
             input_mode,
             suggestions_mode,
             inline_menus,
-            None,
-            orchestration_tabs_available,
+            session_state,
             ctx,
         )
     }
@@ -279,8 +279,7 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
-        transcript: Option<ViewHandle<TuiTranscriptView>>,
-        orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
+        session_state: ModelHandle<TuiTerminalSessionStateModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let voice_input = ctx.add_model(TuiVoiceInputModel::new);
@@ -303,9 +302,8 @@ impl TuiInputView {
             editor_behavior: TuiEditorBehavior::multiline(6),
             prefix_mouse_state: MouseStateHandle::default(),
             focused: false,
-            transcript,
+            session_state,
             keyboard_enhancement_supported: false,
-            orchestration_tabs_available: Rc::new(orchestration_tabs_available),
             can_accept_inline_menu: Rc::new(|_| true),
             voice_input,
         }
@@ -328,9 +326,7 @@ impl TuiInputView {
     }
 
     fn plan_toggle_available(&self, ctx: &AppContext) -> bool {
-        self.transcript
-            .as_ref()
-            .is_some_and(|transcript| transcript.as_ref(ctx).has_toggleable_plan(ctx))
+        self.session_state.as_ref(ctx).resolve(ctx).plan_available()
     }
     /// Whether the input is in detected or explicitly locked shell mode.
     pub(crate) fn is_shell_mode(&self, ctx: &AppContext) -> bool {
@@ -432,24 +428,13 @@ impl TuiInputView {
         // provider on every layout pass instead of being snapshotted here.
         // Shell mode teaches how to exit; agent mode adapts to the transcript
         // state.
-        let input_mode = self.input_mode.clone();
-        let transcript = self.transcript.clone();
-        let suggestions_mode = self.suggestions_mode.clone();
-        let orchestration_tabs_available = self.orchestration_tabs_available.clone();
+        let session_state = self.session_state.clone();
         element.with_placeholder_ghost_text(move |app| {
-            // Inputs constructed without a transcript (isolated tests) count
-            // as zero-state.
-            let transcript_is_empty = transcript
-                .as_ref()
-                .is_none_or(|transcript| transcript.as_ref(app).is_empty());
-            TuiTerminalSessionState::for_input(
-                input_mode_policy::is_shell_mode(input_mode.as_ref(app)),
-                suggestions_mode.as_ref(app).mode(),
-                transcript_is_empty,
-                orchestration_tabs_available(app),
-            )
-            .hint_text()
-            .map(|hint| (hint, TuiUiBuilder::from_app(app).muted_text_style()))
+            session_state
+                .as_ref(app)
+                .resolve(app)
+                .hint_text()
+                .map(|hint| (hint, TuiUiBuilder::from_app(app).muted_text_style()))
         })
     }
     /// Collapses the current text selection to its head without changing text.
@@ -853,7 +838,11 @@ impl TuiInputView {
 
     /// Whether Shift+Up should leave the input instead of extending selection.
     fn can_focus_above(&self, ctx: &AppContext) -> bool {
-        (self.orchestration_tabs_available)(ctx) && self.single_cursor_on_first_row(ctx)
+        self.session_state
+            .as_ref(ctx)
+            .resolve(ctx)
+            .orchestration_available()
+            && self.single_cursor_on_first_row(ctx)
     }
 
     /// Whether the single caret sits on the first visual row of the input with

@@ -480,7 +480,13 @@ fn agent_mode_placeholder_hint_renders_only_while_empty() {
             let buffer = render_input_buffer(&view, ctx);
             let line = &buffer.to_lines()[0];
             // One pad cell separates the cursor from the hint.
-            let hint = crate::input_hints::agent_input_hint(true, false);
+            let hint = view
+                .as_ref(ctx)
+                .session_state
+                .as_ref(ctx)
+                .resolve(ctx)
+                .hint_text()
+                .expect("agent composer has a hint");
             assert!(
                 line.starts_with(&format!(" {hint}")),
                 "unexpected line: {line:?}"
@@ -544,7 +550,10 @@ fn shell_mode_placeholder_hint_teaches_exit() {
             let buffer = render_input_buffer(&view, ctx);
             let line = &buffer.to_lines()[0];
             assert!(
-                line.starts_with(&format!(" {}", crate::input_hints::SHELL_HINT)),
+                line.starts_with(&format!(
+                    " {}",
+                    crate::terminal_session_view::state::SHELL_HINT
+                )),
                 "unexpected line: {line:?}"
             );
 
