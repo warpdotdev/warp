@@ -1,4 +1,4 @@
-use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys, CustomEndpointParams};
 #[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
@@ -2455,6 +2455,7 @@ impl AISettingsPageView {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             } => {
                 if !Self::can_use_custom_inference_controls(ctx) {
@@ -2463,10 +2464,13 @@ impl AISettingsPageView {
                 }
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.add_custom_endpoint(
-                        name.clone(),
-                        url.clone(),
-                        api_key.clone(),
-                        models.clone(),
+                        CustomEndpointParams {
+                            name: name.clone(),
+                            url: url.clone(),
+                            api_key: api_key.clone(),
+                            models: models.clone(),
+                            schema: *schema,
+                        },
                         ctx,
                     );
                 });
@@ -2494,6 +2498,7 @@ impl AISettingsPageView {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             } => {
                 if !Self::can_use_custom_inference_controls(ctx) {
@@ -2503,10 +2508,13 @@ impl AISettingsPageView {
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.save_custom_endpoint(
                         *index,
-                        name.clone(),
-                        url.clone(),
-                        api_key.clone(),
-                        models.clone(),
+                        CustomEndpointParams {
+                            name: name.clone(),
+                            url: url.clone(),
+                            api_key: api_key.clone(),
+                            models: models.clone(),
+                            schema: *schema,
+                        },
                         ctx,
                     );
                 });
@@ -8683,7 +8691,7 @@ impl ApiKeysWidget {
 
         if show_custom_endpoints {
             add_paragraph(vec![FormattedTextFragment::plain_text(
-                "Add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API.",
+                "Add custom endpoints to use third-party models. Custom endpoints must support OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.",
             )]);
         }
 

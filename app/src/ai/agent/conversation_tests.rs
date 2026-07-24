@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
@@ -118,12 +118,12 @@ fn tool_call_result_message(
 
 fn start_recording_tool_call() -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StartRecording(api::message::tool_call::StartRecording {
+        description: String::new(),
         frame_rate: 15,
         limits: None,
         summary: String::new(),
         playback_speed_multiplier: 0,
         target: None,
-        description: String::new(),
     })
 }
 
@@ -602,14 +602,17 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
         initialize_custom_endpoint_usage_test_app(&mut app);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.add_custom_endpoint(
-                "Endpoint".to_string(),
-                "https://custom.example".to_string(),
-                "key".to_string(),
-                vec![(
-                    "raw-model".to_string(),
-                    Some("Friendly alias".to_string()),
-                    Some("config-key".to_string()),
-                )],
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Friendly alias".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -764,14 +767,17 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
         initialize_custom_endpoint_usage_test_app(&mut app);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.add_custom_endpoint(
-                "Endpoint".to_string(),
-                "https://custom.example".to_string(),
-                "key".to_string(),
-                vec![(
-                    "raw-model".to_string(),
-                    Some("Resolved custom".to_string()),
-                    Some("config-key".to_string()),
-                )],
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Resolved custom".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
