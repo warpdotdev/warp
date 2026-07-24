@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::Arc;
 
 use enum_iterator::all;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -374,7 +375,7 @@ impl Buffer {
             delta: Some(EditDelta {
                 precise_deltas,
                 old_offset: replacement_range.old_range,
-                new_lines,
+                new_lines: Arc::new(new_lines),
             }),
             anchor_updates,
         }
