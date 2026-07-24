@@ -343,8 +343,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::WarpManagedSecrets,
         #[cfg(feature = "v4a_file_diffs")]
         FeatureFlag::V4AFileDiffs,
-        #[cfg(feature = "interactive_conversation_management_view")]
-        FeatureFlag::InteractiveConversationManagementView,
         #[cfg(feature = "agent_tips")]
         FeatureFlag::AgentTips,
         #[cfg(feature = "agent_mode_computer_use")]

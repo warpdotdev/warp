@@ -932,10 +932,6 @@ impl AgentConversationsModel {
     /// This function will loop through all active panes, recently closed panes, and historical
     /// conversations to construct a complete snapshot of conversations.
     pub fn sync_conversations(&mut self, ctx: &mut ModelContext<Self>) {
-        if !FeatureFlag::InteractiveConversationManagementView.is_enabled() {
-            return;
-        }
-
         let nav_data_list = ConversationNavigationData::all_conversations(ctx);
 
         self.conversations.clear();
@@ -1595,9 +1591,6 @@ impl AgentConversationsModel {
         event: &BlocklistAIHistoryEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !FeatureFlag::InteractiveConversationManagementView.is_enabled() {
-            return;
-        }
         match event {
             // Events that affect conversation navigation data - need full sync
             BlocklistAIHistoryEvent::StartedNewConversation { .. }

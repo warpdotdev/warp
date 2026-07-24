@@ -573,9 +573,6 @@ pub enum FeatureFlag {
     /// Enables support for AM file diffs backed by the V4A patch format.
     V4AFileDiffs,
 
-    /// Enables loading conversations in the Agent Management View.
-    InteractiveConversationManagementView,
-
     /// Enables agent tips displayed below the warping indicator in Agent Mode.
     AgentTips,
 
