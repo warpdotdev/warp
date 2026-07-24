@@ -163,6 +163,12 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
                 .truncate()
                 .finish(),
         )
+        .child(
+            TuiText::new("built bug free by kevin yang")
+                .with_style(muted)
+                .truncate()
+                .finish(),
+        )
         .child(render_version_line(builder, app));
 
     let bullets = changelog_bullets(app);
