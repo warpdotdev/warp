@@ -855,6 +855,8 @@ type ConversationUsageMetadata {
 
   """The total number of platform credits spent so far in the conversation."""
   platformCreditsSpent: Float!
+  """The cumulative provider cost in US cents, when available."""
+  totalProviderCostInCents: Float
   summarized: Boolean!
 
   """

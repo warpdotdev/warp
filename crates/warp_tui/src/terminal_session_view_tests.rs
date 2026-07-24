@@ -464,7 +464,8 @@ fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
 
         let totals = ConversationUsageTotals {
             credits_spent: 2.5,
-            cost_in_cents: 3.2,
+            cost_in_cents: Some(3.2),
+            has_usage: true,
         };
 
         assert_eq!(
@@ -1360,7 +1361,8 @@ fn footer_renders_agent_sections_left_aligned() {
                 TuiUsageDisplayMode::default(),
                 ConversationUsageTotals {
                     credits_spent: 2.5,
-                    cost_in_cents: 0.0,
+                    cost_in_cents: Some(0.0),
+                    has_usage: true,
                 },
                 ctx,
                 |_, _| {},
@@ -1429,7 +1431,8 @@ fn footer_renders_shell_mode_sections_without_model_or_usage() {
                 TuiUsageDisplayMode::default(),
                 ConversationUsageTotals {
                     credits_spent: 2.5,
-                    cost_in_cents: 0.0,
+                    cost_in_cents: Some(0.0),
+                    has_usage: true,
                 },
                 ctx,
                 |_, _| {},

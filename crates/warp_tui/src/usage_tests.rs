@@ -6,7 +6,8 @@ use super::*;
 fn totals(credits_spent: f32, cost_in_cents: f32) -> ConversationUsageTotals {
     ConversationUsageTotals {
         credits_spent,
-        cost_in_cents,
+        cost_in_cents: Some(cost_in_cents),
+        has_usage: true,
     }
 }
 
@@ -39,5 +40,20 @@ fn entry_text_follows_the_persisted_display_mode() {
     assert_eq!(
         entry_text(credits.toggled().toggled(), usage),
         "2.5 credits"
+    );
+}
+
+#[test]
+fn cost_mode_explicitly_marks_unknown_historical_cost() {
+    assert_eq!(
+        entry_text(
+            TuiUsageDisplayMode::Cost,
+            ConversationUsageTotals {
+                credits_spent: 0.0,
+                cost_in_cents: None,
+                has_usage: true,
+            },
+        ),
+        "Cost unavailable"
     );
 }

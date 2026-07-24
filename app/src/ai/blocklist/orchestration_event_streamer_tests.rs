@@ -237,6 +237,7 @@ fn make_server_metadata_with_harness(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),

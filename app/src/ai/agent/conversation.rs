@@ -183,11 +183,14 @@ pub struct ConversationUsageTotals {
     /// shows as "Credits spent (total)" and the conversation details panel
     /// shows as "Credits used".
     pub credits_spent: f32,
-    /// Total provider cost across all models, in US cents. Fractional —
-    /// per-request provider costs are routinely sub-cent — and `f32` to match
-    /// both the upstream `TokenUsage.cost_in_cents` proto float it sums and
-    /// `credits_spent` above.
-    pub cost_in_cents: f32,
+    /// Total provider cost across all models, in US cents. `None` means the
+    /// server did not provide a historical baseline; it must not be rendered
+    /// as `$0.00` or as an incremental-only total.
+    pub cost_in_cents: Option<f32>,
+    /// Whether the conversation has any usage metadata. This distinguishes a
+    /// new conversation with no usage (hide the footer entry) from a restored
+    /// legacy conversation whose historical cost is unknown.
+    pub has_usage: bool,
 }
 
 // basic info for creating a dummy command block based on an exchange's inputs
@@ -315,6 +318,13 @@ pub struct AIConversation {
 
     total_request_cost: RequestCost,
     total_token_usage_by_model: HashMap<String, TokenUsage>,
+    /// Server-authoritative cumulative provider cost in US cents. New
+    /// conversations start at a known zero; restored legacy conversations can
+    /// remain `None` until a server snapshot is available.
+    total_provider_cost_in_cents: Option<f32>,
+    /// True once usage metadata has been hydrated or a live response reports
+    /// usage, even when all numeric totals are zero.
+    has_usage_metadata: bool,
 
     /// Fallback title used when no task description or initial query exists.
     fallback_display_title: Option<String>,
@@ -404,6 +414,8 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
+            total_provider_cost_in_cents: Some(0.),
+            has_usage_metadata: false,
             fallback_display_title: None,
             artifacts: Vec::new(),
             parent_agent_id: None,
@@ -537,6 +549,7 @@ impl AIConversation {
         let (
             server_conversation_token,
             forked_from_server_conversation_token,
+            has_usage_metadata,
             conversation_usage_metadata,
             reverted_action_ids,
             artifacts,
@@ -553,6 +566,7 @@ impl AIConversation {
             let server_conversation_token = data
                 .server_conversation_token
                 .map(ServerConversationToken::new);
+            let has_usage_metadata = data.conversation_usage_metadata.is_some();
             let conversation_usage_metadata = data.conversation_usage_metadata.unwrap_or_default();
             let reverted_action_ids: HashSet<AIAgentActionId> = data
                 .reverted_action_ids
@@ -588,6 +602,7 @@ impl AIConversation {
             (
                 server_conversation_token,
                 forked_from_server_conversation_token,
+                has_usage_metadata,
                 conversation_usage_metadata,
                 reverted_action_ids,
                 artifacts,
@@ -605,6 +620,7 @@ impl AIConversation {
             (
                 None,
                 None,
+                false,
                 ConversationUsageMetadata::default(),
                 HashSet::new(),
                 Vec::new(),
@@ -619,6 +635,7 @@ impl AIConversation {
                 false,
             )
         };
+        let total_provider_cost_in_cents = conversation_usage_metadata.total_provider_cost_in_cents;
 
         Ok(Self {
             id,
@@ -645,6 +662,8 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
+            total_provider_cost_in_cents,
+            has_usage_metadata,
             optimistic_cli_subagent_subtask_id: None,
             fallback_display_title: None,
             artifacts,
@@ -1081,6 +1100,12 @@ impl AIConversation {
     }
 
     pub fn set_server_metadata(&mut self, metadata: ServerAIConversationMetadata) {
+        if let Some(total_provider_cost_in_cents) = metadata.usage.total_provider_cost_in_cents {
+            self.total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+            self.conversation_usage_metadata
+                .total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+            self.has_usage_metadata = true;
+        }
         self.server_metadata = Some(metadata);
     }
 
@@ -2139,7 +2164,12 @@ impl AIConversation {
         was_user_initiated_request: bool,
         ctx: &AppContext,
     ) -> Result<(), UpdateConversationError> {
+        self.has_usage_metadata |=
+            request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         for usage in token_usage.into_iter() {
+            if let Some(total_provider_cost_in_cents) = self.total_provider_cost_in_cents.as_mut() {
+                *total_provider_cost_in_cents += usage.cost_in_cents;
+            }
             let entry = self
                 .total_token_usage_by_model
                 .entry(usage.model_id.clone())
@@ -2204,6 +2234,8 @@ impl AIConversation {
                 self.conversation_usage_metadata.was_summarized = usage_metadata.summarized;
             }
         }
+        self.conversation_usage_metadata
+            .total_provider_cost_in_cents = self.total_provider_cost_in_cents;
         Ok(())
     }
 
@@ -3680,17 +3712,14 @@ impl AIConversation {
     }
 
     /// Compact usage totals for lightweight displays (e.g. the TUI footer's
-    /// usage entry): the GUI-consistent credits total plus the accumulated
-    /// provider dollar cost from the per-request `StreamFinished` usage rows.
+    /// usage entry): the GUI-consistent credits total plus the server-seeded
+    /// provider cost and any permitted live per-request deltas.
     pub fn usage_totals(&self) -> ConversationUsageTotals {
-        let mut totals = ConversationUsageTotals {
+        ConversationUsageTotals {
             credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
-            cost_in_cents: 0.0,
-        };
-        for usage in self.total_token_usage_by_model.values() {
-            totals.cost_in_cents += usage.cost_in_cents;
+            cost_in_cents: self.total_provider_cost_in_cents,
+            has_usage: self.has_usage_metadata,
         }
-        totals
     }
 
     /// Normalize all newlines to CRLF so restored blocks render lines starting at column 0,

@@ -66,7 +66,10 @@ impl UsageToggle {
 fn entry_text(mode: TuiUsageDisplayMode, totals: ConversationUsageTotals) -> String {
     match mode {
         TuiUsageDisplayMode::Credits => format_credits(totals.credits_spent),
-        TuiUsageDisplayMode::Cost => format_cost(totals.cost_in_cents),
+        TuiUsageDisplayMode::Cost => totals
+            .cost_in_cents
+            .map(format_cost)
+            .unwrap_or_else(|| "Cost unavailable".to_owned()),
     }
 }
 
