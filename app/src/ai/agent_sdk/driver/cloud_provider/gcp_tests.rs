@@ -1,6 +1,6 @@
-use super::*;
-
 use std::time::Duration;
+
+use super::*;
 
 /// Regression test for the `gcloud auth login` timeout: a best-effort command
 /// that runs past its timeout must be killed so it cannot outlive setup.

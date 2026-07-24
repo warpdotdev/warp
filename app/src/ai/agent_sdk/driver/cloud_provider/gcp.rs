@@ -63,9 +63,7 @@ async fn run_best_effort_with_timeout(
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         },
-        Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-            BestEffortOutcome::NotFound
-        }
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => BestEffortOutcome::NotFound,
         Ok(Err(err)) => BestEffortOutcome::SpawnFailed(err),
         Err(_timeout) => BestEffortOutcome::Timeout,
     }
