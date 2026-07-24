@@ -9445,3 +9445,107 @@ fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
         });
     });
 }
+
+/// Regression test (queued-prompt inline editor '?' bug): the fixed `shift-?` binding for
+/// [`InputAction::ToggleAgentViewShortcuts`] must not fire while a queued prompt is being
+/// edited inline, so that `?` is inserted into the queued-prompt editor like any other
+/// character instead of toggling the shortcuts panel.
+#[test]
+fn shift_question_mark_does_not_toggle_agent_view_shortcuts_while_editing_queued_prompt() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let (window_id, terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let (input, editor) = terminal.read(&app, |terminal, ctx| {
+            let input = terminal.input().clone();
+            let editor = input.as_ref(ctx).editor().clone();
+            (input, editor)
+        });
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter agent view")
+            })
+        });
+
+        let focus_path = [terminal.id(), input.id(), editor.id()];
+        let shift_question_mark = Keystroke::parse("shift-?").unwrap();
+
+        // Control: with no queued prompt being edited, shift-? toggles the shortcuts view. This
+        // establishes that the binding is otherwise reachable, so the later assertion actually
+        // exercises the fix rather than some unrelated setup issue.
+        let handled = app
+            .dispatch_keystroke(window_id, &focus_path, &shift_question_mark, false)
+            .unwrap();
+        assert!(
+            handled,
+            "shift-? should toggle the shortcuts view when no queued prompt is being edited"
+        );
+        input.read(&app, |input, ctx| {
+            assert!(
+                input
+                    .agent_shortcut_view_model
+                    .as_ref(ctx)
+                    .is_shortcut_view_open(),
+                "shortcuts view should be open after the control toggle"
+            );
+        });
+        // Close it again so its state can't be conflated with the toggle under test below.
+        app.dispatch_keystroke(window_id, &focus_path, &shift_question_mark, false)
+            .unwrap();
+        input.read(&app, |input, ctx| {
+            assert!(
+                !input
+                    .agent_shortcut_view_model
+                    .as_ref(ctx)
+                    .is_shortcut_view_open(),
+                "shortcuts view should be closed again after the second control toggle"
+            );
+        });
+
+        // Start editing a queued prompt inline.
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(
+                    "queued prompt".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                ),
+                ctx,
+            )
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, query_id, ctx);
+        });
+
+        let handled = app
+            .dispatch_keystroke(window_id, &focus_path, &shift_question_mark, false)
+            .unwrap();
+        assert!(
+            !handled,
+            "shift-? must NOT be handled as ToggleAgentViewShortcuts while a queued prompt is \
+             being edited inline; '?' should fall through to normal character insertion instead"
+        );
+        input.read(&app, |input, ctx| {
+            assert!(
+                !input
+                    .agent_shortcut_view_model
+                    .as_ref(ctx)
+                    .is_shortcut_view_open(),
+                "the shortcuts view must not open while a queued prompt is being edited inline"
+            );
+        });
+    });
+}
