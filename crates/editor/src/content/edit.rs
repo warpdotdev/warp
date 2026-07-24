@@ -134,6 +134,14 @@ pub fn resolve_asset_source_relative_to_directory(
 /// Default height multiplier for images when no dimensions are specified.
 /// Images are rendered at 10x the base line height by default.
 const DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
+
+/// Maximum number of layout tasks that receive full text layout in a single
+/// `layout_delta` call. Tasks beyond this limit are laid out as lightweight
+/// `Hidden` blocks to avoid multi-GB memory spikes when opening very large files.
+/// The hidden content is still tracked in the SumTree (correct char offsets) and
+/// can be scrolled to, but skips expensive CoreText glyph / caret-position
+/// computation.
+const MAX_EAGER_LAYOUT_LINES: usize = 10_000;
 const MIN_TABLE_CELL_CONTENT_WIDTH_EMS: f32 = 1.0;
 const MAX_TABLE_CELL_CONTENT_WIDTH_PX: f32 = 500.0;
 
@@ -524,7 +532,7 @@ impl EditDelta {
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
         // First, build a Vec of layout tasks with information about whether they're hidden
-        let layout_tasks: Vec<_> = self
+        let mut layout_tasks: Vec<_> = self
             .new_lines
             .into_iter()
             .filter_map(|block| {
@@ -547,6 +555,24 @@ impl EditDelta {
                 }
             })
             .collect();
+
+        // Guard against extreme memory usage: when a very large file is loaded,
+        // the parallel text layout of every line creates multi-GB allocations
+        // (glyphs, caret positions, TextFrames). Cap the number of lines that
+        // receive full layout; excess lines become lightweight Hidden blocks
+        // that preserve correct char-offset tracking without the expensive
+        // CoreText work.
+        if layout_tasks.len() > MAX_EAGER_LAYOUT_LINES {
+            log::warn!(
+                "layout_delta: {} layout tasks exceed MAX_EAGER_LAYOUT_LINES ({}), \
+                 marking excess as hidden to limit memory usage",
+                layout_tasks.len(),
+                MAX_EAGER_LAYOUT_LINES,
+            );
+            for (_, is_hidden) in layout_tasks.iter_mut().skip(MAX_EAGER_LAYOUT_LINES) {
+                *is_hidden = true;
+            }
+        }
 
         let last_task = layout_tasks.len().saturating_sub(1);
 
