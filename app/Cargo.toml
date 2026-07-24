@@ -537,7 +537,6 @@ default = [
     "agent_mode_pre_plan_xml",
     "command_correction_key",
     "kitty_images",
-    "global_ai_analytics_collection",
     "grep_tool",
     "validate_autosuggestions",
     "clear_autosuggestion_on_escape",
@@ -723,7 +722,6 @@ extern_plist = []
 fast_dev = ["skip_login"]
 full_screen_zen_mode = []
 global_ai_analytics_banner = []
-global_ai_analytics_collection = []
 grab_the_baton_editing = []
 grep_tool = []
 # This feature is enabled in graphical builds of Warp, and groups together other features
