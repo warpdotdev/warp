@@ -2450,6 +2450,7 @@ dependencies = [
  "hex",
  "instant",
  "is_executable",
+ "itertools 0.14.0",
  "log",
  "nix 0.26.4",
  "serde",
