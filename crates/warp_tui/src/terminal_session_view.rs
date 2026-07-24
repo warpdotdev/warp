@@ -914,6 +914,15 @@ impl TuiTerminalSessionView {
                     initial_requested_command_action_id.as_ref(),
                     ctx,
                 );
+                // `SpawnedSubagent` locks the input to AI while the agent owns
+                // the terminal-use block. Once that block completes, restore
+                // the setting-derived unlocked state so the next prompt can
+                // resume natural-language detection.
+                if self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
+                    self.input_view.update(ctx, |input, ctx| {
+                        input.reset_to_default_agent_mode(ctx);
+                    });
+                }
             }
             CLISubagentEvent::UpdatedControl { .. }
             | CLISubagentEvent::UpdatedInstruction { .. }

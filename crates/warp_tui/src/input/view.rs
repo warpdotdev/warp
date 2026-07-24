@@ -893,8 +893,10 @@ impl TuiInputView {
             input_mode.set_input_config(AI_LOCKED_CONFIG, is_input_buffer_empty, None, ctx);
         });
     }
+    /// Restores the setting-derived agent-first mode after an agent-controlled
+    /// interaction, preserving the current input buffer.
 
-    fn reset_to_default_agent_mode(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn reset_to_default_agent_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_autodetection_enabled = self
             .input_mode
             .as_ref(ctx)

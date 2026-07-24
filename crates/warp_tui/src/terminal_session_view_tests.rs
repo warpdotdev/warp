@@ -44,6 +44,7 @@ use super::{
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
+use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::keybindings::{
     CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
     PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
@@ -76,6 +77,44 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
     assert!(attachment_focus_available(false, true));
     assert!(!attachment_focus_available(true, true));
     assert!(!attachment_focus_available(false, false));
+}
+
+#[test]
+fn nld_unlocks_when_input_resumes_after_agent_control() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .ai_autodetection_enabled_internal
+                    .set_value(true, ctx)
+                    .expect("test setting should update");
+            });
+            view.ai_input_model.update(ctx, |input, ctx| {
+                input.set_input_config(AI_LOCKED_CONFIG, true, None, ctx);
+            });
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("git status", ctx);
+            });
+            assert_eq!(
+                view.ai_input_model.as_ref(ctx).input_config(),
+                AI_LOCKED_CONFIG,
+                "agent control should leave the input locked until it ends"
+            );
+
+            // This is the first user edit after the agent-controlled block has
+            // ended. Before the fix, detection saw the stale lock and returned
+            // without ever restoring the unlocked NLD state.
+            view.handle_input_content_changed(true, ctx);
+            assert_eq!(
+                view.ai_input_model.as_ref(ctx).input_config(),
+                AI_UNLOCKED_CONFIG,
+                "the first post-agent input should resume NLD"
+            );
+        });
+    });
 }
 
 #[test]

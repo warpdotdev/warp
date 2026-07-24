@@ -101,6 +101,16 @@ impl TuiTerminalSessionView {
         self.handle_completion_editor_changed(ctx);
         self.abort_input_detection(ctx);
         if is_user_edit {
+            // Agent-controlled terminal use temporarily locks the shared input
+            // model to AI. The lock is intentionally retained while control is
+            // active, but the completion event can arrive before the next
+            // keystroke. Reconcile the setting-derived mode before scheduling
+            // detection so the first command typed after handoff is classified.
+            if self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
+                self.input_view.update(ctx, |input, ctx| {
+                    input.reset_to_default_agent_mode(ctx);
+                });
+            }
             self.schedule_input_detection(ctx);
         }
     }
