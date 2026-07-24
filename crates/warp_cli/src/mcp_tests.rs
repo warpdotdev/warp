@@ -16,7 +16,16 @@ fn test_parse_uuid() {
     let result = parse_mcp_spec(uuid_str).unwrap();
     match result {
         MCPSpec::Uuid(uuid) => assert_eq!(uuid.to_string(), uuid_str),
-        MCPSpec::Json(_) => panic!("Expected Uuid variant"),
+        other => panic!("Expected Uuid variant, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_well_known_integration_id() {
+    let result = parse_mcp_spec("linear").unwrap();
+    match result {
+        MCPSpec::WellKnown(id) => assert_eq!(id, "linear"),
+        other => panic!("Expected WellKnown variant, got {other:?}"),
     }
 }
 
@@ -26,7 +35,7 @@ fn test_parse_inline_json_cli_server() {
     let result = parse_mcp_spec(json).unwrap();
     match result {
         MCPSpec::Json(s) => assert_eq!(s, json),
-        MCPSpec::Uuid(_) => panic!("Expected Json variant"),
+        other => panic!("Expected Json variant, got {other:?}"),
     }
 }
 
@@ -36,7 +45,7 @@ fn test_parse_inline_json_single_server() {
     let result = parse_mcp_spec(json).unwrap();
     match result {
         MCPSpec::Json(s) => assert_eq!(s, json),
-        MCPSpec::Uuid(_) => panic!("Expected Json variant"),
+        other => panic!("Expected Json variant, got {other:?}"),
     }
 }
 
@@ -46,7 +55,7 @@ fn test_parse_inline_json_sse_server() {
     let result = parse_mcp_spec(json).unwrap();
     match result {
         MCPSpec::Json(s) => assert_eq!(s, json),
-        MCPSpec::Uuid(_) => panic!("Expected Json variant"),
+        other => panic!("Expected Json variant, got {other:?}"),
     }
 }
 
@@ -56,7 +65,7 @@ fn test_parse_inline_json_mcp_servers_wrapper() {
     let result = parse_mcp_spec(json).unwrap();
     match result {
         MCPSpec::Json(s) => assert_eq!(s, json),
-        MCPSpec::Uuid(_) => panic!("Expected Json variant"),
+        other => panic!("Expected Json variant, got {other:?}"),
     }
 }
 
@@ -69,9 +78,18 @@ fn test_uuid_takes_precedence_over_json() {
 }
 
 #[test]
-fn test_invalid_uuid_treated_as_json() {
-    // An invalid UUID that looks like it could be one should be treated as JSON
-    let invalid_uuid = "not-a-valid-uuid";
-    let result = parse_mcp_spec(invalid_uuid).unwrap();
+fn test_bare_identifier_treated_as_well_known() {
+    // A bare non-UUID identifier is a well-known managed MCP id: the server
+    // owns the set of recognized ids and unknown ones are skipped at run
+    // setup, so new ids work without a client change.
+    let result = parse_mcp_spec("not-a-valid-uuid").unwrap();
+    assert!(matches!(result, MCPSpec::WellKnown(id) if id == "not-a-valid-uuid"));
+}
+
+#[test]
+fn test_non_identifier_non_json_treated_as_json() {
+    // Anything with characters outside [A-Za-z0-9_-] that isn't a file falls
+    // through to the inline-JSON path (and fails JSON parsing later).
+    let result = parse_mcp_spec("missing-config.json").unwrap();
     assert!(matches!(result, MCPSpec::Json(_)));
 }

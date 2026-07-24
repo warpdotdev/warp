@@ -36,6 +36,17 @@ pub(super) fn build_mcp_servers_from_specs(
                     }),
                 )?;
             }
+            MCPSpec::WellKnown(id) => {
+                insert_unique(
+                    &mut merged,
+                    id.clone(),
+                    Value::Object({
+                        let mut obj = Map::new();
+                        obj.insert("warp_id".to_string(), Value::String(id.clone()));
+                        obj
+                    }),
+                )?;
+            }
             MCPSpec::Json(json_str) => {
                 let json_str = normalize_mcp_json_for_single_server(json_str)?;
                 let value = parse_json_with_optional_braces(&json_str)?;
@@ -141,9 +152,12 @@ fn validate_server_config(server_name: &str, config: &Value) -> anyhow::Result<(
             anyhow::anyhow!("MCP server '{server_name}' field 'warp_id' must be a string")
         })?;
 
-        uuid::Uuid::parse_str(warp_id).with_context(|| {
-            format!("MCP server '{server_name}' field 'warp_id' must be a UUID")
-        })?;
+        // A warp_id is either a managed MCP server UUID or a well-known id
+        // (e.g. "linear"). The server owns the set of recognized ids, so the
+        // client only requires a non-empty value.
+        if warp_id.trim().is_empty() {
+            anyhow::bail!("MCP server '{server_name}' field 'warp_id' must be non-empty");
+        }
     }
 
     if has_command {

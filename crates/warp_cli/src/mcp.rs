@@ -27,9 +27,23 @@ impl MCPCommand {
 pub enum MCPSpec {
     /// Existing server by UUID.
     Uuid(uuid::Uuid),
+    /// Well-known non-UUID managed MCP id (e.g. "linear"), resolved by the
+    /// server. The server owns the set of recognized ids — ids it does not
+    /// recognize fail resolution and are skipped at run setup, so new ids can
+    /// be introduced server-side without a client change.
+    WellKnown(String),
     /// JSON string (full config, server map, or single server).
     /// Parsing deferred to app layer.
     Json(String),
+}
+
+/// A bare identifier (letters, digits, `-`, `_`) that is not a UUID: treated
+/// as a well-known managed MCP id and sent to the server for resolution.
+pub fn is_well_known_mcp_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && uuid::Uuid::parse_str(s).is_err()
 }
 
 impl clap::builder::ValueParserFactory for MCPSpec {
@@ -70,6 +84,10 @@ impl clap::builder::TypedValueParser for MCPSpecParser {
                     format!("Failed to read MCP config file '{}': {e}", path.display()),
                 )
             })?
+        } else if is_well_known_mcp_id(s) {
+            // Bare identifiers (e.g. "linear") are well-known managed MCP ids
+            // resolved by the server at run setup.
+            return Ok(MCPSpec::WellKnown(s.to_string()));
         } else {
             // Treat as inline JSON
             s.to_string()

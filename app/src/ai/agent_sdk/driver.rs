@@ -1212,7 +1212,7 @@ impl AgentDriver {
                 }
                 MCPSpec::Uuid(uuid) => {
                     let client_config = managed_mcp_client
-                        .create_managed_mcp_client_config(*uuid)
+                        .create_managed_mcp_client_config(uuid.to_string())
                         .await
                         .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
                             uid: *uuid,
@@ -1228,6 +1228,33 @@ impl AgentDriver {
                         }
                     })?;
                     resolved.ephemeral_installations.extend(installations);
+                }
+                MCPSpec::WellKnown(id) => {
+                    // Well-known MCP ids (e.g. "linear") resolve best-effort:
+                    // the server owns the set of recognized ids, and the
+                    // backing integration may be disconnected or the feature
+                    // disabled between dispatch and run setup — so resolution
+                    // failures skip the server instead of failing the run.
+                    let client_config = match managed_mcp_client
+                        .create_managed_mcp_client_config(id.clone())
+                        .await
+                    {
+                        Ok(client_config) => client_config,
+                        Err(err) => {
+                            log::warn!("Skipping well-known MCP server '{id}': {err:#}");
+                            continue;
+                        }
+                    };
+                    match Self::installations_from_managed_client_config_json(
+                        &client_config.mcp_config_json,
+                    ) {
+                        Ok(installations) => {
+                            resolved.ephemeral_installations.extend(installations);
+                        }
+                        Err(err) => {
+                            log::warn!("Skipping well-known MCP server '{id}': {err}");
+                        }
+                    }
                 }
                 MCPSpec::Json(json_str) => {
                     resolved

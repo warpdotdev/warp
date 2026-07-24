@@ -189,7 +189,7 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
     mock.expect_create_managed_mcp_client_config()
         .times(1)
         .returning(move |requested_uid| {
-            assert_eq!(requested_uid, uuid);
+            assert_eq!(requested_uid, uuid.to_string());
             Ok(managed_client_config_output(config_json))
         });
 
@@ -201,6 +201,78 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
     .unwrap();
 
     assert!(resolved.local_uuids.is_empty());
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_spec_resolves_via_managed_client() {
+    let config_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear","headers":{"Authorization":"Bearer tok"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |requested_uid| {
+            assert_eq!(requested_uid, "linear");
+            Ok(managed_client_config_output(config_json))
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_resolution_failure_skips_server() {
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(|_| Err(anyhow::anyhow!("Linear is not connected for this team")));
+
+    // Well-known references are server-injected and best-effort: a failure must
+    // skip the server, not fail run setup.
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn well_known_resolution_failure_does_not_drop_other_specs() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let config_json =
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(2)
+        .returning(move |requested_uid| {
+            if requested_uid == "linear" {
+                Err(anyhow::anyhow!("Linear is not connected for this team"))
+            } else {
+                assert_eq!(requested_uid, uuid.to_string());
+                Ok(managed_client_config_output(config_json))
+            }
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[
+            MCPSpec::WellKnown("linear".to_string()),
+            MCPSpec::Uuid(uuid),
+        ],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
     assert_eq!(resolved.ephemeral_installations.len(), 1);
 }
 
