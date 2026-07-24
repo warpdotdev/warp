@@ -4,7 +4,8 @@ use serde_yaml::Mapping;
 
 use super::*;
 use crate::{
-    CustomWeight, FormattedTable, FormattedTextStyles, LineCount, compute_formatted_text_delta,
+    CustomWeight, FormattedTable, FormattedTextStyles, LineCount, VerticalAlign,
+    compute_formatted_text_delta,
 };
 
 // Simple transformer to make testing easier.
@@ -1982,6 +1983,342 @@ fn test_parse_empty_underline() {
 }
 
 #[test]
+fn test_parse_two_unclosed_underlines_fall_back_to_literal() {
+    // Sibling of #13734 finding 4: two unmatched `<u>` opens must not be paired against each
+    // other by the emphasis resolver (which would silently swallow the tags as underline).
+    assert_eq!(
+        parse_all("<u>a<u>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("<u>a<u>b")]
+    );
+}
+
+// --- Subscript / superscript (`<sub>` / `<sup>`) — issue #13734 --------------------------
+
+#[test]
+fn test_parse_subscript_basic() {
+    // Invariant 2: `H<sub>2</sub>O` subscripts the "2".
+    assert_eq!(
+        parse_all("H<sub>2</sub>O", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("H"),
+            FormattedTextFragment::subscript("2"),
+            FormattedTextFragment::plain_text("O"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_superscript_basic() {
+    // Invariant 3: footnote-style marker `citation<sup>1</sup>`.
+    assert_eq!(
+        parse_all("citation<sup>1</sup>.", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("citation"),
+            FormattedTextFragment::superscript("1"),
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_subscript_composes_with_italic() {
+    // Invariant 4: inline formatting inside `<sub>` composes with the vertical offset.
+    assert_eq!(
+        parse_all("<sub>*n*</sub>", parse_inline),
+        vec![FormattedTextFragment {
+            text: "n".to_string(),
+            styles: FormattedTextStyles {
+                italic: true,
+                vertical_align: Some(VerticalAlign::Sub),
+                ..Default::default()
+            },
+        }]
+    );
+}
+
+#[test]
+fn test_parse_superscript_composes_with_bold() {
+    assert_eq!(
+        parse_all("x<sup>**2**</sup>", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("x"),
+            FormattedTextFragment {
+                text: "2".to_string(),
+                styles: FormattedTextStyles {
+                    weight: Some(CustomWeight::Bold),
+                    vertical_align: Some(VerticalAlign::Sup),
+                    ..Default::default()
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_parse_unclosed_subscript_falls_back_to_literal() {
+    // Invariant 6: an unterminated `<sub>` degrades to literal text for the opening tag,
+    // leaving the rest of the document intact.
+    assert_eq!(
+        parse_all("H<sub>2 and more", parse_inline),
+        vec![FormattedTextFragment::plain_text("H<sub>2 and more")]
+    );
+}
+
+#[test]
+fn test_parse_two_unclosed_subscripts_fall_back_to_literal() {
+    // Two unmatched `<sub>` opens must both degrade to literal text — they must NOT be
+    // paired with each other by the emphasis resolver (which would drop the tags or, worse,
+    // apply italic). Regression guard for #13734 finding 4.
+    assert_eq!(
+        parse_all("<sub>a<sub>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("<sub>a<sub>b")]
+    );
+}
+
+#[test]
+fn test_parse_two_unclosed_superscripts_fall_back_to_literal() {
+    assert_eq!(
+        parse_all("<sup>a<sup>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("<sup>a<sup>b")]
+    );
+}
+
+#[test]
+fn test_parse_unmatched_subscript_close_is_literal() {
+    // A stray closing tag with no opener degrades to literal text.
+    assert_eq!(
+        parse_all("plain </sub> text", parse_inline),
+        vec![FormattedTextFragment::plain_text("plain </sub> text")]
+    );
+}
+
+#[test]
+fn test_parse_nested_vertical_align_bails_whole_span_to_literal() {
+    // Invariant 7 (superseded product ruling, #13734/#13948): nesting does not panic, but does
+    // NOT style either level. ANY nesting of `<sub>`/`<sup>` — regardless of direction — degrades
+    // the ENTIRE outermost span (open tag through close tag, all contents, including the nested
+    // tag) to literal text. A partially-styled nested construct (e.g. a literal inner tag rendered
+    // under a styled outer baseline shift) still reads as a plausible-but-wrong formula; showing
+    // the whole span as source text is the only rendering that can't be misread as a real formula.
+    // Only a single, non-nested `<sub>`/`<sup>` renders styled (see `test_parse_superscript_basic`
+    // and `test_parse_subscript_composes_with_italic`).
+    assert_eq!(
+        parse_all("<sub>a<sup>b</sup>c</sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>a<sup>b</sup>c</sub>"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_nested_vertical_align_same_direction_bails_whole_span_to_literal() {
+    // The motivating case for the whole-formula-bail rule: `2<sup>3<sup>4</sup></sup>` is meant to
+    // read as a stacked exponent tower (2^(3^4)), but the buffer's `vertical_align` is a flat
+    // tri-state attribute with no compounding, so naive same-direction-nesting rendering would
+    // flatten "3" and "4" to the identical single-step superscript offset — reading as 2^(34), a
+    // different and wrong number. Bailing the whole span to literal shows the source instead of a
+    // wrong formula.
+    assert_eq!(
+        parse_all("2<sup>3<sup>4</sup></sup>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "2<sup>3<sup>4</sup></sup>"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_nested_vertical_align_opposite_direction_bails_whole_span_to_literal() {
+    // The second motivating case: `2<sup>3<sub>4</sub></sup>` is meant to read as 2^(3-sub-4) (an
+    // exponent containing its own subscript), but innermost-wins rendering would render "4" at
+    // full subscript depth relative to "2"'s baseline, reading as (2³)₄ — a different, wrong
+    // formula (this is what killed the innermost-wins carve-out for single ties: even a single
+    // opposite-direction tie misreads once nested two levels deep). Bails to literal like the
+    // same-direction tower above.
+    assert_eq!(
+        parse_all("2<sup>3<sub>4</sub></sup>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "2<sup>3<sub>4</sub></sup>"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_nested_vertical_align_bail_preserves_literal_emphasis_markers() {
+    // Issue #14029: a bailed nested sub/sup span must render as VERBATIM source, so Markdown
+    // emphasis markers (`*`, `_`, `~`) inside it stay literal. The pre-fix bail path still ran
+    // `process_emphasis`, so `<sub>*a<sup>b</sup>c*</sub>` had its `*…*` interpreted and stripped
+    // (or turned into an italic run) instead of preserved as source text.
+    assert_eq!(
+        parse_all("<sub>*a<sup>b</sup>c*</sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>*a<sup>b</sup>c*</sub>"
+        )]
+    );
+
+    // Bold (`**`) markers inside a bailed span must likewise survive verbatim.
+    assert_eq!(
+        parse_all("<sup>**a**<sub>b</sub></sup>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sup>**a**<sub>b</sub></sup>"
+        )]
+    );
+
+    // Strikethrough (`~~`) markers inside a bailed span must survive verbatim.
+    assert_eq!(
+        parse_all("<sub>~~a~~<sub>b</sub></sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>~~a~~<sub>b</sub></sub>"
+        )]
+    );
+
+    // Dropping the in-span delimiters must not corrupt emphasis parsing AFTER the bailed span:
+    // trailing `*italic*` still renders italic.
+    assert_eq!(
+        parse_all("<sub>a<sup>b</sup>c</sub> *italic*", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("<sub>a<sup>b</sup>c</sub> "),
+            FormattedTextFragment::italic("italic"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_malformed_overlapping_vertical_align_bails_whole_span_to_literal() {
+    // Issue #14029: a malformed *overlap* like `<sub>a<sup>b</sub>c</sup>` has the inner `<sup>`
+    // opener sitting AFTER the `<sub>` opener on the delimiter stack and still active when `</sub>`
+    // closes. The pre-fix nesting check only scanned delimiters *before* the matched opener, so it
+    // missed the active inner delimiter inside the span and took the styled path — rendering a
+    // plausible-but-wrong formula. An active sub/sup delimiter anywhere inside the span must bail
+    // the whole construct to literal, just like well-formed nesting does.
+    assert_eq!(
+        parse_all("<sub>a<sup>b</sub>c</sup>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>a<sup>b</sub>c</sup>"
+        )]
+    );
+
+    // Opposite ordering of the same overlap: `<sup>a<sub>b</sup>c</sub>`.
+    assert_eq!(
+        parse_all("<sup>a<sub>b</sup>c</sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sup>a<sub>b</sup>c</sub>"
+        )]
+    );
+
+    // Same-direction overlap: `<sub>a<sub>b</sub>c</sub>` — the inner `<sub>` is still active at
+    // the first `</sub>` close.
+    assert_eq!(
+        parse_all("<sub>a<sub>b</sub>c</sub>", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<sub>a<sub>b</sub>c</sub>"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_subscript_ignores_attributes() {
+    // Invariant 9: only the `<sub>`/`<sup>` tag semantics carry meaning; any attributes
+    // (`class`, `style`, `id`, …) are parsed and discarded, matching how other inline HTML
+    // tags are handled. `<sub class="foo">2</sub>` renders styled, exactly as bare `<sub>`.
+    assert_eq!(
+        parse_all("<sub class=\"foo\">2</sub>", parse_inline),
+        vec![FormattedTextFragment::subscript("2")]
+    );
+}
+
+#[test]
+fn test_parse_superscript_ignores_attributes() {
+    // Invariant 9 for `<sup>`: attributes are parsed and discarded; render is styled.
+    assert_eq!(
+        parse_all("x<sup id=\"note-1\" data-ref='7'>2</sup>", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("x"),
+            FormattedTextFragment::superscript("2"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_unclosed_attributed_subscript_falls_back_to_verbatim_literal() {
+    // When an attributed start tag has no matching close, it degrades to literal text — and
+    // the literal must reproduce the ORIGINAL source verbatim (attributes and all), not a
+    // normalized bare `<sub>`. Otherwise the attribute silently vanishes from the fallback.
+    assert_eq!(
+        parse_all("H<sub class=\"foo\">2 and more", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "H<sub class=\"foo\">2 and more"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_underline_ignores_attributes() {
+    // Sibling sweep of the sub/sup attribute miss-cause (#13948): the `<u>` start tag shares
+    // the exact-literal blind spot, so `<u class="…">` must also parse-and-discard attributes
+    // and render styled, with an unclosed attributed `<u>` degrading to a verbatim literal.
+    assert_eq!(
+        parse_all("<u class=\"hl\">text</u>", parse_inline),
+        vec![FormattedTextFragment::underline("text")]
+    );
+    assert_eq!(
+        parse_all("<u data-x=\"1\">unclosed", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "<u data-x=\"1\">unclosed"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_attribute_value_containing_gt_does_not_split_early() {
+    // A `>` inside a quoted attribute value must not be mistaken for the tag close. The
+    // round-1 `take_until(">")` scan split `<sub title="a>b">2</sub>` at the inner `>`, so the
+    // opener was never recognized as one attributed tag and the leftover `b">2` leaked into
+    // content. All three attributed tags share the same helper, so all three are checked.
+    assert_eq!(
+        parse_all("<sub title=\"a>b\">2</sub>", parse_inline),
+        vec![FormattedTextFragment::subscript("2")]
+    );
+    assert_eq!(
+        parse_all("<sup title=\"a>b\">2</sup>", parse_inline),
+        vec![FormattedTextFragment::superscript("2")]
+    );
+    assert_eq!(
+        parse_all("<u title=\"a>b\">t</u>", parse_inline),
+        vec![FormattedTextFragment::underline("t")]
+    );
+    // Single-quoted values with `>` behave the same.
+    assert_eq!(
+        parse_all("<sub title='a>b'>2</sub>", parse_inline),
+        vec![FormattedTextFragment::subscript("2")]
+    );
+}
+
+#[test]
+fn test_parse_unclosed_tag_with_gt_in_quoted_value_degrades_verbatim() {
+    // When an attributed opener whose quoted value contains `>` has no matching close, it must
+    // degrade to the ORIGINAL source verbatim — the full opener (including the inner `>`) plus
+    // trailing content — not a slice truncated at the inner `>`.
+    assert_eq!(
+        parse_all("H<sub title=\"a>b\">2 and more", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "H<sub title=\"a>b\">2 and more"
+        )]
+    );
+}
+
+#[test]
+fn test_parse_empty_subscript() {
+    assert_eq!(
+        parse_all("a<sub></sub>b", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("a"),
+            FormattedTextFragment::subscript(""),
+            FormattedTextFragment::plain_text("b"),
+        ]
+    );
+}
+
+#[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
     let source_2space = "- top level\n  - sublevel\n    - subsublevel";
@@ -2911,4 +3248,17 @@ fn test_parse_table_with_strikethrough() {
     } else {
         panic!("Expected table");
     }
+}
+
+#[test]
+fn test_parse_backslash_escaped_sub_tag_stays_literal() {
+    // Backslash-escaping `<` (CommonMark escape machinery, shared with `\*`, `\_`, etc.)
+    // takes priority over the sub/sup tag parsers, so `\<sub>`/`\</sub>` never open or
+    // close a subscript region — regression guard for #13734.
+    assert_eq!(
+        parse_all("Escaped: \\<sub>x\\</sub> stays literal", parse_inline),
+        vec![FormattedTextFragment::plain_text(
+            "Escaped: <sub>x</sub> stays literal"
+        )]
+    );
 }

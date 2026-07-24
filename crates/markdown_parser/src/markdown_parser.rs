@@ -21,7 +21,7 @@ use crate::{
     CodeBlockText, CustomWeight, FormattedImage, FormattedIndentTextInline, FormattedTable,
     FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
     FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink,
-    OrderedFormattedIndentTextInline, TableAlignment,
+    OrderedFormattedIndentTextInline, TableAlignment, VerticalAlign,
 };
 
 const HEADER_TAG_MIN_COUNT: usize = 1;
@@ -1016,7 +1016,11 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::BackslashEscape(ch) | InlineToken::HtmlEntity(ch) => {
                 state.push_text(ch);
             }
-            InlineToken::Delimiter { kind, count } => {
+            InlineToken::Delimiter {
+                kind,
+                count,
+                literal,
+            } => {
                 let node_index = state.nodes.len();
                 let preceding_char = state
                     .nodes
@@ -1024,8 +1028,14 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                     .and_then(|fragment| fragment.text.chars().last());
                 let following_char = remaining.chars().next();
 
-                let delimiter =
-                    Delimiter::new(node_index, kind, count, preceding_char, following_char);
+                let delimiter = Delimiter::new(
+                    node_index,
+                    kind,
+                    count,
+                    literal,
+                    preceding_char,
+                    following_char,
+                );
                 state.push_closed_node(FormattedTextFragment::plain_text(delimiter.to_text()));
                 state.delimiters.push(delimiter);
             }
@@ -1034,6 +1044,12 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             }
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
+            }
+            InlineToken::SubEnd => {
+                input = parse_sub(&mut state, remaining);
+            }
+            InlineToken::SupEnd => {
+                input = parse_sup(&mut state, remaining);
             }
         }
     }
@@ -1316,6 +1332,164 @@ fn parse_underline<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
     remaining
 }
 
+/// Parses subscript text (`<sub>…</sub>`) using the same logic as [`parse_underline`].
+fn parse_sub<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+    parse_vertical_align(
+        state,
+        remaining,
+        DelimiterKind::SubStart,
+        VerticalAlign::Sub,
+    )
+}
+
+/// Parses superscript text (`<sup>…</sup>`) using the same logic as [`parse_underline`].
+fn parse_sup<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+    parse_vertical_align(
+        state,
+        remaining,
+        DelimiterKind::SupStart,
+        VerticalAlign::Sup,
+    )
+}
+
+/// Shared resolver for a matched `<sub>`/`<sup>` delimiter pair, mirroring [`parse_underline`].
+///
+/// On a missing/inactive start, the closing tag falls back to literal text. On a match, whether
+/// styling is applied depends on nesting (product ruling on #13734, GH13948): ANY nesting of
+/// vertical-align tags — same-direction, opposite-direction, or depth ≥ 2 — degrades the ENTIRE
+/// outermost span (open tag through close tag, all contents, including nested tags) to literal
+/// text. A partially-styled nested construct (e.g. a literal inner tag rendered under a styled
+/// outer baseline shift) still reads as a plausible-but-wrong formula; only showing the whole span
+/// as source text avoids ever displaying a misleading formula. Only a single, non-nested
+/// `<sub>`/`<sup>` renders styled.
+///
+/// Nesting is detected when THIS close finds an outer vertical-align delimiter still active
+/// earlier on the stack: that means this tag opened *inside* an already-open vertical-align span.
+/// When that happens, this tag's own span is reverted to literal (rather than styled), and the
+/// outer delimiter is marked `vertical_align_poisoned` so that when it eventually closes, it also
+/// bails to literal for its entire span instead of applying its own alignment — propagating the
+/// bail outward through arbitrarily many enclosing levels.
+fn parse_vertical_align<'a>(
+    state: &mut InlineState,
+    remaining: &'a str,
+    start_kind: DelimiterKind,
+    align: VerticalAlign,
+) -> &'a str {
+    let close_tag = match start_kind {
+        DelimiterKind::SubStart => "</sub>",
+        DelimiterKind::SupStart => "</sup>",
+        _ => unreachable!("parse_vertical_align called with a non-sub/sup delimiter kind"),
+    };
+
+    let Some((start_index, start)) = state
+        .delimiters
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, delimiter)| delimiter.kind == start_kind)
+    else {
+        // If there's no matching start, treat this as literal closing-tag text.
+        state.push_text(close_tag);
+        return remaining;
+    };
+
+    if !start.active {
+        // If the start is inactive, remove it - this prevents nesting the same tag.
+        state.delimiters.remove(start_index);
+        state.push_text(close_tag);
+        return remaining;
+    }
+
+    let start_node = start.node_index;
+    let start_poisoned = start.vertical_align_poisoned;
+
+    // Nesting check (outer): is there still an active vertical-align delimiter (Sub or Sup) earlier
+    // on the stack? If so, this tag opened inside an already-open outer vertical-align span, so this
+    // close must bail to literal and poison that outer delimiter.
+    let outer_active_vertical_align =
+        state.delimiters[..start_index]
+            .iter()
+            .rposition(|delimiter| {
+                delimiter.active
+                    && matches!(
+                        delimiter.kind,
+                        DelimiterKind::SubStart | DelimiterKind::SupStart
+                    )
+            });
+
+    // Nesting check (inner overlap): is there still an active vertical-align delimiter INSIDE this
+    // span, i.e. after the matched opener? A malformed overlap like `<sub>a<sup>b</sub>c</sup>`
+    // leaves the inner `<sup>` opener active when `</sub>` closes; the outer scan above misses it
+    // because it only looks before `start_index`. Such an unresolved inner vertical-align tag means
+    // this span is not a clean single tag, so it must bail to literal like well-formed nesting does.
+    let inner_active_vertical_align = state.delimiters[start_index + 1..].iter().any(|delimiter| {
+        delimiter.active
+            && matches!(
+                delimiter.kind,
+                DelimiterKind::SubStart | DelimiterKind::SupStart
+            )
+    });
+
+    if let Some(outer_index) = outer_active_vertical_align {
+        state.delimiters[outer_index].vertical_align_poisoned = true;
+    }
+
+    if start_poisoned || outer_active_vertical_align.is_some() || inner_active_vertical_align {
+        // Bail this span to literal: don't apply `align`, and leave this tag's own opening
+        // placeholder node (already literal `<sub>`/`<sup>` text since push time) in place rather
+        // than removing it. If this delimiter was itself poisoned (an inner nested tag already
+        // bailed within its span), its content is already literal text from that inner bail, so
+        // this just leaves it untouched and wraps it with this tag's own literal markers.
+        state.backtrack_styles(start_node, |_styles| {
+            // Deliberately not touching `vertical_align` — leaving it `None` so the whole span
+            // renders as plain text. `backtrack_styles` still ensures a fragment exists to hold
+            // this tag's own literal open tag position.
+        });
+
+        // Do NOT run `process_emphasis` here: the whole span must render as verbatim source, so
+        // Markdown emphasis inside it (`*a*`, `**b**`, `~~c~~`, `<sub>`/`<u>` overlaps, …) must
+        // stay literal. `process_emphasis` would interpret those delimiters and strip their marker
+        // text, so `<sub>*a<sup>b</sup>c*</sub>` would lose its literal `*` (issue #14029). Each
+        // in-span delimiter already pushed its literal marker text as a fragment at parse time, so
+        // dropping the delimiters from the stack without processing them leaves that text in place
+        // as plain source. Drop everything opened after this tag (`start_index + 1..`) before
+        // removing this tag's own delimiter below.
+        state.delimiters.truncate(start_index + 1);
+
+        // Push this tag's own literal closing text; the opening node is left as-is (not removed),
+        // so both tags plus everything in between remain as plain text.
+        state.push_text(close_tag);
+
+        // Only remove *this* delimiter from the stack. Do NOT deactivate other same-kind
+        // delimiters here (unlike the successful-match path below): an enclosing same-kind
+        // delimiter earlier on the stack is the poisoned outer wrapper, not an unrelated sibling,
+        // and must reach its own close still `active` so it takes the poisoned-bail branch above
+        // rather than the stale "inactive start" literal-degradation branch, which doesn't account
+        // for an already-open styled span the way this branch does.
+        state.delimiters.remove(start_index);
+        state.last_node_closed = true;
+        return remaining;
+    }
+
+    state.backtrack_styles(start_node, |styles| {
+        if styles.vertical_align.is_none() {
+            styles.vertical_align = Some(align);
+        }
+    });
+    process_emphasis(state, Some(start_index));
+
+    state.delimiters.remove(start_index);
+    for delimiter in &mut state.delimiters[..start_index] {
+        if delimiter.kind == start_kind {
+            delimiter.active = false;
+        }
+    }
+
+    state.remove_node(start_node);
+    state.last_node_closed = true;
+    remaining
+}
+
 /// Process emphasis delimiters on the state's delimiter stack, bounded by `stack_bottom`.
 ///
 /// This is approximately equivalent to the CommonMark [process emphasis](https://spec.commonmark.org/0.30/#phase-2-inline-structure)
@@ -1549,6 +1723,10 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             parse_inline_token_autolink,
             parse_inline_token_underline_start,
             parse_inline_token_underline_end,
+            parse_inline_token_sub_start,
+            parse_inline_token_sub_end,
+            parse_inline_token_sup_start,
+            parse_inline_token_sup_end,
             whitespace,
             text,
             // This _must_ be the last parser in the chain. It unconditionally consumes a single
@@ -1620,6 +1798,7 @@ fn parse_inline_token_link_start<'a, E: ContextError<&'a str> + ParseError<&'a s
         map(tag("["), |_| InlineToken::Delimiter {
             kind: DelimiterKind::LinkStart,
             count: 1,
+            literal: None,
         }),
     )(input)
 }
@@ -1631,15 +1810,64 @@ fn parse_inline_token_link_end<'a, E: ContextError<&'a str> + ParseError<&'a str
     context("link_end", map(tag("]"), |_| InlineToken::LinkEnd))(input)
 }
 
-/// Parse an underline-start delimiter.
+/// Recognize the attribute region between a start tag's name and its closing `>`, honoring
+/// quoted attribute values so a `>` inside a quoted value does not end the tag early.
+///
+/// Per HTML syntax an attribute value is double-quoted, single-quoted, or unquoted; only a `>`
+/// outside quotes closes the tag. This scans a sequence of chunks — a fully-consumed quoted
+/// string (matching quotes), or a run of characters that are neither a quote nor `>` — up to but
+/// not including the closing `>`. The attributes are discarded (only the recognized slice is used
+/// for the verbatim-literal fallback), so this deliberately does not validate attribute structure;
+/// it only needs to find the real tag close.
+fn parse_html_attributes<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, &'a str, E> {
+    recognize(many0(alt((
+        // A double- or single-quoted value, including any `>` inside it.
+        recognize(delimited(char('"'), take_while(|c| c != '"'), char('"'))),
+        recognize(delimited(char('\''), take_while(|c| c != '\''), char('\''))),
+        // A run of unquoted characters that neither open a quote nor close the tag.
+        take_till1(|c| c == '"' || c == '\'' || c == '>'),
+    ))))(input)
+}
+
+/// Recognize an inline HTML start tag `<name …>` whose attributes are ignored, returning the
+/// verbatim matched slice (tag name, any attributes, and the angle brackets).
+///
+/// Per HTML syntax, an attribute must be separated from the tag name by whitespace, so only
+/// `<name>` and `<name<whitespace>…>` match; `<namex>` is a different element and does not.
+/// The attribute region is scanned by [`parse_html_attributes`], which honors quoted values so a
+/// `>` inside a quoted attribute value (`<u title="a>b">`) does not split the tag early. The
+/// closing form `</name>` never matches here because its second character is `/`, not the tag name.
+fn parse_html_start_tag<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    name: &'static str,
+) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str, E> {
+    move |input: &'a str| {
+        recognize(tuple((
+            char('<'),
+            tag(name),
+            alt((
+                // Bare tag: name immediately followed by `>`.
+                recognize(char('>')),
+                // Attributed tag: whitespace, then the attribute region, then the closing `>`.
+                recognize(tuple((space1, parse_html_attributes, char('>')))),
+            )),
+        )))(input)
+    }
+}
+
+/// Parse an underline-start delimiter (`<u>`, attributes ignored).
 fn parse_inline_token_underline_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, InlineToken<'a>, E> {
     context(
         "underline_start",
-        map(tag("<u>"), |_| InlineToken::Delimiter {
-            kind: DelimiterKind::UnderlineStart,
-            count: 1,
+        map(parse_html_start_tag("u"), |literal| {
+            InlineToken::Delimiter {
+                kind: DelimiterKind::UnderlineStart,
+                count: 1,
+                literal: Some(literal),
+            }
         }),
     )(input)
 }
@@ -1654,13 +1882,63 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse a subscript-start delimiter (`<sub>`, attributes ignored).
+fn parse_inline_token_sub_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "sub_start",
+        map(parse_html_start_tag("sub"), |literal| {
+            InlineToken::Delimiter {
+                kind: DelimiterKind::SubStart,
+                count: 1,
+                literal: Some(literal),
+            }
+        }),
+    )(input)
+}
+
+/// Parse a subscript-end delimiter (`</sub>`).
+fn parse_inline_token_sub_end<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("sub_end", map(tag("</sub>"), |_| InlineToken::SubEnd))(input)
+}
+
+/// Parse a superscript-start delimiter (`<sup>`, attributes ignored).
+fn parse_inline_token_sup_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "sup_start",
+        map(parse_html_start_tag("sup"), |literal| {
+            InlineToken::Delimiter {
+                kind: DelimiterKind::SupStart,
+                count: 1,
+                literal: Some(literal),
+            }
+        }),
+    )(input)
+}
+
+/// Parse a superscript-end delimiter (`</sup>`).
+fn parse_inline_token_sup_end<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("sup_end", map(tag("</sup>"), |_| InlineToken::SupEnd))(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
 ) -> impl FnMut(&'a str) -> IResult<&'a str, InlineToken<'a>, E> {
     map(
         fold_many1(tag(kind.as_str()), || 0, |counter, _| counter + 1),
-        move |count| InlineToken::Delimiter { kind, count },
+        move |count| InlineToken::Delimiter {
+            kind,
+            count,
+            literal: None,
+        },
     )
 }
 
@@ -1683,7 +1961,16 @@ fn parse_code_span<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InlineToken<'a> {
     /// A run of `count` delimiter characters of `kind`.
-    Delimiter { kind: DelimiterKind, count: usize },
+    ///
+    /// `literal` carries the exact matched source slice for HTML-tag delimiters whose written
+    /// form can vary (e.g. `<sub class="foo">`, whose attributes are semantically ignored but must
+    /// survive verbatim in the literal-fallback path). It is `None` for fixed-spelling delimiters
+    /// (`*`, `_`, `~`, `[`), whose literal text is reconstructed from `kind`/`count`.
+    Delimiter {
+        kind: DelimiterKind,
+        count: usize,
+        literal: Option<&'a str>,
+    },
     /// A run of non-delimiter text.
     Text(&'a str),
     /// A backslash-escaped character.
@@ -1700,6 +1987,10 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// A closing </sub>, which triggers subscript parsing.
+    SubEnd,
+    /// A closing </sup>, which triggers superscript parsing.
+    SupEnd,
 }
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)
@@ -1720,6 +2011,22 @@ struct Delimiter {
     can_open: bool,
     /// Whether or not this delimiter can close a strong/emphasis range.
     can_close: bool,
+    /// Only meaningful for `SubStart`/`SupStart`: set when a *nested* vertical-align open was
+    /// detected inside this delimiter's span (see `parse_vertical_align`). A poisoned delimiter's
+    /// close renders the entire span — this tag through its matching close, all contents,
+    /// including any nested `<sub>`/`<sup>` tags — as literal text rather than applying styling.
+    /// This is the whole-formula bail: any nesting of vertical-align tags (same-direction,
+    /// opposite-direction, or depth ≥ 2) means NO partial styling is applied anywhere in the span,
+    /// because a partially-styled nested construct (e.g. a literal inner tag under a styled outer
+    /// baseline shift) still reads as a plausible-but-wrong formula. Showing the whole thing as
+    /// source text is the only rendering that can't be misread as a real (if odd) formula.
+    vertical_align_poisoned: bool,
+    /// The exact matched source text, when it can differ from the canonical spelling of `kind`.
+    /// Set for HTML-tag delimiters carrying attributes (e.g. `<sub class="foo">`): the attributes
+    /// are ignored when the tag renders styled, but must be reproduced verbatim if the tag instead
+    /// degrades to literal text. `None` for fixed-spelling delimiters, whose literal is rebuilt
+    /// from `kind`/`count` by [`Delimiter::to_text`].
+    literal: Option<String>,
 }
 
 impl Delimiter {
@@ -1731,6 +2038,7 @@ impl Delimiter {
         node_index: usize,
         kind: DelimiterKind,
         count: usize,
+        literal: Option<&str>,
         preceding_char: Option<char>,
         following_char: Option<char>,
     ) -> Self {
@@ -1749,25 +2057,37 @@ impl Delimiter {
         let right_flanking = !preceded_by_whitespace
             && (!preceded_by_punctuation || (followed_by_whitespace || followed_by_punctuation));
 
+        // NOTE: The HTML-tag delimiters (`<u>`, `<sub>`, `<sup>`) are resolved exclusively by their
+        // explicit close handlers (`parse_underline`/`parse_vertical_align`), which locate their
+        // start by `kind` and do not consult `can_open`/`can_close`. They must therefore be
+        // non-openable and non-closable for the *emphasis* resolver: otherwise two unmatched opens
+        // of the same kind (e.g. `<sub>a<sub>b`) get paired against each other by `process_emphasis`
+        // and either mis-styled as italic (sub/sup, which have no dedicated branch there) or silently
+        // swallowed (underline). Leaving them off the emphasis pairing path lets an unmatched open
+        // degrade to its literal tag text, which is the desired behavior. (#13734 finding 4.)
         let can_open = match kind {
-            DelimiterKind::LinkStart => false,
+            DelimiterKind::LinkStart
+            | DelimiterKind::UnderlineStart
+            | DelimiterKind::SubStart
+            | DelimiterKind::SupStart => false,
             DelimiterKind::Asterisk => left_flanking,
             DelimiterKind::Underscore => {
                 left_flanking && (!right_flanking || preceded_by_punctuation)
             }
             // The GFM spec doesn't fully specify how strikethrough works, so treat it like asterisks.
             DelimiterKind::Strikethrough => left_flanking,
-            DelimiterKind::UnderlineStart => left_flanking,
         };
 
         let can_close = match kind {
-            DelimiterKind::LinkStart => false,
+            DelimiterKind::LinkStart
+            | DelimiterKind::UnderlineStart
+            | DelimiterKind::SubStart
+            | DelimiterKind::SupStart => false,
             DelimiterKind::Asterisk => right_flanking,
             DelimiterKind::Underscore => {
                 right_flanking && (!left_flanking || followed_by_punctuation)
             }
             DelimiterKind::Strikethrough => right_flanking,
-            DelimiterKind::UnderlineStart => right_flanking,
         };
 
         Self {
@@ -1778,12 +2098,21 @@ impl Delimiter {
             can_open,
             active: true,
             node_index,
+            vertical_align_poisoned: false,
+            literal: literal.map(str::to_owned),
         }
     }
 
     /// Convert this delimiter to literal text.
+    ///
+    /// Prefers the verbatim matched source (`literal`) when present — e.g. an attributed
+    /// `<sub class="foo">` degrades to exactly that string, not a normalized `<sub>`. Falls back to
+    /// the canonical spelling repeated `count` times for fixed-form delimiters.
     fn to_text(&self) -> String {
-        self.kind.as_str().repeat(self.count)
+        match &self.literal {
+            Some(literal) => literal.clone(),
+            None => self.kind.as_str().repeat(self.count),
+        }
     }
 
     /// Whether or not this delimiter can open for the given closing delimiter.
@@ -1819,6 +2148,8 @@ enum DelimiterKind {
     LinkStart,
     Strikethrough,
     UnderlineStart,
+    SubStart,
+    SupStart,
 }
 
 impl DelimiterKind {
@@ -1832,6 +2163,7 @@ impl DelimiterKind {
             // tildes do not create strikethrough.
             DelimiterKind::Strikethrough => count <= 2,
             DelimiterKind::UnderlineStart => count == 1,
+            DelimiterKind::SubStart | DelimiterKind::SupStart => count == 1,
         }
     }
 
@@ -1842,6 +2174,8 @@ impl DelimiterKind {
             DelimiterKind::LinkStart => "[",
             DelimiterKind::Strikethrough => "~",
             DelimiterKind::UnderlineStart => "<u>",
+            DelimiterKind::SubStart => "<sub>",
+            DelimiterKind::SupStart => "<sup>",
         }
     }
 }

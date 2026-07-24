@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use markdown_parser::FormattedTextInline;
+use markdown_parser::VerticalAlign;
 use warpui_core::color::ColorU;
 use warpui_core::fonts::TextLayoutSystem;
 #[cfg(test)]
@@ -187,6 +188,12 @@ impl<'a> TextLayout<'a> {
             styling = styling.with_underline_color(self.rich_text_styles.base_text.text_color);
         }
 
+        if text_styles.is_subscript() {
+            styling = styling.with_vertical_align(VerticalAlign::Sub);
+        } else if text_styles.is_superscript() {
+            styling = styling.with_vertical_align(VerticalAlign::Sup);
+        }
+
         if text_styles.is_inline_code() {
             styling = styling
                 .with_foreground_color(self.rich_text_styles.inline_code_style.font_color)
@@ -277,6 +284,9 @@ pub(crate) fn markdown_inline_to_text_and_style_runs(
         }
         if fragment.styles.underline {
             text_style = text_style.with_underline_color(paragraph_style.text_color);
+        }
+        if let Some(vertical_align) = fragment.styles.vertical_align {
+            text_style = text_style.with_vertical_align(vertical_align);
         }
         if fragment.styles.inline_code
             && let Some(background) = inline_code_background

@@ -17,6 +17,9 @@ fn test_text_style_xor() {
             BufferTextStyle::Weight(weight) => {
                 with_style.set_weight(Weight::from_custom_weight(Some(weight)));
             }
+            BufferTextStyle::Subscript | BufferTextStyle::Superscript => {
+                with_style.set_vertical_align(&style, true);
+            }
             style => {
                 if let Some(style_mut) = with_style.style_mut(&style) {
                     *style_mut = true;
@@ -69,6 +72,88 @@ fn test_text_style_xor() {
             "Set ^= Unset -> Set failed for {style:?}"
         );
     }
+}
+
+#[test]
+fn test_text_style_xor_vertical_align_transitions() {
+    // Issue #14029: the XOR delta compared only `Option::is_some()`, so a direct Sub↔Sup transition
+    // (both sides present) produced no vertical-align delta and the switch was dropped. The delta
+    // must compare the actual `Option<VerticalAlign>` values: equal values cancel to none, differing
+    // values (including Sub vs Sup) yield the target side.
+    let sub = TextStyles::default().subscript();
+    let sup = TextStyles::default().superscript();
+
+    // Sub ^ Sup: differing values must produce a real delta, not cancel to none.
+    let sub_to_sup = sub ^ sup;
+    assert!(
+        sub_to_sup.is_superscript(),
+        "Sub ^ Sup should yield Sup, got {:?}",
+        sub_to_sup.vertical_align
+    );
+    let sup_to_sub = sup ^ sub;
+    assert!(
+        sup_to_sub.is_subscript(),
+        "Sup ^ Sub should yield Sub, got {:?}",
+        sup_to_sub.vertical_align
+    );
+
+    // Same value still cancels to none.
+    assert!(
+        !(sub ^ sub).has_any_vertical_align(),
+        "Sub ^ Sub should cancel to none"
+    );
+    assert!(
+        !(sup ^ sup).has_any_vertical_align(),
+        "Sup ^ Sup should cancel to none"
+    );
+
+    // `BitXorAssign` must match the by-value `BitXor` behavior for the direct Sub↔Sup switch.
+    let mut editable = sub;
+    editable ^= sup;
+    assert!(
+        editable.is_superscript(),
+        "Sub ^= Sup should yield Sup, got {:?}",
+        editable.vertical_align
+    );
+    let mut editable = sup;
+    editable ^= sub;
+    assert!(
+        editable.is_subscript(),
+        "Sup ^= Sub should yield Sub, got {:?}",
+        editable.vertical_align
+    );
+}
+
+#[test]
+fn test_text_style_xor_weight_transitions() {
+    // Sibling sweep of the vertical-align miss-cause: `weight` is likewise an enum-valued Option
+    // (`Bold` vs `Light` vs `Medium` …) whose delta compared only `is_some()`, so a direct
+    // weight-to-weight switch also dropped to no delta. Two distinct weights must produce a delta of
+    // the target weight; equal weights cancel to none.
+    let mut bold = TextStyles::default();
+    bold.set_weight(Weight::Bold);
+    let mut light = TextStyles::default();
+    light.set_weight(Weight::Light);
+
+    let bold_to_light = bold ^ light;
+    assert_eq!(
+        bold_to_light.get_custom_weight(),
+        light.get_custom_weight(),
+        "Bold ^ Light should yield Light"
+    );
+
+    assert!(
+        (bold ^ bold).get_custom_weight().is_none(),
+        "Bold ^ Bold should cancel to none"
+    );
+
+    let mut editable = bold;
+    editable ^= light;
+    assert_eq!(
+        editable.get_custom_weight(),
+        light.get_custom_weight(),
+        "Bold ^= Light should yield Light"
+    );
 }
 
 #[test]

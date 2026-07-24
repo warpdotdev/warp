@@ -143,6 +143,154 @@ fn test_parse_text_styles() {
 }
 
 #[test]
+fn test_parse_sub_sup() {
+    // Issue #13734 — the paste-path HTML parser recognizes `<sub>`/`<sup>` as phrasing tags.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>H<sub>2</sub>O"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("H"),
+            FormattedTextFragment::subscript("2"),
+            FormattedTextFragment::plain_text("O"),
+        ])]
+    );
+
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>x<sup>2</sup>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("x"),
+            FormattedTextFragment::superscript("2"),
+        ])]
+    );
+
+    // Invariant 9: attributes on the tag are ignored; only the tag semantics apply.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>H<sub class=\"foo\" id=\"x\">2</sub>O"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("H"),
+            FormattedTextFragment::subscript("2"),
+            FormattedTextFragment::plain_text("O"),
+        ])]
+    );
+
+    // Invariant 4: content inside composes with other inline styling.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub><em>n</em></sub>"),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment {
+            text: "n".to_string(),
+            styles: FormattedTextStyles {
+                italic: true,
+                vertical_align: Some(VerticalAlign::Sub),
+                ..Default::default()
+            },
+        }])]
+    );
+}
+
+#[test]
+fn test_parse_nested_sub_sup_bails_whole_span_to_literal() {
+    // Issue #13948: the paste-path HTML parser must apply the same whole-formula literal bail as
+    // the Markdown tokenizer. ANY nesting of `<sub>`/`<sup>` — opposite-direction, same-direction,
+    // or depth ≥ 2 — degrades the ENTIRE outermost span to literal source text rather than
+    // rendering a plausible-but-wrong formula (recursive parsing would otherwise just overwrite
+    // `vertical_align`, showing a misleading partially-styled construct).
+
+    // Opposite-direction nesting — the motivating case from the finding.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub>a<sup>b</sup>c</sub>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sub>a<sup>b</sup>c</sub>")
+        ])]
+    );
+
+    // Same-direction nesting.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sup>2<sup>3</sup></sup>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sup>2<sup>3</sup></sup>")
+        ])]
+    );
+
+    // Depth ≥ 2 (a vertical-align tag separated from its nested descendant by a non-vertical-align
+    // tag) still bails the whole outermost span.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub>x<b>y<sup>z</sup></b></sub>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sub>x<b>y<sup>z</sup></b></sub>")
+        ])]
+    );
+
+    // Attributes on a bailed span survive in the literal (invariant 9 ignores them only when the
+    // tag renders styled; the literal must still be faithful to the source).
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub class=\"foo\">a<sup>b</sup></sub>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sub class=\"foo\">a<sup>b</sup></sub>")
+        ])]
+    );
+
+    // Control: a single, non-nested vertical-align tag still renders styled.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'>x<sup>2</sup>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("x"),
+            FormattedTextFragment::superscript("2"),
+        ])]
+    );
+
+    // Control: sibling (non-nested) vertical-align tags each render styled independently.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub>a</sub><sup>b</sup>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::subscript("a"),
+            FormattedTextFragment::superscript("b"),
+        ])]
+    );
+}
+
+#[test]
+fn test_bailed_literal_escapes_html_entities() {
+    // [SECURITY] Issue #14029: the literal-bail serializer must re-escape text and attribute values
+    // when reconstructing source. html5ever decodes entities while parsing, so `&lt;img …&gt;` in a
+    // bailed nested span arrives as a text node holding the DECODED `<img …>`. If serialized
+    // verbatim, that decoded markup round-trips into the "literal" fragment and can be re-parsed as
+    // real HTML downstream. The literal must escape `<`, `>`, and `&` in text nodes so the fragment
+    // is inert plain text that displays the original source.
+
+    // Entity-encoded tag inside a bailed nested span: must come back escaped, not as raw `<img …>`.
+    assert_eq!(
+        test_parse_html(
+            "<meta charset='utf-8'><sub>&lt;img onerror=alert(1)&gt;<sup>b</sup></sub>"
+        ),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text(
+                "<sub>&lt;img onerror=alert(1)&gt;<sup>b</sup></sub>"
+            )
+        ])]
+    );
+
+    // A bare `&` in text must round-trip as `&amp;`, never a naked `&` that could start an entity.
+    assert_eq!(
+        test_parse_html("<meta charset='utf-8'><sub>a &amp; b<sup>c</sup></sub>"),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("<sub>a &amp; b<sup>c</sup></sub>")
+        ])]
+    );
+
+    // Quotes and angle brackets inside an attribute value must be escaped so they can't break out of
+    // the reconstructed `attr="…"` and inject new markup.
+    assert_eq!(
+        test_parse_html(
+            "<meta charset='utf-8'><sub title=\"&quot;&gt;&lt;img onerror=x&gt;\">a<sup>b</sup></sub>"
+        ),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text(
+                "<sub title=\"&quot;&gt;&lt;img onerror=x&gt;\">a<sup>b</sup></sub>"
+            )
+        ])]
+    );
+}
+
+#[test]
 fn test_block() {
     assert_eq!(
         test_parse_html(

@@ -1852,6 +1852,9 @@ impl Element for FormattedTextElement {
                                 text_style.foreground_color.unwrap_or(self.text_color);
                             text_style = text_style.with_underline_color(underline_color)
                         }
+                        if let Some(vertical_align) = inline.styles.vertical_align {
+                            text_style = text_style.with_vertical_align(vertical_align);
+                        }
                         if inline.styles.inline_code {
                             // If we have existing background and foreground highlighting from, for example,
                             // a link or a search, we don't want to override it.

@@ -15,7 +15,7 @@ use markdown_parser::markdown_parser::{
 use markdown_parser::weight::CustomWeight;
 use markdown_parser::{
     CodeBlockText, FormattedImage, FormattedTextLine, FormattedTextStyles, Hyperlink,
-    parse_markdown,
+    VerticalAlign, parse_markdown,
 };
 pub use markdown_parser::{
     FormattedTable, FormattedTableAlignment, FormattedTextFragment, FormattedTextInline,
@@ -582,6 +582,8 @@ impl Display for BufferText {
                     BufferTextStyle::Underline => "u",
                     BufferTextStyle::InlineCode => "c",
                     BufferTextStyle::StrikeThrough => "s",
+                    BufferTextStyle::Subscript => "sub",
+                    BufferTextStyle::Superscript => "sup",
                 };
 
                 let end = match dir {
@@ -1048,6 +1050,8 @@ pub enum BufferTextStyle {
     Underline,
     InlineCode,
     StrikeThrough,
+    Subscript,
+    Superscript,
 }
 
 impl BufferTextStyle {
@@ -1068,13 +1072,15 @@ impl BufferTextStyle {
     }
 
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        let r = rng.gen_range(0..5);
+        let r = rng.gen_range(0..7);
         match r {
             0 => Self::Weight(CustomWeight::Bold),
             1 => Self::Italic,
             2 => Self::Underline,
             3 => Self::InlineCode,
             4 => Self::StrikeThrough,
+            5 => Self::Subscript,
+            6 => Self::Superscript,
             _ => unreachable!(),
         }
     }
@@ -1090,6 +1096,7 @@ pub struct TextStylesWithMetadata {
     strikethrough: bool,
     link: Option<String>,
     color: Option<ColorU>,
+    vertical_align: Option<VerticalAlign>,
 }
 
 impl TextStylesWithMetadata {
@@ -1109,6 +1116,16 @@ impl TextStylesWithMetadata {
 
     pub fn inline_code(mut self) -> Self {
         self.inline_code = true;
+        self
+    }
+
+    pub fn subscript(mut self) -> Self {
+        self.vertical_align = Some(VerticalAlign::Sub);
+        self
+    }
+
+    pub fn superscript(mut self) -> Self {
+        self.vertical_align = Some(VerticalAlign::Sup);
         self
     }
 
@@ -1136,8 +1153,30 @@ impl TextStylesWithMetadata {
             BufferTextStyle::Underline => Some(&mut self.underline),
             BufferTextStyle::InlineCode => Some(&mut self.inline_code),
             BufferTextStyle::StrikeThrough => Some(&mut self.strikethrough),
-            BufferTextStyle::Weight(_) => None,
+            // Vertical alignment isn't a `bool` toggle (it's an `Option<VerticalAlign>`), so it
+            // can't be mutated through this accessor; callers apply it via `set_vertical_align`.
+            BufferTextStyle::Weight(_)
+            | BufferTextStyle::Subscript
+            | BufferTextStyle::Superscript => None,
         }
+    }
+
+    /// Applies or clears the vertical alignment implied by a sub/superscript marker.
+    pub fn set_vertical_align(&mut self, style: &BufferTextStyle, active: bool) {
+        let align = match style {
+            BufferTextStyle::Subscript => VerticalAlign::Sub,
+            BufferTextStyle::Superscript => VerticalAlign::Sup,
+            _ => return,
+        };
+        self.vertical_align = active.then_some(align);
+    }
+
+    /// Sets the collapsed vertical alignment directly. Used by the render iterator, which tracks
+    /// subscript/superscript nesting depth separately and resolves the overlap through
+    /// [`resolve_vertical_align`] so an inner end-marker can restore the still-active outer alignment
+    /// (issue #13734 finding 3).
+    pub(super) fn set_vertical_align_value(&mut self, vertical_align: Option<VerticalAlign>) {
+        self.vertical_align = vertical_align;
     }
 
     pub fn colliding_style(&self, style: &BufferTextStyle) -> bool {
@@ -1147,6 +1186,8 @@ impl TextStylesWithMetadata {
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
             BufferTextStyle::Weight(_) => self.weight.is_some(),
+            BufferTextStyle::Subscript => self.is_subscript(),
+            BufferTextStyle::Superscript => self.is_superscript(),
         }
     }
 
@@ -1157,6 +1198,8 @@ impl TextStylesWithMetadata {
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
             BufferTextStyle::Weight(weight) => self.weight == Some(*weight),
+            BufferTextStyle::Subscript => self.is_subscript(),
+            BufferTextStyle::Superscript => self.is_superscript(),
         }
     }
 
@@ -1205,6 +1248,20 @@ impl TextStylesWithMetadata {
         self.underline
     }
 
+    pub fn is_subscript(&self) -> bool {
+        self.vertical_align == Some(VerticalAlign::Sub)
+    }
+
+    pub fn is_superscript(&self) -> bool {
+        self.vertical_align == Some(VerticalAlign::Sup)
+    }
+
+    /// The raw collapsed alignment, if any. Used to seed the render iterator's `last_opened`
+    /// tracking at a block boundary, where at most one alignment can be carried over.
+    pub(super) fn vertical_align(&self) -> Option<VerticalAlign> {
+        self.vertical_align
+    }
+
     pub fn is_link(&self) -> bool {
         self.link.is_some()
     }
@@ -1235,6 +1292,7 @@ impl TextStylesWithMetadata {
             strikethrough: text_styles.strikethrough,
             link,
             color,
+            vertical_align: text_styles.vertical_align,
         }
     }
 
@@ -1274,6 +1332,13 @@ impl TextStylesWithMetadata {
             Default::default()
         };
 
+        // Only a shared vertical alignment survives; differing (or absent) alignment yields none.
+        let vertical_align = if self.vertical_align == other.vertical_align {
+            self.vertical_align
+        } else {
+            None
+        };
+
         Self {
             weight,
             italic: self.italic && other.italic,
@@ -1283,6 +1348,7 @@ impl TextStylesWithMetadata {
             link,
             color,
             placeholder: self.placeholder && other.placeholder,
+            vertical_align,
         }
     }
 }
@@ -1298,6 +1364,7 @@ impl From<FormattedTextStyles> for TextStylesWithMetadata {
             placeholder: false,
             link: styles.hyperlink.and_then(Hyperlink::url),
             color: None, // TODO: Update this when adding strikethrough support.
+            vertical_align: styles.vertical_align,
         }
     }
 }
@@ -1311,6 +1378,7 @@ impl From<TextStylesWithMetadata> for FormattedTextStyles {
             strikethrough: styles.strikethrough,
             hyperlink: styles.link.map(Hyperlink::Url),
             inline_code: styles.inline_code,
+            vertical_align: styles.vertical_align,
         }
     }
 }
@@ -1327,6 +1395,10 @@ pub struct TextStyles {
     placeholder: bool,
     link: bool,
     colored: bool,
+    /// Subscript and superscript are mutually exclusive, so a single `Option<VerticalAlign>` (rather
+    /// than two independent flags) makes the "both set" state unrepresentable — mirroring the storage
+    /// in `FormattedTextStyles`/`TextStylesWithMetadata` so the conversions stay lossless.
+    vertical_align: Option<VerticalAlign>,
 }
 
 impl TextStyles {
@@ -1337,6 +1409,8 @@ impl TextStyles {
             underline: true,
             inline_code: true,
             strikethrough: true,
+            // Sub and sup are mutually exclusive, so `all()` can only carry one; pick subscript.
+            vertical_align: Some(VerticalAlign::Sub),
             ..Default::default()
         }
     }
@@ -1366,8 +1440,46 @@ impl TextStyles {
         self
     }
 
+    pub fn subscript(mut self) -> Self {
+        self.vertical_align = Some(VerticalAlign::Sub);
+        self
+    }
+
+    pub fn superscript(mut self) -> Self {
+        self.vertical_align = Some(VerticalAlign::Sup);
+        self
+    }
+
+    pub fn is_subscript(&self) -> bool {
+        self.vertical_align == Some(VerticalAlign::Sub)
+    }
+
+    pub fn is_superscript(&self) -> bool {
+        self.vertical_align == Some(VerticalAlign::Sup)
+    }
+
+    /// Whether this mask carries *any* vertical alignment. Unlike [`Self::is_subscript`] and
+    /// [`Self::is_superscript`], this doesn't distinguish which one — it's for "strip all styles"
+    /// callers (see [`Self::all`]) that need to treat `Subscript` and `Superscript` as a single
+    /// family, since the underlying `Option<VerticalAlign>` can only ever name one of them at a time.
+    pub fn has_any_vertical_align(&self) -> bool {
+        self.vertical_align.is_some()
+    }
+
     pub fn set_weight(&mut self, weight: Weight) {
         self.weight = weight.to_custom_weight();
+    }
+
+    /// Applies or clears the vertical alignment implied by a sub/superscript marker. Mirrors the
+    /// `Weight` marker handling: `style_mut` returns `None` for these (they aren't plain toggles),
+    /// so callers reach for this instead.
+    pub fn set_vertical_align(&mut self, style: &BufferTextStyle, active: bool) {
+        let align = match style {
+            BufferTextStyle::Subscript => VerticalAlign::Sub,
+            BufferTextStyle::Superscript => VerticalAlign::Sup,
+            _ => return,
+        };
+        self.vertical_align = active.then_some(align);
     }
 
     pub fn style_mut(&mut self, style: &BufferTextStyle) -> Option<&mut bool> {
@@ -1376,7 +1488,11 @@ impl TextStyles {
             BufferTextStyle::Underline => Some(&mut self.underline),
             BufferTextStyle::InlineCode => Some(&mut self.inline_code),
             BufferTextStyle::StrikeThrough => Some(&mut self.strikethrough),
-            BufferTextStyle::Weight(_) => None,
+            // Vertical alignment is an `Option<VerticalAlign>`, not a `bool` toggle, so it's applied
+            // through `set_vertical_align` rather than this accessor — same as `Weight`.
+            BufferTextStyle::Weight(_)
+            | BufferTextStyle::Subscript
+            | BufferTextStyle::Superscript => None,
         }
     }
 
@@ -1386,6 +1502,8 @@ impl TextStyles {
             BufferTextStyle::Underline => self.underline,
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
+            BufferTextStyle::Subscript => self.is_subscript(),
+            BufferTextStyle::Superscript => self.is_superscript(),
             BufferTextStyle::Weight(_) => self.weight.is_some(),
         }
     }
@@ -1396,6 +1514,8 @@ impl TextStyles {
             BufferTextStyle::Underline => self.underline,
             BufferTextStyle::InlineCode => self.inline_code,
             BufferTextStyle::StrikeThrough => self.strikethrough,
+            BufferTextStyle::Subscript => self.is_subscript(),
+            BufferTextStyle::Superscript => self.is_superscript(),
             BufferTextStyle::Weight(weight) => Some(*weight) == self.weight,
         }
     }
@@ -1448,6 +1568,7 @@ impl TextStyles {
             underline: self.underline,
             inline_code: self.inline_code,
             strikethrough: self.strikethrough,
+            vertical_align: self.vertical_align,
             placeholder: false,
             link: false,
             colored: false,
@@ -1466,6 +1587,31 @@ impl From<TextStylesWithMetadata> for TextStyles {
             strikethrough: styles.strikethrough,
             link: styles.link.is_some(),
             colored: styles.color.is_some(),
+            vertical_align: styles.vertical_align,
+        }
+    }
+}
+
+/// XOR-toggle delta for an enum-valued `Option` style (`weight`, `vertical_align`).
+///
+/// Unlike a `bool` toggle, these fields carry a *value* (e.g. `Sub` vs `Sup`, `Bold` vs `Light`),
+/// so equal presence isn't enough to decide the delta: comparing only `is_some()` drops a direct
+/// value switch like `Sub` → `Sup` (both present) to no delta, silently losing the transition
+/// (issue #14029). Compare the actual values instead:
+/// - both absent, or both the *same* value → cancel to `None`;
+/// - exactly one present → that present value;
+/// - both present but *different* → the `rhs` (target/incoming) value wins, so the switch survives.
+fn xor_optional_value<T: PartialEq>(lhs: Option<T>, rhs: Option<T>) -> Option<T> {
+    match (lhs, rhs) {
+        (None, None) => None,
+        (Some(l), None) => Some(l),
+        (None, Some(r)) => Some(r),
+        (Some(l), Some(r)) => {
+            if l == r {
+                None
+            } else {
+                Some(r)
+            }
         }
     }
 }
@@ -1474,15 +1620,8 @@ impl BitXor for TextStyles {
     type Output = Self;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
-        let weight = if self.weight.is_some() == rhs.weight.is_some() {
-            None
-        } else if self.weight.is_some() {
-            self.weight
-        } else {
-            rhs.weight
-        };
         Self {
-            weight,
+            weight: xor_optional_value(self.weight, rhs.weight),
             italic: self.italic ^ rhs.italic,
             underline: self.underline ^ rhs.underline,
             placeholder: self.placeholder ^ rhs.placeholder,
@@ -1490,20 +1629,15 @@ impl BitXor for TextStyles {
             strikethrough: self.strikethrough ^ rhs.strikethrough,
             link: self.link ^ rhs.link,
             colored: self.colored ^ rhs.colored,
+            vertical_align: xor_optional_value(self.vertical_align, rhs.vertical_align),
         }
     }
 }
 
 impl BitXorAssign for TextStyles {
     fn bitxor_assign(&mut self, rhs: Self) {
-        let weight = if self.weight.is_some() == rhs.weight.is_some() {
-            None
-        } else if self.weight.is_some() {
-            self.weight
-        } else {
-            rhs.weight
-        };
-        self.weight = weight;
+        self.weight = xor_optional_value(self.weight, rhs.weight);
+        self.vertical_align = xor_optional_value(self.vertical_align, rhs.vertical_align);
         self.italic ^= rhs.italic;
         self.underline ^= rhs.underline;
         self.placeholder ^= rhs.placeholder;
@@ -1556,6 +1690,16 @@ pub struct StyleSummary {
     underline_counter: i32,
     inline_code_counter: i32,
     strikethrough_counter: i32,
+    subscript_counter: i32,
+    superscript_counter: i32,
+    /// Which of subscript/superscript was most recently *opened* (never updated by a close) as of
+    /// this summary's right edge, so the innermost-wins tie rule can be recovered from a purely
+    /// additive, order-agnostic-looking `AddAssign`. A leaf's own summary sets this to `Some(_)` only
+    /// when the leaf itself is a start marker; `AddAssign` then prefers the right-hand summary's value
+    /// whenever it carries one, which is well-defined because the sum-tree cursor always folds leaf
+    /// summaries left-to-right in document order (never re-associated out of order). See
+    /// `resolve_vertical_align` for how this combines with the depth counters.
+    last_opened_vertical_align: Option<VerticalAlign>,
     link_counter: i32,
     syntax_color_counter: i32,
     /// We need to keep track the total link marker count so we could index into a specific link marker
@@ -1575,7 +1719,54 @@ impl AddAssign<&StyleSummary> for StyleSummary {
         self.syntax_color_counter += other.syntax_color_counter;
         self.total_color_marker += other.total_color_marker;
         self.strikethrough_counter += other.strikethrough_counter;
+        self.subscript_counter += other.subscript_counter;
+        self.superscript_counter += other.superscript_counter;
         self.underline_counter += other.underline_counter;
+        // `other` is always the right-hand (later-in-document-order) summary in a left-to-right
+        // fold, so it wins whenever it recorded an open of its own.
+        if other.last_opened_vertical_align.is_some() {
+            self.last_opened_vertical_align = other.last_opened_vertical_align;
+        }
+    }
+}
+
+/// The single tie/nesting rule for overlapping subscript and superscript, shared by every consumer
+/// that has to collapse the two independent markers into one `Option<VerticalAlign>`.
+///
+/// IMPORTANT — this function is internal editor-consistency plumbing only, and is NOT the product's
+/// nesting behavior for parsed Markdown. The product rule (see `markdown_parser::parse_vertical_align`)
+/// is a whole-formula literal bail: any nesting of `<sub>`/`<sup>` tags in Markdown source degrades
+/// the entire outermost span to literal text *before the buffer ever sees it*, so imported/parsed
+/// content never produces overlapping buffer markers in the first place — this function's overlap
+/// branch is simply unreachable from that path. It's reachable only through *live interactive style
+/// editing*: applying subscript over a selection that already has superscript active (or vice versa)
+/// directly in the buffer, which has no equivalent "is this nested" concept and can't refuse the
+/// operation the way the parser can refuse to render a nested tag. For that editor-only case, ties
+/// resolve **innermost-wins** (whichever marker was applied most recently over the overlapping
+/// region) purely so `StyleSummary` and the render iterator agree with each other — there is no
+/// visible product behavior riding on which specific tie-break rule this picks, since it's never
+/// reachable from Markdown source, but the two consumers disagreeing with each other would still be
+/// a real bug (cursor/toolbar state vs. rendered runs), which is what issue #13734 finding 3
+/// originally caught. `last_opened` names whichever of the two markers was most recently *opened*
+/// (not closed) in document order; a close never updates it, so that once the inner marker's depth
+/// returns to zero this function falls through to whichever marker is still active. Both the
+/// style-summary reconstruction and the render-run iterator MUST route through this function so they
+/// never disagree with each other.
+pub(super) fn resolve_vertical_align(
+    subscript_depth: i32,
+    superscript_depth: i32,
+    last_opened: Option<VerticalAlign>,
+) -> Option<VerticalAlign> {
+    match last_opened {
+        // The innermost marker is still active: it wins outright, regardless of the other marker.
+        Some(VerticalAlign::Sup) if superscript_depth > 0 => Some(VerticalAlign::Sup),
+        Some(VerticalAlign::Sub) if subscript_depth > 0 => Some(VerticalAlign::Sub),
+        // The innermost marker already closed (or neither marker was ever opened here): fall
+        // back to whichever marker is still active. The properly-nested-markers invariant means
+        // at most one of these can be true once `last_opened`'s marker has closed.
+        _ if superscript_depth > 0 => Some(VerticalAlign::Sup),
+        _ if subscript_depth > 0 => Some(VerticalAlign::Sub),
+        _ => None,
     }
 }
 
@@ -1587,6 +1778,8 @@ impl StyleSummary {
             BufferTextStyle::Underline => self.underline_counter,
             BufferTextStyle::InlineCode => self.inline_code_counter,
             BufferTextStyle::StrikeThrough => self.strikethrough_counter,
+            BufferTextStyle::Subscript => self.subscript_counter,
+            BufferTextStyle::Superscript => self.superscript_counter,
         }
     }
 
@@ -1609,6 +1802,8 @@ impl StyleSummary {
             BufferTextStyle::Underline => &mut self.underline_counter,
             BufferTextStyle::InlineCode => &mut self.inline_code_counter,
             BufferTextStyle::StrikeThrough => &mut self.strikethrough_counter,
+            BufferTextStyle::Subscript => &mut self.subscript_counter,
+            BufferTextStyle::Superscript => &mut self.superscript_counter,
         }
     }
 
@@ -1619,6 +1814,13 @@ impl StyleSummary {
         } else {
             None
         };
+        // Sub and sup are independent markers and can overlap; `resolve_vertical_align` is the shared
+        // tie rule (innermost-wins) that the render iterator also uses, so the two agree.
+        let vertical_align = resolve_vertical_align(
+            self.subscript_counter,
+            self.superscript_counter,
+            self.last_opened_vertical_align,
+        );
         TextStyles {
             weight,
             italic: self.italic_counter > 0,
@@ -1627,6 +1829,7 @@ impl StyleSummary {
             inline_code: self.inline_code_counter > 0,
             colored: self.syntax_color_counter > 0,
             strikethrough: self.strikethrough_counter > 0,
+            vertical_align,
             placeholder: false,
         }
     }
@@ -1643,6 +1846,12 @@ impl From<TextStyles> for StyleSummary {
             inline_code_counter: styles.inline_code.into(),
             syntax_color_counter: styles.colored.into(),
             strikethrough_counter: styles.strikethrough.into(),
+            subscript_counter: styles.is_subscript().into(),
+            superscript_counter: styles.is_superscript().into(),
+            // A `TextStyles` snapshot only ever carries one active alignment (it's a single
+            // `Option<VerticalAlign>`, not independently-overlapping counters), so seeding
+            // "last opened" directly from it is exact and unambiguous.
+            last_opened_vertical_align: styles.vertical_align,
             total_color_marker: 0,
             total_link_marker: 0,
         }
@@ -1827,6 +2036,17 @@ impl sum_tree::Item for BufferText {
                     s.set_weight(Some(*weight));
                 }
                 *s.style_counter_mut(marker_type) += delta;
+                // Only a *start* marker records an "open" for the innermost-wins tie rule; a close
+                // leaves `last_opened_vertical_align` as `None` here so `AddAssign` never lets a
+                // close override a still-active outer marker recorded in an earlier chunk (see
+                // `resolve_vertical_align`).
+                if matches!(dir, MarkerDir::Start) {
+                    s.last_opened_vertical_align = match marker_type {
+                        BufferTextStyle::Subscript => Some(VerticalAlign::Sub),
+                        BufferTextStyle::Superscript => Some(VerticalAlign::Sup),
+                        _ => None,
+                    };
+                }
                 Some(Box::new(s))
             }
             BufferText::Color(marker) => {

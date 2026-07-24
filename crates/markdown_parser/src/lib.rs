@@ -464,11 +464,13 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
             continue;
         }
 
+        // Inline code content is literal (no Markdown is interpreted inside backticks), so it
+        // must be emitted as backtick-wrapped text *before* any outer wraps. But the outer
+        // wraps (hyperlink, strikethrough, underline, sub/sup, emphasis) still apply around the
+        // code span, so we fall through rather than returning early — otherwise a code fragment
+        // that also carries e.g. a `<sub>` alignment would drop that wrap on export.
         if fragment.styles.inline_code {
-            result.push('`');
-            result.push_str(&text);
-            result.push('`');
-            continue;
+            text = format!("`{text}`");
         }
 
         if let Some(Hyperlink::Url(url)) = &fragment.styles.hyperlink {
@@ -479,6 +481,11 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
         }
         if fragment.styles.underline {
             text = format!("<u>{text}</u>");
+        }
+        match fragment.styles.vertical_align {
+            Some(VerticalAlign::Sub) => text = format!("<sub>{text}</sub>"),
+            Some(VerticalAlign::Sup) => text = format!("<sup>{text}</sup>"),
+            None => {}
         }
         let is_bold = fragment
             .styles
@@ -540,6 +547,19 @@ impl PartialEq for Hyperlink {
 
 impl Eq for Hyperlink {}
 
+/// Vertical alignment for a fragment, expressing subscript or superscript.
+///
+/// A fragment can be at most one of these at a time; nesting resolves to the innermost tag
+/// (see the markdown parser's `parse_sub`/`parse_sup`), so a single `Option<VerticalAlign>`
+/// rather than two independent booleans captures the supported behavior exactly.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum VerticalAlign {
+    /// Rendered below the surrounding baseline (`<sub>`).
+    Sub,
+    /// Rendered above the surrounding baseline (`<sup>`).
+    Sup,
+}
+
 /// Formatted text styling, with no attached content.
 #[derive(Clone, Default, Eq, PartialEq)]
 pub struct FormattedTextStyles {
@@ -549,6 +569,7 @@ pub struct FormattedTextStyles {
     pub strikethrough: bool,
     pub inline_code: bool,
     pub hyperlink: Option<Hyperlink>,
+    pub vertical_align: Option<VerticalAlign>,
 }
 
 impl FormattedTextFragment {
@@ -656,6 +677,26 @@ impl FormattedTextFragment {
         }
     }
 
+    pub fn subscript(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            styles: FormattedTextStyles {
+                vertical_align: Some(VerticalAlign::Sub),
+                ..Default::default()
+            },
+        }
+    }
+
+    pub fn superscript(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            styles: FormattedTextStyles {
+                vertical_align: Some(VerticalAlign::Sup),
+                ..Default::default()
+            },
+        }
+    }
+
     pub fn raw_text(&self) -> &String {
         &self.text
     }
@@ -698,6 +739,17 @@ impl fmt::Debug for FormattedTextStyles {
             first = false;
         }
 
+        if let Some(vertical_align) = self.vertical_align {
+            if !first {
+                f.write_str(" | ")?;
+            }
+            match vertical_align {
+                VerticalAlign::Sub => f.write_str("Sub")?,
+                VerticalAlign::Sup => f.write_str("Sup")?,
+            }
+            first = false;
+        }
+
         if let Some(link) = &self.hyperlink {
             if !first {
                 f.write_str(" | ")?;
@@ -713,5 +765,81 @@ impl fmt::Debug for FormattedTextStyles {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod inline_to_markdown_tests {
+    use super::*;
+
+    /// Build a code fragment that also carries an extra style, exercising the composed-style
+    /// serialization path that the `inline_code` early-return used to bypass.
+    fn code_with(
+        text: &str,
+        mutate: impl FnOnce(&mut FormattedTextStyles),
+    ) -> FormattedTextFragment {
+        let mut fragment = FormattedTextFragment::inline_code(text);
+        mutate(&mut fragment.styles);
+        fragment
+    }
+
+    #[test]
+    fn subscript_wrapping_survives_inline_code() {
+        // #13734 finding 1: a fragment carrying both inline-code and a sub alignment must
+        // export as `<sub>`-wrapped backtick code, not bare backtick code.
+        let inline = vec![code_with("n", |styles| {
+            styles.vertical_align = Some(VerticalAlign::Sub);
+        })];
+        assert_eq!(inline_to_markdown(&inline), "<sub>`n`</sub>");
+    }
+
+    #[test]
+    fn superscript_wrapping_survives_inline_code() {
+        let inline = vec![code_with("n", |styles| {
+            styles.vertical_align = Some(VerticalAlign::Sup);
+        })];
+        assert_eq!(inline_to_markdown(&inline), "<sup>`n`</sup>");
+    }
+
+    #[test]
+    fn strikethrough_wrapping_survives_inline_code() {
+        // Sibling of finding 1: the same early-return dropped strikethrough on code fragments.
+        let inline = vec![code_with("x", |styles| styles.strikethrough = true)];
+        assert_eq!(inline_to_markdown(&inline), "~~`x`~~");
+    }
+
+    #[test]
+    fn underline_wrapping_survives_inline_code() {
+        let inline = vec![code_with("x", |styles| styles.underline = true)];
+        assert_eq!(inline_to_markdown(&inline), "<u>`x`</u>");
+    }
+
+    #[test]
+    fn bold_wrapping_survives_inline_code() {
+        let inline = vec![code_with("x", |styles| {
+            styles.weight = Some(CustomWeight::Bold);
+        })];
+        assert_eq!(inline_to_markdown(&inline), "**`x`**");
+    }
+
+    #[test]
+    fn italic_wrapping_survives_inline_code() {
+        let inline = vec![code_with("x", |styles| styles.italic = true)];
+        assert_eq!(inline_to_markdown(&inline), "*`x`*");
+    }
+
+    #[test]
+    fn hyperlink_wrapping_survives_inline_code() {
+        let inline = vec![code_with("x", |styles| {
+            styles.hyperlink = Some(Hyperlink::Url("https://example.com".to_string()));
+        })];
+        assert_eq!(inline_to_markdown(&inline), "[`x`](https://example.com)");
+    }
+
+    #[test]
+    fn plain_inline_code_is_unchanged() {
+        // No regression for the common case: plain code stays bare backticks.
+        let inline = vec![FormattedTextFragment::inline_code("x")];
+        assert_eq!(inline_to_markdown(&inline), "`x`");
     }
 }

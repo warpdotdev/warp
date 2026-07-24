@@ -652,3 +652,26 @@ fn test_layout_text_last_line_clipped_ligatures() -> Result<()> {
 
     Ok(())
 }
+
+/// The Core Text layout path serializes each run's `TextStyle` into CF attributes and reconstructs
+/// it on the other side (`attributes_to_text_style`) to populate `Run.styles`, which paint reads for
+/// the sub/superscript glyph offset. This locks in that `vertical_align` survives that round-trip —
+/// the gap that left `<sub>`/`<sup>` rendering at the plain baseline in the file viewer (#13734).
+#[test]
+fn test_vertical_align_survives_cf_attribute_round_trip() {
+    for expected in [None, Some(VerticalAlign::Sub), Some(VerticalAlign::Sup)] {
+        let mut style = TextStyle::new();
+        if let Some(vertical_align) = expected {
+            style = style.with_vertical_align(vertical_align);
+        }
+
+        let pairs = text_style_as_cf_type_pairs(&style);
+        let dictionary = CFDictionary::from_CFType_pairs(&pairs);
+        let round_tripped = attributes_to_text_style(dictionary);
+
+        assert_eq!(
+            round_tripped.vertical_align, expected,
+            "vertical_align {expected:?} did not survive the CF attribute round-trip"
+        );
+    }
+}
