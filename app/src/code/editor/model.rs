@@ -2901,7 +2901,8 @@ impl CodeEditorModel {
             }
         }
 
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline =
+            !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
         if *motion_type == MotionType::Linewise {
             self.vim_extend_selection_linewise(include_newline, ctx);
         }
@@ -2984,7 +2985,8 @@ impl CodeEditorModel {
 
         self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
 
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline =
+            !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
         if *motion_type == MotionType::Linewise {
             self.vim_extend_selection_linewise(include_newline, ctx);
         }
@@ -3019,7 +3021,8 @@ impl CodeEditorModel {
             }
         }
 
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline =
+            !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
         if *motion_type == MotionType::Linewise {
             self.vim_extend_selection_linewise(include_newline, ctx);
         }
@@ -3059,7 +3062,8 @@ impl CodeEditorModel {
 
         self.vim_move_to_first_nonwhitespace(true, ctx);
 
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline =
+            !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
         if *motion_type == MotionType::Linewise {
             self.vim_extend_selection_linewise(include_newline, ctx);
         }
@@ -3252,7 +3256,8 @@ impl CodeEditorModel {
 
                 self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
                 if let TextObjectType::Paragraph = text_object.object_type {
-                    let include_newline = *op != VimOperator::Change;
+                    let include_newline =
+                        !matches!(*op, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
                     self.vim_extend_selection_linewise(include_newline, ctx);
                 }
             }

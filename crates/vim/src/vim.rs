@@ -271,6 +271,14 @@ impl From<char> for PendingAction {
                 operator: VimOperator::Yank,
                 pending_operand: None,
             },
+            '>' => Self::Operation {
+                operator: VimOperator::Indent,
+                pending_operand: None,
+            },
+            '<' => Self::Operation {
+                operator: VimOperator::Dedent,
+                pending_operand: None,
+            },
             'g' => Self::G,
             'z' => Self::Z,
             'f' => Self::FindChar {
@@ -675,6 +683,12 @@ pub enum VimOperator {
     Uppercase,
     Lowercase,
     ToggleComment,
+    /// Indent one shiftwidth to the right (`>`). A linewise operator: it shifts every line
+    /// covered by the operand, leaving the cursor on the first non-whitespace of the affected line.
+    Indent,
+    /// Dedent one shiftwidth to the left (`<`). A linewise operator that removes only existing
+    /// leading indentation, leaving the cursor on the first non-whitespace of the affected line.
+    Dedent,
 }
 
 impl From<char> for VimOperator {
@@ -686,6 +700,8 @@ impl From<char> for VimOperator {
             '~' => Self::ToggleCase,
             'u' => Self::Lowercase,
             'U' => Self::Uppercase,
+            '>' => Self::Indent,
+            '<' => Self::Dedent,
             _ => panic!("invalid char for VimOperator: {c}"),
         }
     }
@@ -952,7 +968,8 @@ impl VimFSA {
                     },
                 ),
                 'r' => self.change_mode(VimMode::Replace.into()),
-                'g' | 'd' | 'c' | 'y' | 'z' | 'f' | 'F' | 't' | 'T' | '[' | ']' | '"' => {
+                'g' | 'd' | 'c' | 'y' | 'z' | 'f' | 'F' | 't' | 'T' | '[' | ']' | '"' | '<'
+                | '>' => {
                     self.pending_action = Some(PendingAction::from(c));
                     return None;
                 }
@@ -1173,6 +1190,13 @@ impl VimFSA {
             }
             // Support gcc (toggle comment line)
             'c' if operator == VimOperator::ToggleComment => {
+                self.create_operation(operator, VimOperand::Line)
+            }
+            // Doubled operators act on the current line(s): `>>` indents, `<<` dedents.
+            '>' if operator == VimOperator::Indent => {
+                self.create_operation(operator, VimOperand::Line)
+            }
+            '<' if operator == VimOperator::Dedent => {
                 self.create_operation(operator, VimOperand::Line)
             }
             'i' | 'a' | 'g' | 'f' | 'F' | 't' | 'T' | '[' | ']' => {
@@ -1492,7 +1516,7 @@ impl VimFSA {
                     return None;
                 }
             }
-            'd' | 'D' | 'y' | 'Y' | 'x' | 'X' | '~' | 'u' | 'U' => {
+            'd' | 'D' | 'y' | 'Y' | 'x' | 'X' | '~' | 'u' | 'U' | '<' | '>' => {
                 let event_type = self.create_visual_operator(c, motion_type);
                 self.mode = VimMode::Normal;
                 event_type

@@ -198,7 +198,8 @@ impl VimHandler for CodeEditorView {
                             VimMotion::Paragraph(direction) => {
                                 model.vim_move_by_paragraph(operand_count, direction, true, ctx);
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = *operator != VimOperator::Change;
+                                    let include_newline =
+                                        !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
                                     model.vim_extend_selection_linewise(include_newline, ctx);
                                 }
                             }
@@ -206,7 +207,7 @@ impl VimHandler for CodeEditorView {
                                 model.vim_select_to_buffer_end(ctx);
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
-                                        *operator != VimOperator::Change,
+                                        !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent),
                                         ctx,
                                     );
                                 }
@@ -215,7 +216,7 @@ impl VimHandler for CodeEditorView {
                                 model.vim_select_to_buffer_start(ctx);
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
-                                        *operator != VimOperator::Change,
+                                        !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent),
                                         ctx,
                                     );
                                 }
@@ -255,7 +256,8 @@ impl VimHandler for CodeEditorView {
                                 );
 
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = *operator != VimOperator::Change;
+                                    let include_newline =
+                                        !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
                                     model.vim_extend_selection_linewise(include_newline, ctx);
                                 }
                             }
@@ -278,8 +280,13 @@ impl VimHandler for CodeEditorView {
                             );
                         }
 
-                        let include_newline = operator != &VimOperator::Change
-                            && operator != &VimOperator::ToggleComment;
+                        let include_newline = !matches!(
+                            operator,
+                            VimOperator::Change
+                                | VimOperator::ToggleComment
+                                | VimOperator::Indent
+                                | VimOperator::Dedent
+                        );
                         model.vim_extend_selection_linewise(include_newline, ctx);
                     }
                     VimOperand::TextObject(text_object) => {
@@ -431,6 +438,20 @@ impl VimHandler for CodeEditorView {
                     }
                 });
             }
+            VimOperator::Indent | VimOperator::Dedent => {
+                self.model.update(ctx, |model, ctx| {
+                    selection_change(model, ctx);
+                    // `>` indents (shift right) and `<` dedents (shift left), reusing the same
+                    // primitive as Tab/Shift-Tab. Indent operators are linewise, so this only
+                    // ever shifts whole lines regardless of the operand's motion type, and only
+                    // ever adjusts leading indentation.
+                    let shift = *operator == VimOperator::Dedent;
+                    model.indent(shift, ctx);
+                    // Return to a Normal-mode cursor on the first non-whitespace of the affected
+                    // line, matching the existing linewise operators (e.g. `gc`).
+                    model.vim_move_to_first_nonwhitespace(false, ctx);
+                });
+            }
         }
     }
 
@@ -518,8 +539,10 @@ impl VimHandler for CodeEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.model.update(ctx, |model, ctx| {
-            // Compute the visual selection
-            let include_newline = *operator != VimOperator::Change;
+            // Compute the visual selection. Indent/dedent exclude the trailing newline so the
+            // shift primitive does not advance onto the next line.
+            let include_newline =
+                !matches!(*operator, VimOperator::Change | VimOperator::Indent | VimOperator::Dedent);
             model.vim_visual_selection_range(motion_type, include_newline, ctx);
 
             if matches!(
@@ -576,6 +599,12 @@ impl VimHandler for CodeEditorView {
                     } else {
                         model.vim_clear_selections(ctx);
                     }
+                }
+                VimOperator::Indent | VimOperator::Dedent => {
+                    // `>` indents (shift right) and `<` dedents (shift left) on every touched line.
+                    let shift = *operator == VimOperator::Dedent;
+                    model.indent(shift, ctx);
+                    model.vim_move_to_first_nonwhitespace(false, ctx);
                 }
             }
         });

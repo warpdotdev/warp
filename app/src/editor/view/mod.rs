@@ -2408,6 +2408,10 @@ impl VimHandler for EditorView {
             VimOperator::ToggleComment => {
                 // Commenting is not enabled for the EditorView.
             }
+            VimOperator::Indent | VimOperator::Dedent => {
+                // Indent/dedent operators are code-editor-only and are not enabled for the
+                // terminal command-input editor, so this is a deliberate no-op here.
+            }
         }
     }
 
@@ -2748,6 +2752,10 @@ impl VimHandler for EditorView {
             }
             VimOperator::ToggleComment => {
                 // Commenting is not enabled for the EditorView.
+            }
+            VimOperator::Indent | VimOperator::Dedent => {
+                // Indent/dedent operators are code-editor-only and are not enabled for the
+                // terminal command-input editor, so this is a deliberate no-op here.
             }
         }
     }
