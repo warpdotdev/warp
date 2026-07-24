@@ -309,6 +309,166 @@ fn transferred_tab_workspace(
     workspace
 }
 
+/// Subscribes to a terminal view's `Event::Resize` and returns a shared counter
+/// that increments each time the terminal is resized.
+fn resize_event_counter(
+    app: &mut App,
+    terminal_view: &ViewHandle<terminal::view::TerminalView>,
+) -> std::rc::Rc<std::cell::Cell<usize>> {
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let counter_for_cb = counter.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(terminal_view, move |_, event, _| {
+            if matches!(event, terminal::view::Event::Resize { .. }) {
+                counter_for_cb.set(counter_for_cb.get() + 1);
+            }
+        });
+    });
+    counter
+}
+
+/// Regression test: tearing a pane out of a tab into a new tab must resize the
+/// panes left behind in the source tab.
+///
+/// Terminal PTY sizing is driven by layout (`after_terminal_view_layout` ->
+/// `resize_internal`), and only the active tab's pane group is laid out. When a
+/// pane is torn out into another tab the source tab is backgrounded, so the
+/// remaining panes never re-lay-out and keep their old dimensions. The fix
+/// refreshes a tab's terminal sizes when it becomes active again, which emits a
+/// resize on the panes left behind so they reflow to the freed space.
+#[test]
+fn test_moving_pane_to_new_tab_resizes_remaining_panes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        // The source tab starts with one terminal (A); split to add a second (B).
+        let source_pane_group = workspace.read(&app, |workspace, _| {
+            workspace.active_tab_pane_group().clone()
+        });
+        let (pane_a_id, pane_b_id) = source_pane_group.update(&mut app, |panes, ctx| {
+            let pane_a_id = panes.pane_id_by_index(0).expect("pane A should exist");
+            let pane_b_id = PaneId::from(panes.add_terminal_pane(Direction::Right, None, ctx));
+            (pane_a_id, pane_b_id)
+        });
+        let terminal_a = source_pane_group.read(&app, |panes, ctx| {
+            panes
+                .terminal_view_from_pane_id(pane_a_id, ctx)
+                .expect("pane A should have a terminal view")
+        });
+        let resize_count = resize_event_counter(&mut app, &terminal_a);
+
+        // Tear pane B into a new tab, mirroring the drag-to-new-tab path
+        // (`remove_pane_for_move` + `add_tab_from_existing_pane`). This switches
+        // the active tab away from the source tab, backgrounding it.
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane = workspace
+                .active_tab_pane_group()
+                .update(ctx, |panes, ctx| {
+                    panes.remove_pane_for_move(&pane_b_id, ctx)
+                })
+                .expect("pane B should be removed for the move");
+            let (new_idx, group_id) = workspace.new_tab_index_and_group(ctx);
+            workspace.add_tab_from_existing_pane(pane, new_idx, group_id, ctx);
+        });
+
+        let source_group_id = source_pane_group.id();
+        let source_tab_index = workspace.read(&app, |workspace, _| {
+            workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == source_group_id)
+                .expect("source tab should still exist")
+        });
+        assert_ne!(
+            workspace.read(&app, |workspace, _| workspace.active_tab_index()),
+            source_tab_index,
+            "tearing a pane into a new tab should switch away from the source tab"
+        );
+
+        // Only measure resizes triggered by reactivating the source tab.
+        resize_count.set(0);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.activate_tab(source_tab_index, ctx);
+        });
+
+        assert!(
+            resize_count.get() >= 1,
+            "reactivating the source tab must resize the pane left behind so it reflows to the \
+             space freed by the torn-out pane, but no resize was emitted"
+        );
+    });
+}
+
+/// Regression test for the same defect when a pane is dragged into an existing
+/// tab (the `SwitchTabFocusAndMovePane` path), which also backgrounds the source
+/// tab via `set_active_tab_index`.
+#[test]
+fn test_moving_pane_into_existing_tab_resizes_remaining_panes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        // Create a second (destination) tab, then return to the source tab.
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.activate_tab(0, ctx);
+        });
+
+        // The source tab (index 0) starts with one terminal (A); add a second (B).
+        let source_pane_group = workspace.read(&app, |workspace, _| {
+            workspace.active_tab_pane_group().clone()
+        });
+        let (pane_a_id, pane_b_id) = source_pane_group.update(&mut app, |panes, ctx| {
+            let pane_a_id = panes.pane_id_by_index(0).expect("pane A should exist");
+            let pane_b_id = PaneId::from(panes.add_terminal_pane(Direction::Right, None, ctx));
+            (pane_a_id, pane_b_id)
+        });
+        let terminal_a = source_pane_group.read(&app, |panes, ctx| {
+            panes
+                .terminal_view_from_pane_id(pane_a_id, ctx)
+                .expect("pane A should have a terminal view")
+        });
+        let resize_count = resize_event_counter(&mut app, &terminal_a);
+
+        // Move pane B into the existing destination tab, mirroring
+        // `SwitchTabFocusAndMovePane`: remove from the source group, switch to
+        // the destination tab, and add the pane there.
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane = workspace
+                .active_tab_pane_group()
+                .update(ctx, |panes, ctx| {
+                    panes.remove_pane_for_move(&pane_b_id, ctx)
+                })
+                .expect("pane B should be removed for the move");
+            workspace.set_active_tab_index(1, ctx);
+            workspace.active_tab_pane_group().update(ctx, |panes, ctx| {
+                panes.add_pane_as_hidden(pane, Direction::Right, ctx)
+            });
+        });
+
+        assert_ne!(
+            workspace.read(&app, |workspace, _| workspace.active_tab_index()),
+            0,
+            "moving a pane into an existing tab should switch away from the source tab"
+        );
+
+        // Only measure resizes triggered by reactivating the source tab.
+        resize_count.set(0);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.activate_tab(0, ctx);
+        });
+
+        assert!(
+            resize_count.get() >= 1,
+            "reactivating the source tab must resize the pane left behind so it reflows to the \
+             space freed by the moved pane, but no resize was emitted"
+        );
+    });
+}
+
 #[test]
 fn test_tab_bar_traffic_light_space_regression_for_resource_center_overlap() {
     // Regression for #10139: the Resource Center/right panel can be open on

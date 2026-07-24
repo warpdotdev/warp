@@ -15994,7 +15994,13 @@ impl TerminalView {
         Appearance::as_ref(ctx)
     }
 
-    fn refresh_size(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Re-issues the current size as a resize. This invalidates the view so it
+    /// re-lays-out, which lets a subsequent layout pass reflow the terminal to
+    /// its (possibly changed) available space. Callable from the pane group so
+    /// that a tab which was backgrounded while the layout changed (e.g. a pane
+    /// was torn out into another tab) resizes its remaining terminals once it
+    /// becomes active again.
+    pub fn refresh_size(&mut self, ctx: &mut ViewContext<Self>) {
         self.resize_internal(
             SizeUpdateBuilder::for_refresh(*self.size_info).build(self, ctx),
             ctx,

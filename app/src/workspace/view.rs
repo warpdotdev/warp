@@ -5444,6 +5444,16 @@ impl Workspace {
         self.notify_terminal_focus_change(focused_terminal_view_id, ambient_agent_task_id, ctx);
 
         self.update_active_session(ctx);
+
+        // Terminal PTY sizing is driven by layout, and only the active tab's
+        // pane group is laid out. A tab that was backgrounded while its layout
+        // changed (e.g. a pane was torn out of it into another tab) keeps its
+        // stale terminal sizes; refreshing on activation reflows the remaining
+        // panes to reclaim the freed space.
+        let active_pane_group = self.active_tab_pane_group().clone();
+        active_pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.refresh_terminal_sizes(ctx);
+        });
     }
 
     fn update_window_title(&self, ctx: &mut ViewContext<Self>) {
@@ -16603,6 +16613,15 @@ impl Workspace {
                                     self.tabs[self.active_tab_index].default_directory_color =
                                         default;
                                 }
+
+                                // The source tab is about to be backgrounded
+                                // now that one of its panes has been torn out.
+                                // Reflow its remaining terminals so they claim
+                                // the freed space instead of keeping their old
+                                // (pre-removal) dimensions.
+                                pane_group.update(ctx, |pane_group, ctx| {
+                                    pane_group.refresh_terminal_sizes(ctx);
+                                });
                             }
                         }
                         #[cfg_attr(target_family = "wasm", allow(unused_variables))]
@@ -16790,6 +16809,12 @@ impl Workspace {
                     self.set_active_tab_index(*tab_idx, ctx);
                     self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                         pane_group.add_pane_as_hidden(pane, *hidden_pane_preview_direction, ctx)
+                    });
+                    // The source tab is now backgrounded after losing a pane;
+                    // reflow its remaining terminals so they claim the freed
+                    // space on their next layout.
+                    pane_group.update(ctx, |pane_group, ctx| {
+                        pane_group.refresh_terminal_sizes(ctx);
                     });
                 }
             }
