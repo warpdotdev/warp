@@ -597,6 +597,7 @@ fn run_task(
                 ambient::get_ambient_agent_task_status(ctx, global_options, args)
             }
         }
+        TaskCommand::Timeline(args) => ambient::get_run_timeline(ctx, global_options, args),
         TaskCommand::Conversation(conv_cmd) => {
             if !FeatureFlag::ConversationApi.is_enabled() {
                 return Err(anyhow::anyhow!(
@@ -1547,6 +1548,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Run(task_cmd) => match task_cmd {
             TaskCommand::List { .. } => true,
             TaskCommand::Get { .. } => true,
+            TaskCommand::Timeline { .. } => true,
             TaskCommand::Conversation { .. } => true,
             TaskCommand::Message { .. } => true,
         },
@@ -1770,6 +1772,7 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                 CliTelemetryEvent::TaskGet
             }
         }
+        CliCommand::Run(TaskCommand::Timeline(_)) => CliTelemetryEvent::RunTimelineGet,
         CliCommand::Run(TaskCommand::Conversation(_)) => CliTelemetryEvent::ConversationGet,
         CliCommand::Run(TaskCommand::Message(message_cmd)) => match message_cmd {
             MessageCommand::Watch(_) => CliTelemetryEvent::RunMessageWatch {

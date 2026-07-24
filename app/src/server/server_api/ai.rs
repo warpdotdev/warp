@@ -407,6 +407,24 @@ pub struct AgentRunClientSetupMetricPayload {
     pub is_error: bool,
 }
 
+/// A single setup/lifecycle event recorded for a cloud agent run.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct RunTimelineEvent {
+    pub event_uuid: String,
+    pub run_id: String,
+    pub execution_id: Option<i64>,
+    pub event_type: String,
+    pub occurred_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+}
+
+/// Response body for the `GET /agent/runs/:runId/timeline` endpoint.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct RunTimelineResponse {
+    pub events: Vec<RunTimelineEvent>,
+}
+
 impl AgentRunClientEventRequest {
     pub fn timeline_event(event_name: impl Into<String>, timestamp: DateTime<Utc>) -> Self {
         Self {
@@ -1483,6 +1501,12 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         run_id: &str,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+
+    /// Fetch the setup/lifecycle timeline events for a cloud agent run.
+    async fn get_run_timeline(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<RunTimelineResponse, anyhow::Error>;
 
     /// Generates AI copy for code-review flows: commit messages at dialog-open
     /// time and PR titles / bodies at confirm time. `output_type` in the
@@ -2915,6 +2939,16 @@ impl AIClient for ServerApi {
     ) -> anyhow::Result<serde_json::Value, anyhow::Error> {
         let response: serde_json::Value = self
             .get_public_api(&format!("agent/runs/{run_id}/conversation"))
+            .await?;
+        Ok(response)
+    }
+
+    async fn get_run_timeline(
+        &self,
+        run_id: &str,
+    ) -> anyhow::Result<RunTimelineResponse, anyhow::Error> {
+        let response: RunTimelineResponse = self
+            .get_public_api(&format!("agent/runs/{run_id}/timeline"))
             .await?;
         Ok(response)
     }

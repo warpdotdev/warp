@@ -12,6 +12,13 @@ pub enum TaskCommand {
     List(ListTasksArgs),
     /// Get status of a specific ambient agent task.
     Get(TaskGetArgs),
+    /// Show the setup timeline for a specific cloud agent run.
+    ///
+    /// Displays the sequence of setup and lifecycle events recorded during
+    /// the cloud agent's startup process (e.g. claimed, container ready,
+    /// shared session started, agent started). Useful for diagnosing
+    /// cloud start-up failures or slow setup commands.
+    Timeline(TimelineGetArgs),
     /// Retrieve the conversation for a specific run or conversation.
     #[command(subcommand)]
     Conversation(ConversationCommand),
@@ -25,6 +32,7 @@ impl TaskCommand {
         match self {
             TaskCommand::List(_) => "run list",
             TaskCommand::Get(_) => "run get",
+            TaskCommand::Timeline(_) => "run timeline",
             TaskCommand::Conversation(_) => "run conversation",
             TaskCommand::Message(_) => "run message",
         }
@@ -303,6 +311,17 @@ pub struct TaskGetArgs {
     /// Retrieve the conversation for this run instead of the run status.
     #[arg(long = "conversation")]
     pub conversation: bool,
+
+    /// JSON formatting configuration.
+    #[command(flatten)]
+    pub json_output: JsonOutput,
+}
+
+/// Arguments for the `run timeline` subcommand.
+#[derive(Debug, Clone, Args)]
+pub struct TimelineGetArgs {
+    /// The run ID whose setup timeline should be displayed.
+    pub run_id: String,
 
     /// JSON formatting configuration.
     #[command(flatten)]

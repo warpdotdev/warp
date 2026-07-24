@@ -12,7 +12,7 @@ use warp_cli::json_filter::JsonOutput;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
     MessageListArgs, MessageReadArgs, MessageSendArgs, MessageWatchArgs, RunSortByArg,
-    RunSourceArg, RunStateArg, TaskGetArgs,
+    RunSourceArg, RunStateArg, TaskGetArgs, TimelineGetArgs,
 };
 use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_core::channel::ChannelState;
@@ -41,7 +41,7 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::{
     AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, ArtifactType, ExecutionLocation,
-    ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
+    ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder, RunTimelineEvent,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
 use crate::terminal::shared_session;
@@ -1402,6 +1402,19 @@ impl super::output::TableFormat for AgentMessageHeader {
     }
 }
 
+/// Fetch and display the setup timeline for a cloud agent run.
+pub fn get_run_timeline(
+    ctx: &mut AppContext,
+    global_options: GlobalOptions,
+    args: TimelineGetArgs,
+) -> anyhow::Result<()> {
+    let runner = ctx.add_singleton_model(|_ctx| AmbientAgentRunner);
+    let output_format = global_options.output_format;
+    runner.update(ctx, |runner, ctx| {
+        runner.get_timeline(args, output_format, ctx)
+    })
+}
+
 /// Get a conversation by conversation ID.
 pub fn get_conversation(ctx: &mut AppContext, conversation_id: String) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| AmbientAgentRunner);
@@ -1451,6 +1464,84 @@ impl AmbientAgentRunner {
         self.spawn_command(future, ctx);
 
         Ok(())
+    }
+}
+
+impl AmbientAgentRunner {
+    fn get_timeline(
+        &self,
+        args: TimelineGetArgs,
+        output_format: OutputFormat,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+
+        let future = async move {
+            let run_id = args.run_id;
+            let json_output = args.json_output;
+            if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
+                // Return the raw server JSON for machine consumption.
+                let response: serde_json::Value = ai_client
+                    .get_run_timeline(&run_id)
+                    .await
+                    .map(|r| serde_json::to_value(&r).unwrap_or(serde_json::Value::Null))?;
+                super::output::print_raw_json(response, &json_output)?;
+            } else if matches!(output_format, OutputFormat::Ndjson) {
+                let response = ai_client.get_run_timeline(&run_id).await?;
+                for event in &response.events {
+                    super::output::write_json_line(event, std::io::stdout())?;
+                }
+            } else {
+                let response = ai_client.get_run_timeline(&run_id).await?;
+                print_timeline(&run_id, &response.events);
+            }
+            Ok(())
+        };
+        self.spawn_command(future, ctx);
+
+        Ok(())
+    }
+}
+
+/// Pretty-print a list of timeline events to stdout.
+fn print_timeline(run_id: &str, events: &[RunTimelineEvent]) {
+    if events.is_empty() {
+        println!("No timeline events found for run {run_id}.");
+        println!();
+        println!("Timeline events are recorded for remote (cloud) runs only.");
+        println!("Local runs do not go through the same setup state machine and will not have timeline events.");
+        return;
+    }
+
+    println!("\nSetup timeline for run {run_id}:");
+
+    let mut table = crate::ai::agent_sdk::output::standard_table();
+    for event in events {
+        let label = timeline_event_label(&event.event_type);
+        let ts = event
+            .occurred_at
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string();
+        table.add_row(vec![format!("{label}  {ts}")]);
+    }
+    println!("{table}");
+}
+
+/// Return a human-readable label for a timeline event type.
+fn timeline_event_label(event_type: &str) -> &'static str {
+    match event_type {
+        "oz_run_created" => "🆕 Run created",
+        "oz_run_claimed" => "📋 Run claimed by worker",
+        "worker_container_ready" => "📦 Worker container ready",
+        "shared_session_started" => "🔗 Shared session established",
+        "agent_started" => "🤖 Agent started",
+        "oz_run_done" => "✅ Run completed",
+        "oz_run_blocked" => "🛑 Run blocked",
+        "oz_run_cancelled" => "🚫 Run cancelled",
+        "oz_run_failed" => "❌ Run failed",
+        "oz_run_errored" => "⚠️  Run errored",
+        "vm_shutdown" => "🔌 VM shutdown",
+        _ => "📌 Event",
     }
 }
 
