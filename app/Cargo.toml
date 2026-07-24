@@ -536,7 +536,6 @@ default = [
     "agent_mode_primary_xml",
     "agent_mode_pre_plan_xml",
     "command_correction_key",
-    "kitty_images",
     "global_ai_analytics_collection",
     "grep_tool",
     "validate_autosuggestions",
@@ -776,7 +775,6 @@ jemalloc_auto_heap_profiling = ["jemalloc_with_profiling"]
 jemalloc_pprof = ["jemalloc_with_profiling", "dep:jemalloc_pprof"]
 run_generators_with_cmd_exe = []
 inline_ssh_banner = []
-kitty_images = []
 kitty_keyboard_protocol = []
 ligatures = []
 trim_trailing_blank_lines = []

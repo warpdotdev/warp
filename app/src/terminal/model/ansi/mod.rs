@@ -1590,10 +1590,6 @@ where
 
         // 'G' identifies a Kitty image APC message
         if first_byte == b'G' {
-            if !FeatureFlag::KittyImages.is_enabled() {
-                return;
-            }
-
             let parsed_chunk = parse_kitty_chunk(self.state.apc_data[1..].to_vec());
 
             let further_chunks = parsed_chunk.control_data.further_chunks;
