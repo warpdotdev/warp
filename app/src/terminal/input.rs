@@ -11690,8 +11690,18 @@ impl Input {
                     // If we're in classic completion mode and the selected item is equal
                     // to the current word, then we should keep the menu open; the user is cycling.
                     // We early-return because we don't want to filter the menu based on the
-                    // selected item.
+                    // selected item. This must happen before validating the original prefix so
+                    // fuzzy matches that do not start with the original query can still cycle.
                     return false;
+                }
+
+                // Classic completions allow the buffer to diverge from the full original
+                // buffer while cycling, but the original replacement prefix must remain intact.
+                // Otherwise backspacing past the query causes an empty/short prefix search to
+                // restore the stale result set.
+                let original_word = &buffer_text_original[replacement_start..];
+                if !current_word.starts_with(original_word) {
+                    return true;
                 }
             }
 
