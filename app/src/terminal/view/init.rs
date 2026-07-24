@@ -331,6 +331,13 @@ pub fn init(app: &mut AppContext) {
             id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand") & id!("SubshellBanner"),
         ),
         EditableBinding::new(
+            "terminal:reload_shell",
+            "Reload Shell",
+            TerminalAction::ReloadShell,
+        )
+        .with_mac_key_binding("alt-shift-K")
+        .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
+        EditableBinding::new(
             ACCEPT_PROMPT_SUGGESTION_KEYBINDING,
             "Accept Prompt Suggestion",
             TerminalAction::ResolvePromptSuggestion(PromptSuggestionResolution::Accept {

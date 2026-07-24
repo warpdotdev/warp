@@ -678,6 +678,11 @@ impl BackingView for TerminalView {
             );
         }
 
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        items.push(self.reload_shell_menu_item(ctx));
+
         // Split-pane related items.
         if self.split_pane_state(ctx).is_in_split_pane() {
             if !items.is_empty() {

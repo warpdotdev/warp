@@ -68,7 +68,7 @@ use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, Pree
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
-use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::model::terminal_model::{ConversationTranscriptViewerStatus, WithinBlock};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
     RemoteUpdateGuard, apply_cli_agent_state_update,
@@ -3598,7 +3598,7 @@ fn test_clear_buffer() {
 }
 
 #[test]
-fn test_context_menu_includes_clear_when_block_list_non_empty() {
+fn test_context_menu_includes_clear_and_reload_when_block_list_non_empty() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -3618,16 +3618,74 @@ fn test_context_menu_includes_clear_when_block_list_non_empty() {
                 .iter()
                 .filter_map(|item| item.fields().map(|fields| fields.label()))
                 .collect();
+            let clear_index = labels
+                .iter()
+                .position(|label| *label == "Clear Blocks")
+                .unwrap_or_else(|| panic!("Expected `Clear Blocks` menu item, got {labels:?}"));
+            let reload_index = labels
+                .iter()
+                .position(|label| *label == "Reload Shell")
+                .unwrap_or_else(|| panic!("Expected `Reload Shell` menu item, got {labels:?}"));
             assert!(
-                labels.contains(&"Clear Blocks"),
-                "Expected `Clear Blocks` menu item, got {labels:?}"
+                clear_index < reload_index,
+                "Expected `Clear Blocks` to appear before `Reload Shell`, got {labels:?}"
+            );
+            let reload_item = items
+                .iter()
+                .filter_map(|item| item.fields())
+                .find(|fields| fields.label() == "Reload Shell")
+                .expect("Expected `Reload Shell` menu item");
+            assert!(
+                matches!(
+                    reload_item.on_select_action(),
+                    Some(TerminalAction::ReloadShell)
+                ),
+                "Expected `Reload Shell` to trigger `ReloadShell`, got {reload_item:?}"
             );
         });
     })
 }
 
 #[test]
-fn test_context_menu_omits_clear_when_block_list_empty() {
+fn test_context_menu_includes_reload_for_regular_block_right_click() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.simulate_block("ls", "foo");
+                assert!(!model.is_block_list_empty());
+            }
+
+            let menu_source = BlockListMenuSource::RegularBlockRightClick {
+                block_index: BlockIndex::zero(),
+                position_in_terminal_view: Vector2F::zero(),
+            };
+            let items = view.context_menu_items(&menu_source, ctx);
+            let labels: Vec<&str> = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect();
+            let clear_index = labels
+                .iter()
+                .position(|label| *label == "Clear Blocks")
+                .unwrap_or_else(|| panic!("Expected `Clear Blocks` menu item, got {labels:?}"));
+            let reload_index = labels
+                .iter()
+                .position(|label| *label == "Reload Shell")
+                .unwrap_or_else(|| panic!("Expected `Reload Shell` menu item, got {labels:?}"));
+            assert!(
+                clear_index < reload_index,
+                "Expected `Clear Blocks` to appear before `Reload Shell`, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_context_menu_omits_clear_and_includes_reload_when_block_list_empty() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -3647,6 +3705,10 @@ fn test_context_menu_omits_clear_when_block_list_empty() {
                 .filter_map(|item| item.fields().map(|fields| fields.label()))
                 .collect();
             assert!(
+                labels.contains(&"Reload Shell"),
+                "Expected `Reload Shell` menu item when block list is empty, got {labels:?}"
+            );
+            assert!(
                 !labels.contains(&"Clear Blocks"),
                 "Did not expect `Clear Blocks` menu item when block list is empty, got {labels:?}"
             );
@@ -3655,7 +3717,107 @@ fn test_context_menu_omits_clear_when_block_list_empty() {
 }
 
 #[test]
-fn test_context_menu_omits_clear_for_text_right_click() {
+fn test_context_menu_includes_reload_when_session_is_shared() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.simulate_block("ls", "foo");
+                model.set_shared_session_status(SharedSessionStatus::ActiveSharer);
+            }
+
+            let menu_source = BlockListMenuSource::OutsideBlockRightClick {
+                position_in_terminal_view: Vector2F::zero(),
+            };
+            let items = view.context_menu_items(&menu_source, ctx);
+            let labels: Vec<&str> = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect();
+            assert!(
+                labels.contains(&"Reload Shell"),
+                "Expected `Reload Shell` in shared-session right-click menu, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_context_menu_includes_reload_when_terminal_is_read_only() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.set_conversation_transcript_viewer_status(Some(
+                    ConversationTranscriptViewerStatus::Loading,
+                ));
+                assert!(model.is_read_only());
+            }
+
+            let menu_source = BlockListMenuSource::OutsideBlockRightClick {
+                position_in_terminal_view: Vector2F::zero(),
+            };
+            let items = view.context_menu_items(&menu_source, ctx);
+            let labels: Vec<&str> = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect();
+            assert!(
+                labels.contains(&"Reload Shell"),
+                "Expected `Reload Shell` in read-only terminal right-click menu, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_pane_header_menu_includes_reload_for_cli_agent_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    view.view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Codex,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext::default(),
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                        received_rich_notification: false,
+                    },
+                    ctx,
+                );
+            });
+
+            let items = view.pane_header_overflow_menu_items(ctx);
+            let labels: Vec<&str> = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect();
+            assert!(
+                labels.contains(&"Reload Shell"),
+                "Expected `Reload Shell` in CLI-agent pane header menu, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_context_menu_omits_terminal_actions_for_text_right_click() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -3678,6 +3840,10 @@ fn test_context_menu_omits_clear_for_text_right_click() {
             assert!(
                 !labels.contains(&"Clear Blocks"),
                 "Did not expect `Clear Blocks` in text-selection right-click menu, got {labels:?}"
+            );
+            assert!(
+                !labels.contains(&"Reload Shell"),
+                "Did not expect `Reload Shell` in text-selection right-click menu, got {labels:?}"
             );
         });
     })

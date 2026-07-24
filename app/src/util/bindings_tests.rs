@@ -141,6 +141,26 @@ fn test_toggle_maximize_pane_binding_is_editable() {
 }
 
 #[test]
+fn test_reload_shell_binding_is_option_shift_k_on_mac_only() {
+    App::test((), |mut app| async move {
+        app.update(terminal::init);
+
+        app.update(|ctx| {
+            let reload_shell = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == "terminal:reload_shell")
+                .and_then(|binding| trigger_to_keystroke(binding.trigger));
+
+            if OperatingSystem::get().is_mac() {
+                assert_eq!(reload_shell, Keystroke::parse("alt-shift-K").ok());
+            } else {
+                assert_eq!(reload_shell, None);
+            }
+        });
+    });
+}
+
+#[test]
 fn test_terminal_page_scroll_bindings_are_editable() {
     App::test((), |mut app| async move {
         app.update(terminal::init);

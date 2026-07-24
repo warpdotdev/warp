@@ -933,6 +933,9 @@ fn handle_terminal_view_event(
                     terminal_pane.delete_blocks(ctx);
                 }
             }
+            Event::ReloadShellRequested => {
+                group.reload_shell_in_pane(terminal_pane_id, ctx);
+            }
             Event::ShareModalOpened(block_id) => {
                 group.terminal_with_open_share_block_modal = Some(terminal_pane_id);
                 group.share_block_modal.update(ctx, |share_modal, ctx| {

@@ -84,11 +84,13 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::block_list_element::BlockListMenuSource;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::TerminalManager;
 use crate::terminal::local_tty::spawner::PtySpawner;
+use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
@@ -1836,6 +1838,384 @@ fn test_replace_pane_restores_hidden_child_when_replacement_is_already_fullscree
             assert_eq!(
                 panes.pane_id_for_owned_conversation(child_conversation_id, ctx),
                 Some(child_pane_id)
+            );
+        });
+    });
+}
+
+#[test]
+fn test_reload_shell_replaces_terminal_with_fresh_session() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let original_pane_id = get_newly_created_pane_id(panes, &[]);
+            let original_terminal_pane_id = original_pane_id
+                .as_terminal_pane_id()
+                .expect("initial pane should be a terminal pane");
+            let original_terminal_view = panes
+                .terminal_view_from_pane_id(original_pane_id, ctx)
+                .expect("initial pane should have a terminal view");
+            let original_terminal_view_id = original_terminal_view.id();
+            original_terminal_view.update(ctx, |view, _ctx| {
+                let restored_block = SerializedBlock::new_for_test("ls".into(), "foo".into());
+                let mut model = view.model.lock();
+                model
+                    .block_list_mut()
+                    .insert_restored_block(&restored_block);
+                assert!(!model.is_block_list_empty());
+            });
+
+            assert!(panes.reload_shell_in_pane(original_terminal_pane_id, ctx));
+
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, original_pane_id);
+            assert!(!panes.has_pane_id(original_pane_id));
+            assert_eq!(
+                panes.active_session_id(ctx).map(Into::into),
+                Some(replacement_pane_id)
+            );
+
+            let replacement_terminal_view = panes
+                .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                .expect("replacement pane should have a terminal view");
+            assert_ne!(replacement_terminal_view.id(), original_terminal_view_id);
+            assert!(
+                replacement_terminal_view
+                    .as_ref(ctx)
+                    .model
+                    .lock()
+                    .is_block_list_empty()
+            );
+        });
+    });
+}
+
+#[test]
+fn test_reload_shell_replaces_shared_session() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let terminal_pane_id = pane_id
+                .as_terminal_pane_id()
+                .expect("initial pane should be a terminal pane");
+            let terminal_view = panes
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .expect("initial pane should have a terminal view");
+            let terminal_view_id = terminal_view.id();
+
+            terminal_view.update(ctx, |view, _ctx| {
+                view.model
+                    .lock()
+                    .set_shared_session_status(SharedSessionStatus::ActiveSharer);
+            });
+
+            assert!(panes.reload_shell_in_pane(terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, pane_id);
+            assert!(!panes.has_pane_id(pane_id));
+            assert_ne!(
+                panes
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
+                    .id(),
+                terminal_view_id
+            );
+        });
+    });
+}
+
+#[test]
+fn test_reload_shell_replaces_read_only_transcript_viewer() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let terminal_pane_id = pane_id
+                .as_terminal_pane_id()
+                .expect("initial pane should be a terminal pane");
+            let terminal_view = panes
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .expect("initial pane should have a terminal view");
+            let terminal_view_id = terminal_view.id();
+
+            terminal_view.update(ctx, |view, _ctx| {
+                let mut model = view.model.lock();
+                model.set_conversation_transcript_viewer_status(Some(
+                    ConversationTranscriptViewerStatus::Loading,
+                ));
+                assert!(model.is_read_only());
+            });
+
+            assert!(panes.reload_shell_in_pane(terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, pane_id);
+            assert!(!panes.has_pane_id(pane_id));
+            assert_ne!(
+                panes
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
+                    .id(),
+                terminal_view_id
+            );
+        });
+    });
+}
+
+#[test]
+fn test_reload_shell_replaces_ambient_agent_pane() {
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+    let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+    let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+    let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let task_id = new_ambient_agent_task_id();
+
+        pane_group.update(&mut app, |panes, ctx| {
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(ambient_agent_task_for_current_user(task_id));
+            });
+            panes.load_data_into_conversation_transcript_viewer(
+                cloud_conversation_with_ambient_task(task_id),
+                Some(task_id),
+                ctx,
+            );
+
+            let terminal_pane_id = panes
+                .active_session_id(ctx)
+                .expect("ambient pane should become the active terminal pane");
+            let terminal_view = panes
+                .terminal_view_from_pane_id(terminal_pane_id, ctx)
+                .expect("ambient pane should have a terminal view");
+            let terminal_view_id = terminal_view.id();
+            terminal_view.read(ctx, |view, ctx| {
+                assert!(view.is_ambient_agent_session(ctx));
+            });
+
+            assert!(panes.reload_shell_in_pane(terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, terminal_pane_id.into());
+            assert!(!panes.has_pane_id(terminal_pane_id.into()));
+            assert_ne!(
+                panes
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
+                    .id(),
+                terminal_view_id
+            );
+        });
+    });
+}
+
+#[test]
+fn test_reload_shell_replaces_temporary_replacement() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let original_pane_id = get_newly_created_pane_id(panes, &[]);
+            let (replacement_pane, _replacement_view) = panes.create_terminal_pane_data(
+                None,
+                HashMap::new(),
+                IsSharedSessionCreator::No,
+                None,
+                None,
+                ctx,
+            );
+            let replacement_pane_id: PaneId = replacement_pane.terminal_pane_id().into();
+            let replacement_terminal_pane_id = replacement_pane_id
+                .as_terminal_pane_id()
+                .expect("replacement pane should be a terminal pane");
+
+            assert!(panes.replace_pane(original_pane_id, replacement_pane, true, ctx));
+            assert_eq!(
+                panes.original_pane_for_replacement(replacement_pane_id),
+                Some(original_pane_id)
+            );
+
+            let replacement_terminal_view = panes
+                .terminal_view_from_pane_id(replacement_terminal_pane_id, ctx)
+                .expect("replacement pane should have a terminal view");
+            replacement_terminal_view.update(ctx, |view, ctx| {
+                let menu_source = BlockListMenuSource::OutsideBlockRightClick {
+                    position_in_terminal_view: Vector2F::zero(),
+                };
+                let items = view.context_menu_items_for_test(&menu_source, ctx);
+                let labels: Vec<&str> = items
+                    .iter()
+                    .filter_map(|item| item.fields().map(|fields| fields.label()))
+                    .collect();
+                assert!(
+                    labels.contains(&"Reload Shell"),
+                    "Expected `Reload Shell` in temporary replacement menu, got {labels:?}"
+                );
+            });
+
+            assert!(panes.reload_shell_in_pane(replacement_terminal_pane_id, ctx));
+            let fresh_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(fresh_pane_id, original_pane_id);
+            assert_ne!(fresh_pane_id, replacement_pane_id);
+            assert!(!panes.has_pane_id(original_pane_id));
+            assert!(!panes.has_pane_id(replacement_pane_id));
+            assert_eq!(
+                panes.original_pane_for_replacement(replacement_pane_id),
+                None
+            );
+        });
+    });
+}
+
+#[test]
+fn test_reload_shell_ignores_hidden_child_agent_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let child_pane_id = panes.insert_terminal_pane_hidden_for_child_agent(
+                parent_pane_id,
+                HashMap::new(),
+                IsSharedSessionCreator::No,
+                ctx,
+            );
+
+            assert!(!panes.reload_shell_in_pane(child_pane_id, ctx));
+            assert!(panes.has_pane_id(child_pane_id.into()));
+            assert!(!panes.panes.is_pane_in_tree(child_pane_id.into()));
+            assert_eq!(panes.focused_pane_id(ctx), parent_pane_id);
+        });
+    });
+}
+
+#[test]
+fn test_reload_shell_replaces_split_off_child_agent_pane() {
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let child_conversation_id =
+                restore_child_conversation(panes, parent_pane_id, parent_conversation_id, ctx);
+
+            assert!(
+                panes.ensure_hidden_child_agent_pane_for_conversation(child_conversation_id, ctx)
+            );
+            let child_pane_id = panes
+                .unhide_child_agent_pane_for_split_off(child_conversation_id, ctx)
+                .expect("child pane should split into the tree");
+            let child_terminal_pane_id = child_pane_id
+                .as_terminal_pane_id()
+                .expect("child pane should be a terminal pane");
+            let child_terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("child pane should have a terminal view");
+            let child_terminal_view_id = child_terminal_view.id();
+
+            child_terminal_view.update(ctx, |view, ctx| {
+                assert!(view.is_orchestration_split_off());
+                let menu_source = BlockListMenuSource::OutsideBlockRightClick {
+                    position_in_terminal_view: Vector2F::zero(),
+                };
+                let items = view.context_menu_items_for_test(&menu_source, ctx);
+                let labels: Vec<&str> = items
+                    .iter()
+                    .filter_map(|item| item.fields().map(|fields| fields.label()))
+                    .collect();
+                assert!(
+                    labels.contains(&"Reload Shell"),
+                    "Expected `Reload Shell` in split-off child menu, got {labels:?}"
+                );
+            });
+
+            assert!(panes.reload_shell_in_pane(child_terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, child_pane_id);
+            assert!(!panes.has_pane_id(child_pane_id));
+            assert!(!panes.is_child_agent_pane(replacement_pane_id));
+            assert_ne!(
+                panes
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
+                    .id(),
+                child_terminal_view_id
+            );
+        });
+    });
+}
+
+#[test]
+fn test_reload_shell_replaces_split_off_child_agent_tab() {
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let source_pane_group = pane_group.downgrade();
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let child_pane_id = get_newly_created_pane_id(panes, &[]);
+            let child_terminal_pane_id = child_pane_id
+                .as_terminal_pane_id()
+                .expect("child tab pane should be a terminal pane");
+            let parent_conversation_id = start_parent_conversation(panes, child_pane_id, ctx);
+            let child_conversation_id =
+                restore_child_conversation(panes, child_pane_id, parent_conversation_id, ctx);
+            let child_terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("child tab pane should have a terminal view");
+            let child_terminal_view_id = child_terminal_view.id();
+
+            panes.set_child_agent_origin(ChildAgentOrigin {
+                source_pane_group: source_pane_group.clone(),
+                conversation_id: child_conversation_id,
+            });
+            child_terminal_view.update(ctx, |view, ctx| {
+                view.mark_as_orchestration_split_off(ctx);
+            });
+
+            assert!(panes.is_split_off_child_agent_pane(child_pane_id, ctx));
+            child_terminal_view.update(ctx, |view, ctx| {
+                assert!(view.is_orchestration_split_off());
+                let menu_source = BlockListMenuSource::OutsideBlockRightClick {
+                    position_in_terminal_view: Vector2F::zero(),
+                };
+                let items = view.context_menu_items_for_test(&menu_source, ctx);
+                let labels: Vec<&str> = items
+                    .iter()
+                    .filter_map(|item| item.fields().map(|fields| fields.label()))
+                    .collect();
+                assert!(
+                    labels.contains(&"Reload Shell"),
+                    "Expected `Reload Shell` in split-off child tab menu, got {labels:?}"
+                );
+            });
+
+            assert!(panes.reload_shell_in_pane(child_terminal_pane_id, ctx));
+            let replacement_pane_id = panes.focused_pane_id(ctx);
+            assert_ne!(replacement_pane_id, child_pane_id);
+            assert!(!panes.has_pane_id(child_pane_id));
+            assert!(panes.child_agent_origin().is_none());
+            assert_ne!(
+                panes
+                    .terminal_view_from_pane_id(replacement_pane_id, ctx)
+                    .expect("replacement pane should have a terminal view")
+                    .id(),
+                child_terminal_view_id
             );
         });
     });
