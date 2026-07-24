@@ -481,17 +481,29 @@ fn ls_script_for_dir(directory: &TypedPath) -> Option<String> {
     };
     let escaped_dir = warp_util::path::ShellFamily::Posix.shell_escape(dir_str);
 
-    // Get all directories with -print0, which makes all items end in `\0` (null character)
-    // Get all files with -print0, which makes all items end in `\0`
+    // Get all directories with null-delimited output, which makes all items end in `\0`
+    // (null character). Use shell `-d` tests so directory symlinks are classified as
+    // directories, matching local completion behavior and shell `cd` semantics.
+    // Get all files with null-delimited output, which makes all items end in `\0`.
     // Separate the two lists with `\0`
     // Ex: `a\0b\0\c\0\0d.txt\0e.txt\0f.txt\0`
     // Then do the same for anything that is not a directory, and call it a 'File'.
     let command = format!(
         r#"
 cd {escaped_dir} && 
-find . -maxdepth 1 -type d -print0 &&
+find . -maxdepth 1 -exec sh -c 'for entry do
+    [ "$entry" = "." ] && continue;
+    if [ -d "$entry" ]; then
+        printf "%s\0" "$entry";
+    fi;
+done' sh {{}} + &&
 printf '%b' '\0' &&
-find . -maxdepth 1 -not -type d -print0
+find . -maxdepth 1 -exec sh -c 'for entry do
+    [ "$entry" = "." ] && continue;
+    if [ ! -d "$entry" ]; then
+        printf "%s\0" "$entry";
+    fi;
+done' sh {{}} +
             "#
     )
     // Ensure all newlines are escaped, and that the command is a single line, since some
