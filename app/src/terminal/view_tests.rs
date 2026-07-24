@@ -5394,6 +5394,35 @@ fn inline_agent_view_exits_when_tagged_in_long_running_command_is_tagged_out() {
 }
 
 #[test]
+fn ctrl_c_with_retained_block_selection_focuses_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("echo hi", "hi");
+            view.selected_blocks.reset_to_single(BlockIndex::zero());
+            view.handle_action(&TerminalAction::CtrlC, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            // The selection is retained as AI context under `AgentView`…
+            assert!(
+                !view.selected_blocks.is_empty(),
+                "block selection should be retained as AI context"
+            );
+            // …but it must not pin focus to the blocklist: Ctrl+C means the user
+            // wants their prompt back (#13480).
+            assert!(
+                view.input.as_ref(ctx).editor().as_ref(ctx).is_focused(),
+                "ctrl+c should focus the input box despite the retained selection"
+            );
+        });
+    })
+}
+
+#[test]
 fn ctrl_c_after_stop_takeover_cancels_conversation() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

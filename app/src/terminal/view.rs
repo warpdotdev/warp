@@ -8725,7 +8725,15 @@ impl TerminalView {
         );
 
         // We want to focus the input/rich content block if it is active.
-        self.redetermine_global_focus(ctx);
+        //
+        // A block/text selection retained through Ctrl+C (selections are kept as AI context
+        // when AI input or `AgentView` is enabled) shouldn't pin focus to the blocklist:
+        // Ctrl+C signals the user wants their prompt back (#13480). The exception is when
+        // the user is actively making a selection at this very moment.
+        self.redetermine_global_focus_with_policy(
+            SelectionFocusPolicy::HoldsFocusOnlyWhileSelecting,
+            ctx,
+        );
         ctx.notify();
     }
 
