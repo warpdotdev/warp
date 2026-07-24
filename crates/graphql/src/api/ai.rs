@@ -104,6 +104,7 @@ pub struct ScreenshotArtifact {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct FileArtifact {
     pub artifact_uid: cynic::Id,
+    pub title: Option<String>,
     pub filepath: String,
     pub mime_type: String,
     pub description: Option<String>,

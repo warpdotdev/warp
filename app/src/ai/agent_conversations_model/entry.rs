@@ -13,7 +13,7 @@ use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrT
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
-use crate::ai::artifacts::Artifact;
+use crate::ai::artifacts::{Artifact, merge_artifacts};
 use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -527,7 +527,13 @@ pub(super) fn entry_for_task(
                 .as_ref()
                 .and_then(|snapshot| snapshot.environment_id.clone()),
             harness: task_harness(task),
-            artifacts: task.artifacts.clone(),
+            artifacts: merge_artifacts(
+                task.artifacts.clone(),
+                local_conversation_id
+                    .and_then(|conversation_id| history_model.conversation(&conversation_id))
+                    .map(|conversation| conversation.artifacts().to_vec())
+                    .unwrap_or_default(),
+            ),
         },
         backing: AgentConversationBackingData {
             has_loaded_conversation: local_conversation_id

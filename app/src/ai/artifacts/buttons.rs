@@ -5,7 +5,7 @@ use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::elements::{ChildView, Element, Empty, ParentElement, Wrap};
 use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
-use super::{Artifact, file_button_label};
+use super::{Artifact, file_button_label_with_title, is_recording_mime_type};
 use crate::notebooks::NotebookId;
 use crate::terminal::input::MenuPositioning;
 use crate::view_components::action_button::{
@@ -57,15 +57,17 @@ pub enum ArtifactButtonsRowEvent {
     OpenPullRequest { url: String },
     ViewScreenshots { artifact_uids: Vec<String> },
     DownloadFile { artifact_uid: String },
+    OpenRecording { artifact_uid: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactButtonAction {
     OpenPlan { notebook_uid: NotebookId },
     CopyBranch { branch: String },
     OpenPullRequest { url: String },
     ViewScreenshots { artifact_uids: Vec<String> },
     DownloadFile { artifact_uid: String },
+    OpenRecording { artifact_uid: String },
 }
 
 impl Entity for ArtifactButtonsRow {
@@ -115,6 +117,11 @@ impl TypedActionView for ArtifactButtonsRow {
             }
             ArtifactButtonAction::DownloadFile { artifact_uid } => {
                 ArtifactButtonsRowEvent::DownloadFile {
+                    artifact_uid: artifact_uid.clone(),
+                }
+            }
+            ArtifactButtonAction::OpenRecording { artifact_uid } => {
+                ArtifactButtonsRowEvent::OpenRecording {
                     artifact_uid: artifact_uid.clone(),
                 }
             }
@@ -181,13 +188,22 @@ fn collect_buttons(
                 artifact_uid,
                 filepath,
                 filename,
+                title,
+                mime_type,
                 ..
             } => {
-                let button_text = file_button_label(filename, filepath);
+                let button_text = file_button_label_with_title(
+                    title.as_deref(),
+                    filename.as_deref().unwrap_or_default(),
+                    filepath,
+                );
                 let theme = theme.clone();
-                buttons.push(ctx.add_typed_action_view(move |_| {
-                    make_file_button(button_text, artifact_uid.clone(), theme)
-                }));
+                let action = file_artifact_action(artifact_uid, mime_type);
+                buttons.push(
+                    ctx.add_typed_action_view(move |_| {
+                        make_file_button(button_text, action, theme)
+                    }),
+                );
             }
             // External references are reported for reverse-lookup and have no
             // actionable button in the artifact row.
@@ -205,6 +221,17 @@ fn collect_buttons(
     buttons
 }
 
+pub(crate) fn file_artifact_action(artifact_uid: &str, mime_type: &str) -> ArtifactButtonAction {
+    if is_recording_mime_type(mime_type) {
+        ArtifactButtonAction::OpenRecording {
+            artifact_uid: artifact_uid.to_string(),
+        }
+    } else {
+        ArtifactButtonAction::DownloadFile {
+            artifact_uid: artifact_uid.to_string(),
+        }
+    }
+}
 fn make_plan_button(
     title: String,
     notebook_uid: NotebookId,
@@ -270,17 +297,15 @@ fn make_screenshot_button(
 
 fn make_file_button(
     label: String,
-    artifact_uid: String,
+    action: ArtifactButtonAction,
     theme: Arc<dyn ActionButtonTheme>,
 ) -> ActionButton {
-    make_artifact_button(
-        label,
-        Icon::File,
-        "Download file",
-        None,
-        ArtifactButtonAction::DownloadFile { artifact_uid },
-        theme,
-    )
+    let tooltip = if matches!(&action, ArtifactButtonAction::OpenRecording { .. }) {
+        "Open recording"
+    } else {
+        "Download file"
+    };
+    make_artifact_button(label, Icon::File, tooltip, None, action, theme)
 }
 
 fn make_artifact_button(

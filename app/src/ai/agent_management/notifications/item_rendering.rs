@@ -498,5 +498,14 @@ pub(crate) fn handle_notification_artifact_buttons_event(
             );
             crate::ai::artifacts::download_file_artifact(artifact_uid, ctx);
         }
+        ArtifactButtonsRowEvent::OpenRecording { artifact_uid } => {
+            send_telemetry_from_ctx!(
+                AgentManagementTelemetryEvent::ArtifactClicked {
+                    artifact_type: ArtifactType::File
+                },
+                ctx
+            );
+            crate::ai::artifacts::open_recording_artifact(artifact_uid, None, ctx);
+        }
     }
 }

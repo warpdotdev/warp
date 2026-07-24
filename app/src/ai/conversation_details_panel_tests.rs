@@ -13,6 +13,7 @@ use crate::ai::agent::conversation::{
 };
 use crate::ai::ambient_agents::task::{AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
+use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::auth::UserUid;
 use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
@@ -254,6 +255,72 @@ fn test_from_task_includes_linked_directory_when_run_id_matches() {
                     directory: Some(ref task_directory),
                     ..
                 } if task_directory == directory
+            ));
+        });
+    });
+}
+
+#[test]
+fn test_from_task_and_conversation_preserve_recording_artifacts() {
+    App::test((), |mut app| async move {
+        let _history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let recording = Artifact::File {
+            artifact_uid: "recording-task".to_string(),
+            filepath: "outputs/recording.mp4".to_string(),
+            filename: Some("recording.mp4".to_string()),
+            title: Some("Task recording".to_string()),
+            mime_type: "video/mp4".to_string(),
+            description: None,
+            size_bytes: Some(42),
+        };
+        let mut task = create_test_task("550e8400-e29b-41d4-a716-000000004099");
+        task.artifacts = vec![recording.clone()];
+
+        app.update(|ctx| {
+            let task_data = ConversationDetailsData::from_task(&task, None, None, ctx);
+            assert_eq!(task_data.artifacts, vec![recording.clone()]);
+        });
+
+        let conversation_id = AIConversationId::new();
+        let conversation = create_restored_conversation(
+            conversation_id,
+            "root-task",
+            "/tmp/recording-source",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: Some(
+                    serde_json::to_string(&[recording]).expect("serialize recording artifact"),
+                ),
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+
+        app.update(|ctx| {
+            let conversation_data = ConversationDetailsData::from_conversation(&conversation, ctx);
+            assert_eq!(conversation_data.artifacts.len(), 1);
+            assert!(matches!(
+                &conversation_data.artifacts[0],
+                Artifact::File {
+                    artifact_uid,
+                    title: Some(title),
+                    mime_type,
+                    ..
+                } if artifact_uid == "recording-task"
+                    && title == "Task recording"
+                    && mime_type == "video/mp4"
             ));
         });
     });
