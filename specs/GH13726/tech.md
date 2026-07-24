@@ -99,44 +99,62 @@ invariant 7).
 ### 1. Cell model: allow an authored line break (`<br>`)
 
 The minimal, least-disruptive change is to make a cell a sequence of lines rather than a
-single inline run. Two options:
+single inline run. **This spec binds the cell model to one implementable contract: a cell
+is a list of lines, typed `Vec<FormattedTextInline>`.** Every downstream statement in this
+spec (serializers, tests, offset-map handling) depends on this shape, not on a decision
+deferred to implementation time.
 
-- **Option A (recommended): change the cell type to `Vec<FormattedTextInline>`** (a list of
-  lines) in `FormattedTable.headers`/`rows`. This is explicit and makes multi-line cells
-  first-class end to end. It ripples through `from/to_internal_format`, `normalize_shape`,
-  `to_plain_text`, and every editor consumer of `FormattedTable` cells.
-- **Option B (smaller, hackier): keep `FormattedTextInline` but introduce a line-break
-  sentinel fragment** (e.g. a `FormattedTextFragment` flagged as a hard break) that the
-  layout inserts as a forced newline. Less type churn, but every consumer must know to
-  treat the sentinel specially, and it's easy to miss a site.
+The **cell contract** (referenced elsewhere in this spec as "the bound cell model / cell
+contract (item 1)"):
 
-Recommend Option A for correctness, but call the choice out for maintainer review since it
-touches the shared `FormattedTable` type. Whichever is chosen:
+- `FormattedTable.headers` becomes `Vec<Vec<FormattedTextInline>>` (a row of cells, each
+  cell a list of lines); `FormattedTable.rows` becomes `Vec<Vec<Vec<FormattedTextInline>>>`
+  (rows → cells → lines). A single-line cell is the one-element-list case, so simple tables
+  without `<br>` are unaffected in rendering — they just carry a one-line list per cell.
+- This is explicit and makes multi-line cells first-class end to end. It ripples through
+  `from/to_internal_format`, `normalize_shape`, `to_plain_text`, and every editor consumer
+  of `FormattedTable` cells; those sites are enumerated below and in Testing.
+
+A rejected alternative, recorded so the choice is not silently reopened: keeping
+`FormattedTextInline` and introducing a line-break **sentinel fragment** (a
+`FormattedTextFragment` flagged as a hard break) is smaller in type churn but forces every
+consumer to special-case the sentinel — easy to miss a site, and it hides a structural fact
+(a cell has lines) inside fragment flags. Rejected in favor of the explicit list-of-lines
+contract above; do not reintroduce it during implementation.
+
+Given the bound cell contract:
 
 - Layout (`measure_table_cells` / pass-2 in `edit.rs:260-323,1250-1289`) inserts the
   authored break so the cell lays out to ≥2 lines; the existing multi-line `CellLayout`
   machinery (`render/model/mod.rs:1487-1533`) then handles heights/selection.
-- Serialization: `to_internal_format` (`lib.rs:396-411`) must escape an intra-cell break
-  (it can't be a literal `\n`); encode it as `<br>` (or an escape marker) within the
-  tab-separated cell, and decode symmetrically in `from_internal_format`. This is **this
-  spec's own work, not inherited from #13732/PR #13870** — see the explicit dependency
-  note below for why the two do not overlap on this function.
+- Serialization: under the bound cell model a cell is a list of lines, and the tab-separated
+  internal format has no slot for an intra-cell line boundary (a literal `\n` reads as a new
+  row). `to_internal_format` (`lib.rs:396-411`) must therefore **join** a cell's lines with a
+  `<br>` token before writing the tab-separated cell, and `from_internal_format` must **split**
+  that cell text back on `<br>` into the list of lines — a symmetric encode/decode pair. This
+  is **this spec's own work, not inherited from #13732/PR #13870** — see the explicit
+  dependency note below for why the two do not overlap on this function.
 - Keep the per-cell offset maps (`table_cell_offset_maps`) correct across the added break.
 
 **Explicit dependency on #13732 (PR #13870), scoped precisely by function —
 verified against that PR's actual (Oz-approved, merge-pending) diff, not assumed:**
 
-- **`FormattedTable::to_plain_text`'s GFM-export encode side is inherited, not
-  reimplemented.** PR #13870 already patches `to_plain_text` (`lib.rs:431` region) so
-  `inline_to_text` replaces any embedded `\n` in a cell's fragment text with literal
-  `<br>` before joining — this is a general fix over *any* cell whose fragment text
-  contains `\n`, not GFM-pipe-table-specific, so it already covers the HTML-table cells
-  this spec produces once cells hold an embedded break (Option A/B above). This spec's
-  own item 2 work must **not** re-patch `to_plain_text`/`inline_to_markdown` — doing so
-  would either duplicate or conflict with #13870's `f.text.replace('\n', "<br>")` change.
-  Treat `to_plain_text` as already correct once #13870 lands; the round-trip test for
-  the HTML-table-to-GFM-export direction (see Testing, below) exercises inherited
-  behavior, not new code.
+- **`FormattedTable::to_plain_text`'s per-fragment `\n`→`<br>` escaping is inherited, not
+  reimplemented — but joining the cell model's lines is this spec's own work.** PR #13870
+  patches `to_plain_text` (`lib.rs:431` region) so `inline_to_text` replaces any embedded
+  `\n` *inside a cell fragment's text* with literal `<br>` before joining — a general fix
+  over any fragment whose text contains `\n`, not GFM-pipe-table-specific. **Consequence of
+  binding the cell model (this item) to a list of lines:** an authored HTML-table break is
+  a *structural* line boundary between two `FormattedTextInline` entries, not a `\n` inside
+  one fragment's text, so #13870's per-fragment escaping does not by itself join our cells —
+  `to_plain_text` must first flatten each cell's `Vec<FormattedTextInline>` to a single
+  inline run, inserting the literal `<br>` token between lines, and then #13870's inherited
+  per-fragment `\n` escaping applies to any `\n` that was already inside a fragment. This
+  cell-flattening join is this spec's own work (item 2's serialization); the per-fragment
+  `\n`→`<br>` replacement is inherited and must **not** be re-patched — doing so would
+  duplicate or conflict with #13870's `f.text.replace('\n', "<br>")` change. The round-trip
+  test for the HTML-table-to-GFM-export direction (see Testing, below) exercises the
+  inherited per-fragment escaping plus this spec's line-join, and gates on #13870 landing.
 - **`to_internal_format`/`from_internal_format` and `parse_table_cell` are NOT touched
   by #13870 and remain this spec's own responsibility.** #13870's diff (`lib.rs`,
   `markdown_parser.rs`) adds `<br>` recognition only at the GFM/paragraph inline
@@ -320,11 +338,31 @@ same table code paths, so it only affects tables.
 
 ### 4. Security
 
-Only structural tags and `align`/`text-align` (plus `colspan`/`rowspan` read solely to
-ignore) are consulted; all other attributes are dropped (invariant 10). Cell content is
-parsed as inline Markdown/phrasing content and inherits the viewer's existing trust
-boundary. Inline images inside cells resolve through the same asset-source resolver as the
-`<img>` spec — no new source path. No script/event-handler surface.
+On the table's structural elements only structural tags and `align`/`text-align` (plus
+`colspan`/`rowspan` read solely to ignore) are consulted; all other structural-element
+attributes are dropped (product invariant 10). Cell **content** is parsed as inline
+Markdown/phrasing content by the existing `parse_phrasing_content`
+(`html_parser.rs:410-460`) and inherits the viewer's existing trust boundary — this spec
+adds no new phrasing-content path.
+
+**Link behavior (grounds product invariant 3 — the single statement of link behavior):** an
+`<a href>` inside a cell is handled by the existing inline path; this spec adds no new
+navigation code. `href` capture is attribute-driven, not element-arm-driven:
+`update_with_attributes` runs for every phrasing element and stores any `href` into
+`Styling.link` (`html_parser.rs:98-100,440`), which `phrasing_to_formatted_text` emits as
+`Hyperlink::Url` on the fragment (`html_parser.rs:477`) — so the missing dedicated `"a"`
+arm in `parse_phrasing_content` (the `_ => ()` at `:449`, TODO CLD-335) only means link
+*decoration styling* isn't specially applied, **not** that the href is lost. The editor
+then collects each cell's hyperlink fragments into clickable `ParsedUrl` ranges via
+`table_cell_links` (`edit.rs:1352-1372`, wired at layout in `edit.rs:1249`), the identical
+mechanism GFM table cells already use. So an in-cell link navigates through the viewer's
+existing link resolver with **no new navigation path and no new trust boundary** — it is
+the only navigation table markup introduces. (If CLD-335 later adds an `"a"` decoration
+arm, it changes link appearance, not this navigation contract.) Inline images inside cells
+resolve through the same asset-source resolver as the `<img>` spec — no new source path.
+There is **no** script-execution, event-handler (`on*`), form/`action`, or other navigation
+surface: those attributes are dropped as non-consulted structural-element attributes
+(invariant 10), and no phrasing-content arm honors them.
 
 ## Testing and validation
 
@@ -340,8 +378,8 @@ boundary. Inline images inside cells resolve through the same asset-source resol
   demoted to a plain data row (invariant 2).
 - Inline formatting inside cells (bold/link/`code`/inline image) → parsed fragments
   (invariant 3).
-- `<br>` in a cell → multi-line cell (invariant 4); assert the cell holds ≥2 lines under
-  the chosen cell model.
+- `<br>` in a cell → multi-line cell (invariant 4); assert the cell holds ≥2 lines
+  (`Vec<FormattedTextInline>` of length ≥2) per the bound cell model (item 1).
 - **Escape-ambiguity matrix (invariant 4's escape rule):**
   - Authored break: `<td>a<br>b</td>` → cell holds 2 lines, `["a", "b"]`.
   - Escaped literal: `<td>a&lt;br&gt;b</td>` → cell holds 1 line, text `a<br>b` (the
@@ -421,10 +459,11 @@ Markdown file containing an HTML table if exercisable there.
   shipping only the near-free simple-table reader. If maintainers would rather ship the
   simple reader first and defer `<br>`, the cell-model change (item 1) can be split into its
   own follow-up — noted as an option.
-- **Cell-type change touches the shared `FormattedTable`.** Whether Option A (`Vec<lines>`)
-  or Option B (sentinel fragment), this ripples through parser round-trip, editor layout,
-  and offset maps. It's the main risk surface; the tests above target each site. If it
-  starts to sprawl, that's the signal to split simple-table and `<br>` into two PRs.
+- **Cell-type change touches the shared `FormattedTable`.** The bound cell contract (item 1:
+  cell = `Vec<FormattedTextInline>`, a list of lines) ripples through parser round-trip,
+  editor layout, and offset maps. It's the main risk surface; the tests above target each
+  site. If it starts to sprawl, that's the signal to split simple-table and `<br>` into two
+  PRs — but the cell contract does not change if it is split, only which PR lands it.
 - **Merge-order dependency on PR #13870 (#13732).** This spec's `to_plain_text` GFM-export
   round-trip inherits its `<br>`-encoding from #13870, which is Oz-approved and ahead in
   the merge queue but not yet merged as of this writing. If this spec's implementation PR
