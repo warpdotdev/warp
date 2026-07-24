@@ -58,17 +58,17 @@ fn success_result_reports_actual_limit_reached_reason() {
     assert_termination_reason(event, "limit_reached");
 }
 
-/// A stop action joining a conversation `Cancelled` finalization still reports
-/// `cancelled` — previously this was hard-coded, now it flows naturally from
-/// the actual reason.
+/// A stop action joining a conversation `RunCancelled` finalization still
+/// reports `run_cancelled` — previously this was hard-coded, now it flows
+/// naturally from the actual reason.
 #[test]
-fn cancelled_result_reports_cancelled_from_actual_reason() {
+fn cancelled_result_reports_run_cancelled_from_actual_reason() {
     let event = recording_stopped_telemetry(
         "rec",
-        FinalizeReason::Cancelled,
+        FinalizeReason::RunCancelled,
         &StopRecordingResult::Cancelled,
     );
-    assert_termination_reason(event, "cancelled");
+    assert_termination_reason(event, "run_cancelled");
 }
 
 /// The normal happy path: an agent-initiated stop that itself started the
@@ -83,15 +83,15 @@ fn happy_path_agent_stopped_still_reports_agent_stopped() {
     assert_termination_reason(event, "agent_stopped");
 }
 
-/// An `AgentFinished` finalization (the driver's teardown path) surfaces as
-/// `agent_finished`, even if a later stop action would have claimed
+/// A `RunEnded` finalization (the driver's teardown path) surfaces as
+/// `run_ended`, even if a later stop action would have claimed
 /// `StoppedByAgent`.
 #[test]
-fn agent_finished_joined_by_stop_action_reports_agent_finished() {
+fn run_ended_joined_by_stop_action_reports_run_ended() {
     let event = recording_stopped_telemetry(
         "rec",
-        FinalizeReason::AgentFinished,
+        FinalizeReason::RunEnded,
         &success_result(computer_use::RecordingCompletionStatus::StoppedEarly),
     );
-    assert_termination_reason(event, "agent_finished");
+    assert_termination_reason(event, "run_ended");
 }

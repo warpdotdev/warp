@@ -93,7 +93,7 @@ fn dropped_waiter_does_not_discard_finalized_result() {
 
 /// Regression test for a `StopRecording` that joins a finalization started by
 /// a different path (e.g. the exit watcher's `FfmpegExited` / `LimitReached`,
-/// or a conversation `Cancelled`): the joining caller must observe the actual
+/// or a conversation `RunCancelled`): the joining caller must observe the actual
 /// [`FinalizeReason`] that drove finalization, not any reason it might have
 /// claimed when joining. Otherwise `Recording.Stopped.termination_reason`
 /// would misattribute the trigger — e.g. an ffmpeg crash would be reported

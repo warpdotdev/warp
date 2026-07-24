@@ -113,8 +113,11 @@ impl StartRecordingExecutor {
                     send_telemetry_from_ctx!(
                         RecordingTelemetryEvent::Started {
                             recording_id: recording_id.clone(),
-                            width_px,
-                            height_px,
+                            capture_target: match target {
+                                computer_use::Target::Screen => "screen",
+                                computer_use::Target::Window { .. } => "window",
+                            }
+                            .to_string(),
                         },
                         ctx
                     );

@@ -19,10 +19,11 @@ use crate::ai::agent::conversation::AIConversationId;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum FinalizeReason {
     StoppedByAgent,
-    AgentFinished,
+    RunEnded,
     LimitReached,
     FfmpegExited,
-    Cancelled,
+    RunCancelled,
+    FinalizationDropped,
 }
 
 impl FinalizeReason {
@@ -33,10 +34,11 @@ impl FinalizeReason {
     pub(crate) fn telemetry_key(self) -> &'static str {
         match self {
             FinalizeReason::StoppedByAgent => "agent_stopped",
-            FinalizeReason::AgentFinished => "agent_finished",
+            FinalizeReason::RunEnded => "run_ended",
             FinalizeReason::LimitReached => "limit_reached",
             FinalizeReason::FfmpegExited => "encoding_failed",
-            FinalizeReason::Cancelled => "cancelled",
+            FinalizeReason::RunCancelled => "run_cancelled",
+            FinalizeReason::FinalizationDropped => "finalization_dropped",
         }
     }
 
@@ -54,8 +56,8 @@ impl FinalizeReason {
                     "Recording stopped before the agent requested it".to_string()
                 }
             },
-            FinalizeReason::AgentFinished => {
-                "Finalized because the agent finished without stopping the recording".to_string()
+            FinalizeReason::RunEnded => {
+                "Finalized because the agent run ended without stopping the recording".to_string()
             }
             FinalizeReason::LimitReached => {
                 "Stopped at the configured duration or size limit".to_string()
@@ -63,8 +65,11 @@ impl FinalizeReason {
             FinalizeReason::FfmpegExited => {
                 "Capture process exited before the recording was stopped".to_string()
             }
-            FinalizeReason::Cancelled => {
+            FinalizeReason::RunCancelled => {
                 "Recording was interrupted when the conversation was cancelled".to_string()
+            }
+            FinalizeReason::FinalizationDropped => {
+                "Recording finalization ended without producing a result".to_string()
             }
         }
     }

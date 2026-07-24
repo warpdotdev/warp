@@ -1133,7 +1133,7 @@ impl BlocklistAIActionModel {
             // `should_upload = false`.
             if let Some(finalization) = finalize_recording_for_conversation(
                 conversation_id,
-                FinalizeReason::Cancelled,
+                FinalizeReason::RunCancelled,
                 false,
                 ctx,
             ) {

@@ -21,10 +21,9 @@ pub enum RecordingTelemetryEvent {
         /// Client-generated UUID identifying this recording, echoed back in the
         /// matching `Stopped` event.
         recording_id: String,
-        /// The applied capture width in pixels.
-        width_px: i32,
-        /// The applied capture height in pixels.
-        height_px: i32,
+        /// Whether capture is scoped to a specific window (`"window"`) or the
+        /// whole screen (`"screen"`).
+        capture_target: String,
     },
     /// Emitted when a `StopRecording` action's finalization resolves, carrying
     /// the outcome and finalized recording metadata.
@@ -35,19 +34,13 @@ pub enum RecordingTelemetryEvent {
         /// Coarse outcome: `"success"` (artifact published), `"error"`, or
         /// `"cancelled"` (includes deliberate discards and cancellations).
         outcome: String,
-        /// Finalized video duration in seconds, when available.
+        /// Finalized (post-cut) video duration in seconds, when available.
         duration_secs: Option<f64>,
         /// Finalized video size in bytes, when available.
         size_bytes: Option<i64>,
-        /// Whether capture completed normally: `"complete"`, `"incomplete"`, or
-        /// `"unknown"` (no capture metadata, e.g. error/cancel/discard).
-        completion_status: String,
         /// Stable, machine-readable key identifying why finalization ran, mapped
         /// from `FinalizeReason` (e.g. `"agent_stopped"`, `"limit_reached"`).
         termination_reason: String,
-        /// `true` when the recording was uploaded and an artifact uid was
-        /// produced; `false` for errors, cancellations, and discards.
-        artifact_uid_present: bool,
     },
 }
 
@@ -60,29 +53,23 @@ impl TelemetryEvent for RecordingTelemetryEvent {
         match self {
             RecordingTelemetryEvent::Started {
                 recording_id,
-                width_px,
-                height_px,
+                capture_target,
             } => Some(json!({
                 "recording_id": recording_id,
-                "width_px": width_px,
-                "height_px": height_px,
+                "capture_target": capture_target,
             })),
             RecordingTelemetryEvent::Stopped {
                 recording_id,
                 outcome,
                 duration_secs,
                 size_bytes,
-                completion_status,
                 termination_reason,
-                artifact_uid_present,
             } => Some(json!({
                 "recording_id": recording_id,
                 "outcome": outcome,
                 "duration_secs": duration_secs,
                 "size_bytes": size_bytes,
-                "completion_status": completion_status,
                 "termination_reason": termination_reason,
-                "artifact_uid_present": artifact_uid_present,
             })),
         }
     }

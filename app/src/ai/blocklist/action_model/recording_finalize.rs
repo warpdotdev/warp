@@ -39,11 +39,9 @@ impl RecordingFinalization {
                     StopRecordingResult::Error(
                         "Recording finalization ended without producing a result.".to_string(),
                     ),
-                    // The finalization was dropped without a completion signal,
-                    // so the actual reason is unknown; report the same reason
-                    // an ffmpeg crash would surface so downstream telemetry
-                    // still attributes it to a finalization failure.
-                    FinalizeReason::FfmpegExited,
+                    // The result channel closed before delivering a result, so the
+                    // real trigger is unknown and distinct from an ffmpeg crash.
+                    FinalizeReason::FinalizationDropped,
                 )
             }),
             RecordingFinalization::Ready(ready) => ready,

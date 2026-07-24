@@ -37,8 +37,14 @@ fn cancellation_finalization_skips_upload_even_without_actions() {
             pending_group: None,
         };
 
-        let result =
-            finalize_recording(recording, FinalizeReason::Cancelled, false, uploader, None).await;
+        let result = finalize_recording(
+            recording,
+            FinalizeReason::RunCancelled,
+            false,
+            uploader,
+            None,
+        )
+        .await;
 
         assert_eq!(result, StopRecordingResult::Cancelled);
     });
