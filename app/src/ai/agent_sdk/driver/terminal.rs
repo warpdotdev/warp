@@ -222,6 +222,31 @@ impl TerminalDriver {
         ctx.add_model(|ctx| Self::new(terminal_view, false, None, PathBuf::default(), ctx))
     }
 
+    /// Wrap an already-created terminal view in a new `TerminalDriver` model,
+    /// **synthetically advanced to the bootstrapped stage** without spawning a
+    /// PTY. Intended for the wasm32-unknown-unknown + Node prototype
+    /// (REMOTE-2264), where `local_tty` is unavailable: the bootstrap result
+    /// channel is pre-resolved to `Ok(())` so `wait_for_session_bootstrapped`
+    /// returns immediately, and session sharing is disabled. The caller must
+    /// still supply a real `ViewHandle<TerminalView>`; command execution and
+    /// session-sharing remain unavailable on a no-PTY target.
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn create_no_op(
+        terminal_view: ViewHandle<TerminalView>,
+        ctx: &mut AppContext,
+    ) -> ModelHandle<Self> {
+        ctx.add_model(|ctx| {
+            let mut driver = Self::new(terminal_view, false, None, PathBuf::default(), ctx);
+            // Synthetically advance to the bootstrapped stage: resolve the
+            // bootstrap channel immediately so the driver run does not wait for
+            // a PTY bootstrap that will never happen on wasm32-unknown-unknown.
+            if let Some(tx) = driver.bootstrap_tx.take() {
+                let _ = tx.send(Ok(()));
+            }
+            driver
+        })
+    }
+
     /// Set up event subscriptions and session-sharing conditions for an
     /// already-created terminal view.
     fn new(

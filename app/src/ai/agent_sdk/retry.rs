@@ -5,6 +5,10 @@
 //! This module re-exports those symbols so existing agent-SDK call sites keep compiling
 //! without a path change.
 
+// `with_bounded_retry` is only used by native-only driver modules
+// (attachments, snapshot). Gate the re-export on wasm to avoid dead-code
+// warnings.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use crate::server::retry_strategies::with_bounded_retry;
 // Re-export for tests only; the canonical definitions live in retry_strategies.
 #[cfg(test)]

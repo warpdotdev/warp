@@ -6443,6 +6443,7 @@ dependencies = [
  "futures",
  "gloo",
  "http 1.4.0",
+ "js-sys",
  "log",
  "oauth2",
  "opentelemetry",
@@ -6458,6 +6459,7 @@ dependencies = [
  "tracing-subscriber",
  "warp_core",
  "warp_errors",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
 
@@ -15378,6 +15380,7 @@ dependencies = [
  "warpui_core",
  "warpui_extras",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "watcher",
  "web-sys",
  "websocket",
@@ -16069,6 +16072,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_wasm_node"
+version = "0.1.0"
+dependencies = [
+ "warp",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "warp_web_event_bus"
 version = "0.0.0"
 dependencies = [
@@ -16217,6 +16229,7 @@ dependencies = [
  "infer",
  "instant",
  "itertools 0.14.0",
+ "js-sys",
  "lazy_static",
  "libc",
  "log",
@@ -16260,6 +16273,7 @@ dependencies = [
  "warp_errors",
  "warp_util",
  "warpui_core",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "woothee",
 ]
@@ -16411,6 +16425,22 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "wasm_node_proto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "console_error_panic_hook",
+ "js-sys",
+ "prost",
+ "serde",
+ "serde_json",
+ "warp_multi_agent_api",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

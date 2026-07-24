@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use settings::{Setting as _, SettingsManager};
 use warp_core::features::FeatureFlag;
@@ -276,6 +277,34 @@ fn handle_warp_config_change(
         }
     });
 }
+/// When `true`, the headless wasm/CLI path (e.g. the Node prototype,
+/// REMOTE-2264) uses an in-memory `UserPreferences` backend instead of the
+/// browser `LocalStoragePreferences`, which requires a `window`/`localStorage`
+/// global unavailable in a DOM-free runtime. Set by the app at startup via
+/// [`set_headless_wasm_preferences`]; the browser web-GUI path leaves this
+/// `false` and keeps `LocalStoragePreferences`.
+static HEADLESS_WASM_PREFERENCES: AtomicBool = AtomicBool::new(false);
+
+/// Enable the in-memory preferences backend for the headless wasm/CLI path.
+///
+/// Call once at app startup (before `init_private_user_preferences` /
+/// `init_public_user_preferences`) on a DOM-free wasm runtime. Has no effect on
+/// the browser web-GUI path or on native targets.
+pub fn set_headless_wasm_preferences() {
+    HEADLESS_WASM_PREFERENCES.store(true, Ordering::SeqCst);
+}
+
+#[cfg(target_family = "wasm")]
+fn use_headless_in_memory_preferences() -> bool {
+    HEADLESS_WASM_PREFERENCES.load(Ordering::SeqCst)
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[allow(dead_code)]
+fn use_headless_in_memory_preferences() -> bool {
+    false
+}
+
 /// Returns the platform-native preferences backend.
 ///
 /// Used directly for private settings, and also as the fallback for public
@@ -300,7 +329,11 @@ fn init_platform_native_preferences() -> user_preferences::Model {
                 warp_core::channel::ChannelState::data_domain_if_not_default()
             ))
         } else if #[cfg(target_family = "wasm")] {
-            Box::<user_preferences::local_storage::LocalStoragePreferences>::default()
+            if use_headless_in_memory_preferences() {
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default()
+            } else {
+                Box::<user_preferences::local_storage::LocalStoragePreferences>::default()
+            }
         } else {
             unreachable!("Unspecified user preferences implementation for current platform!");
         }
@@ -330,7 +363,11 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
         if #[cfg(test)] {
             (Box::<user_preferences::in_memory::InMemoryPreferences>::default(), None)
         } else if #[cfg(target_family = "wasm")] {
-            (Box::<user_preferences::local_storage::LocalStoragePreferences>::default(), None)
+            if use_headless_in_memory_preferences() {
+                (Box::<user_preferences::in_memory::InMemoryPreferences>::default(), None)
+            } else {
+                (Box::<user_preferences::local_storage::LocalStoragePreferences>::default(), None)
+            }
         } else {
             if warp_core::features::FeatureFlag::SettingsFile.is_enabled() {
                 let (prefs, parse_error) =
