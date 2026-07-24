@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 
@@ -90,11 +91,127 @@ void *unregisterGlobalHotkey(NSUInteger key, NSUInteger modifiers) {
     return nil;
 }
 
-NSRect screenFrame() { return [[NSScreen mainScreen] frame]; }
+static CGFloat rectIntersectionArea(CGRect lhs, CGRect rhs) {
+    CGRect intersection = CGRectIntersection(lhs, rhs);
+    if (CGRectIsNull(intersection) || CGRectIsEmpty(intersection)) {
+        return 0;
+    }
+    return CGRectGetWidth(intersection) * CGRectGetHeight(intersection);
+}
+
+static NSScreen *screenForDisplayId(CGDirectDisplayID displayId) {
+    for (NSScreen *screen in [NSScreen screens]) {
+        NSNumber *screenNumber = [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
+        if ([screenNumber unsignedIntValue] == displayId) {
+            return screen;
+        }
+    }
+    return nil;
+}
+
+static NSScreen *screenForWindowBounds(NSDictionary *boundsDict) {
+    CGRect windowBounds = CGRectNull;
+    if (!CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)boundsDict, &windowBounds) ||
+        CGRectIsNull(windowBounds) || CGRectIsEmpty(windowBounds)) {
+        return nil;
+    }
+
+    uint32_t displayCount = 0;
+    if (CGGetActiveDisplayList(0, NULL, &displayCount) != kCGErrorSuccess || displayCount == 0) {
+        return nil;
+    }
+
+    CGDirectDisplayID *displayIds = calloc(displayCount, sizeof(CGDirectDisplayID));
+    if (!displayIds) {
+        return nil;
+    }
+
+    CGError error = CGGetActiveDisplayList(displayCount, displayIds, &displayCount);
+    if (error != kCGErrorSuccess) {
+        free(displayIds);
+        return nil;
+    }
+
+    CGFloat bestIntersectionArea = 0;
+    CGDirectDisplayID bestDisplayId = 0;
+    for (uint32_t i = 0; i < displayCount; i++) {
+        CGFloat intersectionArea =
+            rectIntersectionArea(windowBounds, CGDisplayBounds(displayIds[i]));
+        if (intersectionArea > bestIntersectionArea) {
+            bestIntersectionArea = intersectionArea;
+            bestDisplayId = displayIds[i];
+        }
+    }
+
+    free(displayIds);
+
+    if (bestDisplayId == 0) {
+        return nil;
+    }
+    return screenForDisplayId(bestDisplayId);
+}
+
+static NSScreen *screenForFrontmostApplication() {
+    NSRunningApplication *frontmostApplication =
+        [[NSWorkspace sharedWorkspace] frontmostApplication];
+    if (!frontmostApplication || [frontmostApplication.bundleIdentifier
+                                     isEqualToString:[[NSBundle mainBundle] bundleIdentifier]]) {
+        return nil;
+    }
+
+    CFArrayRef windowInfoRef = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    if (!windowInfoRef) {
+        return nil;
+    }
+
+    pid_t frontmostPid = frontmostApplication.processIdentifier;
+    NSScreen *result = nil;
+    for (NSDictionary *windowInfo in (NSArray *)windowInfoRef) {
+        NSNumber *ownerPid = [windowInfo objectForKey:(id)kCGWindowOwnerPID];
+        if ([ownerPid intValue] != frontmostPid) {
+            continue;
+        }
+
+        NSNumber *windowLayer = [windowInfo objectForKey:(id)kCGWindowLayer];
+        if (windowLayer && [windowLayer integerValue] != 0) {
+            continue;
+        }
+
+        result = screenForWindowBounds([windowInfo objectForKey:(id)kCGWindowBounds]);
+        if (result) {
+            break;
+        }
+    }
+
+    CFRelease(windowInfoRef);
+    return result;
+}
+
+static NSScreen *activeScreen() {
+    // `NSScreen.mainScreen` follows this process's key/main window and can fall back to the
+    // primary display while Warp is inactive. Global hotkeys are triggered from another app, so
+    // prefer the frontmost app's visible window to keep Active Screen aligned with that Space.
+    NSScreen *frontmostApplicationScreen = screenForFrontmostApplication();
+    if (frontmostApplicationScreen) {
+        return frontmostApplicationScreen;
+    }
+
+    NSPoint mouseLocation = [NSEvent mouseLocation];
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (NSPointInRect(mouseLocation, screen.frame)) {
+            return screen;
+        }
+    }
+
+    return [NSScreen mainScreen];
+}
+
+NSRect screenFrame() { return [activeScreen() frame]; }
 
 NSUInteger activeScreenId() {
-    return [[[[NSScreen mainScreen] deviceDescription] objectForKey:@"NSScreenNumber"]
-        unsignedIntegerValue];
+    return
+        [[[activeScreen() deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntegerValue];
 }
 
 @interface WarpMenuItemDelegate : NSObject <NSMenuDelegate> {
