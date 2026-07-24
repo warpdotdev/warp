@@ -2575,6 +2575,48 @@ fn test_full_grid_clear_resize_then_bounds_to_string_does_not_panic() {
     }
 }
 
+/// Regression guard: resizing a terminal whose contents include wide
+/// (full-width / CJK) characters must not panic.
+///
+/// `resize_storage` converts each cursor to a flat-storage content offset via
+/// `content_offset_at_point`, which can return `Err` for a cursor column that
+/// does not map to tracked content. That result used to be unwrapped with
+/// `.expect()`, which aborts the whole process — the crash users hit when a
+/// terminal showing CJK text (e.g. a Korean directory name in the prompt) was
+/// resized. The conversion now clamps to the nearest content cell instead.
+///
+/// This drives mixed narrow/wide content through a reflow across many widths,
+/// exercising the wide-char cursor-remapping path the fix hardens.
+#[test]
+fn test_resize_with_wide_chars_does_not_panic() {
+    let mut grid = GridHandler::new_for_test(4, 12);
+
+    // A prompt-like first line mixing ASCII and full-width Korean syllables,
+    // a command, then more wide output — the kind of mixed-width content a
+    // Korean directory name produces.
+    for c in "~/한글폴더 $ ls".chars() {
+        grid.input(c);
+    }
+    grid.linefeed();
+    grid.carriage_return();
+    for c in "문서 사진 음악".chars() {
+        grid.input(c);
+    }
+    assert!(
+        grid.grid_storage()[VisibleRow(0)][2]
+            .flags
+            .intersects(Flags::WIDE_CHAR),
+        "expected a wide character in the prompt line"
+    );
+
+    // Reflow across a range of widths (including ones too narrow to hold a wide
+    // char in the trailing column) and back out. Every resize must complete
+    // without panicking.
+    for cols in [6, 3, 1, 5, 2, 8, 1, 4, 10, 2, 12] {
+        grid.resize(SizeInfo::new_without_font_metrics(4, cols));
+    }
+}
+
 /// Write `text` into the grid with `uri` as the active OSC 8 hyperlink, then
 /// close the hyperlink. Cells written for `text` carry the interned id.
 fn input_hyperlinked(grid: &mut GridHandler, uri: &str, text: &str) {

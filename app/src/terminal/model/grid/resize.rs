@@ -284,45 +284,125 @@ impl InitialCursorState {
     fn into_content_offset(self, grid: &GridHandler) -> CursorContentOffset {
         match self {
             Self::AtPoint(point) => {
-                let content_offset = grid
-                    .flat_storage
-                    .content_offset_at_point(point)
-                    .expect("should have a content offset for point");
-                CursorContentOffset::AtPoint(content_offset)
+                CursorContentOffset::AtPoint(content_offset_for_point(grid, point))
             }
             Self::AtCellAfterPoint(point) => {
-                let content_offset = grid
-                    .flat_storage
-                    .content_offset_at_point(point)
-                    .expect("should have a content offset for point");
-                CursorContentOffset::AtCellAfterPoint(content_offset)
+                CursorContentOffset::AtCellAfterPoint(content_offset_for_point(grid, point))
             }
         }
     }
 }
 
+/// Resolves the flat-storage content offset for a cursor `point`, clamping the
+/// column back toward the start of the row if the exact cell has no content
+/// offset.
+///
+/// The cursor `point` is derived from the live grid, whose per-column
+/// accounting can diverge from flat storage's grapheme-run accounting for rows
+/// that contain wide (full-width / CJK) characters: a wide char occupies two
+/// columns but is a single grapheme, and a trailing wide-char spacer can push
+/// `point.col` past the number of content cells flat storage tracks. In that
+/// case `content_offset_at_point` returns `Err`, and unwrapping it used to
+/// abort the whole app whenever a terminal containing wide characters was
+/// resized. Instead, snap the cursor to the nearest preceding cell that does
+/// have a content offset, mirroring the defensive clamping in
+/// [`InitialCursorState::new`].
+///
+/// We walk backward over columns in the cursor's row first (the wide-char
+/// case), and then, if even column 0 of that row is unresolvable, over earlier
+/// rows. If nothing resolves (e.g. flat storage is empty), we return `None`
+/// instead of fabricating a `ByteOffset::zero()`: content offsets count every
+/// byte the grid has *ever* seen, so the earliest tracked offset is generally
+/// greater than zero (and grows as scrollback is truncated from the front). A
+/// zero offset would sit *before* the first stored row, which the later
+/// `content_offset_to_point` conversion rejects — re-introducing the very panic
+/// this function exists to prevent. The caller homes the cursor to the origin
+/// when there is no anchor.
+fn content_offset_for_point(grid: &GridHandler, point: Point) -> Option<ByteOffset> {
+    if let Ok(content_offset) = grid.flat_storage.content_offset_at_point(point) {
+        return Some(content_offset);
+    }
+
+    log::warn!(
+        "no content offset for cursor point {point:?} during resize; \
+         clamping to the nearest preceding content cell"
+    );
+
+    for row in (0..=point.row).rev() {
+        // For the cursor's own row, start just before the failing column; for
+        // earlier rows, start past the last possible column so the whole row is
+        // probed. Column 0 of a non-empty row always resolves, so as long as any
+        // row at or before the cursor holds content, the search terminates with
+        // a valid offset.
+        let start_col = if row == point.row {
+            point.col
+        } else {
+            grid.columns()
+        };
+        for col in (0..start_col).rev() {
+            if let Ok(content_offset) =
+                grid.flat_storage.content_offset_at_point(Point { row, col })
+            {
+                return Some(content_offset);
+            }
+        }
+    }
+
+    // Flat storage tracks no resolvable cell at or before the cursor (e.g. it is
+    // empty). There is nothing to anchor the cursor to, so report the absence
+    // and let the caller home the cursor to the origin.
+    None
+}
+
+/// Resolves a cursor content offset back to the grid point that anchors it, or
+/// `None` when there is no anchor to map.
+///
+/// [`content_offset_for_point`] yields `None` when flat storage holds no cell to
+/// anchor the cursor to. Even a concrete offset can fail to convert if it falls
+/// before the first stored row once scrollback has been truncated from the
+/// front. Neither case has a meaningful prior position, so we return `None` and
+/// let the caller home the cursor to the origin instead of unwrapping and
+/// aborting the app mid-resize. Returning `None` (rather than the origin point)
+/// keeps the no-anchor case distinguishable from a real anchor that happens to
+/// land on the origin, so callers don't apply cell-after semantics to it.
+fn resolve_content_offset(grid: &GridHandler, offset: Option<ByteOffset>) -> Option<Point> {
+    let offset = offset?;
+    grid.flat_storage
+        .content_offset_to_point(offset)
+        .map_err(|err| {
+            log::warn!(
+                "cursor content offset {offset:?} did not map to a point during \
+                 resize ({err:?}); homing cursor to origin"
+            );
+        })
+        .ok()
+}
+
 enum CursorContentOffset {
-    /// Cursor is at the location with the given byte offset in flat storage.
-    AtPoint(ByteOffset),
-    /// Cursor is at cell _after_ the location with the given byte offset in
+    /// Cursor is at the location with the given content offset in flat storage,
+    /// or `None` if flat storage held no cell to anchor the cursor to.
+    AtPoint(Option<ByteOffset>),
+    /// Cursor is at cell _after_ the location with the given content offset in
     /// flat storage.  This helps ensure we properly handle `input_needs_wrap`
-    /// cases.
-    AtCellAfterPoint(ByteOffset),
+    /// cases.  `None` carries the same no-anchor meaning as `AtPoint`.
+    AtCellAfterPoint(Option<ByteOffset>),
 }
 
 impl CursorContentOffset {
     fn into_cursor_point(self, new_cols: usize, grid: &GridHandler) -> FinalCursorState {
+        let origin = Point { row: 0, col: 0 };
         match self {
-            Self::AtPoint(byte_offset) => FinalCursorState::AtPoint(
-                grid.flat_storage
-                    .content_offset_to_point(byte_offset)
-                    .expect("content offset should be valid"),
+            Self::AtPoint(offset) => FinalCursorState::AtPoint(
+                resolve_content_offset(grid, offset).unwrap_or(origin),
             ),
-            Self::AtCellAfterPoint(byte_offset) => {
-                let mut point = grid
-                    .flat_storage
-                    .content_offset_to_point(byte_offset)
-                    .expect("content offset should be valid");
+            Self::AtCellAfterPoint(offset) => {
+                // With no anchor there is nothing to advance past, so home the
+                // cursor to the origin rather than applying cell-after semantics
+                // (which would otherwise nudge the fabricated point to col 1 or
+                // flag `input_needs_wrap`).
+                let Some(mut point) = resolve_content_offset(grid, offset) else {
+                    return FinalCursorState::AtPoint(origin);
+                };
                 // All data is in flat storage at the moment, so we need to
                 // explicitly ask it about row wrapping.
                 let input_needs_wrap =
