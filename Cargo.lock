@@ -15487,6 +15487,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_cli_wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "getrandom 0.2.16",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "warp_cli",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "warp_completer"
 version = "0.1.0"
 dependencies = [
