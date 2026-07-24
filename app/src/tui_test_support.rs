@@ -23,6 +23,7 @@ use crate::ai::blocklist::{
     PersistedAIInputType, QueuedQueryModel,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -113,6 +114,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     });
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(CloudEnvironmentCatalog::new);
     app.add_singleton_model(|_| crate::appearance::Appearance::mock());
 
     app.add_singleton_model(|_| TemplatableMCPServerManager::default());

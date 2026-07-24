@@ -48,8 +48,6 @@ use warpui::{
     ViewHandle,
 };
 
-#[cfg(feature = "local_fs")]
-pub(crate) use self::environment_selector::sort_environments_by_recency;
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };

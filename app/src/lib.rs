@@ -2048,6 +2048,7 @@ pub(crate) fn initialize_app(
             time_of_next_force_object_refresh,
         )
     });
+    ctx.add_singleton_model(ai::cloud_environments::CloudEnvironmentCatalog::new);
 
     let unsynced_actions: Vec<(CloudObjectTypeAndId, ObjectAction)> = object_actions
         .iter()
