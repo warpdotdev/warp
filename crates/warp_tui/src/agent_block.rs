@@ -54,12 +54,24 @@ use crate::tui_markdown::{
 };
 use crate::tui_permission_prompt::TuiPermissionPrompt;
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
+use crate::tui_review_comments::render_review_comments_tool_call;
 const PLANS_URL: &str = "https://www.warp.dev/pricing";
 const BYOK_DOCS_URL: &str =
     "https://docs.warp.dev/agent-platform/inference/bring-your-own-api-key/";
 const COMPARE_PLANS_LABEL: &str = "Compare plans";
 const USE_YOUR_OWN_API_KEYS_LABEL: &str = "Use your own API keys";
 const FAILURE_WARNING_PREFIX: &str = "⚠ ";
+
+fn render_stateless_tool_call_section(
+    action: &AIAgentAction,
+    status: Option<&AIActionStatus>,
+    output_streaming: bool,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    render_review_comments_tool_call(action, status, output_streaming, app).unwrap_or_else(|| {
+        render_fallback_tool_call_section(action, status, output_streaming, None, app)
+    })
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct TuiCodeBlockKey {
@@ -1193,13 +1205,7 @@ impl TuiAIBlock {
                     }
                 }
                 let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                render_fallback_tool_call_section(
-                    action,
-                    status.as_ref(),
-                    output_streaming,
-                    None,
-                    app,
-                )
+                render_stateless_tool_call_section(action, status.as_ref(), output_streaming, app)
             }
             TuiAIBlockSection::Thinking {
                 message_id,
@@ -1539,11 +1545,10 @@ impl TuiAIBlock {
                 TuiAIBlockSection::ToolCall(action) => match self.action_views.get(&action.id) {
                     Some(TuiToolCallView::Plan(view)) if !view.as_ref(app).renders_rich_body() => {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        render_fallback_tool_call_section(
+                        render_stateless_tool_call_section(
                             action,
                             status.as_ref(),
                             output_streaming,
-                            None,
                             app,
                         )
                     }
@@ -1551,22 +1556,20 @@ impl TuiAIBlock {
                         if view.as_ref(app).active_permission_prompt(app).is_none() =>
                     {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        render_fallback_tool_call_section(
+                        render_stateless_tool_call_section(
                             action,
                             status.as_ref(),
                             output_streaming,
-                            None,
                             app,
                         )
                     }
                     Some(view) => TuiContainer::new(Box::new(view.render_child())).finish(),
                     None => {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        render_fallback_tool_call_section(
+                        render_stateless_tool_call_section(
                             action,
                             status.as_ref(),
                             output_streaming,
-                            None,
                             app,
                         )
                     }
