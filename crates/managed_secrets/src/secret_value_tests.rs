@@ -152,6 +152,152 @@ fn test_debug_representation_no_secrets_anthropic_bedrock_access_key() {
     );
 }
 
+mod validate_field_sizes {
+    use crate::secret_value::{
+        ENV_VAR_ANTHROPIC_API_KEY, ENV_VAR_AWS_ACCESS_KEY_ID, ENV_VAR_AWS_BEARER_TOKEN_BEDROCK,
+        ENV_VAR_AWS_SECRET_ACCESS_KEY, ENV_VAR_AWS_SESSION_TOKEN, ENV_VAR_OPENAI_API_KEY,
+        MAX_SECRET_FIELD_BYTES, ManagedSecretValue,
+    };
+
+    const NAME: &str = "my-secret";
+
+    fn oversized_for_key(env_key: &str) -> String {
+        "x".repeat(MAX_SECRET_FIELD_BYTES - env_key.len() + 1)
+    }
+
+    #[test]
+    fn combined_at_limit_is_valid() {
+        let name = "K";
+        let value = "x".repeat(MAX_SECRET_FIELD_BYTES - 2);
+        let secret = ManagedSecretValue::raw_value(value);
+        assert!(secret.validate_field_sizes(name).is_ok());
+    }
+
+    #[test]
+    fn combined_one_over_limit_is_rejected() {
+        let name = "K";
+        let value = "x".repeat(MAX_SECRET_FIELD_BYTES - 1);
+        let secret = ManagedSecretValue::raw_value(value);
+        assert!(secret.validate_field_sizes(name).is_err());
+    }
+
+    #[test]
+    fn raw_value_over_limit_is_rejected() {
+        let secret = ManagedSecretValue::raw_value(oversized_for_key(NAME));
+        let err = secret.validate_field_sizes(NAME).unwrap_err();
+        assert!(err.to_string().contains(&format!("'{NAME}'")));
+    }
+
+    #[test]
+    fn raw_value_combined_name_and_value_over_limit_is_rejected() {
+        let half = MAX_SECRET_FIELD_BYTES / 2;
+        let name = "x".repeat(half + 1);
+        let value = "y".repeat(half);
+        let secret = ManagedSecretValue::raw_value(value);
+        assert!(secret.validate_field_sizes(&name).is_err());
+    }
+
+    #[test]
+    fn anthropic_api_key_over_limit_is_rejected() {
+        let secret =
+            ManagedSecretValue::anthropic_api_key(oversized_for_key(ENV_VAR_ANTHROPIC_API_KEY));
+        let err = secret.validate_field_sizes(NAME).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("'{ENV_VAR_ANTHROPIC_API_KEY}'"))
+        );
+    }
+
+    #[test]
+    fn anthropic_bedrock_api_key_token_over_limit_is_rejected() {
+        let secret = ManagedSecretValue::anthropic_bedrock_api_key(
+            oversized_for_key(ENV_VAR_AWS_BEARER_TOKEN_BEDROCK),
+            "us-east-1",
+        );
+        let err = secret.validate_field_sizes(NAME).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("'{ENV_VAR_AWS_BEARER_TOKEN_BEDROCK}'"))
+        );
+    }
+
+    #[test]
+    fn anthropic_bedrock_access_key_access_key_id_over_limit_is_rejected() {
+        let secret = ManagedSecretValue::anthropic_bedrock_access_key(
+            oversized_for_key(ENV_VAR_AWS_ACCESS_KEY_ID),
+            "secret",
+            None,
+            "us-east-1",
+        );
+        let err = secret.validate_field_sizes(NAME).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("'{ENV_VAR_AWS_ACCESS_KEY_ID}'"))
+        );
+    }
+
+    #[test]
+    fn anthropic_bedrock_access_key_secret_over_limit_is_rejected() {
+        let secret = ManagedSecretValue::anthropic_bedrock_access_key(
+            "AKID",
+            oversized_for_key(ENV_VAR_AWS_SECRET_ACCESS_KEY),
+            None,
+            "us-east-1",
+        );
+        let err = secret.validate_field_sizes(NAME).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("'{ENV_VAR_AWS_SECRET_ACCESS_KEY}'"))
+        );
+    }
+
+    #[test]
+    fn anthropic_bedrock_access_key_session_token_over_limit_is_rejected() {
+        let secret = ManagedSecretValue::anthropic_bedrock_access_key(
+            "AKID",
+            "secret",
+            Some(oversized_for_key(ENV_VAR_AWS_SESSION_TOKEN)),
+            "us-east-1",
+        );
+        let err = secret.validate_field_sizes(NAME).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("'{ENV_VAR_AWS_SESSION_TOKEN}'"))
+        );
+    }
+
+    #[test]
+    fn openai_api_key_over_limit_is_rejected() {
+        let secret =
+            ManagedSecretValue::openai_api_key(oversized_for_key(ENV_VAR_OPENAI_API_KEY), None);
+        let err = secret.validate_field_sizes(NAME).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("'{ENV_VAR_OPENAI_API_KEY}'"))
+        );
+    }
+
+    #[test]
+    fn valid_secret_passes() {
+        let secret = ManagedSecretValue::anthropic_bedrock_access_key(
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfi",
+            Some("session-token".to_owned()),
+            "us-east-1",
+        );
+        assert!(secret.validate_field_sizes(NAME).is_ok());
+    }
+
+    #[test]
+    fn raw_value_name_at_limit_is_rejected() {
+        // A name this long causes `name.len() + 1 == MAX_SECRET_FIELD_BYTES`, which
+        // would underflow the usize subtraction without the upfront guard.
+        let name = "x".repeat(MAX_SECRET_FIELD_BYTES - 1);
+        let secret = ManagedSecretValue::raw_value("value");
+        assert!(secret.validate_field_sizes(&name).is_err());
+    }
+}
+
 /// Test to ensure that the [`ManagedSecretValue::AnthropicBedrockApiKey`] debug representation does not leak secrets.
 #[test]
 fn test_debug_representation_no_secrets_anthropic_bedrock_api_key() {
