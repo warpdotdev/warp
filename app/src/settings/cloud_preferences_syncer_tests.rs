@@ -1144,8 +1144,9 @@ fn test_cloud_pref_not_synced_when_current_value_not_syncable() {
             syncer
         });
 
-        // Run any spawned futures
-        warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+        // Wait for the syncer to spawn its futures for the initial load. `await_spawned_futures`
+        // already polls (up to 5s) rather than sleeping for a fixed duration, so no separate
+        // fixed wait is needed before it.
         await_spawned_futures(&mut app, 3, "initial load").await;
 
         // Verify that the local value remains false and wasn't synced from cloud's true
