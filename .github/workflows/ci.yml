@@ -795,6 +795,33 @@ jobs:
           # Sentry SDK binary releases).
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # The agent-mode-evals repo (warpdotdev/agent-mode-evals) depends on this repo
+  # with the `agent_mode_evals` feature enabled. That feature is not part of any
+  # other CI job's feature set, so code behind `cfg(feature = "agent_mode_evals")`
+  # can silently stop compiling until the eval repo bumps its pinned warp rev.
+  # This job compiles that configuration to catch breakage in the PR that causes it.
+  check-eval-compilation:
+    name: Verify compilation with eval features
+    timeout-minutes: 25
+    # Match the platform used by agent-mode-evals CI.
+    runs-on: ubuntu-latest-large
+    needs: params
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+
+      - name: Verify compilation with the agent_mode_evals feature
+        run: cargo check --locked -p warp --features agent_mode_evals --all-targets
+        env:
+          # Attach the GitHub auth token so that requests to the GitHub API
+          # don't get rate limited during compilation (e.g.: retrieving
+          # Sentry SDK binary releases).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # A final job that collects the results of all of the parallel CI jobs and
   # makes sure that all of them pass.
   #
@@ -816,6 +843,7 @@ jobs:
       - wasm-lint
       - general-lint
       - check-release-compilation
+      - check-eval-compilation
     steps:
       - name: Check CI results
         run: |
