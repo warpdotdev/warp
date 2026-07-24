@@ -10131,7 +10131,6 @@ impl Input {
 
                     // Check if "@" was just typed in a valid context
                     if FeatureFlag::AIContextMenuEnabled.is_enabled()
-                        && (is_ai_input_enabled || FeatureFlag::AtMenuOutsideOfAIMode.is_enabled())
                         && Some(PlainTextEditorViewAction::InsertChar) == last_action
                         && *edit_origin == EditOrigin::UserTyped
                     {
