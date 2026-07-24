@@ -4384,6 +4384,100 @@ fn test_move_selected_tabs_to_group_expands_collapsed_group() {
 }
 
 #[test]
+fn test_merge_selected_tabs_appends_visible_terminal_panes_to_first_selected_tab() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let destination_pane_group = workspace.tabs[0].pane_group.clone();
+            let source_one_pane_group = workspace.tabs[1].pane_group.clone();
+            let source_two_pane_group = workspace.tabs[2].pane_group.clone();
+            let destination_pane_group_id = destination_pane_group.id();
+
+            source_one_pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.handle_action(&PaneGroupAction::Add(Direction::Right), ctx);
+            });
+
+            let mut expected_visible_pane_ids =
+                destination_pane_group.read(ctx, |pane_group, _| pane_group.visible_pane_ids());
+            expected_visible_pane_ids.extend(
+                source_one_pane_group.read(ctx, |pane_group, _| pane_group.visible_pane_ids()),
+            );
+            expected_visible_pane_ids.extend(
+                source_two_pane_group.read(ctx, |pane_group, _| pane_group.visible_pane_ids()),
+            );
+            assert_eq!(expected_visible_pane_ids.len(), 4);
+
+            workspace.activate_tab(0, ctx);
+            workspace.tabs[1].in_multi_selection = true;
+            workspace.tabs[2].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::MergeSelectedTabs, ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
+            assert_eq!(workspace.active_tab_index(), 0);
+            assert_eq!(workspace.tabs[0].pane_group.id(), destination_pane_group_id);
+            assert!(workspace.tabs.iter().all(|tab| !tab.in_multi_selection));
+
+            let actual_visible_pane_ids = workspace.tabs[0]
+                .pane_group
+                .read(ctx, |pane_group, _| pane_group.visible_pane_ids());
+            assert_eq!(actual_visible_pane_ids, expected_visible_pane_ids);
+        });
+    });
+}
+
+#[test]
+fn test_merge_selected_tabs_uses_first_selected_tab_not_active_tab_as_destination() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let destination_pane_group = workspace.tabs[0].pane_group.clone();
+            let middle_pane_group_id = workspace.tabs[1].pane_group.id();
+            let source_pane_group = workspace.tabs[2].pane_group.clone();
+            let destination_pane_group_id = destination_pane_group.id();
+
+            let mut expected_visible_pane_ids =
+                destination_pane_group.read(ctx, |pane_group, _| pane_group.visible_pane_ids());
+            expected_visible_pane_ids
+                .extend(source_pane_group.read(ctx, |pane_group, _| pane_group.visible_pane_ids()));
+            assert_eq!(expected_visible_pane_ids.len(), 2);
+
+            workspace.activate_tab(2, ctx);
+            workspace.tabs[0].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::MergeSelectedTabs, ctx);
+
+            assert_eq!(workspace.tab_count(), 2);
+            assert_eq!(workspace.active_tab_index(), 0);
+            assert_eq!(workspace.tabs[0].pane_group.id(), destination_pane_group_id);
+            assert_eq!(workspace.tabs[1].pane_group.id(), middle_pane_group_id);
+            assert!(workspace.tabs.iter().all(|tab| !tab.in_multi_selection));
+
+            let actual_visible_pane_ids = workspace.tabs[0]
+                .pane_group
+                .read(ctx, |pane_group, _| pane_group.visible_pane_ids());
+            assert_eq!(actual_visible_pane_ids, expected_visible_pane_ids);
+        });
+    });
+}
+
+#[test]
 fn test_new_tab_in_group_expands_collapsed_group_non_member_active() {
     // When the active tab is NOT a member of the group, `new_tab_in_group`
     // must still expand the target group.

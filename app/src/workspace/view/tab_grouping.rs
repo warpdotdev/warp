@@ -2,10 +2,11 @@ use std::collections::HashSet;
 
 use itertools::{Either, Itertools};
 use warp_core::features::FeatureFlag;
-use warpui::{EntityId, UpdateView, ViewContext};
+use warpui::{AppContext, EntityId, UpdateView, ViewContext};
 
 use super::{Workspace, group_member_indices};
 use crate::menu::{MenuItem, MenuItemFields};
+use crate::pane_group::Direction;
 use crate::tab::{MOVE_TO_GROUP_LABEL, TabData};
 use crate::workspace::action::{TabContextMenuAnchor, WorkspaceAction};
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
@@ -457,17 +458,84 @@ impl Workspace {
         ctx.notify();
     }
 
+    pub(super) fn can_merge_selected_tabs(&self, ctx: &AppContext) -> bool {
+        let selected_indices = self.selected_tab_indices();
+        selected_indices.len() >= 2
+            && selected_indices.iter().all(|index| {
+                self.tabs.get(*index).is_some_and(|tab| {
+                    tab.pane_group
+                        .as_ref(ctx)
+                        .can_drain_visible_terminal_panes_for_move()
+                })
+            })
+    }
+
+    pub(super) fn merge_selected_tabs(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::GroupedTabs.is_enabled() {
+            return;
+        }
+
+        let selected_indices = self.selected_tab_indices();
+        if selected_indices.len() < 2 {
+            log::warn!(
+                "merge_selected_tabs called with {} selected tab(s); expected at least 2",
+                selected_indices.len()
+            );
+            return;
+        }
+
+        if !self.can_merge_selected_tabs(ctx) {
+            log::warn!("merge_selected_tabs called with an ineligible tab selection");
+            return;
+        }
+
+        let destination_index = selected_indices[0];
+        let destination_pane_group = self.tabs[destination_index].pane_group.clone();
+        let source_indices = selected_indices[1..].to_vec();
+
+        for source_index in &source_indices {
+            let source_pane_group = self.tabs[*source_index].pane_group.clone();
+            let moved_panes = source_pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.drain_visible_terminal_panes_for_move(ctx)
+            });
+
+            destination_pane_group.update(ctx, |pane_group, ctx| {
+                for pane in moved_panes {
+                    pane_group.add_existing_pane_with_direction(Direction::Right, pane, false, ctx);
+                }
+            });
+        }
+
+        for source_index in source_indices.into_iter().rev() {
+            self.remove_tab(source_index, false, false, ctx);
+        }
+
+        self.activate_tab_internal(destination_index, ctx);
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
     /// Items shown in the multi-tab right-click menu. Composition depends on
     /// the selection: "Create group from tabs" is always there; "Remove from
     /// group" only when the selection has an unambiguous group; "Move to
     /// group" only when there's a destination group worth offering.
-    fn tab_selection_menu_items(&self) -> Vec<MenuItem<WorkspaceAction>> {
+    fn tab_selection_menu_items(&self, ctx: &AppContext) -> Vec<MenuItem<WorkspaceAction>> {
         let shared_group = self.selection_shared_group();
-        let mut menu_items = vec![
+        let mut menu_items = vec![];
+
+        if self.can_merge_selected_tabs(ctx) {
+            menu_items.push(
+                MenuItemFields::new("Merge selected tabs")
+                    .with_on_select_action(WorkspaceAction::MergeSelectedTabs)
+                    .into_item(),
+            );
+        }
+
+        menu_items.push(
             MenuItemFields::new("Create group from tabs")
                 .with_on_select_action(WorkspaceAction::NewTabGroupFromSelectedTabs)
                 .into_item(),
-        ];
+        );
 
         // Only single-group selections have an unambiguous group to leave.
         if shared_group.is_some() {
@@ -505,7 +573,7 @@ impl Workspace {
             return;
         }
 
-        let menu_items = self.tab_selection_menu_items();
+        let menu_items = self.tab_selection_menu_items(ctx);
         ctx.update_view(&self.tab_right_click_menu, |context_menu, view_ctx| {
             context_menu.set_items(menu_items, view_ctx);
         });

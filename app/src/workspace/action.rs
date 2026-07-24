@@ -224,6 +224,9 @@ pub enum WorkspaceAction {
     },
     /// Removes every selected tab from its group (requires a single shared group).
     RemoveSelectedTabsFromGroup,
+    /// Merges every selected tab into the first selected tab by moving visible
+    /// terminal panes into the destination and removing the emptied source tabs.
+    MergeSelectedTabs,
     /// Context-aware "remove from group" entry point for the keybinding:
     /// removes the multi-selection from its shared group when 2+ tabs are
     /// selected, otherwise removes the active tab.
@@ -955,6 +958,7 @@ impl WorkspaceAction {
             | NewTabGroupFromActiveOrSelectedTabs
             | MoveSelectedTabsToGroup { .. }
             | RemoveSelectedTabsFromGroup
+            | MergeSelectedTabs
             | RemoveActiveOrSelectedTabsFromGroup
             | UngroupTabs(_)
             | NewTabInGroup(_)
