@@ -3555,7 +3555,7 @@ impl TypedPane<'_> {
             TypedPane::File => "File",
             TypedPane::Notebook { .. } => "Notebook",
             TypedPane::Workflow { .. } => "Workflow",
-            TypedPane::Settings => "Settings",
+            TypedPane::Settings => "More Settings",
             TypedPane::EnvVarCollection => "Environment Variables",
             TypedPane::EnvironmentManagement => "Environments",
             TypedPane::AIFact => "Rules",
