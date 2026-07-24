@@ -8113,8 +8113,6 @@ fn test_image_attachment_preserves_lock_state() {
 
 #[test]
 fn test_ai_context_menu_closes_when_space_immediately_after_at_symbol() {
-    let _ai_context_menu_enabled = FeatureFlag::AIContextMenuEnabled.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
