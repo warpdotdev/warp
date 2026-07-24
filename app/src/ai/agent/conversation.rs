@@ -635,6 +635,7 @@ impl AIConversation {
                 false,
             )
         };
+        let total_provider_cost_in_cents = conversation_usage_metadata.total_provider_cost_in_cents;
 
         Ok(Self {
             id,
@@ -661,7 +662,7 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
-            total_provider_cost_in_cents: conversation_usage_metadata.total_provider_cost_in_cents,
+            total_provider_cost_in_cents,
             has_usage_metadata,
             optimistic_cli_subagent_subtask_id: None,
             fallback_display_title: None,
