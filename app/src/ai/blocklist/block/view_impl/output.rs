@@ -61,11 +61,11 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome, MessageId,
-    ReadFilesFailedFile, ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, StartRecordingResult, StopRecordingResult,
-    SubagentCall, SubagentType, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UploadArtifactResult,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome, FileContext,
+    FileLocations, MessageId, ReadFilesFailedFile, ReadFilesRequest, ReadFilesResult,
+    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
+    StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
+    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -96,7 +96,9 @@ use crate::ai::blocklist::inline_action::requested_action::{
 };
 use crate::ai::blocklist::inline_action::requested_command::RequestedCommand;
 use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardView;
-use crate::ai::blocklist::inline_action::search_codebase::SearchCodebaseView;
+use crate::ai::blocklist::inline_action::search_codebase::{
+    SearchCodebaseView, grouped_search_codebase_display_files,
+};
 use crate::ai::blocklist::inline_action::suggested_unit_tests::SuggestedUnitTestsView;
 use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
 use crate::ai::blocklist::inline_action::web_search::WebSearchView;
@@ -107,7 +109,7 @@ use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits, should_show_failed_output_usage_notice,
 };
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
-use crate::ai::paths::shell_native_absolute_path;
+use crate::ai::paths::{shell_native_absolute_path, shell_native_path_for_display};
 use crate::ai::skills::{
     SkillManager, SkillOpenOrigin, icon_override_for_skill_name, render_skill_button,
     skill_path_from_location,
@@ -514,7 +516,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                             continue;
                                         }
                                         (
-                                            group_file_contexts_for_display(
+                                            read_files_success_display_paths(
                                                 file_contexts,
                                                 props.shell_launch_data,
                                                 props.current_working_directory,
@@ -524,16 +526,11 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     }
                                     // if not completed/successful, generate a user message without line count
                                     _ => (
-                                        files
-                                            .iter()
-                                            .map(|file| {
-                                                file.to_user_message(
-                                                    props.shell_launch_data,
-                                                    props.current_working_directory,
-                                                    None,
-                                                )
-                                            })
-                                            .collect_vec(),
+                                        read_files_request_display_paths(
+                                            files,
+                                            props.shell_launch_data,
+                                            props.current_working_directory,
+                                        ),
                                         vec![],
                                     ),
                                 };
@@ -1482,6 +1479,13 @@ fn render_search_codebase(
         .search_codebase_executor(app)
         .as_ref(app)
         .root_repo_for_action(id);
+    let root_repo_display = root_repo_path.map(|path| {
+        shell_native_path_for_display(
+            &path.to_string_lossy(),
+            props.shell_launch_data,
+            props.current_working_directory,
+        )
+    });
 
     let requested_action = match status.as_ref() {
         Some(status) => match status {
@@ -1491,11 +1495,11 @@ fn render_search_codebase(
                         ChildView::new(search_codebase_view).finish()
                     }
                     _ => {
-                        let root_repo_path = root_repo_path?;
+                        let root_repo_display = root_repo_display.as_deref()?;
                         renderable_action(
                             props,
                             id,
-                            format!("Search in {}", root_repo_path.to_string_lossy()).as_str(),
+                            format!("Search in {root_repo_display}").as_str(),
                             app,
                             footer,
                             appearance,
@@ -1507,7 +1511,7 @@ fn render_search_codebase(
                 }
             }
             AIActionStatus::Blocked => {
-                let root_repo_path = root_repo_path?;
+                let root_repo_display = root_repo_display.as_deref()?;
 
                 let buttons = props
                     .action_buttons
@@ -1517,7 +1521,7 @@ fn render_search_codebase(
                 renderable_action(
                     props,
                     id,
-                    &root_repo_path.to_string_lossy(),
+                    root_repo_display,
                     app,
                     footer,
                     appearance,
@@ -1541,11 +1545,11 @@ fn render_search_codebase(
                     ChildView::new(search_codebase_view).finish()
                 }
                 _ => {
-                    let root_repo_path = root_repo_path?;
+                    let root_repo_display = root_repo_display.as_deref()?;
                     renderable_action(
                         props,
                         id,
-                        format!("Searching in {}", root_repo_path.to_string_lossy()).as_str(),
+                        format!("Searching in {root_repo_display}").as_str(),
                         app,
                         footer,
                         appearance,
@@ -1592,7 +1596,11 @@ fn render_search_codebase(
                                 let skill = file_locations.and_then(|file_locations| {
                                     parsed_skill_for_common_locations(file_locations, app)
                                 });
-                                let grouped = group_file_contexts_for_display(files, None, None);
+                                let grouped = grouped_search_codebase_display_files(
+                                    files,
+                                    props.shell_launch_data,
+                                    props.current_working_directory,
+                                );
                                 return Some(render_read_files(
                                     props,
                                     id,
@@ -1605,15 +1613,12 @@ fn render_search_codebase(
                             }
                         }
                         SearchCodebaseResult::Failed { reason, .. } => {
-                            let root_repo_path = root_repo_path?;
+                            let root_repo_display = root_repo_display.as_deref()?;
                             let message = match reason {
                                 SearchCodebaseFailureReason::CodebaseNotIndexed => format!(
-                                    "Search in {} failed because the codebase isn't indexed",
-                                    root_repo_path.to_string_lossy(),
+                                    "Search in {root_repo_display} failed because the codebase isn't indexed",
                                 ),
-                                _ => {
-                                    format!("Search in {} failed", root_repo_path.to_string_lossy())
-                                }
+                                _ => format!("Search in {root_repo_display} failed"),
                             };
                             renderable_action(
                                 props,
@@ -1628,12 +1633,11 @@ fn render_search_codebase(
                             .finish()
                         }
                         SearchCodebaseResult::Cancelled => {
-                            let root_repo_path = root_repo_path?;
+                            let root_repo_display = root_repo_display.as_deref()?;
                             renderable_action(
                                 props,
                                 id,
-                                format!("Search in {} cancelled", root_repo_path.to_string_lossy())
-                                    .as_str(),
+                                format!("Search in {root_repo_display} cancelled").as_str(),
                                 app,
                                 footer,
                                 appearance,
@@ -1647,11 +1651,11 @@ fn render_search_codebase(
             },
         },
         None => {
-            let root_repo_path = root_repo_path?;
+            let root_repo_display = root_repo_display.as_deref()?;
             renderable_action(
                 props,
                 id,
-                format!("Search in {}", root_repo_path.to_string_lossy()).as_str(),
+                format!("Search in {root_repo_display}").as_str(),
                 app,
                 footer,
                 appearance,
@@ -1702,8 +1706,6 @@ impl<A: Action> LinkActionConstructors<A> {
     }
 }
 pub struct RenderContext<'a> {
-    pub shell_launch_data: Option<&'a ShellLaunchData>,
-    pub current_working_directory: Option<&'a String>,
     pub detected_links_state: &'a DetectedLinksState,
     pub secret_redaction_state: &'a SecretRedactionState,
 }
@@ -1735,8 +1737,6 @@ impl<'a> From<Props<'a>> for RenderReadFileArg<'a, AIBlockAction> {
     fn from(val: Props<'a>) -> Self {
         Self {
             render_context: RenderContext {
-                shell_launch_data: val.shell_launch_data,
-                current_working_directory: val.current_working_directory,
                 detected_links_state: val.detected_links_state,
                 secret_redaction_state: val.secret_redaction_state,
             },
@@ -1755,20 +1755,7 @@ pub fn render_read_files_text<A: Action>(
     action_index: usize,
 ) -> FormattedTextElement {
     let theme = appearance.theme();
-
-    let file_names = file_names
-        .into_iter()
-        .map(|name| {
-            shell_native_absolute_path(
-                name.as_ref(),
-                render_read_file_args.render_context.shell_launch_data,
-                render_read_file_args
-                    .render_context
-                    .current_working_directory,
-            )
-        })
-        .collect_vec()
-        .join("\n");
+    let file_names = join_display_paths(file_names);
     let mut formatted_files = render_requested_action_body_text(
         file_names.as_str().into(),
         appearance.ui_font_family(),
@@ -1804,6 +1791,44 @@ pub fn render_read_files_text<A: Action>(
         app,
     );
     formatted_files
+}
+fn read_files_request_display_paths(
+    files: &[FileLocations],
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> Vec<String> {
+    files
+        .iter()
+        .map(|file| file.to_user_message(shell_launch_data, current_working_directory, None))
+        .collect()
+}
+
+fn read_files_success_display_paths(
+    files: &[FileContext],
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> Vec<String> {
+    group_file_contexts_for_display(files, shell_launch_data, current_working_directory)
+}
+
+fn join_display_paths(file_names: impl IntoIterator<Item = impl AsRef<str>>) -> String {
+    file_names
+        .into_iter()
+        .map(|name| name.as_ref().to_string())
+        .join("\n")
+}
+
+fn format_failed_read_paths(
+    failed_files: &[ReadFilesFailedFile],
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> String {
+    failed_files
+        .iter()
+        .map(|file| {
+            shell_native_path_for_display(&file.path, shell_launch_data, current_working_directory)
+        })
+        .join("\n")
 }
 
 /// Returns the display text for a `read_skill` action.
@@ -1948,16 +1973,11 @@ fn render_read_files_partial(
         app,
     );
 
-    let failed_paths = failed_files
-        .iter()
-        .map(|file| {
-            shell_native_absolute_path(
-                &file.path,
-                props.shell_launch_data,
-                props.current_working_directory,
-            )
-        })
-        .join("\n");
+    let failed_paths = format_failed_read_paths(
+        failed_files,
+        props.shell_launch_data,
+        props.current_working_directory,
+    );
     let failed_row = render_requested_action_row_for_text(
         failed_paths.into(),
         appearance.ui_font_family(),
@@ -2541,17 +2561,53 @@ fn create_formatted_text_for_grep(
         .as_ref()
         .is_some_and(|status| status.is_queued());
 
+    let formatted_text = formatted_text_for_grep(
+        queries,
+        path,
+        is_cancelled,
+        is_queued,
+        props.shell_launch_data,
+        props.current_working_directory,
+    );
+
+    FormattedTextElement::new(
+        formatted_text,
+        appearance.monospace_font_size(),
+        appearance.ui_font_family(),
+        appearance.monospace_font_family(),
+        theme.main_text_color(theme.background()).into(),
+        Default::default(),
+    )
+    .with_inline_code_properties(
+        Some(
+            if is_queued
+                || (props.model.status(app).is_streaming()
+                    && !props.model.is_first_action_in_output(id, app))
+            {
+                blended_colors::text_disabled(theme, theme.surface_2())
+            } else {
+                theme.terminal_colors().normal.green.into()
+            },
+        ),
+        None,
+    )
+}
+
+fn formatted_text_for_grep(
+    queries: &[String],
+    path: &str,
+    is_cancelled: bool,
+    is_queued: bool,
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> FormattedText {
     let display_path = if path == "." {
         "the current directory".to_string()
     } else {
-        shell_native_absolute_path(
-            path,
-            props.shell_launch_data,
-            props.current_working_directory,
-        )
+        shell_native_path_for_display(path, shell_launch_data, current_working_directory)
     };
 
-    let formatted_text = if queries.len() == 1 {
+    if queries.len() == 1 {
         let query = queries
             .first()
             .expect("Queries slice should have an element");
@@ -2601,7 +2657,36 @@ fn create_formatted_text_for_grep(
         }
 
         FormattedText::new(lines)
-    };
+    }
+}
+
+/// Creates a FormattedText object with inline code formatting for file glob queries
+fn create_formatted_text_for_file_glob(
+    props: Props,
+    id: &AIAgentActionId,
+    patterns: &[String],
+    path: Option<&str>,
+    app: &AppContext,
+) -> FormattedTextElement {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    let action_status = props.action_model.as_ref(app).get_action_status(id);
+    let is_cancelled = action_status
+        .as_ref()
+        .is_some_and(|status| status.is_cancelled());
+    let is_queued = action_status
+        .as_ref()
+        .is_some_and(|status| status.is_queued());
+
+    let formatted_text = formatted_text_for_file_glob(
+        patterns,
+        path,
+        is_cancelled,
+        is_queued,
+        props.shell_launch_data,
+        props.current_working_directory,
+    );
 
     FormattedTextElement::new(
         formatted_text,
@@ -2626,36 +2711,21 @@ fn create_formatted_text_for_grep(
     )
 }
 
-/// Creates a FormattedText object with inline code formatting for file glob queries
-fn create_formatted_text_for_file_glob(
-    props: Props,
-    id: &AIAgentActionId,
+fn formatted_text_for_file_glob(
     patterns: &[String],
     path: Option<&str>,
-    app: &AppContext,
-) -> FormattedTextElement {
-    let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
-
-    let action_status = props.action_model.as_ref(app).get_action_status(id);
-    let is_cancelled = action_status
-        .as_ref()
-        .is_some_and(|status| status.is_cancelled());
-    let is_queued = action_status
-        .as_ref()
-        .is_some_and(|status| status.is_queued());
-
+    is_cancelled: bool,
+    is_queued: bool,
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> FormattedText {
     let path = path
         .map(|path| {
-            shell_native_absolute_path(
-                path,
-                props.shell_launch_data,
-                props.current_working_directory,
-            )
+            shell_native_path_for_display(path, shell_launch_data, current_working_directory)
         })
         .unwrap_or_else(|| "the current directory".to_string());
 
-    let formatted_text = if patterns.len() == 1 {
+    if patterns.len() == 1 {
         let pattern = patterns
             .first()
             .expect("Patterns slice should have an element");
@@ -2705,29 +2775,7 @@ fn create_formatted_text_for_file_glob(
             ]));
         }
         FormattedText::new(lines)
-    };
-
-    FormattedTextElement::new(
-        formatted_text,
-        appearance.monospace_font_size(),
-        appearance.ui_font_family(),
-        appearance.monospace_font_family(),
-        theme.main_text_color(theme.background()).into(),
-        Default::default(),
-    )
-    .with_inline_code_properties(
-        Some(
-            if is_queued
-                || (props.model.status(app).is_streaming()
-                    && !props.model.is_first_action_in_output(id, app))
-            {
-                blended_colors::text_disabled(theme, theme.surface_2())
-            } else {
-                theme.terminal_colors().normal.green.into()
-            },
-        ),
-        None,
-    )
+    }
 }
 
 /// Renders the Grep and File Glob tools.
@@ -2897,8 +2945,15 @@ fn render_read_mcp_resource(
 fn format_upload_artifact_text(
     request: &UploadArtifactRequest,
     result: Option<&UploadArtifactResult>,
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
 ) -> String {
-    let mut lines = vec![format!("Upload artifact: {}", request.file_path)];
+    let request_path = shell_native_path_for_display(
+        &request.file_path,
+        shell_launch_data,
+        current_working_directory,
+    );
+    let mut lines = vec![format!("Upload artifact: {request_path}")];
 
     if let Some(description) = request.description.as_deref() {
         lines.push(format!("Description: {description}"));
@@ -2912,6 +2967,11 @@ fn format_upload_artifact_text(
         }) => {
             lines.push(format!("Status: uploaded artifact {artifact_uid}"));
             if let Some(filepath) = filepath.as_deref() {
+                let filepath = shell_native_path_for_display(
+                    filepath,
+                    shell_launch_data,
+                    current_working_directory,
+                );
                 lines.push(format!("Uploaded file: {filepath}"));
             }
         }
@@ -2942,7 +3002,12 @@ fn render_upload_artifact(
             _ => None,
         });
 
-    let text = format_upload_artifact_text(request, result);
+    let text = format_upload_artifact_text(
+        request,
+        result,
+        props.shell_launch_data,
+        props.current_working_directory,
+    );
     let mut renderable_action = RenderableAction::new(&text, app);
 
     if status.as_ref().is_some_and(|status| status.is_blocked()) {
