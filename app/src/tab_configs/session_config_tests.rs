@@ -1,12 +1,20 @@
 use std::path::Path;
 
+use warp_util::path::ShellFamily;
+use warpui::platform::OperatingSystem;
+
 use super::*;
 use crate::terminal::cli_agent::CLIAgent;
 
-fn generated_worktree_path_string(repo: &str, worktree_name: &str) -> String {
+/// Convenience for tests that want to spell repo paths as `&str` literals.
+fn expected_worktree_path(repo: &str, worktree_name: &str) -> String {
     super::super::tab_config::generated_worktree_path(Path::new(repo), worktree_name)
         .display()
         .to_string()
+}
+
+fn default_shell_family() -> ShellFamily {
+    OperatingSystem::get().default_shell_family()
 }
 
 // ── SessionType helpers ──
@@ -46,6 +54,7 @@ fn terminal_no_worktree() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     assert_eq!(config.name, "New tab: project");
@@ -66,6 +75,7 @@ fn cli_agent_no_worktree() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     assert_eq!(config.panes[0].commands.as_deref().unwrap(), &["claude"]);
@@ -80,11 +90,12 @@ fn terminal_with_worktree() {
         Path::new("/home/user/repo"),
         true,
         false,
+        default_shell_family(),
     );
 
     assert_eq!(config.title.as_deref(), Some("{{worktree_branch_name}}"));
     let expected_worktree_path =
-        generated_worktree_path_string("/home/user/repo", "{{worktree_branch_name}}");
+        expected_worktree_path("/home/user/repo", "{{worktree_branch_name}}");
     assert_eq!(
         config.panes[0].commands.as_deref().unwrap(),
         [
@@ -107,11 +118,12 @@ fn cli_agent_with_worktree() {
         Path::new("/home/user/repo"),
         true,
         false,
+        default_shell_family(),
     );
 
     // Worktree commands come first, then agent command.
     let expected_worktree_path =
-        generated_worktree_path_string("/home/user/repo", "{{worktree_branch_name}}");
+        expected_worktree_path("/home/user/repo", "{{worktree_branch_name}}");
     assert_eq!(
         config.panes[0].commands.as_deref().unwrap(),
         [
@@ -132,12 +144,14 @@ fn oz_no_worktree_same_as_terminal() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
     let terminal = build_tab_config(
         &SessionType::Terminal,
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     assert_eq!(oz.panes[0].directory, terminal.panes[0].directory);
@@ -147,9 +161,15 @@ fn oz_no_worktree_same_as_terminal() {
 
 #[test]
 fn oz_with_worktree_has_worktree_commands_but_no_agent_command() {
-    let config = build_tab_config(&SessionType::Oz, Path::new("/home/user/repo"), true, false);
+    let config = build_tab_config(
+        &SessionType::Oz,
+        Path::new("/home/user/repo"),
+        true,
+        false,
+        default_shell_family(),
+    );
     let expected_worktree_path =
-        generated_worktree_path_string("/home/user/repo", "{{worktree_branch_name}}");
+        expected_worktree_path("/home/user/repo", "{{worktree_branch_name}}");
 
     assert_eq!(
         config.panes[0].commands.as_deref().unwrap(),
@@ -169,6 +189,7 @@ fn directory_path_is_absolute_in_directory() {
         Path::new("/absolute/path/here"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     let directory = config.panes[0].directory.as_deref().unwrap();
@@ -187,6 +208,7 @@ fn round_trip_terminal_no_worktree() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
     let toml_str = toml::to_string_pretty(&config).expect("Should serialize");
     let parsed: TabConfig = toml::from_str(&toml_str).expect("Should deserialize");
@@ -203,6 +225,7 @@ fn round_trip_cli_agent_with_worktree() {
         Path::new("/home/user/repo"),
         true,
         false,
+        ShellFamily::Posix,
     );
     let toml_str = toml::to_string_pretty(&config).expect("Should serialize");
     let parsed: TabConfig = toml::from_str(&toml_str).expect("Should deserialize");
@@ -226,6 +249,7 @@ fn render_terminal_produces_correct_pane_template() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
     let param_values = config.default_param_values();
     let (title, pane_template) = super::super::render_tab_config(&config, &param_values, None);
@@ -251,6 +275,7 @@ fn render_cli_agent_produces_correct_commands() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
     let param_values = config.default_param_values();
     let (_, pane_template) = super::super::render_tab_config(&config, &param_values, None);
@@ -273,6 +298,7 @@ fn render_worktree_substitutes_default_branch_name() {
         Path::new("/home/user/repo"),
         true,
         false,
+        ShellFamily::Posix,
     );
     let param_values = config.default_param_values();
     let (title, pane_template) = super::super::render_tab_config(&config, &param_values, None);
@@ -299,6 +325,7 @@ fn write_tab_config_creates_file_with_correct_naming() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     let path1 = write_tab_config(&config, dir.path(), "startup_config")
@@ -322,6 +349,7 @@ fn write_tab_config_content_is_valid_toml() {
         Path::new("/home/user/repo"),
         true,
         false,
+        ShellFamily::Posix,
     );
 
     let path =
@@ -338,7 +366,13 @@ fn write_tab_config_content_is_valid_toml() {
 fn write_tab_config_creates_directory_if_missing() {
     let dir = tempfile::tempdir().expect("Should create temp dir");
     let nested = dir.path().join("nested").join("tab_configs");
-    let config = build_tab_config(&SessionType::Terminal, Path::new("/tmp"), false, true);
+    let config = build_tab_config(
+        &SessionType::Terminal,
+        Path::new("/tmp"),
+        false,
+        true,
+        ShellFamily::Posix,
+    );
 
     let path = write_tab_config(&config, &nested, "startup_config").expect("Write should succeed");
     assert!(path.exists());
@@ -352,6 +386,7 @@ fn write_tab_config_custom_base_name() {
         Path::new("/home/user/project"),
         false,
         true,
+        ShellFamily::Posix,
     );
 
     let path =
@@ -366,11 +401,12 @@ fn terminal_with_autogenerated_worktree() {
         Path::new("/home/user/repo"),
         true,
         true,
+        default_shell_family(),
     );
 
     assert!(config.title.is_none());
     let expected_worktree_path =
-        generated_worktree_path_string("/home/user/repo", "{{autogenerated_branch_name}}");
+        expected_worktree_path("/home/user/repo", "{{autogenerated_branch_name}}");
     assert_eq!(
         config.panes[0].commands.as_deref().unwrap(),
         [
@@ -930,4 +966,177 @@ fn detects_git_repo_in_parent() {
 fn root_directory_does_not_loop() {
     // Ensures the walk terminates at the filesystem root without panicking.
     assert!(!is_git_repo(Path::new("/")));
+}
+
+/// Tests for the shell-escape applied to the worktree path in
+/// [`build_tab_config`] (#11144). The repo-derived portion of the path
+/// may contain shell metacharacters (spaces, `$`, backticks); we must
+/// escape them so the rendered `git worktree add` / `cd` commands are
+/// parsed by the shell as single literal arguments. The
+/// `{{handlebars}}` branch placeholder is left untouched so it can still
+/// be resolved by the tab-config render pass.
+mod worktree_path_quoting {
+    use std::path::Path;
+
+    use warp_util::path::ShellFamily;
+
+    use super::super::build_tab_config;
+    use super::default_shell_family;
+    use crate::tab_configs::session_config::SessionType;
+
+    #[test]
+    fn spaces_in_repo_path_are_shell_escaped_in_worktree_commands() {
+        // The reported bug: a repo path with a space breaks the shell
+        // tokenization. Once escaped, the space is preceded by a backslash.
+        let config = build_tab_config(
+            &SessionType::Terminal,
+            Path::new("/Users/luizv/Developer/2026-05 Site da Jô"),
+            true,
+            true,
+            ShellFamily::Posix,
+        );
+        let commands = config.panes[0].commands.as_deref().unwrap();
+        for command in commands {
+            // No bare " " in the path portion — every space inside the
+            // worktree path is preceded by a backslash.
+            assert!(
+                command.contains(r"2026-05\ Site\ da\ Jô"),
+                "expected escaped path in command: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn dollar_in_repo_name_is_shell_escaped() {
+        // The worktree path's last component is the repo dir name (per
+        // `generated_worktree_repo_dir`); leading parents are stripped.
+        // So `$` in the repo dir name itself is the relevant attack
+        // surface — not `$` in a parent directory.
+        let shell_family = default_shell_family();
+        let config = build_tab_config(
+            &SessionType::Terminal,
+            Path::new("/Users/me/dollar$repo"),
+            true,
+            true,
+            shell_family,
+        );
+        let commands = config.panes[0].commands.as_deref().unwrap();
+        for command in commands {
+            for (i, c) in command.char_indices() {
+                if c == '$' {
+                    let prev = command[..i].chars().next_back();
+                    assert!(
+                        prev.is_some_and(|prev| shell_family.escape_char().is_char(prev)),
+                        "unescaped $ at byte {i}: {command}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn backtick_in_repo_name_is_shell_escaped() {
+        // A backtick in the repo dir name would otherwise trigger
+        // command substitution when the rendered command runs.
+        let config = build_tab_config(
+            &SessionType::Terminal,
+            Path::new("/Users/me/back`tick"),
+            true,
+            true,
+            ShellFamily::Posix,
+        );
+        let commands = config.panes[0].commands.as_deref().unwrap();
+        for command in commands {
+            // Every backtick in the rendered command must be preceded by a
+            // backslash.
+            for (i, c) in command.char_indices() {
+                if c == '`' {
+                    let prev = command[..i].chars().next_back();
+                    assert_eq!(
+                        prev,
+                        Some('\\'),
+                        "unescaped backtick at byte {i}: {command}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn handlebars_placeholder_is_preserved_through_escape() {
+        // The branch-name placeholder inside the worktree path must
+        // survive the escape untouched so handlebars can resolve it
+        // later at render time.
+        let config = build_tab_config(
+            &SessionType::Terminal,
+            Path::new("/home/user/repo with spaces"),
+            true,
+            true,
+            ShellFamily::Posix,
+        );
+        let commands = config.panes[0].commands.as_deref().unwrap();
+        for command in commands {
+            assert!(
+                command.contains("{{autogenerated_branch_name}}"),
+                "branch placeholder lost in: {command}"
+            );
+            // The space in the repo dir name is escaped, but the
+            // double-brace placeholder is left alone.
+            assert!(
+                !command.contains(r"\{\{"),
+                "handlebars placeholder accidentally escaped: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_paths_remain_unchanged() {
+        // Regression guard: a path with no shell metacharacters renders
+        // exactly the same way it did before #11144. This is the case
+        // the existing terminal_with_worktree / oz_with_worktree tests
+        // cover; we re-pin it here as a clear baseline.
+        let shell_family = default_shell_family();
+        let config = build_tab_config(
+            &SessionType::Terminal,
+            Path::new("/home/user/repo"),
+            true,
+            true,
+            shell_family,
+        );
+        let commands = config.panes[0].commands.as_deref().unwrap();
+        assert_eq!(commands.len(), 2);
+        assert!(commands[0].starts_with("git worktree add -b "));
+        assert!(commands[1].starts_with("cd "));
+        // No shell escapes appear when no metacharacters are present.
+        for command in commands {
+            assert!(
+                !command.contains(|c| shell_family.escape_char().is_char(c)),
+                "unexpected shell escape in: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn named_branch_path_escape_matches_autogenerated() {
+        // The non-autogenerated branch path (worktree_branch_name) goes
+        // through the same helper, so the escape applies there too.
+        let config = build_tab_config(
+            &SessionType::Terminal,
+            Path::new("/Users/me/My Project"),
+            true,
+            false,
+            ShellFamily::Posix,
+        );
+        let commands = config.panes[0].commands.as_deref().unwrap();
+        for command in commands {
+            assert!(
+                command.contains(r"My\ Project"),
+                "expected escaped path in: {command}"
+            );
+            assert!(
+                command.contains("{{worktree_branch_name}}"),
+                "named-branch placeholder lost in: {command}"
+            );
+        }
+    }
 }

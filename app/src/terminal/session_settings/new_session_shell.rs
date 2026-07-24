@@ -55,3 +55,7 @@ impl NewSessionShell {
         ShellFamily::Posix
     }
 }
+
+#[cfg(test)]
+#[path = "new_session_shell_tests.rs"]
+mod tests;

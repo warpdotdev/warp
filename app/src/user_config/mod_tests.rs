@@ -2,10 +2,17 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
+use warp_util::path::ShellFamily;
+use warpui::platform::OperatingSystem;
+
 use super::*;
 use crate::launch_configs::launch_config::PaneTemplateType;
 use crate::tab_configs::render_tab_config;
 use crate::tab_configs::tab_config::{TabConfigPaneType, generated_worktree_repo_dir};
+
+fn default_shell_family() -> ShellFamily {
+    OperatingSystem::get().default_shell_family()
+}
 
 #[cfg(feature = "local_fs")]
 #[test]
@@ -46,9 +53,14 @@ fn test_is_tab_config_toml_rejects_tomls_outside_tab_config_dirs() {
 fn test_materialize_default_worktree_config_bakes_repo_and_pane_type_only() {
     let template = include_str!("../../resources/tab_configs/default_worktree.toml");
     let repo_path = "/tmp/example-repo";
-    let (toml_content, tab_config) =
-        materialize_default_worktree_config(template, "Worktree: example-repo", repo_path, "agent")
-            .expect("expected template materialization to succeed");
+    let (toml_content, tab_config) = materialize_default_worktree_config(
+        template,
+        "Worktree: example-repo",
+        repo_path,
+        "agent",
+        default_shell_family(),
+    )
+    .expect("expected template materialization to succeed");
 
     assert!(toml_content.contains("name = \"Worktree: example-repo\""));
     assert!(toml_content.contains(repo_path));
@@ -82,9 +94,14 @@ fn test_materialize_default_worktree_config_bakes_repo_and_pane_type_only() {
 fn test_materialized_default_worktree_config_renders_full_worktree_path() {
     let template = include_str!("../../resources/tab_configs/default_worktree.toml");
     let repo_path = "/tmp/example-repo";
-    let (_, tab_config) =
-        materialize_default_worktree_config(template, "Worktree: example-repo", repo_path, "agent")
-            .expect("expected template materialization to succeed");
+    let (_, tab_config) = materialize_default_worktree_config(
+        template,
+        "Worktree: example-repo",
+        repo_path,
+        "agent",
+        default_shell_family(),
+    )
+    .expect("expected template materialization to succeed");
 
     let (_, pane_template) = render_tab_config(&tab_config, &HashMap::new(), Some("my-feature"));
 
@@ -175,4 +192,165 @@ fn test_load_tab_configs_skips_non_toml_files() {
     assert!(errors.is_empty());
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].name, "Real");
+}
+
+/// Tests for the shell-escape applied to the worktree path inside
+/// [`materialize_default_worktree_config`] (#11144). This is the
+/// sibling-fix to `build_tab_config`'s `build_shell_safe_worktree_path`;
+/// both code paths produce `git worktree add` / `cd` commands that
+/// embed a user-derived path, and both must escape the path so it
+/// survives the user's shell as a single literal word.
+#[cfg(feature = "local_fs")]
+mod worktree_path_quoting {
+    use warp_util::path::ShellFamily;
+
+    use super::{default_shell_family, materialize_default_worktree_config};
+
+    fn worktree_commands(toml_content: &str) -> Vec<String> {
+        let value: toml::Value = toml::from_str(toml_content).expect("parse materialized toml");
+        let panes = value
+            .get("panes")
+            .and_then(|v| v.as_array())
+            .expect("panes array");
+        let commands = panes[0]
+            .get("commands")
+            .and_then(|v| v.as_array())
+            .expect("commands array");
+        commands
+            .iter()
+            .map(|v| v.as_str().expect("command is string").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn spaces_in_repo_path_are_shell_escaped() {
+        // The user-reported case: a workspace whose last path component
+        // contains spaces produced a bare `git worktree add … /…/2026-05 Site da Jô/…`
+        // that the shell split into separate args. After the fix the
+        // space is backslash-escaped.
+        let template = include_str!("../../resources/tab_configs/default_worktree.toml");
+        let (toml_content, _) = materialize_default_worktree_config(
+            template,
+            "Worktree: 2026-05 Site da Jô",
+            "/Users/luizv/Developer/2026-05 Site da Jô",
+            "terminal",
+            ShellFamily::Posix,
+        )
+        .expect("materialize succeeds");
+
+        for command in worktree_commands(&toml_content) {
+            assert!(
+                command.contains(r"2026-05\ Site\ da\ Jô"),
+                "expected escaped path in command: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn dollar_in_repo_name_is_shell_escaped() {
+        // `generated_worktree_repo_dir` uses only the last component of
+        // the repo path. So `$` in that last component is the relevant
+        // attack surface; it must be escaped to suppress shell expansion.
+        let shell_family = default_shell_family();
+        let template = include_str!("../../resources/tab_configs/default_worktree.toml");
+        let (toml_content, _) = materialize_default_worktree_config(
+            template,
+            "Worktree: dollar repo",
+            "/Users/me/dollar$repo",
+            "terminal",
+            shell_family,
+        )
+        .expect("materialize succeeds");
+
+        for command in worktree_commands(&toml_content) {
+            for (i, c) in command.char_indices() {
+                if c == '$' {
+                    let prev = command[..i].chars().next_back();
+                    assert!(
+                        prev.is_some_and(|prev| shell_family.escape_char().is_char(prev)),
+                        "unescaped $ at byte {i}: {command}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn backtick_in_repo_name_is_shell_escaped() {
+        // A backtick in the repo dir name would otherwise trigger
+        // command substitution when the rendered command runs.
+        let template = include_str!("../../resources/tab_configs/default_worktree.toml");
+        let (toml_content, _) = materialize_default_worktree_config(
+            template,
+            "Worktree: backtick repo",
+            "/Users/me/back`tick",
+            "terminal",
+            ShellFamily::Posix,
+        )
+        .expect("materialize succeeds");
+
+        for command in worktree_commands(&toml_content) {
+            for (i, c) in command.char_indices() {
+                if c == '`' {
+                    let prev = command[..i].chars().next_back();
+                    assert_eq!(
+                        prev,
+                        Some('\\'),
+                        "unescaped backtick at byte {i}: {command}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn handlebars_placeholder_is_preserved_through_escape() {
+        // The branch-name placeholder embedded in the rendered worktree
+        // path must survive untouched so the tab-config render pass can
+        // resolve it later.
+        let template = include_str!("../../resources/tab_configs/default_worktree.toml");
+        let (toml_content, _) = materialize_default_worktree_config(
+            template,
+            "Worktree: spacey",
+            "/home/user/repo with spaces",
+            "terminal",
+            ShellFamily::Posix,
+        )
+        .expect("materialize succeeds");
+
+        for command in worktree_commands(&toml_content) {
+            assert!(
+                command.contains("{{autogenerated_branch_name}}"),
+                "branch placeholder lost in: {command}"
+            );
+            assert!(
+                !command.contains(r"\{\{"),
+                "handlebars placeholder accidentally escaped: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_paths_remain_unchanged() {
+        // A repo path with no shell-significant characters renders
+        // exactly the same way it did before #11144 — no backslash
+        // escapes introduced.
+        let shell_family = default_shell_family();
+        let template = include_str!("../../resources/tab_configs/default_worktree.toml");
+        let (toml_content, _) = materialize_default_worktree_config(
+            template,
+            "Worktree: example-repo",
+            "/home/user/repo",
+            "terminal",
+            shell_family,
+        )
+        .expect("materialize succeeds");
+
+        for command in worktree_commands(&toml_content) {
+            assert!(
+                !command.contains(|c| shell_family.escape_char().is_char(c)),
+                "unexpected shell escape in: {command}"
+            );
+        }
+    }
 }
