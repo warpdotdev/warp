@@ -604,28 +604,16 @@ impl TypedActionView for TuiInputView {
         }
         let outcome = match action {
             TuiInputAction::Editor(editor_action) => {
-                let shortcuts_visible = matches!(
-                    self.suggestions_mode.as_ref(ctx).mode(),
-                    TuiInputSuggestionsMode::Shortcuts
-                );
                 if let TuiEditorAction::PasteText(text) = editor_action {
-                    if shortcuts_visible {
-                        self.suggestions_mode.update(ctx, |mode, ctx| {
-                            mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
-                        });
-                    }
+                    self.close_shortcuts(ctx);
                     ctx.emit(TuiInputViewEvent::Pasted(text.clone()));
                     return;
                 }
-                if shortcuts_visible {
-                    self.suggestions_mode.update(ctx, |mode, ctx| {
-                        mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
-                    });
+                if self.close_shortcuts(ctx) {
                     if matches!(editor_action, TuiEditorAction::InsertChar('?')) {
                         return;
                     }
                 } else if matches!(editor_action, TuiEditorAction::InsertChar('?'))
-                    && !self.is_shell_mode(ctx)
                     && self.plain_text(ctx).is_empty()
                     && self.is_cursor_at_start(ctx)
                     && matches!(
@@ -655,6 +643,7 @@ impl TypedActionView for TuiInputView {
                 }
             }
             TuiInputAction::Submit => {
+                self.close_shortcuts(ctx);
                 if !self.handle_voice_submit(ctx) {
                     self.submit(ctx);
                 }
@@ -671,6 +660,7 @@ impl TypedActionView for TuiInputView {
                 TuiEditorInteractionOutcome::PreserveViewport
             }
             TuiInputAction::EditorCommand(command) => {
+                self.close_shortcuts(ctx);
                 if matches!(*command, TuiEditorCommand::SelectUp) && self.can_focus_above(ctx) {
                     ctx.emit(TuiInputViewEvent::MoveFocusUp);
                     return;
@@ -716,6 +706,7 @@ impl TypedActionView for TuiInputView {
                 }
             }
             TuiInputAction::SetCursor { offset } => {
+                self.close_shortcuts(ctx);
                 self.model.update(ctx, |m, ctx| {
                     m.select_at(*offset, false, ctx);
                     m.end_selection(ctx);
@@ -1035,13 +1026,10 @@ impl TuiInputView {
     /// order. New input modes should be added after the inline-menu branch so
     /// one Escape always closes the most local surface first.
     fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        if matches!(
-            self.suggestions_mode.as_ref(ctx).mode(),
-            TuiInputSuggestionsMode::Shortcuts
-        ) {
-            self.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
-            });
+        if self.close_shortcuts(ctx) {
+            if self.is_shell_mode(ctx) {
+                self.exit_shell_mode(ctx);
+            }
             return true;
         }
         if let Some(inline_menu) = self.active_inline_menu(ctx) {
@@ -1071,6 +1059,18 @@ impl TuiInputView {
         false
     }
 
+    fn close_shortcuts(&self, ctx: &mut ViewContext<Self>) -> bool {
+        let is_open = matches!(
+            self.suggestions_mode.as_ref(ctx).mode(),
+            TuiInputSuggestionsMode::Shortcuts
+        );
+        if is_open {
+            self.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
+        }
+        is_open
+    }
     fn active_inline_menu(&self, ctx: &AppContext) -> Option<TuiInlineMenu> {
         active_inline_menu(
             &self.inline_menus,

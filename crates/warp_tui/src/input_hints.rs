@@ -18,7 +18,7 @@ const HINT_SEPARATOR: &str = " • ";
 /// Ghost text for an empty `!` shell-mode input: how to run and how to get
 /// back to agent mode (esc is the input's contextual escape; backspace on the
 /// empty input exits too).
-pub(crate) const SHELL_HINT: &str = "Run a shell command • esc for agent mode";
+pub(crate) const SHELL_HINT: &str = "Run a shell command • ? for shortcuts • esc for agent mode";
 
 /// Ghosted hint row shown in the input's slot while a user-controlled
 /// long-running command owns input (the input box itself stays hidden).

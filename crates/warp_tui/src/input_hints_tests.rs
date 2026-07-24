@@ -1,5 +1,5 @@
 use super::{
-    ASK_AGENT_HINT, COMMANDS_HINT, CONVERSATIONS_HINT, SHELL_MODE_HINT, SHORTCUTS_HINT,
+    ASK_AGENT_HINT, COMMANDS_HINT, CONVERSATIONS_HINT, SHELL_HINT, SHELL_MODE_HINT, SHORTCUTS_HINT,
     agent_input_hint,
 };
 
@@ -18,4 +18,5 @@ fn transcript_state_selects_the_applicable_hint_segments() {
     assert!(started.contains(SHELL_MODE_HINT));
     assert!(started.contains(COMMANDS_HINT));
     assert!(!started.contains(CONVERSATIONS_HINT));
+    assert!(SHELL_HINT.contains(SHORTCUTS_HINT));
 }

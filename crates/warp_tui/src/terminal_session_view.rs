@@ -74,7 +74,7 @@ use crate::input::view::TuiInputAction;
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_hints;
 use crate::input_mode_policy::{self, TuiInputModePolicy};
-use crate::input_suggestions_mode::TuiInputSuggestionsModeModel;
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{
     ATTACHMENTS_AVAILABLE_FLAG, CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME,
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
@@ -216,6 +216,8 @@ const ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT: &str =
 const ZERO_STATE_ASCII_RELOAD_FAILED_HINT: &str =
     "Could not reload custom ASCII art. Keeping the current object.";
 const VOICE_USAGE_HINT: &str = "Usage: /voice (no arguments)";
+const AUTO_APPROVE_ENABLED_HINT: &str = "Auto approve on";
+const AUTO_APPROVE_DISABLED_HINT: &str = "Auto approve off";
 const COST_NO_ACTIVE_CONVERSATION_HINT: &str =
     "Cannot show conversation cost: no active conversation";
 const COST_EMPTY_CONVERSATION_HINT: &str = "Cannot show conversation cost: conversation is empty";
@@ -2406,6 +2408,20 @@ impl TuiTerminalSessionView {
         });
         if show_feedback {
             self.show_auto_approve_feedback(ctx);
+            let enabled = self
+                .conversation_selection
+                .as_ref(ctx)
+                .pending_query_autoexecute_override(ctx)
+                .is_autoexecute_any_action();
+            self.show_success_hint(
+                if enabled {
+                    AUTO_APPROVE_ENABLED_HINT
+                } else {
+                    AUTO_APPROVE_DISABLED_HINT
+                }
+                .to_owned(),
+                ctx,
+            );
         } else {
             self.clear_auto_approve_feedback(ctx);
         }
@@ -2493,6 +2509,9 @@ impl TuiTerminalSessionView {
             ctx.notify();
             return;
         }
+        self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+        });
         if self.handle_terminal_use_interrupt(ctx) {
             self.exit_confirmation.disarm();
             ctx.notify();

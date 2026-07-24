@@ -207,13 +207,12 @@ impl TuiTerminalSessionState {
             }];
         }
 
-        let mut shortcuts = Vec::new();
+        let mut shortcuts = vec![TuiShortcut {
+            key: "?".to_owned(),
+            description: "shortcuts",
+        }];
         if !self.facts.input_is_shell {
             shortcuts.extend([
-                TuiShortcut {
-                    key: "?".to_owned(),
-                    description: "shortcuts",
-                },
                 TuiShortcut {
                     key: "/".to_owned(),
                     description: "commands",

@@ -94,6 +94,12 @@ fn shell_and_orchestration_contribute_active_shortcut_sections() {
                 sections[0]
                     .shortcuts
                     .iter()
+                    .any(|shortcut| shortcut.description == "shortcuts")
+            );
+            assert!(
+                sections[0]
+                    .shortcuts
+                    .iter()
                     .any(|shortcut| shortcut.description == "agent mode")
             );
             assert!(
