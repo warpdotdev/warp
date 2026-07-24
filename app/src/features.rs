@@ -361,8 +361,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::NamedAgents,
         #[cfg(feature = "cloud_conversations")]
         FeatureFlag::CloudConversations,
-        #[cfg(feature = "agent_toolbar_editor")]
-        FeatureFlag::AgentToolbarEditor,
         #[cfg(feature = "configurable_toolbar")]
         FeatureFlag::ConfigurableToolbar,
         #[cfg(feature = "agent_view_prompt_chip")]

@@ -663,7 +663,6 @@ default = [
     "rewind_slash_command",
     "hoa_code_review",
     "warpify_footer",
-    "agent_toolbar_editor",
     "configurable_toolbar",
     "transfer_control_tool",
     "hoa_notifications",
@@ -973,7 +972,6 @@ agent_view_block_context = ["agent_view"]
 warp_managed_secrets = []
 v4a_file_diffs = []
 agent_tips = []
-agent_toolbar_editor = ["agent_view"]
 cloud_conversations = []
 agent_view_prompt_chip = ["agent_view"]
 ambient_agents_rtc = []

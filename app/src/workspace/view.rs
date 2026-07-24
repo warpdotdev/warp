@@ -19463,9 +19463,6 @@ impl Workspace {
         mode: AgentToolbarEditorMode,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::AgentToolbarEditor.is_enabled() {
-            return;
-        }
         self.agent_toolbar_editor_modal
             .update(ctx, |modal, ctx| modal.open(mode, ctx));
         self.close_all_overlays(ctx);
@@ -27154,9 +27151,7 @@ impl View for Workspace {
             stack.add_child(ChildView::new(&self.prompt_editor_modal).finish());
         }
 
-        if FeatureFlag::AgentToolbarEditor.is_enabled()
-            && self.current_workspace_state.is_agent_toolbar_editor_open
-        {
+        if self.current_workspace_state.is_agent_toolbar_editor_open {
             stack.add_child(ChildView::new(&self.agent_toolbar_editor_modal).finish());
         }
 

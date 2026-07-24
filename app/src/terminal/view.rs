@@ -17246,21 +17246,21 @@ impl TerminalView {
             .agent_view_state()
             .is_active();
         let edit_menu_item = if has_cli_agent_session {
-            FeatureFlag::AgentToolbarEditor.is_enabled().then(|| {
+            Some(
                 MenuItemFields::new("Edit CLI agent toolbelt")
                     .with_on_select_action(TerminalAction::ContextMenu(
                         ContextMenuAction::EditCLIAgentToolbar,
                     ))
-                    .into_item()
-            })
+                    .into_item(),
+            )
         } else if is_agent_view_active {
-            FeatureFlag::AgentToolbarEditor.is_enabled().then(|| {
+            Some(
                 MenuItemFields::new("Edit agent toolbelt")
                     .with_on_select_action(TerminalAction::ContextMenu(
                         ContextMenuAction::EditAgentToolbar,
                     ))
-                    .into_item()
-            })
+                    .into_item(),
+            )
         } else {
             Some(
                 MenuItemFields::new("Edit prompt")
@@ -24539,14 +24539,10 @@ impl TerminalView {
             CopyRprompt => self.copy_rprompt(ctx),
             EditPrompt => self.edit_prompt(ctx),
             EditAgentToolbar => {
-                if FeatureFlag::AgentToolbarEditor.is_enabled() {
-                    ctx.emit(Event::OpenAgentToolbarEditor);
-                }
+                ctx.emit(Event::OpenAgentToolbarEditor);
             }
             EditCLIAgentToolbar => {
-                if FeatureFlag::AgentToolbarEditor.is_enabled() {
-                    ctx.emit(Event::OpenCLIAgentToolbarEditor);
-                }
+                ctx.emit(Event::OpenCLIAgentToolbarEditor);
             }
             AskAI(ask_source) => {
                 if FeatureFlag::AgentMode.is_enabled() {

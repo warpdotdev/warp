@@ -5121,32 +5121,15 @@ fn test_prompt_context_menu_items_for_agent_toolbelt_flag() {
             });
         });
 
-        {
-            let _agent_footer_guard = FeatureFlag::AgentToolbarEditor.override_enabled(false);
-            terminal.read(&app, |view, ctx| {
-                let items = view.prompt_context_menu_items(ctx);
-                let labels = items
-                    .iter()
-                    .filter_map(|item| item.fields().map(|fields| fields.label()))
-                    .collect::<Vec<_>>();
-
-                assert!(!labels.contains(&"Edit prompt"));
-                assert!(!labels.contains(&"Edit agent toolbelt"));
-            });
-        }
-
-        {
-            let _agent_footer_guard = FeatureFlag::AgentToolbarEditor.override_enabled(true);
-            terminal.read(&app, |view, ctx| {
-                let items = view.prompt_context_menu_items(ctx);
-                let labels = items
-                    .iter()
-                    .filter_map(|item| item.fields().map(|fields| fields.label()))
-                    .collect::<Vec<_>>();
-                assert!(!labels.contains(&"Edit prompt"));
-                assert!(labels.contains(&"Edit agent toolbelt"));
-            });
-        }
+        terminal.read(&app, |view, ctx| {
+            let items = view.prompt_context_menu_items(ctx);
+            let labels = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect::<Vec<_>>();
+            assert!(!labels.contains(&"Edit prompt"));
+            assert!(labels.contains(&"Edit agent toolbelt"));
+        });
     })
 }
 
