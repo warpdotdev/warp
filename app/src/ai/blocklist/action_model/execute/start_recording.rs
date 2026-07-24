@@ -9,9 +9,11 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
+use crate::ai::blocklist::action_model::RecordingTelemetryEvent;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::action_model::recording_finalize::spawn_recording_exit_watcher;
+use crate::send_telemetry_from_ctx;
 
 pub struct StartRecordingExecutor;
 
@@ -108,6 +110,14 @@ impl StartRecordingExecutor {
                     let started_at = SystemTime::now();
                     let width_px = handle.width() as i32;
                     let height_px = handle.height() as i32;
+                    send_telemetry_from_ctx!(
+                        RecordingTelemetryEvent::Started {
+                            recording_id: recording_id.clone(),
+                            width_px,
+                            height_px,
+                        },
+                        ctx
+                    );
                     let controller = RecordingController::handle(ctx);
                     controller.update(ctx, |controller, _| {
                         controller.finish_start(

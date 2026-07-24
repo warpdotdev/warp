@@ -26,6 +26,19 @@ pub(crate) enum FinalizeReason {
 }
 
 impl FinalizeReason {
+    /// Stable, machine-readable key identifying why finalization ran, used by
+    /// the `Recording.Stopped` telemetry event. Distinct from
+    /// [`FinalizeReason::termination_reason`], which is human-readable prose.
+    pub(crate) fn telemetry_key(self) -> &'static str {
+        match self {
+            FinalizeReason::StoppedByAgent => "agent_stopped",
+            FinalizeReason::AgentFinished => "agent_finished",
+            FinalizeReason::LimitReached => "limit_reached",
+            FinalizeReason::FfmpegExited => "encoding_failed",
+            FinalizeReason::Cancelled => "cancelled",
+        }
+    }
+
     fn termination_reason(
         self,
         completion_status: computer_use::RecordingCompletionStatus,

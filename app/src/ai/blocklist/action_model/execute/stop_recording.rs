@@ -1,5 +1,5 @@
 #[cfg(not(target_family = "wasm"))]
-use ai::agent::action_result::StopRecordingResult;
+use ai::agent::action_result::{RecordingStopped, StopRecordingResult};
 use futures::FutureExt;
 use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
@@ -14,11 +14,14 @@ use crate::ai::{
     blocklist::{
         BlocklistAIHistoryModel,
         action_model::{
+            RecordingTelemetryEvent,
             recording_controller::{RecordingController, StopRecordingControllerError},
             recording_finalize::{FinalizeReason, finalize_recording_by_id},
         },
     },
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::send_telemetry_from_ctx;
 
 pub struct StopRecordingExecutor;
 
@@ -83,20 +86,26 @@ impl StopRecordingExecutor {
             // Atomically claim an active recording, join an upload another
             // terminal path already started, or read the retained result. The
             // controller owns the actual stop/upload task in every case.
-            let finalization = match finalize_recording_by_id(
-                recording_id,
-                FinalizeReason::StoppedByAgent,
-                *should_persist,
-                ctx,
-            ) {
-                Ok(finalization) => finalization,
-                Err(error) => {
-                    return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
-                        StopRecordingResult::Error(error.to_string()),
-                    ))
-                    .into();
-                }
-            };
+            //
+            // `reason` is the stop action's claimed finalization reason. When
+            // this action joins an in-progress finalization started by another
+            // path (the exit watcher or conversation cancellation), the
+            // controller ignores `reason` and the resolved result reflects the
+            // actual trigger; `recording_stopped_telemetry` overrides the
+            // termination key for the `Cancelled` result accordingly.
+            let reason = FinalizeReason::StoppedByAgent;
+            let finalization =
+                match finalize_recording_by_id(recording_id, reason, *should_persist, ctx) {
+                    Ok(finalization) => finalization,
+                    Err(error) => {
+                        return ActionExecution::<()>::Sync(
+                            AIAgentActionResultType::StopRecording(StopRecordingResult::Error(
+                                error.to_string(),
+                            )),
+                        )
+                        .into();
+                    }
+                };
             let recording_id = recording_id.clone();
 
             // Consume `Finalized` only from the completion callback, after the
@@ -109,6 +118,10 @@ impl StopRecordingExecutor {
                     RecordingController::handle(ctx).update(ctx, |controller, _| {
                         controller.consume_finalized(&recording_id);
                     });
+                    send_telemetry_from_ctx!(
+                        recording_stopped_telemetry(&recording_id, reason, &result),
+                        ctx
+                    );
                     AIAgentActionResultType::StopRecording(result)
                 },
             )
@@ -127,4 +140,69 @@ impl StopRecordingExecutor {
 
 impl Entity for StopRecordingExecutor {
     type Event = ();
+}
+
+/// Builds the `Recording.Stopped` telemetry event from a resolved
+/// [`StopRecordingResult`] and the stop action's claimed [`FinalizeReason`].
+///
+/// `outcome` is `"success"` only when an artifact was published; deliberate
+/// discards and cancellations map to `"cancelled"`, and errors to `"error"`.
+/// `artifact_uid_present` is `true` only for the `Success` variant, so
+/// `outcome == "success"` coincides with a published artifact. The
+/// `termination_reason` key comes from the claimed `reason`, except for a
+/// `Cancelled` result, which is always produced by a `Cancelled` finalization
+/// even when this stop action joined an in-progress cancellation.
+#[cfg(not(target_family = "wasm"))]
+fn recording_stopped_telemetry(
+    recording_id: &str,
+    reason: FinalizeReason,
+    result: &StopRecordingResult,
+) -> RecordingTelemetryEvent {
+    match result {
+        StopRecordingResult::Success(RecordingStopped {
+            duration,
+            size_bytes,
+            completion_status,
+            ..
+        }) => RecordingTelemetryEvent::Stopped {
+            recording_id: recording_id.to_string(),
+            outcome: "success".to_string(),
+            duration_secs: Some(duration.as_secs_f64()),
+            size_bytes: Some(*size_bytes),
+            completion_status: match completion_status {
+                computer_use::RecordingCompletionStatus::Completed => "complete",
+                computer_use::RecordingCompletionStatus::StoppedEarly => "incomplete",
+            }
+            .to_string(),
+            termination_reason: reason.telemetry_key().to_string(),
+            artifact_uid_present: true,
+        },
+        StopRecordingResult::Discarded => RecordingTelemetryEvent::Stopped {
+            recording_id: recording_id.to_string(),
+            outcome: "cancelled".to_string(),
+            duration_secs: None,
+            size_bytes: None,
+            completion_status: "unknown".to_string(),
+            termination_reason: reason.telemetry_key().to_string(),
+            artifact_uid_present: false,
+        },
+        StopRecordingResult::Cancelled => RecordingTelemetryEvent::Stopped {
+            recording_id: recording_id.to_string(),
+            outcome: "cancelled".to_string(),
+            duration_secs: None,
+            size_bytes: None,
+            completion_status: "unknown".to_string(),
+            termination_reason: FinalizeReason::Cancelled.telemetry_key().to_string(),
+            artifact_uid_present: false,
+        },
+        StopRecordingResult::Error(_) => RecordingTelemetryEvent::Stopped {
+            recording_id: recording_id.to_string(),
+            outcome: "error".to_string(),
+            duration_secs: None,
+            size_bytes: None,
+            completion_status: "unknown".to_string(),
+            termination_reason: reason.telemetry_key().to_string(),
+            artifact_uid_present: false,
+        },
+    }
 }

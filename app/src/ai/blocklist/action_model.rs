@@ -17,6 +17,8 @@ mod preprocess;
 pub(crate) mod recording_controller;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod recording_finalize;
+pub(crate) mod recording_telemetry;
+pub(crate) use recording_telemetry::RecordingTelemetryEvent;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
