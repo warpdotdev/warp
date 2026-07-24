@@ -97,7 +97,14 @@ Out of scope (explicit non-goals):
 - Arbitrary CSS beyond the discrete `align` / `text-align` used for alignment.
 - Any change to GFM pipe-table behavior. HTML tables are an additional input path that
   produces the same internal table representation.
-- Script execution / event handlers / navigation from table markup.
+- Script execution, event-handler attributes (`onclick`, …), and any navigation vector
+  *other than a rendered `<a href>` link*. A `<a href>` inside a cell **is** supported and
+  navigable — it renders and resolves through the viewer's existing link resolver, exactly
+  as a link in a GFM table cell or ordinary paragraph does, and carries no additional trust
+  beyond that shared path (see invariant 3 for the single statement of link behavior). What
+  is out of scope is everything that is *not* that resolver: no `onclick`/`on*` handlers, no
+  `style`-driven or attribute-driven navigation, no `<form>`/`action`, no script. Any
+  such attribute is dropped per invariant 10.
 
 ## Behavior
 
@@ -135,7 +142,13 @@ Out of scope (explicit non-goals):
 
 3. Cell content renders with the viewer's inline formatting: bold, italic, inline code,
    strikethrough, links, and inline images (per the `<img>` spec) all render inside a cell
-   exactly as they do in a GFM table cell.
+   exactly as they do in a GFM table cell. **This is the single authoritative statement of
+   link behavior for this spec (referenced from the Non-goals):** an `<a href>` inside a
+   cell is parsed into the same hyperlink representation every markdown-viewer link uses and
+   is navigable through the viewer's existing link resolver — no new navigation path, no new
+   trust boundary. This is the *only* navigation this spec introduces from table markup;
+   scripts, event-handler attributes, and any non-`<a href>` navigation vector are out of
+   scope (Non-goals) and their attributes are dropped (invariant 10).
 
 4. A `<br>` inside a cell renders as a hard line break, so the cell's content occupies
    multiple lines within its row. The row's height grows to fit the tallest cell. This is
@@ -186,11 +199,17 @@ Out of scope (explicit non-goals):
    table's column count with empty cells, not dropped — consistent with invariant 2's
    principle of never silently discarding an authored row.
 
-10. Only structural tags (`table`/`thead`/`tbody`/`tr`/`th`/`td`) and the `align`/
-    `text-align`/`colspan`/`rowspan` attributes are read (the last two only to decide the
-    degraded single-cell behavior of invariant 7). All other attributes (`onclick`,
-    `style` beyond text-align, `class`, `id`, …) are ignored. No attribute is executed or
-    navigated to.
+10. On the **table's structural elements** (`table`/`thead`/`tbody`/`tr`/`th`/`td`), only
+    the `align`/`text-align`/`colspan`/`rowspan` attributes are read (the last two only to
+    decide the degraded single-cell behavior of invariant 7). All other attributes on those
+    elements (`onclick`, `style` beyond text-align, `class`, `id`, …) are ignored; none is
+    executed or navigated to. This governs the *table scaffolding only* — it does not
+    restrict the inline phrasing content **inside** a cell, which is parsed exactly as
+    ordinary markdown-viewer inline content, including a navigable `<a href>` link per
+    invariant 3 (the single statement of link behavior). The `href` of an in-cell `<a>` is
+    inline content resolved by the viewer's link resolver, not a table-structural attribute,
+    so it is out of this invariant's scope; every genuinely table-structural attribute
+    remains inert.
 
 11. Copy / export of a document containing an HTML table preserves the tabular content.
     Because the internal representation is the shared table model, export may canonicalize
