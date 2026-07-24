@@ -1,0 +1,12 @@
+[project]
+name = "icon-library"
+version = "0.1.0"
+description = "SVG icon library with Claude-powered recommendations"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.97.0",
+]
+
+[project.scripts]
+icon-ingest = "ingest:main"
+icon-query = "query:main"
