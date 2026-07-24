@@ -269,7 +269,9 @@ impl EnvironmentsPageView {
                     EnvironmentFormValues {
                         name: model.name.clone(),
                         description: model.description.clone().unwrap_or_default(),
-                        selected_repos: model.github_repos.clone(),
+                        // Use effective_github_repos so environments that store repos
+                        // via source_repos (newer path) still show them in the form.
+                        selected_repos: model.effective_github_repos(),
                         docker_image: model.base_image_display(),
                         setup_commands: model.setup_commands.clone(),
                     }
@@ -790,17 +792,30 @@ impl EnvironmentsPageView {
                 // Get the revision from the existing environment
                 let revision = existing_env.metadata.revision.clone();
 
+                // Merge form changes into the existing environment so server-managed fields
+                // (secrets, providers, source_repos, code_forge) are preserved. The form only
+                // exposes name, description, github_repos, docker_image, and setup_commands;
+                // all other fields are kept from the current server state.
+                let mut merged = existing_env.model().string_model.clone();
+                merged.name = environment.name.clone();
+                merged.description = environment.description.clone();
+                merged.base_image = environment.base_image.clone();
+                merged.setup_commands = environment.setup_commands.clone();
+                // Replace github_repos with the form's selection. When the existing environment
+                // uses source_repos as its authoritative repo list, clear it so the server falls
+                // back to github_repos; this prevents the new repo selection from being silently
+                // ignored by the server.
+                merged.github_repos = environment.github_repos.clone();
+                if merged.source_repos.is_some() {
+                    merged.source_repos = None;
+                }
+
                 // Track the pending save to show success toast when complete
                 self.pending_save_env_id = Some(*env_id);
 
                 // Update via UpdateManager
                 UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
-                    update_manager.update_ambient_agent_environment(
-                        environment.clone(),
-                        *env_id,
-                        revision,
-                        ctx,
-                    );
+                    update_manager.update_ambient_agent_environment(merged, *env_id, revision, ctx);
                 });
 
                 // Navigate back to list
@@ -1800,7 +1815,10 @@ impl EnvironmentsPageWidget {
                 );
             }
 
-            let mut details_parts = vec![format!("Image: {}", env_docker_image)];
+            let mut details_parts = Vec::new();
+            if !env_docker_image.is_empty() {
+                details_parts.push(format!("Image: {}", env_docker_image));
+            }
 
             if !env_github_repos.is_empty() {
                 let repos_text = env_github_repos
