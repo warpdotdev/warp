@@ -557,7 +557,6 @@ default = [
     "ai_resume_button",
     "code_find_replace",
     "ai_context_menu_code",
-    "agent_decides_command_execution",
     "linked_code_blocks",
     "drive_objects_as_context",
     "search_codebase_ui",
@@ -910,7 +909,6 @@ retry_truncated_code_responses = []
 usage_based_pricing = []
 ai_context_menu = []
 at_menu_outside_of_ai_mode = []
-agent_decides_command_execution = []
 fast_forward_autoexecute_button = []
 code_find_replace = []
 command_palette_file_search = []

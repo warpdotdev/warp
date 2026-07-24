@@ -5,7 +5,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use warp_completer::parsers::simple::{command_without_leading_env_vars, decompose_command};
 use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::{report_error, report_if_error};
@@ -917,8 +916,7 @@ impl BlocklistAIPermissions {
 
         match self.get_execute_commands_setting(ctx, terminal_view_id) {
             ActionPermission::AgentDecides | ActionPermission::Unknown => {
-                if FeatureFlag::AgentDecidesCommandExecution.is_enabled() && is_risky == Some(false)
-                {
+                if is_risky == Some(false) {
                     return CommandExecutionPermission::Allowed(
                         CommandExecutionPermissionAllowedReason::AgentDecided,
                     );
