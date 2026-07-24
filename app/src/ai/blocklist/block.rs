@@ -1887,10 +1887,10 @@ impl AIBlock {
         let time_to_first_token_ms = self
             .time_to_first_token
             .get()
-            .map(|duration| duration.num_milliseconds() as u128);
+            .and_then(|duration| u128::try_from(duration.num_milliseconds()).ok());
         let time_to_last_token_ms = self
             .time_to_last_token
-            .map(|duration| duration.num_milliseconds() as u128);
+            .and_then(|duration| u128::try_from(duration.num_milliseconds()).ok());
         let status = self.model.status(ctx);
         let is_udi_enabled = InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
 

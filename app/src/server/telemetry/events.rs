@@ -3452,17 +3452,22 @@ impl TelemetryEvent {
                 cancelled,
                 conversation_id,
                 is_udi_enabled,
-            } => Some(json!({
-                "client_exchange_id": client_exchange_id,
-                "server_output_id": server_output_id,
-                "was_autodetected_ai_query": was_autodetected_ai_query,
-                "time_to_first_token_ms": time_to_first_token_ms,
-                "time_to_last_token_ms": time_to_last_token_ms,
-                "was_user_facing_error": was_user_facing_error,
-                "cancelled": cancelled,
-                "conversation_id": conversation_id,
-                "is_udi_enabled": is_udi_enabled,
-            })),
+            } => {
+                let time_to_first_token_ms = json_number_safe_duration_ms(*time_to_first_token_ms);
+                let time_to_last_token_ms = json_number_safe_duration_ms(*time_to_last_token_ms);
+
+                Some(json!({
+                    "client_exchange_id": client_exchange_id,
+                    "server_output_id": server_output_id,
+                    "was_autodetected_ai_query": was_autodetected_ai_query,
+                    "time_to_first_token_ms": time_to_first_token_ms,
+                    "time_to_last_token_ms": time_to_last_token_ms,
+                    "was_user_facing_error": was_user_facing_error,
+                    "cancelled": cancelled,
+                    "conversation_id": conversation_id,
+                    "is_udi_enabled": is_udi_enabled,
+                }))
+            }
             TelemetryEvent::TierLimitHit(event) => Some(json!(event)),
             TelemetryEvent::AgentModeClickedEntrypoint { entrypoint } => {
                 Some(json!({"entrypoint": entrypoint}))
@@ -5157,6 +5162,9 @@ impl TelemetryEvent {
     }
 }
 
+fn json_number_safe_duration_ms(duration_ms: Option<u128>) -> Option<u64> {
+    duration_ms.and_then(|duration_ms| u64::try_from(duration_ms).ok())
+}
 impl TelemetryEventDesc for TelemetryEventDiscriminants {
     fn enablement_state(&self) -> EnablementState {
         // We disallow the wildcard statement to prevent us from accidentally ignoring any
