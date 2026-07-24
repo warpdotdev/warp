@@ -962,6 +962,158 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
 }
 
 #[test]
+fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_children_with_empty_tasks(
+) {
+    // Regression test for APP-4853: after the TUI startup speedup
+    // (commit 0ac6f594), conversations arrive from startup with empty
+    // task lists. The eager child hydration must still work via the
+    // `convert_persisted_conversation_to_ai_conversation_with_metadata`
+    // fallback when `load_conversation_from_db` cannot find a DB (which is
+    // always the case in tests). This covers the production code path where
+    // `agent_conversation.tasks.is_empty() == true`.
+    App::test((), |app| async move {
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+
+        // Simulate the production startup shape: task lists are EMPTY, and
+        // each record carries a pre-computed `summary` as written by
+        // `upsert_agent_conversation`.
+        let child_summary = serde_json::to_string(&AgentConversationSummary {
+            initial_query: "Child query".to_string(),
+            title: "Child query".to_string(),
+            initial_working_directory: None,
+            is_restorable: true,
+            is_unlisted_auto_code_diff: false,
+        })
+        .expect("summary should serialize");
+        let parent_summary = serde_json::to_string(&AgentConversationSummary {
+            initial_query: "Parent query".to_string(),
+            title: "Parent query".to_string(),
+            initial_working_directory: None,
+            is_restorable: true,
+            is_unlisted_auto_code_diff: false,
+        })
+        .expect("summary should serialize");
+
+        let conversations = vec![
+            AgentConversation {
+                conversation: AgentConversationRecord {
+                    id: 0,
+                    conversation_id: child_id.to_string(),
+                    conversation_data: serde_json::to_string(&AgentConversationData {
+                        server_conversation_token: Some("child-token".to_string()),
+                        conversation_usage_metadata: None,
+                        reverted_action_ids: None,
+                        forked_from_server_conversation_token: None,
+                        artifacts_json: None,
+                        parent_agent_id: Some(parent_run_id.clone()),
+                        agent_name: Some("Agent 1".to_string()),
+                        orchestration_harness_type: None,
+                        parent_conversation_id: Some(parent_id.to_string()),
+                        is_remote_child: false,
+                        root_task_is_optimistic: None,
+                        run_id: Some(child_run_id.clone()),
+                        autoexecute_override: None,
+                        last_event_sequence: None,
+                        pinned: false,
+                    })
+                    .expect("conversation data should serialize"),
+                    last_modified_at: now,
+                    summary: Some(child_summary),
+                },
+                tasks: vec![], // Production startup shape: no tasks loaded
+            },
+            AgentConversation {
+                conversation: AgentConversationRecord {
+                    id: 1,
+                    conversation_id: parent_id.to_string(),
+                    conversation_data: serde_json::to_string(&AgentConversationData {
+                        server_conversation_token: Some("parent-token".to_string()),
+                        conversation_usage_metadata: None,
+                        reverted_action_ids: None,
+                        forked_from_server_conversation_token: None,
+                        artifacts_json: None,
+                        parent_agent_id: None,
+                        agent_name: None,
+                        orchestration_harness_type: None,
+                        parent_conversation_id: None,
+                        is_remote_child: false,
+                        root_task_is_optimistic: None,
+                        run_id: Some(parent_run_id.clone()),
+                        autoexecute_override: None,
+                        last_event_sequence: None,
+                        pinned: false,
+                    })
+                    .expect("conversation data should serialize"),
+                    last_modified_at: now - chrono::Duration::seconds(1),
+                    summary: Some(parent_summary),
+                },
+                tasks: vec![], // Production startup shape: no tasks loaded
+            },
+        ];
+
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        history_model.read(&app, |model, _| {
+            // APP-4853 regression: child must still be eagerly hydrated even
+            // when its task list is empty (the production startup shape).
+            // Without the fallback to
+            // `convert_persisted_conversation_to_ai_conversation_with_metadata`,
+            // `load_conversation_from_db` returns `None` in tests (no backing
+            // DB), leaving the child absent from `conversations_by_id` and
+            // causing the pill bar and name resolution to show nothing /
+            // "Unknown agent".
+            assert!(
+                model.conversation(&child_id).is_some(),
+                "APP-4853: orchestration child with empty tasks should still be eagerly hydrated \
+                 into conversations_by_id via the metadata-synthesis fallback",
+            );
+            // The hydrated child must have the correct agent name and run_id
+            // so the pill bar label and name resolution both work.
+            let child = model.conversation(&child_id).unwrap();
+            assert_eq!(
+                child.agent_name(),
+                Some("Agent 1"),
+                "child agent_name should be restored from conversation_data",
+            );
+            assert_eq!(
+                child.orchestration_agent_id().as_deref(),
+                Some(child_run_id.as_str()),
+                "child run_id should be restorable from conversation_data",
+            );
+            // children_by_parent index is populated so the pill bar tree
+            // traversal finds the child.
+            assert_eq!(
+                model.child_conversation_ids_of(&parent_id),
+                &[child_id],
+                "orchestration children should be indexed in children_by_parent",
+            );
+            // run_id → conversation_id index is populated so name resolution
+            // in send_message / messages_received rows resolves correctly.
+            assert_eq!(
+                model.conversation_id_for_agent_id(&child_run_id),
+                Some(child_id),
+                "child run_id should be indexed in agent_id_to_conversation_id",
+            );
+            assert_eq!(
+                model.conversation_id_for_agent_id(&parent_run_id),
+                Some(parent_id),
+                "parent run_id should be indexed in agent_id_to_conversation_id",
+            );
+            // Parent must NOT be in conversations_by_id (stays on lazy path).
+            assert!(
+                model.conversation(&parent_id).is_none(),
+                "parent conversation should NOT be eagerly loaded",
+            );
+        });
+    });
+}
+
+#[test]
 fn prompt_history_candidates_seeds_from_snapshot_then_appends_session_prompts() {
     App::test((), |mut app| async move {
         let now = Local::now();
