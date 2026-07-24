@@ -119,6 +119,56 @@ fn auggie_is_supported() {
 }
 
 #[test]
+fn grok_is_supported() {
+    assert!(is_agent_supported(&CLIAgent::Grok));
+}
+
+#[test]
+fn grok_parses_osc9_as_stop() {
+    let event = GrokSessionHandler::parse_osc9_text("Turn complete · Grok").unwrap();
+    assert_eq!(event.event, CLIAgentEventType::Stop);
+    assert_eq!(event.agent, CLIAgent::Grok);
+    assert_eq!(event.payload.query.as_deref(), Some("Turn complete · Grok"));
+    assert_eq!(event.source, CLIAgentEventSource::CodexOsc9Fallback);
+}
+
+#[test]
+fn grok_try_parse_handles_osc9_and_rich_plugin() {
+    let mut handler = GrokSessionHandler;
+    let osc9 = handler
+        .try_parse(None, "Turn complete · Grok", false)
+        .unwrap();
+    assert_eq!(osc9.event, CLIAgentEventType::Stop);
+    assert_eq!(osc9.agent, CLIAgent::Grok);
+
+    let body = r#"{"v":1,"agent":"grok","event":"session_start","session_id":"s1","plugin_version":"1.0.0"}"#;
+    let rich = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+        .unwrap();
+    assert_eq!(rich.event, CLIAgentEventType::SessionStart);
+    assert_eq!(rich.agent, CLIAgent::Grok);
+    assert_eq!(rich.payload.plugin_version.as_deref(), Some("1.0.0"));
+
+    // Once rich is active, OSC 9 fallback is dropped.
+    assert!(
+        handler
+            .try_parse(None, "Turn complete · Grok", true)
+            .is_none()
+    );
+}
+
+#[test]
+fn grok_try_parse_ignores_other_agents() {
+    let mut handler = GrokSessionHandler;
+    let body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
+    assert!(
+        handler
+            .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+            .is_none()
+    );
+}
+
+#[test]
 fn auggie_default_handler_skips_session_start() {
     let mut handler = DefaultSessionListener;
     let event = CLIAgentEvent {

@@ -38,6 +38,11 @@ fn returns_none_for_unsupported_agents() {
 }
 
 #[test]
+fn returns_manager_for_grok() {
+    assert!(plugin_manager_for(CLIAgent::Grok).is_some());
+}
+
+#[test]
 fn compare_versions_equal() {
     assert_eq!(compare_versions("1.2.3", "1.2.3"), Ordering::Equal);
 }
