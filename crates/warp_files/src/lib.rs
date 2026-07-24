@@ -33,6 +33,16 @@ use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 pub mod text_file_reader;
 pub use text_file_reader::{TextFileReadResult, TextFileSegment};
 
+/// Maximum size, in bytes, of a file that [`FileModel::open`] will read into
+/// memory for display/editing in a buffer.
+///
+/// Files larger than this are rejected with [`FileLoadError::FileTooLarge`]
+/// before their contents are read. This guards against multi-GiB memory
+/// spikes: the code editor amplifies file content several-fold when it builds
+/// its text sum-tree, clones edit deltas, and lays out every glyph, so a
+/// single very large file can retain many gigabytes of heap (see APP-4519).
+pub const MAX_EDITOR_FILE_SIZE_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB
+
 #[derive(Debug)]
 pub enum FileModelEvent {
     FileLoaded {
@@ -418,9 +428,10 @@ impl FileModel {
         let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
-                let contents = async_fs::read_to_string(&file_path_buf)
-                    .await
-                    .map_err(FileLoadError::from);
+                // Enforce a size limit before reading so oversized files never
+                // get read into memory (and then amplified into a multi-GiB
+                // editor buffer). See MAX_EDITOR_FILE_SIZE_BYTES / APP-4519.
+                let contents = Self::read_file_with_size_limit(&file_path_buf).await;
                 (file_id, contents)
             },
             move |me, (file_id, load_result), ctx| match load_result {
@@ -473,6 +484,35 @@ impl FileModel {
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
         if !Self::file_exists(file_path).await {
             return Err(FileLoadError::DoesNotExist);
+        }
+        async_fs::read_to_string(file_path)
+            .await
+            .map_err(FileLoadError::from)
+    }
+
+    /// Reads a file to a `String`, rejecting files larger than
+    /// [`MAX_EDITOR_FILE_SIZE_BYTES`] *before* their contents are read into
+    /// memory. Used by the buffer-loading paths (e.g. [`Self::open`]) to avoid
+    /// multi-GiB memory spikes from oversized files.
+    pub async fn read_file_with_size_limit(file_path: &Path) -> Result<String, FileLoadError> {
+        Self::read_file_with_limit(file_path, MAX_EDITOR_FILE_SIZE_BYTES).await
+    }
+
+    /// Implementation of [`Self::read_file_with_size_limit`] with an explicit
+    /// byte limit, so the size-guard behavior can be unit-tested without
+    /// creating multi-megabyte fixtures.
+    async fn read_file_with_limit(
+        file_path: &Path,
+        limit_bytes: u64,
+    ) -> Result<String, FileLoadError> {
+        // Check the size from metadata first so we never read an oversized
+        // file's contents into memory.
+        let size_bytes = async_fs::metadata(file_path).await?.len();
+        if size_bytes > limit_bytes {
+            return Err(FileLoadError::FileTooLarge {
+                size_bytes,
+                limit_bytes,
+            });
         }
         async_fs::read_to_string(file_path)
             .await

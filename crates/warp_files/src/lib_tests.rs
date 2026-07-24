@@ -91,6 +91,33 @@ fn test_load() {
 }
 
 #[test]
+fn test_read_file_with_limit_rejects_oversized() {
+    // Write a small fixture, then exercise the size guard with an explicit
+    // limit so we don't need to create a multi-megabyte file.
+    std::fs::create_dir_all(WRITE_TEST_PATH).unwrap();
+    let path = PathBuf::from(WRITE_TEST_PATH).join("test_size_guard.txt");
+    let content = "hello, world";
+    std::fs::write(&path, content).unwrap();
+
+    // Under the limit: the content is returned unchanged.
+    let ok = block_on(FileModel::read_file_with_limit(&path, 1024))
+        .expect("file within the limit should load");
+    assert_eq!(ok, content);
+
+    // Over the limit: FileTooLarge is returned with the actual size + limit,
+    // and the contents are never read into memory.
+    let err = block_on(FileModel::read_file_with_limit(&path, 4))
+        .expect_err("file exceeding the limit should be rejected");
+    assert!(matches!(
+        err,
+        FileLoadError::FileTooLarge { size_bytes, limit_bytes }
+            if size_bytes == content.len() as u64 && limit_bytes == 4
+    ));
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn test_save_uninitialized_file() {
     App::test((), |mut app| async move {
         let app = &mut app;
