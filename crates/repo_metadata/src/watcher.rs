@@ -363,7 +363,7 @@ impl DirectoryWatcher {
 
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(gitignores, force_included_paths),
+                        repo_watch_filter(local_path.clone(), gitignores, force_included_paths),
                         RecursiveMode::Recursive,
                     ))
                 })
