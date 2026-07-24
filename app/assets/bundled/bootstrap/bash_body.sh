@@ -1204,12 +1204,12 @@ esac
             source /etc/bash.bashrc
         fi
 
-        if [[ -e $HOME/.bash_profile ]]; then
-            source $HOME/.bash_profile
-        elif [[ -e $HOME/.bash_login ]]; then
-            source $HOME/.bash_login
-        elif [[ -e $HOME/.profile ]]; then
-            source $HOME/.profile
+        if [[ -e "$HOME/.bash_profile" ]]; then
+            source "$HOME/.bash_profile"
+        elif [[ -e "$HOME/.bash_login" ]]; then
+            source "$HOME/.bash_login"
+        elif [[ -e "$HOME/.profile" ]]; then
+            source "$HOME/.profile"
         fi
 
         rcfiles_end_time="$(LC_ALL="C"; echo $EPOCHREALTIME)"
