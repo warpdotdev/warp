@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use smol_str::SmolStr;
+use warp_util::path::ShellFamily;
 
 use super::add_extra_positional;
 use crate::completer::context::call_js_function;
@@ -695,10 +696,19 @@ async fn generate_suggestions_for_argument_value(
                             }
                         }
                     };
+                    // Generators emit raw values; shell-escape so the buffer-insertion path
+                    // produces a single shell token (e.g. `new file test.csv` becomes
+                    // `new\ file\ test.csv` for POSIX shells). Mirrors the legacy code path.
+                    let shell_family = ctx.shell_family().unwrap_or(ShellFamily::Posix);
                     let internal_suggestions = results
                         .suggestions
                         .into_iter()
                         .map(Into::into)
+                        .map(|mut suggestion: Suggestion| {
+                            suggestion.replacement =
+                                shell_family.escape(&suggestion.replacement).into();
+                            suggestion
+                        })
                         .filter_map(|suggestion: Suggestion| {
                             let match_type = matcher
                                 .get_match_type(parsed_token.as_str(), suggestion.display.as_str());

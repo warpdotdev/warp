@@ -2299,3 +2299,91 @@ fn test_powershell_parser_directives_for_case_insensitivity() {
         vec!["-Force"]
     );
 }
+
+/// Suggestions produced by a Rust generator (`Generator::script` registered via the
+/// command-signatures crate) flow through `legacy.rs:From<warp_command_signatures::Suggestion>
+/// for Suggestion`, which today copies `exact_string` into `replacement` verbatim. Real-world
+/// trigger: `git add <tab>` after the command-signatures repo is fixed to return raw filenames
+/// — the generator produces `new file test.csv`, but the buffer-insertion path needs
+/// `new\ file\ test.csv` (POSIX) for the shell to parse it as one token. Without escaping at
+/// this boundary, picking the suggestion produces three shell tokens and `git add` fails.
+#[cfg(not(feature = "v2"))]
+#[test]
+fn test_generator_suggestion_replacement_is_shell_escaped() {
+    use std::collections::HashMap;
+    use warp_command_signatures::{
+        Argument, ArgumentType, CommandBuilder, CommandSignatureGenerators, Generator,
+        GeneratorName, GeneratorResults, IsArgumentOptional, Signature,
+        Suggestion as MetadataSuggestion,
+    };
+
+    use crate::signatures::CommandRegistry;
+
+    const FILE_NAME: &str = "new file test.csv";
+    const SHELL_CMD: &str = "echo file_with_spaces";
+
+    let generators = CommandSignatureGenerators::new("stage").add_generator(
+        "files",
+        Generator::script(
+            CommandBuilder::single_command(SHELL_CMD),
+            // Output is irrelevant to this test; the callback returns a fixed
+            // suggestion mirroring what the fixed command-signatures generator
+            // emits for `git status --short -z`.
+            |_| GeneratorResults {
+                suggestions: vec![MetadataSuggestion::new(FILE_NAME)],
+                is_ordered: false,
+            },
+        ),
+    );
+    let generators_map = HashMap::from([generators.into()]);
+
+    let signature = Signature {
+        name: "stage".to_owned(),
+        alias_generator: None,
+        description: None,
+        arguments: Some(vec![Argument {
+            display_name: Some("file".to_owned()),
+            description: None,
+            is_variadic: false,
+            is_command: false,
+            argument_types: vec![ArgumentType::Generator(GeneratorName("files".to_owned()))],
+            optional: IsArgumentOptional::Required,
+            skip_generator_validation: false,
+        }]),
+        subcommands: None,
+        options: None,
+        priority: warp_command_signatures::Priority::default(),
+        parser_directives: Default::default(),
+    };
+
+    let registry = CommandRegistry::new_for_test([signature], generators_map);
+    let generator_ctx = MockGeneratorContext::new().with_expected_command(SHELL_CMD, "");
+    let ctx = FakeCompletionContext::new(registry).with_generator_context(generator_ctx);
+
+    let results = suggestions_for_test(
+        "stage ",
+        "stage ".len(),
+        CompleterOptions {
+            match_strategy: MatchStrategy::CaseInsensitive,
+            fallback_strategy: CompletionsFallbackStrategy::FilePaths,
+            suggest_file_path_completions_only: false,
+            parse_quotes_as_literals: false,
+        },
+        &ctx,
+    )
+    .expect("expected suggestion results from generator");
+
+    let matched = results
+        .suggestions
+        .iter()
+        .find(|s| s.display() == FILE_NAME)
+        .expect("expected the generator's suggestion to surface");
+
+    assert_eq!(
+        matched.replacement(),
+        r"new\ file\ test.csv",
+        "Generator-produced replacement must be shell-escaped before insertion. \
+         Today it equals the unescaped `{FILE_NAME}`, which the shell would parse \
+         as three separate tokens."
+    );
+}
