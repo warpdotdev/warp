@@ -486,7 +486,6 @@ agent_shared_sessions = []
 ask_user_question = []
 async_find = []
 changelog = []
-clear_autosuggestion_on_escape = []
 cloud_object_initial_load = ["enforce_revisions_to_cloud_objects"]
 codebase_index_speedbump = []
 cocoa_sentry = ["crash_reporting"]
@@ -540,7 +539,6 @@ default = [
     "global_ai_analytics_collection",
     "grep_tool",
     "validate_autosuggestions",
-    "clear_autosuggestion_on_escape",
     "file_retrieval_tools",
     "mcp_server",
     "fast_forward_autoexecute_button",
