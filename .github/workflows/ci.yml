@@ -814,11 +814,6 @@ jobs:
           target_os: linux
           is_self_hosted: false
 
-      # Only the library target is checked, because that is all the eval repo
-      # builds: it consumes `warp` as a git dependency, so this crate's own
-      # `#[cfg(test)]` code is never compiled there. Checking `--all-targets`
-      # instead would force unit tests to be `cfg`-gated for a configuration
-      # they are never run in.
       - name: Verify compilation with the agent_mode_evals feature
         run: cargo check --locked -p warp --lib --features agent_mode_evals
         env:
