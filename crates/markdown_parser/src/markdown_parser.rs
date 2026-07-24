@@ -1793,6 +1793,16 @@ impl Delimiter {
             return false;
         }
 
+        // `<u>` is only ever closed by an explicit `</u>` (handled by
+        // `parse_underline`), never by pairing two openers through the emphasis
+        // path. Without this guard, an unclosed `<u>` followed by another `<u>`
+        // is matched as an opener/closer pair and both markers plus the text
+        // between them are deleted. An unclosed `<u>` should round-trip to
+        // literal text, exactly like an unclosed `*`.
+        if self.kind == DelimiterKind::UnderlineStart {
+            return false;
+        }
+
         // For strikethrough, the delimiter counts must match.
         if self.kind == DelimiterKind::Strikethrough {
             return self.count == other.count;
