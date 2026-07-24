@@ -857,3 +857,132 @@ impl Entity for PrivacySettings {
 }
 
 impl SingletonEntity for PrivacySettings {}
+
+#[cfg(test)]
+mod tests {
+    //! Regression coverage for #11262: every code path that mutates the
+    //! user-secret regex list must emit
+    //! [`PrivacySettingsChangedEvent::CustomSecretRegexList`] so the
+    //! subscribing `CustomSecretRegexUpdater` can recompile the in-memory
+    //! `SECRETS_REGEX` DFA. Without these events the local MCP-save
+    //! redaction check silently falls through.
+    use super::*;
+    use settings::{PrivatePreferences, PublicPreferences, SettingsManager};
+    use warpui::App;
+
+    fn register_settings_singletons(app: &mut App) {
+        // The setting framework's `set_value` calls reach for these
+        // singletons; PrivacySettings::mock doesn't register them itself.
+        app.add_singleton_model(|_| {
+            PublicPreferences::new(Box::<
+                warpui_extras::user_preferences::in_memory::InMemoryPreferences,
+            >::default())
+        });
+        app.add_singleton_model(|_| {
+            PrivatePreferences::new(Box::<
+                warpui_extras::user_preferences::in_memory::InMemoryPreferences,
+            >::default())
+        });
+        app.add_singleton_model(|_| SettingsManager::default());
+    }
+
+    fn count_secret_regex_list_events(
+        app: &mut App,
+        model: &warpui::ModelHandle<PrivacySettings>,
+        mutate: impl FnOnce(&mut PrivacySettings, &mut ModelContext<PrivacySettings>),
+    ) -> usize {
+        let (sender, receiver) = async_channel::unbounded();
+        let model_clone = model.clone();
+        model.update(app, move |_, ctx| {
+            let sender = sender.clone();
+            ctx.subscribe_to_model(
+                &model_clone,
+                move |_, event: &PrivacySettingsChangedEvent, _| {
+                    if matches!(
+                        event,
+                        PrivacySettingsChangedEvent::CustomSecretRegexList { .. }
+                    ) {
+                        let _ = sender.try_send(());
+                    }
+                },
+            );
+        });
+
+        model.update(app, |settings, ctx| mutate(settings, ctx));
+
+        let mut count = 0;
+        while receiver.try_recv().is_ok() {
+            count += 1;
+        }
+        count
+    }
+
+    #[test]
+    fn add_all_recommended_regex_emits_custom_secret_regex_list_event() {
+        // The recommended-defaults path was a silent mutator before #11262:
+        // it pushed ~20 regexes into `user_secret_regex_list.set_value`
+        // without emitting `CustomSecretRegexList`, so the global DFA was
+        // never recompiled. Verify the event now fires.
+        App::test((), |mut app| async move {
+            register_settings_singletons(&mut app);
+            let model = app.add_model(PrivacySettings::mock);
+
+            let event_count = count_secret_regex_list_events(&mut app, &model, |settings, ctx| {
+                settings.add_all_recommended_regex(ctx);
+            });
+
+            assert_eq!(
+                event_count, 1,
+                "add_all_recommended_regex must emit exactly one CustomSecretRegexList event"
+            );
+        });
+    }
+
+    #[test]
+    fn add_all_recommended_regex_when_already_populated_does_not_emit() {
+        // Early-return guard: if every default is already present, no
+        // mutation happens and we shouldn't fire an event for nothing.
+        App::test((), |mut app| async move {
+            register_settings_singletons(&mut app);
+            let model = app.add_model(PrivacySettings::mock);
+
+            // First call adds the defaults and fires once.
+            let first_count = count_secret_regex_list_events(&mut app, &model, |settings, ctx| {
+                settings.add_all_recommended_regex(ctx);
+            });
+            assert_eq!(first_count, 1);
+
+            // Second call is a no-op (early-return at `num_existing_regexes
+            // == new.len()`) and must NOT emit.
+            let second_count = count_secret_regex_list_events(&mut app, &model, |settings, ctx| {
+                settings.add_all_recommended_regex(ctx);
+            });
+            assert_eq!(
+                second_count, 0,
+                "no-op call must not spuriously emit CustomSecretRegexList"
+            );
+        });
+    }
+
+    #[test]
+    fn remove_user_secret_regex_emits_custom_secret_regex_list_event() {
+        App::test((), |mut app| async move {
+            register_settings_singletons(&mut app);
+            let model = app.add_model(PrivacySettings::mock);
+
+            // Seed the list so there's something to remove.
+            model.update(&mut app, |settings, ctx| {
+                settings.add_all_recommended_regex(ctx);
+            });
+
+            let event_count = count_secret_regex_list_events(&mut app, &model, |settings, ctx| {
+                settings.remove_user_secret_regex(&0, ctx);
+            });
+
+            assert_eq!(
+                event_count, 1,
+                "remove_user_secret_regex must emit exactly one CustomSecretRegexList event"
+            );
+        });
+    }
+}
