@@ -569,7 +569,6 @@ default = [
     "selection_as_context",
     "undo_closed_panes",
     "revert_diff_hunk",
-    "code_review_save_changes",
     "create_project_flow",
     "get_started_tab",
     "file_tree",
@@ -938,7 +937,6 @@ vim_code_editor = []
 allow_opening_file_links_using_editor_env = []
 undo_closed_panes = []
 revert_diff_hunk = []
-code_review_save_changes = []
 remote_code_review = []
 file_tree = []
 code_launch_modal = []

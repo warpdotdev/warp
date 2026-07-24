@@ -3485,11 +3485,7 @@ impl CodeReviewView {
                     }
 
                     if is_initial_setup {
-                        if FeatureFlag::CodeReviewSaveChanges.is_enabled() {
-                            editor.set_interaction_state(InteractionState::Editable, ctx);
-                        } else {
-                            editor.set_interaction_state(InteractionState::Selectable, ctx);
-                        }
+                        editor.set_interaction_state(InteractionState::Editable, ctx);
                     }
                 });
             });
