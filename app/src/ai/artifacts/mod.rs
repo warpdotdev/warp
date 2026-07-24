@@ -330,10 +330,6 @@ where
         .collect())
 }
 
-pub fn file_button_label(filename: &str, filepath: &str) -> String {
-    file_button_label_with_title(None, filename, filepath)
-}
-
 pub fn file_button_label_with_title(title: Option<&str>, filename: &str, filepath: &str) -> String {
     if let Some(title) = title.and_then(non_empty_trimmed) {
         return title.to_string();

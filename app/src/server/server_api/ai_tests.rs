@@ -400,6 +400,7 @@ fn test_deserialize_list_tasks_response_with_artifacts() {
         artifact_uid,
         filepath,
         filename,
+        title,
         mime_type,
         description,
         size_bytes,
@@ -409,7 +410,8 @@ fn test_deserialize_list_tasks_response_with_artifacts() {
     };
     assert_eq!(artifact_uid, "artifact-file-1");
     assert_eq!(filepath, "outputs/report.txt");
-    assert_eq!(filename, "report.txt");
+    assert_eq!(filename.as_deref(), Some("report.txt"));
+    assert!(title.is_none());
     assert_eq!(mime_type, "text/plain");
     assert_eq!(*description, Some("Daily summary".to_string()));
     assert_eq!(*size_bytes, Some(42));

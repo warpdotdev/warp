@@ -91,19 +91,22 @@ fn resolves_lightbox_image_for_screenshot_artifact() {
 #[test]
 fn file_button_label_prefers_filename() {
     assert_eq!(
-        file_button_label("report.txt", "outputs/other.txt"),
+        file_button_label_with_title(None, "report.txt", "outputs/other.txt"),
         "report.txt"
     );
 }
 
 #[test]
 fn file_button_label_falls_back_to_filepath_basename() {
-    assert_eq!(file_button_label("", "outputs/report.txt"), "report.txt");
+    assert_eq!(
+        file_button_label_with_title(None, "", "outputs/report.txt"),
+        "report.txt"
+    );
 }
 
 #[test]
 fn file_button_label_falls_back_to_generic_label() {
-    assert_eq!(file_button_label("", ""), "File");
+    assert_eq!(file_button_label_with_title(None, "", ""), "File");
 }
 #[test]
 fn file_button_label_prefers_title_and_ignores_whitespace() {

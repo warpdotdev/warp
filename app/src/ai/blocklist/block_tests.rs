@@ -11,10 +11,11 @@ use super::{
     CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
-    recording_artifact_view_url, user_avatar_info_for_conversation_creator,
+    user_avatar_info_for_conversation_creator,
 };
 use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::artifacts::recording_artifact_view_url;
 use crate::ai::blocklist::action_model::{
     compose_run_agents_child_prompt, run_agents_to_start_agent_mode,
 };

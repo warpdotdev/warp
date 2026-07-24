@@ -15,7 +15,7 @@ authenticated run-page URL helper being added by QUALITY-1193, with the
 existing signed-download URL as the no-task-id fallback. Fix the WASM issue
 upstream in artifact population, not by adding a rendering-only WASM gate.
 
-*Design alternatives:* 
+*Design alternatives:*
 - Add a `RECORDING`/`VIDEO` artifact union variant — rejected. Uploads,
   GraphQL, the protobuf event, and Oz web all currently model recordings as
   `FILE`; introducing a new variant would require a compatibility migration
