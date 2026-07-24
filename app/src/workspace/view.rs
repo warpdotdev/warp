@@ -566,6 +566,8 @@ const TITLE_BAR_SEARCH_BAR_SLOT_PADDING: f32 = 8.;
 pub const TOTAL_TAB_BAR_HEIGHT: f32 = TAB_BAR_HEIGHT + TAB_BAR_BORDER_HEIGHT;
 
 const TAB_BAR_ICON_PADDING: f32 = 4.;
+const TAB_BAR_ICON_SIZE: f32 = 18.;
+const TAB_BAR_ICON_BUTTON_PADDING: f32 = 3.;
 
 const TAB_BAR_PILL_WIDTH: f32 = 100.;
 const PILL_FONT_SIZE: f32 = 12.;
@@ -20487,8 +20489,8 @@ impl Workspace {
 
         // Build the button content: Diff icon + optional diff stats
         let icon = ConstrainedBox::new(icons::Icon::Diff.to_warpui_icon(font_color).finish())
-            .with_width(16.)
-            .with_height(16.)
+            .with_width(TAB_BAR_ICON_SIZE)
+            .with_height(TAB_BAR_ICON_SIZE)
             .finish();
 
         let show_diff_stats = *TabSettings::as_ref(ctx).show_code_review_diff_stats;
@@ -21871,6 +21873,10 @@ impl Workspace {
             icon_color,
         );
         button = button
+            .with_style(UiComponentStyles {
+                padding: Some(Coords::uniform(TAB_BAR_ICON_BUTTON_PADDING)),
+                ..UiComponentStyles::default()
+            })
             .with_hovered_styles(UiComponentStyles {
                 font_color: Some(icon_color.into()),
                 background: Some(theme.surface_2().into()),
