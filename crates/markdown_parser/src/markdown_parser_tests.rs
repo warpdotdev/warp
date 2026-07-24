@@ -2912,3 +2912,136 @@ fn test_parse_table_with_strikethrough() {
         panic!("Expected table");
     }
 }
+
+#[test]
+fn test_parse_br_tag_inline() {
+    assert_eq!(
+        parse_all("a<br>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("a\nb")]
+    );
+
+    assert_eq!(
+        parse_all("a<br/>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("a\nb")]
+    );
+
+    assert_eq!(
+        parse_all("a<br />b", parse_inline),
+        vec![FormattedTextFragment::plain_text("a\nb")]
+    );
+
+    assert_eq!(
+        parse_all("a<BR>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("a\nb")]
+    );
+
+    assert_eq!(
+        parse_all("a<Br/>b", parse_inline),
+        vec![FormattedTextFragment::plain_text("a\nb")]
+    );
+
+    assert_eq!(
+        parse_all("hello<br>world", parse_inline),
+        vec![FormattedTextFragment::plain_text("hello\nworld")]
+    );
+
+    assert_eq!(
+        parse_all("**bold**<br>*italic*", parse_inline),
+        vec![
+            FormattedTextFragment::bold("bold"),
+            FormattedTextFragment::plain_text("\n"),
+            FormattedTextFragment::italic("italic"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_br_tag_at_line_end() {
+    let source = "line1<br>\nline2\n";
+    let result = test_parse_markdown(source);
+    assert_eq!(result.len(), 2);
+    assert_eq!(
+        result[0],
+        FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("line1")])
+    );
+    assert_eq!(
+        result[1],
+        FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("line2")])
+    );
+}
+
+#[test]
+fn test_parse_multiple_br_tags() {
+    let source = "line1<br><br>\nline2\n";
+    let result = test_parse_markdown(source);
+    assert_eq!(result.len(), 2);
+    assert_eq!(
+        result[0],
+        FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("line1\n")])
+    );
+    assert_eq!(
+        result[1],
+        FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("line2")])
+    );
+}
+
+#[test]
+fn test_parse_br_in_table_cell() {
+    let source = "| A | B |\n| --- | --- |\n| line1<br>line2 | 2 |\n";
+    let result = test_parse_markdown_with_gfm_tables(source);
+    assert_eq!(result.len(), 1);
+
+    if let FormattedTextLine::Table(table) = &result[0] {
+        assert_eq!(table.rows.len(), 1);
+        let cell = &table.rows[0][0];
+        assert_eq!(cell.len(), 1);
+        assert_eq!(cell[0].text, "line1\nline2");
+    } else {
+        panic!("Expected table");
+    }
+}
+
+#[test]
+fn test_parse_br_before_closing_markup_at_line_end() {
+    assert_eq!(
+        parse_all("<u>line<br></u>", parse_inline),
+        vec![FormattedTextFragment::underline("line")]
+    );
+
+    assert_eq!(
+        parse_all("<u>line<br><br></u>", parse_inline),
+        vec![FormattedTextFragment::underline("line\n")]
+    );
+
+    assert_eq!(
+        parse_all("**line<br>**", parse_inline),
+        vec![FormattedTextFragment::bold("line")]
+    );
+
+    assert_eq!(
+        parse_all("**line<br><br>**", parse_inline),
+        vec![FormattedTextFragment::bold("line\n")]
+    );
+
+    assert_eq!(
+        parse_all("*line<br>*", parse_inline),
+        vec![FormattedTextFragment::italic("line")]
+    );
+
+    assert_eq!(
+        parse_all("~~line<br>~~", parse_inline),
+        vec![FormattedTextFragment::strikethrough("line")]
+    );
+}
+
+#[test]
+fn test_inline_line_count_with_br() {
+    let line = FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("hello\nworld")]);
+    assert_eq!(line.num_lines(), 2);
+
+    let header = FormattedTextLine::Heading(FormattedTextHeader {
+        heading_size: 1,
+        text: vec![FormattedTextFragment::plain_text("title\nsubtitle")],
+    });
+    assert_eq!(header.num_lines(), 2);
+}

@@ -1018,10 +1018,12 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             }
             InlineToken::Delimiter { kind, count } => {
                 let node_index = state.nodes.len();
-                let preceding_char = state
-                    .nodes
-                    .last()
-                    .and_then(|fragment| fragment.text.chars().last());
+                let preceding_char = state.nodes.iter().rev().find_map(|fragment| {
+                    fragment
+                        .text
+                        .rfind(|c: char| c != '\n')
+                        .map(|i| fragment.text[i..].chars().next().unwrap())
+                });
                 let following_char = remaining.chars().next();
 
                 let delimiter =
@@ -1035,6 +1037,10 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
             }
+            InlineToken::HardLineBreak => {
+                state.push_text("\n");
+                state.last_node_closed = true;
+            }
         }
     }
 
@@ -1042,7 +1048,59 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
     assert!(state.delimiters.is_empty()); // All delimiters should have been processed.
 
-    Ok((input, consolidate_fragments(state.nodes)))
+    let mut fragments = consolidate_fragments(state.nodes);
+    strip_trailing_hard_break(&mut fragments);
+    Ok((input, fragments))
+}
+
+/// Strip a trailing hard line break from inline fragments when `<br>` appears
+/// at the end of a physical line.
+///
+/// The block-level parser already separates physical lines into distinct
+/// `FormattedTextLine::Line` entries, so the trailing `\n` from a `<br>` at
+/// end-of-line would create an unwanted empty visual row. This removes the
+/// last newline (plus any trailing whitespace after it), while preserving
+/// preceding newlines from additional `<br>` tags.
+///
+/// This is a no-op if the last fragment does not end with a newline from a
+/// hard line break.
+fn strip_trailing_hard_break(fragments: &mut Vec<FormattedTextFragment>) {
+    let mut trailing_ws_end = fragments.len();
+    for i in (0..fragments.len()).rev() {
+        let frag = &fragments[i];
+        if frag.styles == FormattedTextStyles::default()
+            && frag.text.chars().all(|c| c.is_whitespace() && c != '\n')
+        {
+            trailing_ws_end = i;
+        } else {
+            break;
+        }
+    }
+
+    if trailing_ws_end == 0 {
+        return;
+    }
+
+    let should_strip = {
+        let last_content = &fragments[trailing_ws_end - 1].text;
+        let trimmed = last_content.trim_end_matches(|c: char| c.is_whitespace() && c != '\n');
+        trimmed.ends_with('\n')
+    };
+
+    if !should_strip {
+        return;
+    }
+
+    fragments.truncate(trailing_ws_end);
+    let last = fragments.last_mut().unwrap();
+    let trimmed_len = last
+        .text
+        .trim_end_matches(|c: char| c.is_whitespace() && c != '\n')
+        .len();
+    last.text.truncate(trimmed_len - 1);
+    if last.text.is_empty() {
+        fragments.pop();
+    }
 }
 
 /// State for parsing inline Markdown.
@@ -1549,6 +1607,7 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             parse_inline_token_autolink,
             parse_inline_token_underline_start,
             parse_inline_token_underline_end,
+            parse_inline_token_br,
             whitespace,
             text,
             // This _must_ be the last parser in the chain. It unconditionally consumes a single
@@ -1654,6 +1713,24 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse a hard line break tag: `<br>`, `<br/>`, `<br />`, case-insensitive.
+fn parse_inline_token_br<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "br_tag",
+        value(
+            InlineToken::HardLineBreak,
+            tuple((
+                tag("<"),
+                tag_no_case("br"),
+                space0,
+                alt((tag("/>"), tag(">"))),
+            )),
+        ),
+    )(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
@@ -1700,6 +1777,8 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// A hard line break (`<br>`, `<br/>`, `<br />`).
+    HardLineBreak,
 }
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)

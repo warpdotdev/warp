@@ -285,11 +285,11 @@ impl LineCount for FormattedTextLine {
     fn num_lines(&self) -> usize {
         match self {
             Self::CodeBlock(text) => text.code.matches('\n').count(),
-            Self::Heading(_) => 1,
-            Self::Line(_) => 1,
-            Self::OrderedList(_) => 1,
-            Self::UnorderedList(_) => 1,
-            Self::TaskList(_) => 1,
+            Self::Heading(header) => count_inline_lines(&header.text),
+            Self::Line(texts) => count_inline_lines(texts),
+            Self::OrderedList(list) => count_inline_lines(&list.indented_text.text),
+            Self::UnorderedList(list) => count_inline_lines(&list.text),
+            Self::TaskList(list) => count_inline_lines(&list.text),
             Self::LineBreak => 0,
             Self::HorizontalRule => 0,
             Self::Embedded(_) => 1,
@@ -297,6 +297,13 @@ impl LineCount for FormattedTextLine {
             Self::Table(table) => 1 + table.rows.len(), // Header + data rows (separator not counted as a line)
         }
     }
+}
+
+fn count_inline_lines(fragments: &[FormattedTextFragment]) -> usize {
+    1 + fragments
+        .iter()
+        .map(|f| f.text.matches('\n').count())
+        .sum::<usize>()
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
