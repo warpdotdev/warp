@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use chrono::NaiveDate;
 use instant::Instant;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
@@ -47,8 +48,10 @@ use super::{
     SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
-    format_context_window_usage, log_bundle_success_message, raw_prompt_if_not_blank,
-    render_status_footer_row, voice_argument_is_empty, voice_command_argument,
+    format_context_window_usage, format_statusline_date, format_statusline_time_12_hour,
+    format_statusline_time_24_hour, format_todo_progress, log_bundle_success_message,
+    raw_prompt_if_not_blank, render_status_footer_row, voice_argument_is_empty,
+    voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -83,7 +86,19 @@ struct FocusTestFixture {
 }
 
 #[test]
-fn footer_supports_arbitrary_order_and_branch_without_a_leading_arrow() {
+fn figma_statusline_metadata_formats_are_stable() {
+    let now = NaiveDate::from_ymd_opt(2026, 7, 20)
+        .unwrap()
+        .and_hms_opt(13, 8, 0)
+        .unwrap();
+    assert_eq!(format_statusline_date(now), "July 20, 2026");
+    assert_eq!(format_statusline_time_12_hour(now), "1:08pm");
+    assert_eq!(format_statusline_time_24_hour(now), "13:08");
+    assert_eq!(format_todo_progress(1, 10, false), "❒ 1/10");
+    assert_eq!(format_todo_progress(10, 10, true), "✓ 10/10");
+}
+#[test]
+fn footer_supports_arbitrary_order_and_figma_group_dividers() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
@@ -95,6 +110,7 @@ fn footer_supports_arbitrary_order_and_branch_without_a_leading_arrow() {
                         FooterSegment::GitBranch("feature/statusline".to_owned()),
                         FooterSegment::ActiveIndicator("Auto-queue"),
                         FooterSegment::WorkingDirectory("/tmp/warp".to_owned()),
+                        FooterSegment::DateTime("July 20, 2026".to_owned()),
                     ],
                 },
                 &builder,
@@ -102,7 +118,10 @@ fn footer_supports_arbitrary_order_and_branch_without_a_leading_arrow() {
             .finish();
             assert_eq!(
                 render_element(row, ctx, 120).to_lines(),
-                vec!["43% context used • feature/statusline • Auto-queue • /tmp/warp".to_owned()],
+                vec![
+                    "43% context used | feature/statusline | Auto-queue | /tmp/warp | July 20, 2026"
+                        .to_owned()
+                ],
             );
 
             let branch_only = render_status_footer_row(
@@ -120,6 +139,45 @@ fn footer_supports_arbitrary_order_and_branch_without_a_leading_arrow() {
     });
 }
 
+#[test]
+fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let row = render_status_footer_row(
+                FooterSegments {
+                    ordered: vec![
+                        FooterSegment::ActiveIndicator("Auto-approve"),
+                        FooterSegment::ActiveIndicator("Auto-queue"),
+                        FooterSegment::Model(TuiText::new("model").finish()),
+                        FooterSegment::WorkingDirectory("/tmp/warp".to_owned()),
+                        FooterSegment::GitBranch("main".to_owned()),
+                        FooterSegment::GitBranchStatus("↑1 ↓2".to_owned()),
+                        FooterSegment::GitDiff {
+                            additions: 31,
+                            deletions: 12,
+                        },
+                        FooterSegment::CreditUsage(TuiText::new("40 credits").finish()),
+                        FooterSegment::ContextWindowUsage("43% context used".to_owned()),
+                        FooterSegment::DateTime("July 20, 2026".to_owned()),
+                        FooterSegment::DateTime("1:08pm".to_owned()),
+                        FooterSegment::AgentTodoList("❒ 1/10".to_owned()),
+                    ],
+                },
+                &builder,
+            )
+            .finish();
+            assert_eq!(
+                render_element(row, ctx, 160).to_lines(),
+                vec![
+                    "Auto-approve • Auto-queue | model | /tmp/warp ↬ main | ↑1 ↓2 | +31 -12 | 40 credits | 43% context used | July 20, 2026 • 1:08pm | ❒ 1/10"
+                        .to_owned()
+                ],
+            );
+        });
+    });
+}
 #[test]
 fn empty_configurable_footer_has_zero_height() {
     App::test((), |mut app| async move {
@@ -1997,6 +2055,10 @@ fn assert_footer_segments_absent(lines: &[String]) {
         "a replacing hint should occupy the whole row with no sections: {row}"
     );
     assert!(
+        !row.contains(" | "),
+        "a replacing hint should contain no statusline group dividers: {row}"
+    );
+    assert!(
         !row.contains(" ↬ "),
         "the cwd/branch section is absent: {row}"
     );
@@ -2127,7 +2189,7 @@ fn footer_renders_agent_sections_left_aligned() {
 
             assert_eq!(
                 lines,
-                vec!["TestModel /home/user/warp ↬ main • 2.5 credits • +3 -1"],
+                vec!["TestModel | /home/user/warp ↬ main | 2.5 credits | +3 -1"],
                 "agent footer is left-aligned in order model → cwd/branch → usage → diff"
             );
             assert!(
@@ -2192,7 +2254,7 @@ fn footer_renders_shell_mode_sections_without_model_or_usage() {
 
             assert_eq!(
                 lines,
-                vec![format!("{SHELL_MODE_HINT} /home/user/warp ↬ main • +3 -1")],
+                vec![format!("{SHELL_MODE_HINT} /home/user/warp ↬ main | +3 -1")],
                 "shell footer leads with the shell-mode indicator and hides model/usage"
             );
             assert!(

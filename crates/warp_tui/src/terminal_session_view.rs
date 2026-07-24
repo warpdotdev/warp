@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::Sender;
+use chrono::{Local, NaiveDateTime};
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
@@ -346,6 +347,19 @@ fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
 fn format_context_window_usage(usage: f32) -> String {
     format!("{:.0}% context used", usage * 100.0)
 }
+fn format_statusline_date(now: NaiveDateTime) -> String {
+    now.format("%B %-d, %Y").to_string()
+}
+fn format_statusline_time_12_hour(now: NaiveDateTime) -> String {
+    now.format("%-I:%M%P").to_string()
+}
+fn format_statusline_time_24_hour(now: NaiveDateTime) -> String {
+    now.format("%H:%M").to_string()
+}
+fn format_todo_progress(completed: usize, total: usize, finished: bool) -> String {
+    let marker = if finished { "✓" } else { "❒" };
+    format!("{marker} {completed}/{total}")
+}
 fn cost_command_unavailable_hint(
     selected_conversation: Option<(bool, bool)>,
 ) -> Option<&'static str> {
@@ -394,6 +408,9 @@ enum FooterSegment {
     CreditUsage(Box<dyn TuiElement>),
     ContextWindowUsage(String),
     GitDiff { additions: usize, deletions: usize },
+    GitBranchStatus(String),
+    DateTime(String),
+    AgentTodoList(String),
 }
 
 impl FooterSegment {
@@ -402,23 +419,38 @@ impl FooterSegment {
             (Self::ShellMode | Self::Model(_), Self::WorkingDirectory(_)) => " ",
             (Self::WorkingDirectory(_), Self::GitBranch(_)) => " ↬ ",
             (
-                Self::ShellMode
-                | Self::ActiveIndicator(_)
-                | Self::Model(_)
-                | Self::WorkingDirectory(_)
-                | Self::GitBranch(_)
-                | Self::CreditUsage(_)
-                | Self::ContextWindowUsage(_)
-                | Self::GitDiff { .. },
-                Self::ShellMode
-                | Self::ActiveIndicator(_)
-                | Self::Model(_)
-                | Self::WorkingDirectory(_)
-                | Self::GitBranch(_)
-                | Self::CreditUsage(_)
-                | Self::ContextWindowUsage(_)
-                | Self::GitDiff { .. },
+                Self::ActiveIndicator(_),
+                Self::ActiveIndicator(_),
             ) => " • ",
+            (
+                Self::WorkingDirectory(_) | Self::GitBranch(_),
+                Self::WorkingDirectory(_) | Self::GitBranch(_),
+            )
+            | (Self::DateTime(_), Self::DateTime(_))
+            | (Self::ShellMode, _)
+            | (_, Self::ShellMode) => " • ",
+            (
+                Self::ActiveIndicator(_)
+                | Self::Model(_)
+                | Self::WorkingDirectory(_)
+                | Self::GitBranch(_)
+                | Self::CreditUsage(_)
+                | Self::ContextWindowUsage(_)
+                | Self::GitDiff { .. }
+                | Self::GitBranchStatus(_)
+                | Self::DateTime(_)
+                | Self::AgentTodoList(_),
+                Self::ActiveIndicator(_)
+                | Self::Model(_)
+                | Self::WorkingDirectory(_)
+                | Self::GitBranch(_)
+                | Self::CreditUsage(_)
+                | Self::ContextWindowUsage(_)
+                | Self::GitDiff { .. }
+                | Self::GitBranchStatus(_)
+                | Self::DateTime(_)
+                | Self::AgentTodoList(_),
+            ) => " | ",
         }
     }
 }
@@ -429,9 +461,10 @@ struct FooterSegments {
 }
 
 /// Builds the status row from resolved segments. Working directory follows a
-/// leading model or shell-mode label with a plain space; an immediately
-/// following branch uses the existing ` ↬ ` relationship marker. Every other
-/// adjacent pair uses ` • `, and the first item never receives a separator.
+/// leading shell-mode label with a plain space; an immediately following
+/// branch uses the existing ` ↬ ` relationship marker. Items in different
+/// Figma groups use ` | `; other adjacent pairs use ` • `. The first item never
+/// receives a separator.
 fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) -> TuiFlex {
     let muted = builder.muted_text_style();
     let mut row = TuiFlex::row();
@@ -463,6 +496,11 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
             }
             FooterSegment::ContextWindowUsage(usage) => {
                 row = row.child(TuiText::new(usage).with_style(muted).truncate().finish());
+            }
+            FooterSegment::GitBranchStatus(value)
+            | FooterSegment::DateTime(value)
+            | FooterSegment::AgentTodoList(value) => {
+                row = row.child(TuiText::new(value).with_style(muted).truncate().finish());
             }
             FooterSegment::GitDiff {
                 additions,
@@ -2729,8 +2767,8 @@ impl TuiTerminalSessionView {
 
     /// Builds the configured statusline under the input box. Normal mode uses
     /// the persisted item order and visibility; shell mode always leads with
-    /// its mode label and only resolves configured working-directory and git
-    /// items. A replacing hint — the ctrl-c exit confirmation while armed, the
+    /// its mode label and resolves configured shell-relevant metadata. A
+    /// replacing hint — the ctrl-c exit confirmation while armed, the
     /// conversation-list loading hint, or an active transient notice — occupies
     /// the whole row instead. An empty resolved configuration consumes no row.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
@@ -2741,6 +2779,7 @@ impl TuiTerminalSessionView {
         let shell_mode = self.is_shell_mode(ctx);
         let config = AISettings::as_ref(ctx).tui_statusline.normalized();
         let git_metadata = self.git_status_metadata(ctx);
+        let local_now = Local::now().naive_local();
         let mut ordered = Vec::new();
         if shell_mode {
             ordered.push(FooterSegment::ShellMode);
@@ -2793,6 +2832,9 @@ impl TuiTerminalSessionView {
                     .map(|cwd| FooterSegment::WorkingDirectory(compact_footer_path(&cwd))),
                 TuiStatuslineItem::GitBranch => git_metadata
                     .map(|metadata| FooterSegment::GitBranch(metadata.current_branch_name.clone())),
+                TuiStatuslineItem::GitBranchStatus => git_metadata.map(|metadata| {
+                    FooterSegment::GitBranchStatus(metadata.branch_tracking_status.display_text())
+                }),
                 TuiStatuslineItem::GitDiffStatus => git_metadata.and_then(|metadata| {
                     let stats = metadata.stats_against_head;
                     (stats.total_additions > 0 || stats.total_deletions > 0).then_some(
@@ -2828,6 +2870,31 @@ impl TuiTerminalSessionView {
                     .map(|conversation| {
                         FooterSegment::ContextWindowUsage(format_context_window_usage(
                             conversation.context_window_usage(),
+                        ))
+                    }),
+                TuiStatuslineItem::Date => {
+                    Some(FooterSegment::DateTime(format_statusline_date(local_now)))
+                }
+                TuiStatuslineItem::Time12Hour => Some(FooterSegment::DateTime(
+                    format_statusline_time_12_hour(local_now),
+                )),
+                TuiStatuslineItem::Time24Hour => Some(FooterSegment::DateTime(
+                    format_statusline_time_24_hour(local_now),
+                )),
+                TuiStatuslineItem::AgentTodoList => (!shell_mode)
+                    .then(|| {
+                        self.conversation_selection
+                            .as_ref(ctx)
+                            .selected_conversation(ctx)
+                    })
+                    .flatten()
+                    .and_then(|conversation| conversation.active_todo_list())
+                    .filter(|todo_list| !todo_list.is_empty())
+                    .map(|todo_list| {
+                        FooterSegment::AgentTodoList(format_todo_progress(
+                            todo_list.completed_items().len(),
+                            todo_list.len(),
+                            todo_list.is_finished(),
                         ))
                     }),
             };

@@ -75,9 +75,14 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::AutoApprove,
             TuiStatuslineItem::AutoQueue,
             TuiStatuslineItem::WorkingDirectory,
+            TuiStatuslineItem::GitBranchStatus,
             TuiStatuslineItem::GitDiffStatus,
             TuiStatuslineItem::CreditUsage,
             TuiStatuslineItem::ContextWindowUsage,
+            TuiStatuslineItem::Date,
+            TuiStatuslineItem::Time12Hour,
+            TuiStatuslineItem::Time24Hour,
+            TuiStatuslineItem::AgentTodoList,
         ]
     );
     assert_eq!(
