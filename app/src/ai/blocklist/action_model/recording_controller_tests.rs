@@ -6,6 +6,10 @@ use futures::executor::block_on;
 
 use super::*;
 
+/// Convenience for the tests below — pick a distinctive reason so a stale
+/// caller-claimed reason would never coincidentally match.
+const TEST_REASON: FinalizeReason = FinalizeReason::LimitReached;
+
 fn active_controller(recording_id: &str, conversation_id: AIConversationId) -> RecordingController {
     let mut controller = RecordingController::new();
     controller.try_begin_start(conversation_id).unwrap();
@@ -47,13 +51,14 @@ fn finalization_is_shared_and_retained_until_consumed() {
     ));
     let result = StopRecordingResult::Error("finished".to_string());
 
-    controller.complete_finalization("recording", result.clone());
+    controller.complete_finalization("recording", result.clone(), TEST_REASON);
 
-    assert_eq!(block_on(first).unwrap(), result);
-    assert_eq!(block_on(second).unwrap(), result);
+    assert_eq!(block_on(first).unwrap(), (result.clone(), TEST_REASON));
+    assert_eq!(block_on(second).unwrap(), (result.clone(), TEST_REASON));
     assert!(matches!(
         controller.claim_finalization_by_id("recording"),
-        FinalizationClaim::Finished(ref ready) if ready == &result
+        FinalizationClaim::Finished((ref ready, ref ready_reason))
+            if ready == &result && ready_reason == &TEST_REASON
     ));
     assert!(matches!(
         controller.try_begin_start(conversation_id),
@@ -77,12 +82,63 @@ fn dropped_waiter_does_not_discard_finalized_result() {
     drop(receiver);
 
     let result = StopRecordingResult::Error("finished".to_string());
-    controller.complete_finalization("recording", result.clone());
+    controller.complete_finalization("recording", result.clone(), TEST_REASON);
 
     assert!(matches!(
         controller.claim_finalization_by_id("recording"),
-        FinalizationClaim::Finished(ref ready) if ready == &result
+        FinalizationClaim::Finished((ref ready, ref ready_reason))
+            if ready == &result && ready_reason == &TEST_REASON
     ));
+}
+
+/// Regression test for a `StopRecording` that joins a finalization started by
+/// a different path (e.g. the exit watcher's `FfmpegExited` / `LimitReached`,
+/// or a conversation `Cancelled`): the joining caller must observe the actual
+/// [`FinalizeReason`] that drove finalization, not any reason it might have
+/// claimed when joining. Otherwise `Recording.Stopped.termination_reason`
+/// would misattribute the trigger — e.g. an ffmpeg crash would be reported
+/// as `agent_stopped`.
+#[test]
+fn joining_caller_observes_actual_finalize_reason_not_claimed_one() {
+    let conversation_id = AIConversationId::new();
+    let mut controller = active_controller("recording", conversation_id);
+
+    // First caller starts the work — imagine this is the exit watcher, which
+    // claimed `FfmpegExited`.
+    let starter = match controller.claim_finalization_by_id("recording") {
+        FinalizationClaim::Claimed {
+            result_receiver, ..
+        } => result_receiver,
+        _ => panic!("active recording should be claimed"),
+    };
+    // A later `StopRecording` action joins the in-progress work. It has no way
+    // to influence the reason — the controller ignores anything but the
+    // caller that actually started finalization.
+    let joiner = match controller.claim_finalization_by_id("recording") {
+        FinalizationClaim::InProgress(receiver) => receiver,
+        _ => panic!("joining caller should subscribe to in-progress work"),
+    };
+
+    let result = StopRecordingResult::Error("ffmpeg crashed".to_string());
+    let actual_reason = FinalizeReason::FfmpegExited;
+    controller.complete_finalization("recording", result.clone(), actual_reason);
+
+    // Both the starter and the joining caller must see the actual reason.
+    let (starter_result, starter_reason) = block_on(starter).unwrap();
+    let (joiner_result, joiner_reason) = block_on(joiner).unwrap();
+    assert_eq!(starter_result, result);
+    assert_eq!(joiner_result, result);
+    assert_eq!(starter_reason, actual_reason);
+    assert_eq!(joiner_reason, actual_reason);
+
+    // A late caller that only reads the retained result must also see it.
+    let FinalizationClaim::Finished((ready_result, ready_reason)) =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("retained result should be available after completion");
+    };
+    assert_eq!(ready_result, result);
+    assert_eq!(ready_reason, actual_reason);
 }
 
 #[test]

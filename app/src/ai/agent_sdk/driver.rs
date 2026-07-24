@@ -889,9 +889,9 @@ impl AgentDriver {
                         )
                         .await
                         .context("Failed to update agent task state to InProgress")
-                    {
-                        report_error!(e);
-                    }
+                {
+                    report_error!(e);
+                }
                 // Primary: WARP_SANDBOX_DEADLINE client-side timer.
                 //
                 // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
@@ -916,6 +916,7 @@ impl AgentDriver {
                 // runs to completion as before (local and self-hosted runs are unaffected).
                 let result = {
                     use std::time::SystemTime;
+
                     use warpui::r#async::Timer;
 
                     /// How far before the sandbox deadline to start the teardown sequence.
@@ -1035,9 +1036,10 @@ impl AgentDriver {
                     })
                     .await
                 {
-                    let finalization_result = finalization.resolve().await;
+                    let (finalization_result, actual_reason) = finalization.resolve().await;
                     log::info!(
-                        "Recording finalization completed before agent driver exit: {finalization_result:?}"
+                        "Recording finalization completed before agent driver exit \
+                         (reason={actual_reason:?}): {finalization_result:?}"
                     );
                 }
                 Self::run_snapshot_upload(&foreground).await;

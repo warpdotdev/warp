@@ -18,8 +18,6 @@ pub(crate) mod recording_controller;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod recording_finalize;
 pub(crate) mod recording_telemetry;
-pub(crate) use recording_telemetry::RecordingTelemetryEvent;
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,6 +42,7 @@ use futures::future::{BoxFuture, join_all};
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use preprocess::{PendingPreprocessedActions, PreprocessId};
+pub(crate) use recording_telemetry::RecordingTelemetryEvent;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::execute::search_codebase::SearchCodebaseExecutor;
@@ -1140,9 +1139,10 @@ impl BlocklistAIActionModel {
             ) {
                 ctx.spawn(
                     async move { finalization.resolve().await },
-                    |_model, result, _ctx| {
+                    |_model, (result, actual_reason), _ctx| {
                         log::info!(
-                            "Recording finalization after conversation cancellation completed: {result:?}"
+                            "Recording finalization after conversation cancellation completed \
+                             (reason={actual_reason:?}): {result:?}"
                         );
                     },
                 );

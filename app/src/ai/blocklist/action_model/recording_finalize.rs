@@ -6,8 +6,10 @@ use futures::channel::oneshot;
 use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+pub(crate) use super::recording_controller::FinalizeReason;
 use super::recording_controller::{
-    ActiveRecording, FinalizationClaim, RecordingController, StopRecordingControllerError,
+    ActiveRecording, FinalizationClaim, FinalizedRecording, RecordingController,
+    StopRecordingControllerError,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::artifact_upload::{FileArtifactUploadRequest, FileArtifactUploader};
@@ -16,77 +18,35 @@ use crate::server::server_api::ServerApiProvider;
 
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum FinalizeReason {
-    StoppedByAgent,
-    AgentFinished,
-    LimitReached,
-    FfmpegExited,
-    Cancelled,
-}
-
-impl FinalizeReason {
-    /// Stable, machine-readable key identifying why finalization ran, used by
-    /// the `Recording.Stopped` telemetry event. Distinct from
-    /// [`FinalizeReason::termination_reason`], which is human-readable prose.
-    pub(crate) fn telemetry_key(self) -> &'static str {
-        match self {
-            FinalizeReason::StoppedByAgent => "agent_stopped",
-            FinalizeReason::AgentFinished => "agent_finished",
-            FinalizeReason::LimitReached => "limit_reached",
-            FinalizeReason::FfmpegExited => "encoding_failed",
-            FinalizeReason::Cancelled => "cancelled",
-        }
-    }
-
-    fn termination_reason(
-        self,
-        completion_status: computer_use::RecordingCompletionStatus,
-    ) -> String {
-        match self {
-            FinalizeReason::StoppedByAgent => match completion_status {
-                computer_use::RecordingCompletionStatus::Completed => {
-                    "Stopped by agent".to_string()
-                }
-                computer_use::RecordingCompletionStatus::StoppedEarly => {
-                    "Recording stopped before the agent requested it".to_string()
-                }
-            },
-            FinalizeReason::AgentFinished => {
-                "Finalized because the agent finished without stopping the recording".to_string()
-            }
-            FinalizeReason::LimitReached => {
-                "Stopped at the configured duration or size limit".to_string()
-            }
-            FinalizeReason::FfmpegExited => {
-                "Capture process exited before the recording was stopped".to_string()
-            }
-            FinalizeReason::Cancelled => {
-                "Recording was interrupted when the conversation was cancelled".to_string()
-            }
-        }
-    }
-}
-
 /// A handle to the canonical result owned by `RecordingController`.
 ///
 /// `Pending` subscribes to work already owned by the controller; dropping the
 /// receiver does not cancel stop or upload. `Ready` exposes the retained result
-/// after that work has completed.
+/// after that work has completed. Both variants carry the *actual*
+/// [`FinalizeReason`] that drove the work — callers that only joined an
+/// in-progress finalization still learn why it ran, rather than the reason
+/// they claimed when joining.
 pub(crate) enum RecordingFinalization {
-    Pending(oneshot::Receiver<StopRecordingResult>),
-    Ready(StopRecordingResult),
+    Pending(oneshot::Receiver<FinalizedRecording>),
+    Ready(FinalizedRecording),
 }
 
 impl RecordingFinalization {
-    pub(crate) async fn resolve(self) -> StopRecordingResult {
+    pub(crate) async fn resolve(self) -> FinalizedRecording {
         match self {
             RecordingFinalization::Pending(receiver) => receiver.await.unwrap_or_else(|_| {
-                StopRecordingResult::Error(
-                    "Recording finalization ended without producing a result.".to_string(),
+                (
+                    StopRecordingResult::Error(
+                        "Recording finalization ended without producing a result.".to_string(),
+                    ),
+                    // The finalization was dropped without a completion signal,
+                    // so the actual reason is unknown; report the same reason
+                    // an ffmpeg crash would surface so downstream telemetry
+                    // still attributes it to a finalization failure.
+                    FinalizeReason::FfmpegExited,
                 )
             }),
-            RecordingFinalization::Ready(result) => result,
+            RecordingFinalization::Ready(ready) => ready,
         }
     }
 }
@@ -245,7 +205,9 @@ fn build_finalize_future(
 }
 
 /// Runs finalization independently of any action future and stores its result
-/// on the controller before waking subscribers.
+/// on the controller before waking subscribers. The `reason` is forwarded to
+/// [`RecordingController::complete_finalization`] so waiters that only joined
+/// this work receive the actual reason it ran, not the reason they claimed.
 fn spawn_finalize(
     recording: ActiveRecording,
     reason: FinalizeReason,
@@ -254,7 +216,7 @@ fn spawn_finalize(
 ) {
     let (recording_id, future) = build_finalize_future(recording, reason, should_upload, ctx);
     ctx.spawn(future, move |controller, result, _ctx| {
-        controller.complete_finalization(&recording_id, result);
+        controller.complete_finalization(&recording_id, result, reason);
     });
 }
 
