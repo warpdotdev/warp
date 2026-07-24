@@ -8871,6 +8871,12 @@ impl TerminalView {
             return false;
         }
 
+        // The WASM/web cloud-run viewer has no terminal to return to, so Ctrl+C
+        // must not exit the agent view (unless setup failed; see the helper).
+        if self.is_terminalless_wasm_agent_view(app) {
+            return false;
+        }
+
         if self
             .agent_view_controller
             .as_ref(app)
@@ -11302,19 +11308,84 @@ impl TerminalView {
         conversation_id
     }
 
+    /// Pure decision for whether the "ESC for terminal" affordance and every
+    /// agent-view exit path should be suppressed because this is the WASM/web
+    /// cloud-run *viewer* surface, which has no local terminal to return to.
+    ///
+    /// Kept as a function of plain booleans (rather than reading `self`) so the
+    /// decision matrix is unit-testable on native, where `cfg!(target_family =
+    /// "wasm")` is always false. [`Self::is_terminalless_wasm_agent_view`] is the
+    /// live wiring.
+    fn should_suppress_terminalless_wasm_exit(
+        is_wasm: bool,
+        is_fullscreen_agent_view: bool,
+        is_child_agent: bool,
+        setup_command_failed: bool,
+    ) -> bool {
+        is_wasm && is_fullscreen_agent_view && !is_child_agent && !setup_command_failed
+    }
+
+    /// True when the active agent-view conversation is a child agent (it has a
+    /// parent conversation). Child agents swap back to their orchestrator on
+    /// exit instead of returning to a terminal, so their back/exit affordances
+    /// must stay available.
+    fn is_agent_view_child_agent(&self, app: &AppContext) -> bool {
+        self.agent_view_controller
+            .as_ref(app)
+            .agent_view_state()
+            .active_conversation_id()
+            .and_then(|id| BlocklistAIHistoryModel::as_ref(app).conversation(&id))
+            .and_then(|conversation| conversation.parent_conversation_id())
+            .is_some()
+    }
+
+    /// True when the cloud run backing this viewer failed during environment
+    /// setup (the server reports [`TaskStatusErrorCode::EnvironmentSetupFailed`]).
+    /// In that state the user must retain a way to view the failed setup command,
+    /// so the terminalless-viewer exit suppression is bypassed.
+    fn agent_view_setup_command_failed(&self, app: &AppContext) -> bool {
+        let Some(task_id) = self.model.lock().ambient_agent_task_id() else {
+            return false;
+        };
+        AgentConversationsModel::as_ref(app)
+            .get_task_data(&task_id)
+            .and_then(|task| task.status_message)
+            .is_some_and(|status_message| status_message.is_environment_setup_failure())
+    }
+
+    /// True for the WASM/web cloud-run *viewer* surface that has no local
+    /// terminal to return to. There the "ESC for terminal" back button is
+    /// meaningless and exiting the agent view would strand the user, so the
+    /// affordance is hidden and all exit paths (Escape, the `ExitAgentView`
+    /// action, and Ctrl+C) are suppressed.
+    ///
+    /// Always false on native, so desktop behavior is unchanged. Excludes child
+    /// agents (which navigate back to their orchestrator) and the
+    /// environment-setup-failure case (where the user must be able to view the
+    /// failed setup command).
+    fn is_terminalless_wasm_agent_view(&self, app: &AppContext) -> bool {
+        let is_wasm = cfg!(target_family = "wasm");
+        let is_fullscreen_agent_view = self.agent_view_controller.as_ref(app).is_fullscreen();
+        let is_child_agent = self.is_agent_view_child_agent(app);
+        // Gate the model-locking setup-failure lookup behind the cheap checks so
+        // the native render path (where `is_wasm` is false) never touches the model.
+        let setup_command_failed = is_wasm
+            && is_fullscreen_agent_view
+            && !is_child_agent
+            && self.agent_view_setup_command_failed(app);
+        Self::should_suppress_terminalless_wasm_exit(
+            is_wasm,
+            is_fullscreen_agent_view,
+            is_child_agent,
+            setup_command_failed,
+        )
+    }
+
     /// Updates the back button's state and label. For child agents the
     /// label becomes "for Orchestrator" since ESC swaps to the parent
     /// instead of exiting in place.
     pub(crate) fn update_agent_view_back_button_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let active_conv_id = self
-            .agent_view_controller
-            .as_ref(ctx)
-            .agent_view_state()
-            .active_conversation_id();
-        let is_child_agent = active_conv_id
-            .and_then(|id| BlocklistAIHistoryModel::as_ref(ctx).conversation(&id))
-            .and_then(|c| c.parent_conversation_id())
-            .is_some();
+        let is_child_agent = self.is_agent_view_child_agent(ctx);
 
         // Never disable for child agents: the swap-back path can't be blocked.
         let disabled_reason = if is_child_agent {
@@ -21399,6 +21470,13 @@ impl TerminalView {
                         return;
                     }
 
+                    // The WASM/web cloud-run viewer has no terminal to return
+                    // to, so Escape must not exit the agent view (unless setup
+                    // failed; see the helper). Runs after the child swap-back.
+                    if self.is_terminalless_wasm_agent_view(ctx) {
+                        return;
+                    }
+
                     // Disable escape completely for ambient agents without a parent terminal.
                     if self
                         .agent_view_controller
@@ -27288,6 +27366,10 @@ impl TypedActionView for TerminalView {
                 // to the in-place exit flow.
                 if self.try_navigate_to_parent_conversation(ctx) {
                     ctx.notify();
+                } else if self.is_terminalless_wasm_agent_view(ctx) {
+                    // The WASM/web cloud-run viewer has no terminal to return
+                    // to, so exiting the agent view is a no-op (unless setup
+                    // failed; see the helper).
                 } else if self
                     .agent_view_controller
                     .as_ref(ctx)

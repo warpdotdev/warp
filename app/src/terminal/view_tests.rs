@@ -5975,6 +5975,41 @@ fn terminal_action_ctrl_c_exit_agent_view_requires_confirmation() {
     })
 }
 
+/// The "ESC for terminal" affordance and every agent-view exit path are
+/// suppressed only for a terminalless WASM cloud-run viewer: a fullscreen,
+/// non-child agent view whose setup command has NOT failed. This locks in the
+/// decision matrix that `TerminalView::is_terminalless_wasm_agent_view` wires
+/// to live state (the `cfg!(target_family = "wasm")` guard itself is exercised
+/// by the WASM build / manual web verification).
+#[test]
+fn terminalless_wasm_viewer_exit_suppression_decision() {
+    // Baseline WASM viewer: fullscreen, not a child, setup not failed -> suppress.
+    assert!(TerminalView::should_suppress_terminalless_wasm_exit(
+        true, true, false, false
+    ));
+
+    // Native build: never suppress, regardless of the other inputs.
+    assert!(!TerminalView::should_suppress_terminalless_wasm_exit(
+        false, true, false, false
+    ));
+
+    // Not a fullscreen agent view (e.g. inline / inactive): nothing to suppress.
+    assert!(!TerminalView::should_suppress_terminalless_wasm_exit(
+        true, false, false, false
+    ));
+
+    // Child agent: ESC swaps back to the orchestrator, so keep exit available.
+    assert!(!TerminalView::should_suppress_terminalless_wasm_exit(
+        true, true, true, false
+    ));
+
+    // Environment setup command failed: the user must be able to view it, so
+    // exit/back stays available.
+    assert!(!TerminalView::should_suppress_terminalless_wasm_exit(
+        true, true, false, true
+    ));
+}
+
 /// Sets up a CLI agent session, opens rich input, submits `text`, and returns
 /// the terminal handle and the collected PTY writes.
 #[allow(clippy::type_complexity)]
