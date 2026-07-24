@@ -285,6 +285,50 @@ impl FontDB {
     }
 }
 
+/// Converts a POSIX locale name into a BCP-47 language tag.
+///
+/// POSIX locales are `language[_TERRITORY][.codeset][@modifier]` (e.g.
+/// `th_TH.UTF-8`, `th_TH@thai`, `C.UTF-8`). We drop the codeset and modifier,
+/// swap `_` for `-`, and map the locale-agnostic `C`/`POSIX` locales to `en` —
+/// none of `C`, `POSIX`, `th-TH@thai` are valid BCP-47 tags, and forwarding them
+/// to cosmic-text undoes the intended font-fallback locale ordering.
+#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
+fn posix_locale_to_bcp47(locale: &str) -> String {
+    // Split off `.codeset` and `@modifier` (either may come first, e.g.
+    // `th_TH@thai.UTF-8` vs `th_TH.UTF-8@euro`).
+    let base = locale.split(['.', '@']).next().unwrap_or("");
+    if base.is_empty() || base == "C" || base == "POSIX" {
+        return "en".into();
+    }
+    base.replace('_', "-")
+}
+
+/// Returns the system locale as a BCP-47 language tag (e.g. "th-TH", "en-US").
+///
+/// On Linux/FreeBSD, reads `LC_ALL` → `LC_CTYPE` → `LANG` and converts the POSIX
+/// locale name (e.g. "th_TH.UTF-8") to BCP-47 (e.g. "th-TH").  On all other
+/// platforms we fall back to "en" because font fallback on those platforms goes
+/// through platform-specific APIs (DirectWrite on Windows, CoreText on macOS)
+/// rather than fontconfig locale ordering.
+fn detect_system_locale() -> String {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        if let Some(lang) = std::env::var("LC_ALL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("LC_CTYPE").ok().filter(|s| !s.is_empty()))
+            .or_else(|| std::env::var("LANG").ok().filter(|s| !s.is_empty()))
+        {
+            return posix_locale_to_bcp47(&lang);
+        }
+        "en".into()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    {
+        "en".into()
+    }
+}
+
 impl Default for TextLayoutSystem {
     fn default() -> Self {
         Self::new()
@@ -296,9 +340,10 @@ impl TextLayoutSystem {
         Self {
             families: Default::default(),
             font_store: RwLock::new(cosmic_text::FontSystem::new_with_locale_and_db(
-                // Locale is needed for font fallback. For now, we hardcode this to "en" to match
-                // our mac implementation https://github.com/warpdotdev/warp-internal/blob/bf33d651a9fcece70df8eac35f89b0393ca5189a/ui/src/platform/mac/fonts.rs#L383.
-                "en".into(),
+                // Detect the system locale so that cosmic_text selects appropriate fallback
+                // fonts for non-Latin scripts (e.g. Thai, Arabic) on Linux/FreeBSD where
+                // fontconfig uses the locale for font ordering.
+                detect_system_locale(),
                 Default::default(),
             )),
             font_id_map: Default::default(),
@@ -1272,3 +1317,31 @@ impl GlyphIdExt for owned_ttf_parser::GlyphId {
 #[cfg(test)]
 #[path = "text_layout_tests.rs"]
 mod layout_tests;
+
+#[cfg(test)]
+mod locale_tests {
+    use super::posix_locale_to_bcp47;
+
+    #[test]
+    fn maps_posix_locales_to_bcp47() {
+        // Plain language[_TERRITORY][.codeset] → BCP-47.
+        assert_eq!(posix_locale_to_bcp47("th_TH.UTF-8"), "th-TH");
+        assert_eq!(posix_locale_to_bcp47("en_US.UTF-8"), "en-US");
+        assert_eq!(posix_locale_to_bcp47("th_TH"), "th-TH");
+        assert_eq!(posix_locale_to_bcp47("th"), "th");
+
+        // Modifiers must be stripped (the old code kept "@thai", which is not a
+        // BCP-47 tag and breaks the font-fallback locale ordering).
+        assert_eq!(posix_locale_to_bcp47("th_TH@thai.UTF-8"), "th-TH");
+        assert_eq!(posix_locale_to_bcp47("th_TH.UTF-8@thai"), "th-TH");
+        assert_eq!(posix_locale_to_bcp47("sr_RS@latin"), "sr-RS");
+
+        // Locale-agnostic POSIX locales map to "en" (the old code forwarded a
+        // bare "C"/"POSIX", which cosmic-text can't use as a language tag).
+        assert_eq!(posix_locale_to_bcp47("C"), "en");
+        assert_eq!(posix_locale_to_bcp47("C.UTF-8"), "en");
+        assert_eq!(posix_locale_to_bcp47("POSIX"), "en");
+        assert_eq!(posix_locale_to_bcp47(""), "en");
+        assert_eq!(posix_locale_to_bcp47("@euro"), "en");
+    }
+}

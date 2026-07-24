@@ -738,3 +738,111 @@ fn test_softwrap_caret_positions_multi_paragraph() -> Result<()> {
 
     Ok(())
 }
+
+// ── Thai / Unicode rendering tests ───────────────────────────────────────────
+
+/// Thai consonants are full-width characters (unicode_width == 1). Layout must
+/// produce a positive total width and must not panic.
+#[test]
+fn thai_consonants_layout_non_zero_width() -> Result<()> {
+    let (font_db, roboto) = init_fonts();
+    let text = "กขคงจ";
+    let style = LineStyle {
+        font_size: FONT_SIZE,
+        line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+        baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+        fixed_width_tab_size: None,
+    };
+    let line = font_db.text_layout_system().layout_line(
+        text,
+        style,
+        &[(
+            0..text.chars().count(),
+            StyleAndFont::new(roboto, Properties::default(), TextStyle::new()),
+        )],
+        f32::MAX,
+        crate::text_layout::ClipConfig::default(),
+    );
+    assert!(
+        line.width > 0.0,
+        "Thai consonants must produce non-zero width"
+    );
+    Ok(())
+}
+
+/// Sara Aa (U+0E32) is a combining vowel (unicode_width == 0) and must not add
+/// extra width compared to the base consonant alone; the delta must stay < 2 px.
+#[test]
+fn thai_combining_vowel_does_not_widen_line() -> Result<()> {
+    let (font_db, roboto) = init_fonts();
+    let style = LineStyle {
+        font_size: FONT_SIZE,
+        line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+        baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+        fixed_width_tab_size: None,
+    };
+    let make_line = |text: &str| {
+        font_db.text_layout_system().layout_line(
+            text,
+            style,
+            &[(
+                0..text.chars().count(),
+                StyleAndFont::new(roboto, Properties::default(), TextStyle::new()),
+            )],
+            f32::MAX,
+            crate::text_layout::ClipConfig::default(),
+        )
+    };
+    // "กา" = consonant + sara aa; "กข" = two plain consonants
+    let with_vowel = make_line("กา").width;
+    let two_consonants = make_line("กข").width;
+    let delta = (with_vowel - two_consonants).abs();
+    assert!(
+        delta < 2.0,
+        "combining vowel sara aa widened the line by {delta:.1} px (expected < 2 px)"
+    );
+    Ok(())
+}
+
+/// Mixed ASCII + Thai text must not panic and must trigger the missing-glyph
+/// fallback path when the primary font (Roboto) lacks Thai glyphs.
+#[test]
+fn mixed_ascii_thai_records_missing_glyphs() -> Result<()> {
+    let (font_db, roboto) = init_fonts();
+    let text = "Hello สวัสดี";
+    let style = LineStyle {
+        font_size: FONT_SIZE,
+        line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+        baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+        fixed_width_tab_size: None,
+    };
+    let line = font_db.text_layout_system().layout_line(
+        text,
+        style,
+        &[(
+            0..text.chars().count(),
+            StyleAndFont::new(roboto, Properties::default(), TextStyle::new()),
+        )],
+        f32::MAX,
+        crate::text_layout::ClipConfig::default(),
+    );
+    assert!(
+        line.width > 0.0,
+        "mixed ASCII+Thai line must have positive width"
+    );
+    // Roboto doesn't cover Thai, so the Thai codepoints end up in
+    // chars_with_missing_glyphs and trigger async fallback font loading.
+    let missing = &line.chars_with_missing_glyphs;
+    assert!(
+        !missing.is_empty(),
+        "expected Thai chars to be recorded as missing glyphs"
+    );
+    for &ch in missing {
+        assert!(
+            ('\u{0E00}'..='\u{0E7F}').contains(&ch),
+            "unexpected non-Thai char in missing glyphs: U+{:04X}",
+            ch as u32
+        );
+    }
+    Ok(())
+}
