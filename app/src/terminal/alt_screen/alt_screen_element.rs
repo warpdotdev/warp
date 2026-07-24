@@ -385,20 +385,30 @@ impl AltScreenElement {
         }
 
         let point = self.coord_to_point(local_position);
+        let modifiers = *mouse_state.modifiers();
+        let position = WithinModel::AltScreen(Point {
+            col: point.col,
+            row: point.row,
+        });
+
+        // Cmd (macOS) / Ctrl (other) + click on an OSC 8 hyperlink opens it (handled by the
+        // ClickOnGrid action). When it will, don't also forward the click to the TUI even though
+        // mouse reporting is on — otherwise the app swallows the click alongside opening the link.
+        let opening_link = crate::terminal::links::should_directly_open_link(&modifiers)
+            && self.model.lock().hyperlink_at_point(&position).is_some();
 
         ctx.dispatch_typed_action(TerminalAction::ClickOnGrid {
-            position: WithinModel::AltScreen(Point {
-                col: point.col,
-                row: point.row,
-            }),
-            modifiers: *mouse_state.modifiers(),
+            position,
+            modifiers,
         });
 
         if self.is_terminal_selecting {
             ctx.dispatch_typed_action(TerminalAction::AltSelect(SelectAction::End));
         }
 
-        if !should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app) {
+        if !opening_link
+            && !should_intercept_mouse(&self.model.lock(), modifiers.shift, app)
+        {
             ctx.dispatch_typed_action(TerminalAction::AltMouseAction(mouse_state.set_point(point)));
         }
 

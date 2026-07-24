@@ -18287,6 +18287,23 @@ impl TerminalView {
     }
 
     fn maybe_open_link(&mut self, position: &WithinModel<Point>, ctx: &mut ViewContext<Self>) {
+        // Full-screen TUIs render into the alt screen, which has no hovered-link (`highlighted_link`)
+        // state, so resolve the OSC 8 hyperlink at the clicked point directly from the model and
+        // open it. Without this, Cmd/Ctrl+click on a hyperlink inside a TUI opens nothing.
+        if matches!(position, WithinModel::AltScreen(_)) {
+            let uri = self
+                .model
+                .lock()
+                .hyperlink_at_point(position)
+                .map(|(_, uri)| uri);
+            if let Some(uri) = uri {
+                self.open_hyperlink_uri(&uri, ctx);
+                return;
+            }
+            // No OSC 8 hyperlink at the clicked cell: fall through to the `highlighted_link`
+            // handler below so a regex-detected URL still opens on Cmd/Ctrl+click.
+        }
+
         let Some(link) = self.highlighted_link.as_ref() else {
             return;
         };
