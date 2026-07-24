@@ -3036,9 +3036,34 @@ impl RootView {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
+            // Check if we already have a pane viewing or sharing this session. If so,
+            // focus the existing pane instead of opening a duplicate viewer. This handles
+            // the cross-platform scenario where a user opens a session link in the native
+            // app from the web while the session is already open in another pane — without
+            // this check a new read-only viewer pane would be created, leaving the user
+            // with a frozen input.
+            use crate::terminal::shared_session::manager::Manager;
+            let existing_viewer_id = Manager::as_ref(ctx)
+                .joined_view_by_session_id(session_id, ctx)
+                .or_else(|| Manager::as_ref(ctx).shared_view_by_session_id(session_id, ctx))
+                .map(|view| view.id());
+
+            let session_id = *session_id;
             handle.update(ctx, |workspace, ctx| {
+                if let Some(existing_terminal_view_id) = existing_viewer_id {
+                    // Focus the existing pane so the user continues interacting with their
+                    // already-established session (which may have executor access), rather
+                    // than opening a new read-only viewer.
+                    if workspace.focus_terminal_view(existing_terminal_view_id, ctx) {
+                        log::info!(
+                            "Focused existing pane for session {session_id} instead of creating a new viewer"
+                        );
+                        return;
+                    }
+                }
+                // No existing pane found — create a new viewer.
                 // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
-                workspace.add_tab_for_joining_shared_session(*session_id, false, ctx);
+                workspace.add_tab_for_joining_shared_session(session_id, false, ctx);
             });
             let window_id = ctx.window_id();
             ctx.windows().show_window_and_focus_app(window_id);

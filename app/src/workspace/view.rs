@@ -5842,6 +5842,33 @@ impl Workspace {
     }
 
     /// Searches this workspace's tabs for the given terminal view and focuses it.
+    /// Also searches other windows if not found locally. Returns true if found and focused.
+    /// Used when navigating to an existing pane (e.g., when re-opening a session already open).
+    pub fn focus_terminal_view(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if self.focus_terminal_view_locally(terminal_view_id, ctx) {
+            return true;
+        }
+        self.focus_terminal_view_in_other_window(terminal_view_id, ctx);
+        // focus_terminal_view_in_other_window doesn't return a bool, but dispatches
+        // cross-window actions. Report success based on whether we found the view in another window.
+        WorkspaceRegistry::as_ref(ctx)
+            .all_workspaces(ctx)
+            .iter()
+            .any(|(_, workspace)| {
+                workspace.as_ref(ctx).tab_views().any(|pane_group| {
+                    pane_group
+                        .as_ref(ctx)
+                        .find_pane_id_for_terminal_view(terminal_view_id, ctx)
+                        .is_some()
+                })
+            })
+    }
+
+    /// Searches this workspace's tabs for the given terminal view and focuses it.
     /// Returns true if the terminal view was found and focused.
     fn focus_terminal_view_locally(
         &mut self,
