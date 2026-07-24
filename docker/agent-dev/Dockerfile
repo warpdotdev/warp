@@ -25,10 +25,13 @@ RUN set -eux; \
 # Install rustup. The pinned Rust toolchain is installed below from rust-toolchain.toml.
 RUN set -eux; \
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal; \
+  rustup component add clippy rustfmt; \
   chmod -R a+w $RUSTUP_HOME $CARGO_HOME; \
   rustup --version; \
   cargo --version; \
-  rustc --version
+  rustc --version; \
+  cargo clippy --version; \
+  cargo fmt --version
 
 # Install go and go command-line tools we use.
 RUN set -eux; \
