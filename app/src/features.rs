@@ -227,8 +227,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TabCloseButtonOnLeft,
         #[cfg(feature = "profiles_design_revamp")]
         FeatureFlag::ProfilesDesignRevamp,
-        #[cfg(feature = "search_codebase_ui")]
-        FeatureFlag::SearchCodebaseUI,
         #[cfg(feature = "linked_code_blocks")]
         FeatureFlag::LinkedCodeBlocks,
         #[cfg(feature = "tabbed_editor_view")]

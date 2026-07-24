@@ -3982,10 +3982,6 @@ impl AIBlock {
         _server_output_id: Option<ServerOutputId>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::SearchCodebaseUI.is_enabled() {
-            return;
-        }
-
         let Some(action_index) = self.calculate_renderable_action_index(action_id, ctx) else {
             return;
         };
@@ -4693,8 +4689,8 @@ impl AIBlock {
                         .filter_map(|id| action_model.as_ref(ctx).get_action_status(id))
                         .collect_vec();
 
-                    // Detecting links on SearchCodebase tool call outputs
-                    for (action_index, status) in action_statuses.iter().enumerate() {
+                    // Update the SearchCodebase views with their results.
+                    for status in &action_statuses {
                         let AIActionStatus::Finished(result) = status else {
                             continue;
                         };
@@ -4702,22 +4698,6 @@ impl AIBlock {
                             SearchCodebaseResult::Success { files },
                         ) = &result.result
                         {
-                            if !FeatureFlag::SearchCodebaseUI.is_enabled() {
-                                for (line_index, file) in files.iter().enumerate() {
-                                    let text_location = TextLocation::Action {
-                                        action_index,
-                                        line_index,
-                                    };
-                                    detect_links(
-                                        &mut me.detected_links_state,
-                                        &file.to_string(),
-                                        text_location,
-                                        me.current_working_directory.as_ref(),
-                                        me.shell_launch_data.as_ref(),
-                                    );
-                                }
-                            }
-
                             if let Some(view) = me.search_codebase_view.get(action_id) {
                                 view.update(ctx, |view, ctx| {
                                     view.update_render_read_file_args(

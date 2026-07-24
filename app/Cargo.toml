@@ -560,7 +560,6 @@ default = [
     "agent_decides_command_execution",
     "linked_code_blocks",
     "drive_objects_as_context",
-    "search_codebase_ui",
     "profiles_design_revamp",
     "multi_profile",
     "tabbed_editor_view",
@@ -921,7 +920,6 @@ ai_context_menu_code = []
 expand_edit_to_pane = []
 fallback_model_load_output_messaging = []
 profiles_design_revamp = []
-search_codebase_ui = []
 linked_code_blocks = []
 tabbed_editor_view = []
 selection_as_context = []
