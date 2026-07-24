@@ -172,10 +172,7 @@ async fn main() -> ExitCode {
             let button: MouseButton = button.into();
             (
                 vec![
-                    Action::MouseDown {
-                        button: button.clone(),
-                        at: pos,
-                    },
+                    Action::MouseDown { button, at: pos },
                     Action::MouseUp { button },
                 ],
                 None,

@@ -16025,6 +16025,7 @@ dependencies = [
  "vec1",
  "warp",
  "warp_channel_config",
+ "warp_completer",
  "warp_core",
  "warp_editor",
  "warp_errors",

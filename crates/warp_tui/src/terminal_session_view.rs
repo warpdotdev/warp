@@ -25,8 +25,8 @@ use warp::tui_export::{
     GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
     LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent, ParsedSlashCommandInput,
     PersistenceWriter, PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
-    ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
-    SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
+    ServerConversationToken, Sessions, ShellCommandExecutorEvent, SizeInfo, SizeUpdate,
+    SkillReference, SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
     StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
     TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource,
     TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource, UserTakeOverReason,
@@ -37,6 +37,7 @@ use warp::tui_export::{
     record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
@@ -63,6 +64,7 @@ use crate::attachment_bar::{
     TuiAttachmentPasteDisposition,
 };
 use crate::clipboard::copy_to_clipboard;
+use crate::completion_menu::TuiCompletionMenuModel;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
@@ -107,8 +109,13 @@ use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_r
 use crate::usage::UsageToggle;
 use crate::warping_indicator::{render_response_summary, render_warping_indicator_row};
 use crate::zero_state::TuiZeroStateView;
+use crate::zero_state_animation::{
+    ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
+};
+mod completions;
 mod input_detection;
 
+use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
@@ -161,6 +168,13 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
     }
 }
 
+fn zero_state_ascii_load_failure_hint(failure: ZeroStateAnimationLoadFailure) -> &'static str {
+    match failure {
+        ZeroStateAnimationLoadFailure::InitialLoad => ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT,
+        ZeroStateAnimationLoadFailure::Reload => ZERO_STATE_ASCII_RELOAD_FAILED_HINT,
+    }
+}
+
 /// Transient hint shown when a shell command is rejected because the PTY is
 /// already running a command.
 const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already running";
@@ -185,6 +199,10 @@ const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
 const NLD_ENABLED_HINT: &str = "Natural language detection enabled.";
 const NLD_DISABLED_HINT: &str = "Natural language detection disabled.";
 const NLD_PERSISTENCE_FAILED_HINT: &str = "Could not save the natural language detection setting.";
+const ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT: &str =
+    "Could not load custom ASCII art. Using the built-in Warp logo.";
+const ZERO_STATE_ASCII_RELOAD_FAILED_HINT: &str =
+    "Could not reload custom ASCII art. Keeping the current object.";
 const COST_NO_ACTIVE_CONVERSATION_HINT: &str =
     "Cannot show conversation cost: no active conversation";
 const COST_EMPTY_CONVERSATION_HINT: &str = "Cannot show conversation cost: conversation is empty";
@@ -193,6 +211,27 @@ const COST_CONVERSATION_IN_PROGRESS_HINT: &str =
 
 fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
+}
+
+/// User-facing CLI binary name for the current channel.
+///
+/// Installed builds expose `warp`, `warp-dev`, `warp-preview`, etc. Local cargo
+/// builds don't ship a versioned `warp` binary on PATH, so they intentionally
+/// target `warp-dev` (the dogfood channel name).
+fn tui_cli_binary_name(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => "warp",
+        Channel::Dev | Channel::Local => "warp-dev",
+        Channel::Preview => "warp-preview",
+        Channel::Oss => "warp-oss",
+        Channel::Integration => "warp-integration",
+    }
+}
+
+/// Shell command used by `/version` to print the binary version as a normal
+/// transcript block.
+fn version_shell_command(channel: Channel) -> String {
+    format!("{} --version", tui_cli_binary_name(channel))
 }
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
@@ -207,6 +246,10 @@ fn cost_command_unavailable_hint(
         Some((false, false)) => Some(COST_CONVERSATION_IN_PROGRESS_HINT),
         Some((false, true)) => None,
     }
+}
+
+fn attachment_focus_available(is_shell_mode: bool, attachments_should_render: bool) -> bool {
+    !is_shell_mode && attachments_should_render
 }
 
 /// Resolved segments for the footer's left-aligned sectioned status row.
@@ -421,6 +464,7 @@ pub(crate) struct TuiTerminalSessionView {
     model_menu: ModelHandle<TuiModelMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
     mcp_menu: ModelHandle<TuiMcpMenuModel>,
+    completion_menu: ModelHandle<TuiCompletionMenuModel>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
@@ -429,6 +473,7 @@ pub(crate) struct TuiTerminalSessionView {
     cli_subagent_views: HashMap<BlockId, ViewHandle<TuiCLISubagentView>>,
     /// Read by the footer for the active session's working directory.
     active_session: ModelHandle<ActiveSession>,
+    sessions: ModelHandle<Sessions>,
     /// Repository currently containing the active session's working directory.
     current_repo_path: Option<LocalOrRemotePath>,
     /// Watcher-backed branch and uncommitted diff metadata for the footer.
@@ -453,6 +498,7 @@ pub(crate) struct TuiTerminalSessionView {
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     input_detection: InputDetectionState,
+    completion_request: CompletionRequestState,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Last dimensions applied to the terminal model and PTY.
     size_info: SizeInfo,
@@ -912,6 +958,18 @@ impl TuiTerminalSessionView {
         let terminal_surface_id: EntityId = ctx.view_id();
         let active_session =
             ctx.add_model(|ctx| ActiveSession::new(sessions.clone(), model_events.clone(), ctx));
+        let zero_state_animation_config = ZeroStateAnimationConfig::handle(ctx);
+        let initial_zero_state_load_failure =
+            zero_state_animation_config.as_ref(ctx).load_failure();
+        ctx.subscribe_to_model(
+            &zero_state_animation_config,
+            |view, _, event, ctx| match event {
+                ZeroStateAnimationConfigEvent::Updated => {}
+                ZeroStateAnimationConfigEvent::LoadFailed(failure) => {
+                    view.show_zero_state_ascii_load_failure(*failure, ctx);
+                }
+            },
+        );
         let model_for_conversation_selection = model.clone();
         let conversation_selection = ctx.add_model(|ctx| {
             Box::new(TuiConversationSelection::new(
@@ -922,7 +980,7 @@ impl TuiTerminalSessionView {
         });
         let context_model = ctx.add_model(|ctx| {
             BlocklistAIContextModel::new(
-                sessions,
+                sessions.clone(),
                 &model_events,
                 model.clone(),
                 terminal_surface_id,
@@ -1091,6 +1149,9 @@ impl TuiTerminalSessionView {
             let TuiPromptHistoryMenuEvent::Updated = event;
             ctx.notify();
         });
+        let completion_menu =
+            ctx.add_model(|_| TuiCompletionMenuModel::new(suggestions_mode.clone()));
+        ctx.subscribe_to_model(&completion_menu, |_, _, _, ctx| ctx.notify());
         // The footer's conversations callout depends on whether the input is
         // empty, so content changes must invalidate this parent view as well as
         // the input child. Typing after ctrl-c also disarms the pending exit
@@ -1115,10 +1176,11 @@ impl TuiTerminalSessionView {
 
         let editor_for_selection = input_editor_model.clone();
         let transcript_for_selection = transcript.clone();
-        ctx.subscribe_to_model(&input_editor_model, move |_, _, event, ctx| {
+        ctx.subscribe_to_model(&input_editor_model, move |view, _, event, ctx| {
             if !matches!(event, CodeEditorModelEvent::SelectionChanged) {
                 return;
             }
+            view.handle_completion_editor_changed(ctx);
 
             let has_selection = !editor_for_selection
                 .as_ref(ctx)
@@ -1140,6 +1202,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
             TuiInlineMenu::new(prompt_history_menu.clone()),
+            TuiInlineMenu::new(completion_menu.clone()),
         ];
         let inline_menus_for_input = inline_menus.clone();
         let suggestions_mode_for_input = suggestions_mode.clone();
@@ -1232,6 +1295,9 @@ impl TuiTerminalSessionView {
             TuiInputViewEvent::AcceptedPromptHistory(text) => {
                 view.handle_accepted_prompt_history(text.clone(), ctx);
             }
+            TuiInputViewEvent::RequestShellCompletion => {
+                view.request_shell_completion(ctx);
+            }
             TuiInputViewEvent::ClipboardCopySucceeded => view.show_copy_hint(ctx),
             TuiInputViewEvent::ClipboardCopyFailed => {
                 view.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
@@ -1273,7 +1339,10 @@ impl TuiTerminalSessionView {
         });
         // The input box border color and the footer's shell-mode hint depend
         // on the input mode.
-        ctx.subscribe_to_model(&ai_input_model, |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&ai_input_model, |view, _, _, ctx| {
+            view.handle_completion_editor_changed(ctx);
+            ctx.notify();
+        });
         ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
         // The warping indicator between the transcript and the input box
         // tracks the selected conversation: re-render when its status changes
@@ -1352,6 +1421,7 @@ impl TuiTerminalSessionView {
         });
         ctx.subscribe_to_model(&active_session, |view, _, event, ctx| match event {
             ActiveSessionEvent::UpdatedPwd => {
+                view.abort_shell_completion(ctx);
                 // Run repo detection so project rules and skills follow the
                 // session's working directory (the GUI's equivalent lives in
                 // `TerminalView::apply_block_metadata_update`). The first
@@ -1391,7 +1461,7 @@ impl TuiTerminalSessionView {
                 });
                 ctx.notify();
             }
-            ActiveSessionEvent::Bootstrapped => {}
+            ActiveSessionEvent::Bootstrapped => view.abort_shell_completion(ctx),
         });
         // The footer's usage entry shows the selected conversation's token/cost
         // totals: re-render when that conversation's usage metadata updates.
@@ -1430,7 +1500,7 @@ impl TuiTerminalSessionView {
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
         let zero_state_view =
             ctx.add_tui_view(|ctx| TuiZeroStateView::new(active_session.clone(), ctx));
-        Self {
+        let mut view = Self {
             transcript,
             input_view,
             attachment_bar,
@@ -1440,6 +1510,7 @@ impl TuiTerminalSessionView {
             model_menu,
             skills_menu,
             mcp_menu,
+            completion_menu,
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
@@ -1447,6 +1518,7 @@ impl TuiTerminalSessionView {
             cli_subagent_controller,
             cli_subagent_views: HashMap::new(),
             active_session,
+            sessions,
             current_repo_path: None,
             git_repo_status: None,
             terminal_surface_id,
@@ -1458,6 +1530,7 @@ impl TuiTerminalSessionView {
             ai_context_model: context_model,
             ai_input_model,
             input_detection: InputDetectionState::default(),
+            completion_request: CompletionRequestState::default(),
             terminal_model: model,
             size_info,
             terminal_resize_tx,
@@ -1472,7 +1545,11 @@ impl TuiTerminalSessionView {
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
             zero_state_view,
+        };
+        if let Some(failure) = initial_zero_state_load_failure {
+            view.show_zero_state_ascii_load_failure(failure, ctx);
         }
+        view
     }
 
     /// Starts the first request for a child conversation hosted by this
@@ -2108,6 +2185,20 @@ impl TuiTerminalSessionView {
             .show_success(text, ctx, |view| &mut view.transient_hint);
     }
 
+    /// Displays error-colored feedback in the transient footer slot.
+    fn show_error_hint(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        self.transient_hint
+            .show_error(text, ctx, |view| &mut view.transient_hint);
+    }
+
+    fn show_zero_state_ascii_load_failure(
+        &mut self,
+        failure: ZeroStateAnimationLoadFailure,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.show_error_hint(zero_state_ascii_load_failure_hint(failure).to_owned(), ctx);
+    }
+
     /// Displays success-colored feedback in the transient footer slot.
     fn show_copy_hint(&mut self, ctx: &mut ViewContext<Self>) {
         self.show_success_hint(COPY_SELECTION_HINT.to_owned(), ctx);
@@ -2280,6 +2371,7 @@ impl TuiTerminalSessionView {
             let style = match tone {
                 TransientHintTone::Muted => muted,
                 TransientHintTone::Success => builder.success_glyph_style(),
+                TransientHintTone::Error => builder.error_text_style(),
             };
             return TuiFlex::row().child(
                 TuiText::new(transient)
@@ -2918,6 +3010,13 @@ impl TuiTerminalSessionView {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 log_out_tui(ctx);
             }
+            SlashCommandKind::Version => {
+                // Run as a normal user shell command so version output lands in
+                // the transcript as a regular shell block.
+                let command_text = version_shell_command(ChannelState::channel());
+                self.execute_user_command(&command_text, ctx);
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
             SlashCommandKind::ViewLogs => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 ctx.spawn(
@@ -3230,7 +3329,10 @@ impl TuiView for TuiTerminalSessionView {
             && !self.suggestions_mode.as_ref(ctx).mode().is_visible()
         {
             context.set.insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
-            if self.attachment_bar.as_ref(ctx).should_render(ctx) {
+            if attachment_focus_available(
+                self.is_shell_mode(ctx),
+                self.attachment_bar.as_ref(ctx).should_render(ctx),
+            ) {
                 context.set.insert(ATTACHMENTS_AVAILABLE_FLAG);
             }
         }

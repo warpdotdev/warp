@@ -358,6 +358,14 @@ pub fn char_slice(s: &str, start: usize, end: usize) -> Option<&str> {
     s.get(start_index..end_index)
 }
 
+pub fn byte_offset_for_char_offset(text: &str, char_offset: CharOffset) -> Option<ByteOffset> {
+    if char_offset.as_usize() == text.chars().count() {
+        return Some(ByteOffset::from(text.len()));
+    }
+    text.char_indices()
+        .nth(char_offset.as_usize())
+        .map(|(byte_offset, _)| ByteOffset::from(byte_offset))
+}
 pub fn count_chars_up_to_byte(text: &str, byte_offset: ByteOffset) -> Option<CharOffset> {
     if byte_offset.as_usize() == text.len() {
         return Some(CharOffset::from(text.chars().count()));

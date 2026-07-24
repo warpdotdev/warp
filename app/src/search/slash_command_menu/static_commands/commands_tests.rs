@@ -133,6 +133,20 @@ fn logout_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
+fn version_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command == &VERSION)
+    );
+    assert!(
+        !all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .any(|command| command == &VERSION)
+    );
+}
+
+#[test]
 fn rename_tab_command_requires_argument() {
     let command = COMMAND_REGISTRY
         .get_command_with_name(RENAME_TAB.name)

@@ -32,9 +32,10 @@ use warpui_core::{
 };
 
 use super::{
-    INPUT_HANDLES_ESCAPE_FLAG, TuiInputAction, TuiInputView, TuiInputViewEvent,
-    input_keymap_context,
+    INPUT_HANDLES_ESCAPE_FLAG, InputKeymapContextConfig, SHELL_COMPLETION_AVAILABLE_FLAG,
+    TuiInputAction, TuiInputView, TuiInputViewEvent, input_keymap_context,
 };
+use crate::completion_menu::{TuiCompletionAcceptance, TuiCompletionMenuModel};
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
 use crate::editor_interaction::TuiEditorCommand;
 use crate::inline_menu::{
@@ -87,8 +88,184 @@ impl InputModePolicy for TestInputModePolicy {
 }
 
 #[test]
+fn tab_cycles_open_completion_menu_and_enter_applies_selection() {
+    App::test((), |mut app| async move {
+        let (view, menu, completion_requests) = app.update(|ctx| {
+            let (view, menu) = build_view_with_completion_menu(ctx);
+            type_str(&view, ctx, "!");
+            view.update(ctx, |view, ctx| view.set_text("ec", ctx));
+            let completion_requests = Rc::new(Cell::new(0));
+            let completion_requests_for_subscription = completion_requests.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiInputViewEvent::RequestShellCompletion) {
+                    completion_requests_for_subscription
+                        .set(completion_requests_for_subscription.get() + 1);
+                }
+            });
+            (view, menu, completion_requests)
+        });
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Complete, TuiInputAction::Submit],
+            );
+        });
+        assert_eq!(completion_requests.get(), 0);
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "eclair ");
+            assert!(!menu.as_ref(ctx).is_open(ctx));
+        });
+    });
+}
+
+#[test]
+fn tab_requests_completion_for_detected_shell_input() {
+    App::test((), |mut app| async move {
+        let (view, completion_requests) = app.update(|ctx| {
+            let view = build_view(ctx);
+            let input_mode = view.as_ref(ctx).input_mode.clone();
+            input_mode.update(ctx, |input_mode, ctx| {
+                input_mode.enable_autodetection(InputType::Shell, ctx);
+            });
+            view.update(ctx, |view, ctx| view.set_text("git che", ctx));
+            let completion_requests = Rc::new(Cell::new(0));
+            let completion_requests_for_subscription = completion_requests.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiInputViewEvent::RequestShellCompletion) {
+                    completion_requests_for_subscription
+                        .set(completion_requests_for_subscription.get() + 1);
+                }
+            });
+            (view, completion_requests)
+        });
+
+        app.update(|ctx| dispatch(&view, ctx, &[TuiInputAction::Complete]));
+        assert_eq!(completion_requests.get(), 1);
+        app.read(|ctx| {
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(
+                view.as_ref(ctx).completion_snapshot(ctx),
+                Some(super::TuiCompletionInputSnapshot {
+                    buffer_text: "git che".to_owned(),
+                    cursor_byte_offset: 7,
+                })
+            );
+        });
+    });
+}
+
+#[test]
+fn tab_requests_completion_only_in_shell_mode_without_submitting() {
+    App::test((), |mut app| async move {
+        let (view, completion_requests, submitted) = app.update(|ctx| {
+            let view = build_view(ctx);
+            let completion_requests = Rc::new(Cell::new(0));
+            let completion_requests_for_subscription = completion_requests.clone();
+            let submitted = Rc::new(RefCell::new(Vec::new()));
+            let submitted_for_subscription = submitted.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| match event {
+                TuiInputViewEvent::RequestShellCompletion => {
+                    completion_requests_for_subscription
+                        .set(completion_requests_for_subscription.get() + 1);
+                }
+                TuiInputViewEvent::Submitted(text) => {
+                    submitted_for_subscription.borrow_mut().push(text.clone());
+                }
+                _ => {}
+            });
+            (view, completion_requests, submitted)
+        });
+
+        app.update(|ctx| {
+            dispatch(&view, ctx, &[TuiInputAction::Complete]);
+            type_str(&view, ctx, "!git che");
+            dispatch(&view, ctx, &[TuiInputAction::Complete]);
+        });
+        assert_eq!(completion_requests.get(), 1);
+        assert!(submitted.borrow().is_empty());
+        app.read(|ctx| assert_eq!(text(&view, ctx), "git che"));
+    });
+}
+
+#[test]
+fn tab_is_consumed_by_an_existing_non_completion_menu() {
+    App::test((), |mut app| async move {
+        let (view, menu, completion_requests) = app.update(|ctx| {
+            let (view, menu, _) = build_view_with_inline_menu(ctx);
+            type_str(&view, ctx, "!");
+            let completion_requests = Rc::new(Cell::new(0));
+            let completion_requests_for_subscription = completion_requests.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiInputViewEvent::RequestShellCompletion) {
+                    completion_requests_for_subscription
+                        .set(completion_requests_for_subscription.get() + 1);
+                }
+            });
+            (view, menu, completion_requests)
+        });
+
+        app.update(|ctx| dispatch(&view, ctx, &[TuiInputAction::Complete]));
+        assert_eq!(completion_requests.get(), 0);
+        app.read(|ctx| assert!(menu.as_ref(ctx).is_open(ctx)));
+    });
+}
+
+#[test]
+fn completion_replaces_utf8_byte_span_and_preserves_following_text() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "!");
+            view.update(ctx, |view, ctx| view.set_text("écho --fi tail", ctx));
+            let input = text(&view, ctx);
+            let start = input.find("--fi").expect("test token exists");
+            let end = start + "--fi".len();
+
+            let applied = view.update(ctx, |view, ctx| {
+                view.apply_shell_completion(
+                    TuiCompletionAcceptance {
+                        replacement: "--file".to_owned(),
+                        replacement_range: start..end,
+                        append_space: false,
+                    },
+                    ctx,
+                )
+            });
+
+            assert!(applied);
+            assert_eq!(text(&view, ctx), "écho --file tail");
+        });
+    });
+}
+
+#[test]
+fn completion_can_append_a_space_at_buffer_end() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "!ec");
+            let applied = view.update(ctx, |view, ctx| {
+                view.apply_shell_completion(
+                    TuiCompletionAcceptance {
+                        replacement: "echo".to_owned(),
+                        replacement_range: 0..2,
+                        append_space: true,
+                    },
+                    ctx,
+                )
+            });
+
+            assert!(applied);
+            assert_eq!(text(&view, ctx), "echo ");
+        });
+    });
+}
+
+#[test]
 fn input_escape_context_is_present_only_while_escape_is_handled() {
-    let closed = input_keymap_context(false, false, false);
+    let closed = input_keymap_context(InputKeymapContextConfig::default());
     assert!(closed.set.contains("TuiInputView"));
     assert!(!closed.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
     assert!(
@@ -102,7 +279,12 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
             .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)
     );
 
-    let open = input_keymap_context(true, true, true);
+    let open = input_keymap_context(InputKeymapContextConfig {
+        input_handles_escape: true,
+        plan_toggle_available: true,
+        keyboard_enhancement_supported: true,
+        shell_completion_available: true,
+    });
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
     assert!(
@@ -113,6 +295,7 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
         open.set
             .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)
     );
+    assert!(open.set.contains(SHELL_COMPLETION_AVAILABLE_FLAG));
 }
 
 fn add_suggestions_mode(
@@ -533,6 +716,62 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
     build_view_with_orchestration_tabs(ctx, Rc::new(Cell::new(false)))
 }
 
+fn build_view_with_completion_menu(
+    ctx: &mut AppContext,
+) -> (
+    ViewHandle<TuiInputView>,
+    ModelHandle<TuiCompletionMenuModel>,
+) {
+    ctx.add_singleton_model(|_| Appearance::mock());
+    add_test_semantic_selection(ctx);
+    let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
+    let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
+    let suggestions_mode =
+        add_suggestions_mode(ctx, TuiInputSuggestionsMode::CompletionSuggestions);
+    let completion_menu = ctx.add_model(|_| {
+        TuiCompletionMenuModel::new_for_test(
+            suggestions_mode.clone(),
+            vec![
+                (
+                    "echo".to_owned(),
+                    TuiCompletionAcceptance {
+                        replacement: "echo".to_owned(),
+                        replacement_range: 0..2,
+                        append_space: true,
+                    },
+                ),
+                (
+                    "eclair".to_owned(),
+                    TuiCompletionAcceptance {
+                        replacement: "eclair".to_owned(),
+                        replacement_range: 0..2,
+                        append_space: true,
+                    },
+                ),
+            ],
+            0,
+        )
+    });
+    let menu_for_return = completion_menu.clone();
+    let (_window_id, view) = ctx.add_tui_window(
+        AddWindowOptions {
+            window_style: WindowStyle::NotStealFocus,
+            ..Default::default()
+        },
+        move |ctx| {
+            TuiInputView::new_for_test(
+                input_model,
+                input_mode,
+                suggestions_mode,
+                vec![TuiInlineMenu::new(completion_menu)],
+                |_| false,
+                ctx,
+            )
+        },
+    );
+    (view, menu_for_return)
+}
+
 fn build_view_with_orchestration_tabs(
     ctx: &mut AppContext,
     orchestration_tabs_available: Rc<Cell<bool>>,
@@ -927,6 +1166,7 @@ fn multiline_paste_emits_once_and_fallback_inserts_without_submitting() {
                 | TuiInputViewEvent::AcceptedModel(_)
                 | TuiInputViewEvent::AcceptedMcp(_)
                 | TuiInputViewEvent::AcceptedPromptHistory(_)
+                | TuiInputViewEvent::RequestShellCompletion
                 | TuiInputViewEvent::BackspaceAtEmptyInput
                 | TuiInputViewEvent::MoveFocusUp
                 | TuiInputViewEvent::ClipboardCopySucceeded
@@ -2274,13 +2514,17 @@ fn keymap_context_flags_shell_mode() {
             let view = build_view(ctx);
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                input_keymap_context(false, false, false)
+                input_keymap_context(InputKeymapContextConfig::default())
             );
 
             type_str(&view, ctx, "!");
             assert_eq!(
                 view.as_ref(ctx).keymap_context(ctx),
-                input_keymap_context(true, false, false)
+                input_keymap_context(InputKeymapContextConfig {
+                    input_handles_escape: true,
+                    shell_completion_available: true,
+                    ..Default::default()
+                })
             );
         });
     });

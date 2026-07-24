@@ -2013,6 +2013,22 @@ impl AISettings {
             && !self.is_ai_disabled_due_to_remote_session_org_policy(app)
     }
 
+    /// Returns whether conversation history is available for the current
+    /// account and AI state.
+    ///
+    /// The stored `show_conversation_history` preference is kept separately so
+    /// an onboarding choice can take effect automatically after signup and AI
+    /// enablement without asking the user to toggle the setting again.
+    pub fn is_conversation_history_available(&self, app: &AppContext) -> bool {
+        self.is_any_ai_enabled(app)
+    }
+
+    /// Returns whether conversation history should currently appear in the
+    /// tools panel.
+    pub fn is_conversation_history_enabled(&self, app: &AppContext) -> bool {
+        *self.show_conversation_history && self.is_conversation_history_available(app)
+    }
+
     pub fn default_session_mode(&self, app: &AppContext) -> DefaultSessionMode {
         let mode = *self.default_session_mode_internal.value();
         match mode {

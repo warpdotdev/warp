@@ -45,6 +45,11 @@ fn add_request_usage_model_for_anonymous_users(app: &mut App) -> ModelHandle<AIR
     app.add_singleton_model(|_| AuthStateProvider::new_anonymous_for_test());
     add_request_usage_model_without_auth(app)
 }
+
+fn add_request_usage_model_for_logged_out_users(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
+    app.add_singleton_model(|_| AuthStateProvider::new_logged_out_for_test());
+    add_request_usage_model_without_auth(app)
+}
 fn register_user_preferences_for_tests(app: &mut App) {
     if app
         .models_of_type::<settings::PrivatePreferences>()
@@ -96,6 +101,16 @@ fn enable_auto_reload(workspace: &mut Workspace) {
         .selected_auto_reload_credit_denomination = Some(1000);
 }
 
+#[test]
+fn refresh_request_usage_returns_no_fresh_limit_when_logged_out() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model_for_logged_out_users(&mut app);
+        let refresh =
+            request_usage_model.update(&mut app, |model, ctx| model.refresh_request_usage(ctx));
+
+        assert_eq!(refresh.await.unwrap(), None);
+    });
+}
 #[test]
 fn test_request_limit_info() {
     App::test((), |mut app| async move {

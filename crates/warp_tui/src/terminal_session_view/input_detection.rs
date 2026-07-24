@@ -98,6 +98,7 @@ impl TuiTerminalSessionView {
         is_user_edit: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.handle_completion_editor_changed(ctx);
         self.abort_input_detection(ctx);
         if is_user_edit {
             self.schedule_input_detection(ctx);

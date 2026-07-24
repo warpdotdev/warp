@@ -422,9 +422,13 @@ impl AmbientAgentRunner {
                     }
                 };
 
+            // When using a third-party harness, --model specifies a harness-specific
+            // model identifier (e.g. "sonnet", "claude-opus-4-8" for Claude Code;
+            // "gpt-5.5" for Codex) rather than an Oz model ID. Route it directly
+            // into HarnessConfig.model_id so it reaches the harness unchanged.
             let harness_override = (args.harness != Harness::Oz).then_some(HarnessConfig {
                 harness_type: args.harness,
-                model_id: None,
+                model_id: args.model.model.clone(),
                 reasoning_level: None,
             });
             let harness_auth_secrets = (args.claude_auth_secret.is_some()
@@ -440,7 +444,13 @@ impl AmbientAgentRunner {
                     name: args.name,
                     environment_id,
                     runner_id: args.runner,
-                    model_id: args.model.model.clone(),
+                    // For third-party harnesses the model goes into harness config above;
+                    // leave the Oz model_id slot empty so Oz validation is not attempted.
+                    model_id: if args.harness == Harness::Oz {
+                        args.model.model.clone()
+                    } else {
+                        None
+                    },
                     base_prompt: None,
                     mcp_servers: cli_mcp_servers,
                     profile_id: None,
@@ -453,16 +463,25 @@ impl AmbientAgentRunner {
             );
 
             // We must wait until after workspace metadata is refreshed to check available LLMs.
-            let model_id = match merged_config
-                .model_id
-                .as_deref()
-                .map(|model_id| super::common::validate_agent_mode_base_model_id(model_id, ctx))
-                .transpose()
-            {
-                Ok(id) => id.map(|id| id.to_string()),
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                    return;
+            // For third-party harnesses, the model is in harness.model_id and is validated
+            // server-side. Clear the top-level model_id slot to prevent any Oz model ID
+            // that leaked in from a config file from being sent alongside the harness model.
+            let model_id = if merged_config.harness.is_some() {
+                None
+            } else {
+                match merged_config
+                    .model_id
+                    .as_deref()
+                    .map(|model_id| {
+                        super::common::validate_agent_mode_base_model_id(model_id, ctx)
+                    })
+                    .transpose()
+                {
+                    Ok(id) => id.map(|id| id.to_string()),
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
                 }
             };
 

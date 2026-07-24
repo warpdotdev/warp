@@ -34,6 +34,17 @@ fn tui_binding_registration_passes_the_cross_surface_validators() {
         app.update(super::init);
     });
 }
+
+#[test]
+fn tui_binding_registration_passes_the_app_cross_platform_validator() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.set_default_binding_validator(warp::util::bindings::is_binding_cross_platform);
+            super::init(ctx);
+        });
+    });
+}
+
 #[test]
 fn attachment_bindings_are_scoped_to_available_and_focused_contexts() {
     App::test((), |mut app| async move {

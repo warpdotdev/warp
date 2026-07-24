@@ -36,6 +36,27 @@ fn test_config_local_dir_path() {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn test_macos_config_dir_name_scopes_to_data_profile() {
+    assert_eq!(macos_config_dir_name_for(Channel::Stable, None), ".warp");
+    assert_eq!(
+        macos_config_dir_name_for(Channel::Local, None),
+        ".warp-local"
+    );
+
+    // Each development profile must get its own directory so shared config
+    // (notably settings.toml) cannot leak between profiles.
+    assert_eq!(
+        macos_config_dir_name_for(Channel::Local, Some("myprofile")),
+        ".warp-local-myprofile"
+    );
+    assert_eq!(
+        macos_config_dir_name_for(Channel::Stable, Some("myprofile")),
+        ".warp-myprofile"
+    );
+}
+
 #[test]
 fn test_gui_app_id_maps_oss_tui_to_oss_gui() {
     let gui_app_id = gui_app_id_for_channel(Channel::Oss, AppId::new("dev", "warp", "WarpTui"));

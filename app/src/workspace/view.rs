@@ -6423,6 +6423,12 @@ impl Workspace {
                     ctx,
                 );
             }
+            LeftPanelEvent::SignInRequested => {
+                self.open_require_login_modal(AuthViewVariant::RequireLoginCloseable, ctx);
+                self.require_login_modal.update(ctx, |modal, ctx| {
+                    modal.start_sign_in(ctx);
+                });
+            }
         }
     }
 
@@ -11389,6 +11395,13 @@ impl Workspace {
                 self.open_auth_override_warning_modal(interrupted_auth_payload.clone(), ctx);
             }
             AuthManagerEvent::AuthComplete => {
+                // This workspace can survive an anonymous user signing up from
+                // inside the app. Refresh the cached auth state and recompute
+                // effective toolbelt availability so onboarding preferences
+                // (for example, Warp Drive and conversation history) take
+                // effect without requiring an off/on toggle.
+                self.auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+                self.update_left_panel_available_views(ctx);
                 // Only show the telemetry banner if the user is an existing user. The new user flow
                 // for this is handled in the onboarding flow.
                 if self.auth_state.is_onboarded().unwrap_or_default() {
@@ -11396,6 +11409,7 @@ impl Workspace {
                     // to make sure we don't show the banner if the user is an enterprise user.
                     self.check_and_trigger_telemetry_banner_for_existing_users(ctx);
                 }
+                ctx.notify();
             }
             _ => {
                 ctx.notify();
@@ -23685,7 +23699,6 @@ impl Workspace {
             views.push(ToolPanelView::ProjectExplorer);
         }
         if FeatureFlag::AgentViewConversationListView.is_enabled()
-            && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
             && *AISettings::as_ref(ctx).show_conversation_history
         {
             views.push(ToolPanelView::ConversationListView);
@@ -23698,7 +23711,7 @@ impl Workspace {
                 entry_focus: GlobalSearchEntryFocus::Results,
             });
         }
-        if WarpDriveSettings::is_warp_drive_enabled(ctx) {
+        if *WarpDriveSettings::as_ref(ctx).enable_warp_drive {
             views.push(ToolPanelView::WarpDrive);
         }
         views
@@ -26311,9 +26324,7 @@ impl View for Workspace {
             context.set.insert(flags::ENABLE_WARP_DRIVE);
         }
 
-        if AISettings::as_ref(app).is_any_ai_enabled(app)
-            && *AISettings::as_ref(app).show_conversation_history
-        {
+        if AISettings::as_ref(app).is_conversation_history_enabled(app) {
             context.set.insert(flags::SHOW_CONVERSATION_HISTORY);
         }
 
