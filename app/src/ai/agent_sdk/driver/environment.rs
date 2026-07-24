@@ -38,6 +38,14 @@ pub enum PrepareEnvironmentError {
     SetupCommand { command: String },
     #[error("Failed to change directory into {repo_name}")]
     ChangeDirectory { repo_name: String },
+    #[error(
+        "Repositories {first_owner}/{repo_name} and {second_owner}/{repo_name} share a clone directory name"
+    )]
+    CloneDirectoryCollision {
+        repo_name: String,
+        first_owner: String,
+        second_owner: String,
+    },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
@@ -105,39 +113,33 @@ pub(crate) fn prepare_environment(
 pub(super) fn merge_repos_deduped(
     environment_repos: Vec<SourceRepo>,
     additional_repos: Vec<SourceRepo>,
-) -> Vec<SourceRepo> {
+) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
     let mut seen = HashSet::new();
-    let merged = environment_repos
-        .into_iter()
-        .chain(additional_repos)
-        .filter(|repo| {
-            seen.insert((
-                repo.code_forge.unwrap_or_default(),
-                repo.owner.to_lowercase(),
-                repo.repo.to_lowercase(),
-            ))
-        })
-        .collect::<Vec<_>>();
+    let mut names = HashMap::<String, (String, CodeForge)>::new();
+    let mut merged = Vec::with_capacity(environment_repos.len() + additional_repos.len());
 
-    let mut names = HashMap::<&str, (&str, CodeForge)>::new();
-    for repo in &merged {
-        if let Some((owner, forge)) = names.insert(
-            &repo.repo,
-            (&repo.owner, repo.code_forge.unwrap_or_default()),
-        ) && (owner != repo.owner || forge != repo.code_forge.unwrap_or_default())
-        {
-            log::warn!(
-                "Source repositories share clone directory name {:?}: {owner}/{repo_name} and {new_owner}/{new_repo}",
-                repo.repo,
-                owner = owner,
-                repo_name = repo.repo,
-                new_owner = repo.owner,
-                new_repo = repo.repo,
-            );
+    for repo in environment_repos.into_iter().chain(additional_repos) {
+        let forge = repo.code_forge.unwrap_or_default();
+        let key = (forge, repo.owner.to_lowercase(), repo.repo.to_lowercase());
+        if !seen.insert(key) {
+            continue;
         }
+
+        if let Some((owner, existing_forge)) =
+            names.insert(repo.repo.clone(), (repo.owner.clone(), forge))
+            && (owner != repo.owner || existing_forge != forge)
+        {
+            return Err(PrepareEnvironmentError::CloneDirectoryCollision {
+                repo_name: repo.repo,
+                first_owner: owner,
+                second_owner: repo.owner,
+            });
+        }
+
+        merged.push(repo);
     }
 
-    merged
+    Ok(merged)
 }
 
 #[allow(clippy::too_many_arguments)]

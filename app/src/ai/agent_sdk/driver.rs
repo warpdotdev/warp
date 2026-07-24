@@ -536,6 +536,8 @@ pub enum AgentDriverError {
     PromptResolutionFailed(#[source] anyhow::Error),
     #[error("Failed to fetch task secrets")]
     SecretsFetchFailed(#[source] anyhow::Error),
+    #[error("Failed to fetch task metadata")]
+    TaskMetadataFetchFailed(#[source] anyhow::Error),
     #[error("Failed to load conversation: {0}")]
     ConversationLoadFailed(String),
     #[error("Failed to initialize AWS Bedrock credentials: {0}")]
@@ -2286,7 +2288,7 @@ impl AgentDriver {
                 .map(AmbientAgentEnvironment::effective_repos)
                 .unwrap_or_default(),
             additional_source_repos,
-        );
+        )?;
 
         if environment_opt.is_some() || !source_repos.is_empty() {
             log::info!("Loading environment...");

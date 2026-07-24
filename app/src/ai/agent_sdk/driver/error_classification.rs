@@ -250,6 +250,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::InternalError,
             ),
         ),
+        AgentDriverError::TaskMetadataFetchFailed(err) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(
+                format!("Failed to fetch task metadata: {err}"),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
         AgentDriverError::AwsBedrockCredentialsFailed(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

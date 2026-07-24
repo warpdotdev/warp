@@ -1320,10 +1320,7 @@ impl AgentDriverRunner {
                 )
             }
             Ok(None) => (None, None, None, None, Vec::new()),
-            Err(err) => {
-                log::warn!("Failed to fetch task metadata: {err:#}");
-                (None, None, None, None, Vec::new())
-            }
+            Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
