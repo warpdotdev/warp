@@ -1,5 +1,7 @@
 use super::parse_markdown_into_text_and_code_sections;
-use crate::ai::agent::{AIAgentTextSection, AgentOutputImageLayout, AgentOutputTableRendering};
+use crate::ai::agent::{
+    AIAgentTextSection, AgentOutputImageLayout, AgentOutputTableRendering, ProgrammingLanguage,
+};
 use crate::features::FeatureFlag;
 
 #[test]
@@ -45,6 +47,48 @@ fn extracts_gfm_pipe_table_into_table_section() {
     }
 }
 
+#[test]
+fn normalizes_language_identifier_on_first_code_line() {
+    let sections = parse_markdown_into_text_and_code_sections(
+        "Before\n\n```\ngo\npackage main\n\nfunc main() {}\n```\n\nAfter",
+    );
+
+    assert_eq!(sections.len(), 3);
+    assert!(matches!(
+        &sections[0],
+        AIAgentTextSection::PlainText { text } if text.text().contains("Before")
+    ));
+    match &sections[1] {
+        AIAgentTextSection::Code {
+            code,
+            language: Some(ProgrammingLanguage::Other(language)),
+            ..
+        } => {
+            assert_eq!(language, "go");
+            assert_eq!(code, "package main\n\nfunc main() {}");
+        }
+        _ => panic!("expected malformed fence to normalize its language"),
+    }
+    assert!(matches!(
+        &sections[2],
+        AIAgentTextSection::PlainText { text } if text.text().contains("After")
+    ));
+}
+
+#[test]
+fn does_not_remove_unknown_first_code_line() {
+    let sections = parse_markdown_into_text_and_code_sections("```\nnot_a_language\ncontent\n```");
+
+    assert_eq!(sections.len(), 1);
+    match &sections[0] {
+        AIAgentTextSection::Code {
+            code,
+            language: None,
+            ..
+        } => assert_eq!(code, "not_a_language\ncontent"),
+        _ => panic!("expected unknown first line to remain code"),
+    }
+}
 #[test]
 fn does_not_extract_pipe_text_without_separator_row() {
     let _flag = FeatureFlag::BlocklistMarkdownTableRendering.override_enabled(true);

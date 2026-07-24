@@ -147,6 +147,12 @@ pub(super) fn parse_markdown_into_text_and_code_sections(
                         );
                     }
                     current_section = CurrentSection::PlainText(String::new());
+                } else if code.is_empty()
+                    && language_token.is_none()
+                    && let Some(language_name) = known_language_identifier(line)
+                {
+                    *language_token = Some(language_name.clone());
+                    *language = Some(language_name.into());
                 } else {
                     if !code.is_empty() {
                         code.push('\n');
@@ -185,6 +191,24 @@ pub(super) fn parse_markdown_into_text_and_code_sections(
     sections
 }
 
+/// Returns a normalized language name when a malformed fence puts the language
+/// identifier on the first line of the code payload instead of the opening
+/// fence.
+fn known_language_identifier(line: &str) -> Option<String> {
+    let language = line.trim();
+    if language.is_empty() || language != line {
+        return None;
+    }
+
+    let language = ProgrammingLanguage::from(language.to_owned());
+    match &language {
+        ProgrammingLanguage::Shell(_) => Some(language.display_name()),
+        ProgrammingLanguage::Other(_) if language.to_extension().is_some() => {
+            Some(language.display_name())
+        }
+        ProgrammingLanguage::Other(_) => None,
+    }
+}
 fn parse_agent_output_table(markdown_source: &str) -> Option<AgentOutputTable> {
     let formatted_text = parse_markdown_with_gfm_tables(markdown_source).ok()?;
     let table = formatted_text
