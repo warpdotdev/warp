@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -182,7 +183,7 @@ impl PreciseDelta {
 /// Delta after an edit operation recording the old range of rows that got replaced
 /// and the content of new rows changed after the edit. This is necessary for the rendering
 /// model to know what block objects need a re-layout.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct EditDelta {
     /// The exact replacement charoffset range where content was changed.
     pub precise_deltas: Vec<PreciseDelta>,
@@ -191,7 +192,13 @@ pub struct EditDelta {
     /// the first character after it.
     pub old_offset: Range<CharOffset>,
     /// Content of the lines that have been changed.
-    pub new_lines: Vec<StyledBufferBlock>,
+    ///
+    /// Wrapped in `Arc` so that `EditDelta::clone` is O(1). The render pipeline
+    /// often clones a delta (e.g. when storing it in `DelayRendering::edits`)
+    /// before consuming it in `layout_delta`. Without `Arc`, cloning an entire
+    /// file's worth of styled blocks can add several gigabytes of transient
+    /// allocation for large files.
+    pub new_lines: Arc<Vec<StyledBufferBlock>>,
 }
 
 /// Render Delta that has its content laid out into TextFrames.
@@ -523,9 +530,15 @@ impl EditDelta {
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
+        // Unwrap the Arc to get owned access to the blocks. If this is the last
+        // reference (the common case — the original delta from the event has
+        // already been dropped by the time layout runs), `try_unwrap` succeeds
+        // at zero cost. If another clone of the delta still exists, we fall back
+        // to an ordinary Vec clone.
+        let new_lines = Arc::try_unwrap(self.new_lines).unwrap_or_else(|arc| (*arc).clone());
+
         // First, build a Vec of layout tasks with information about whether they're hidden
-        let layout_tasks: Vec<_> = self
-            .new_lines
+        let layout_tasks: Vec<_> = new_lines
             .into_iter()
             .filter_map(|block| {
                 let content_length = block.content_length();
