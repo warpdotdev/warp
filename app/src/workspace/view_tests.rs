@@ -3515,6 +3515,62 @@ fn test_unified_new_session_menu_includes_reopen_closed_session() {
     });
 }
 
+#[test]
+fn test_close_tab_shows_reopen_toast_and_reopen_restores_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        // Capture the pane group id of the first tab before closing it, and
+        // confirm no toast is showing yet.
+        let closed_tab_id = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 2);
+            assert!(
+                !workspace
+                    .toast_stack
+                    .read(ctx, |stack, _| stack.has_toasts())
+            );
+            workspace.get_pane_group_view(0).unwrap().id()
+        });
+
+        // Closing a tab must surface an inline "Reopen" toast so the close is
+        // recoverable on Warp on web, which lacks the native app-menu reopen
+        // affordance. Before this fix no toast appeared after a close.
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.remove_tab(0, true, true, ctx);
+            assert_eq!(workspace.tab_count(), 1);
+            assert!(
+                workspace
+                    .toast_stack
+                    .read(ctx, |stack, _| stack.has_toasts())
+            );
+        });
+
+        // The toast's "Reopen" link dispatches WorkspaceAction::ReopenClosedSession,
+        // which routes through the shared `app:undo_close` global action. Drive
+        // that same global action here (at the app level, so the action's
+        // internal workspace update isn't nested) to mirror clicking the link,
+        // and confirm the just-closed tab is restored via the existing
+        // UndoCloseStack -> restore_closed_tab path.
+        app.update(|ctx| {
+            ctx.dispatch_global_action("app:undo_close", ());
+        });
+
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(workspace.tab_count(), 2);
+            assert!(
+                workspace
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.pane_group.id() == closed_tab_id),
+                "the closed tab should be restored"
+            );
+        });
+    });
+}
+
 #[cfg(feature = "local_fs")]
 #[test]
 fn test_worktree_sidecar_search_editor_proxies_navigation_and_escape() {
