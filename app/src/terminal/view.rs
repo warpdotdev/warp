@@ -11978,7 +11978,7 @@ impl TerminalView {
                                                 let remote_host =
                                                     me.active_session_remote_host(ctx);
                                                 let should_auto_toggle_input = agent
-                                                    .supports_rich_input()
+                                                    .supports_cli_agent_footer()
                                                     && *AISettings::as_ref(ctx)
                                                         .auto_open_rich_input_on_cli_agent_start;
                                                 sessions_model.set_session(
@@ -28046,12 +28046,11 @@ impl View for TerminalView {
             context.set.insert(init::KEYBOARD_PROTOCOL_ENABLED_KEY);
         }
 
-        if CLIAgentSessionsModel::as_ref(app)
-            .session(self.view_id)
-            .is_some()
-        {
+        if let Some(session) = CLIAgentSessionsModel::as_ref(app).session(self.view_id) {
             context.set.insert(init::CLI_AGENT_SESSION_ACTIVE_KEY);
-            if *AISettings::as_ref(app).should_render_cli_agent_footer {
+            if session.agent.supports_cli_agent_footer()
+                && *AISettings::as_ref(app).should_render_cli_agent_footer
+            {
                 context.set.insert(flags::CLI_AGENT_FOOTER_ENABLED);
 
                 if is_rich_input_chip_in_cli_toolbar(app) {

@@ -326,8 +326,9 @@ impl CLIAgent {
             CLIAgent::Claude | CLIAgent::Codex | CLIAgent::OpenCode | CLIAgent::OhMyPi
         )
     }
-    /// Whether this CLI agent can use Warp's outer rich input.
-    pub(super) fn supports_rich_input(&self) -> bool {
+
+    /// Whether Warp should show its CLI-agent footer for this agent.
+    pub(super) fn supports_cli_agent_footer(&self) -> bool {
         !matches!(self, CLIAgent::WarpTui)
     }
 
@@ -378,6 +379,7 @@ impl CLIAgent {
             None => command.split_whitespace().next().map(String::from),
         }
     }
+
     /// Returns whether the command's executable name identifies this CLI agent.
     pub(super) fn matches_command(&self, command: &str, escape_char: Option<EscapeChar>) -> bool {
         let Some(first_word) = Self::extract_first_command(command.trim_start(), escape_char)

@@ -952,11 +952,7 @@ impl CommentListView {
             if !has_sendable_comments {
                 Cow::Borrowed("No non-outdated comments to send")
             } else {
-                let label = match agent.command_prefixes() {
-                    [command_prefix] => *command_prefix,
-                    [] | [_, ..] => agent.display_name(),
-                };
-                Cow::Owned(format!("Send diff comments to {label}"))
+                Cow::Owned(format!("Send diff comments to {}", agent.display_name()))
             }
         } else if !ai_enabled {
             Cow::Borrowed("AI must be enabled to send comments to Agent")

@@ -306,8 +306,11 @@ impl TerminalView {
             .session(self.view_id)
             .map(|s| s.agent);
 
-        // Check the appropriate setting based on whether this is a CLI agent command
-        if cli_agent.is_some() {
+        // Check the appropriate setting based on whether this is a CLI agent command.
+        if let Some(cli_agent) = cli_agent {
+            if !cli_agent.supports_cli_agent_footer() {
+                return false;
+            }
             // For CLI agent commands, only check the CLI agent footer setting.
             // This is independent of the global AI toggle so that users who
             // disable Warp AI still get the footer for third-party coding agents.
@@ -1345,7 +1348,10 @@ impl View for UseAgentToolbar {
         // If a CLI agent is detected, delegate rendering to the CLI agent footer view.
         // Wrap with horizontal padding matching the terminal view padding so the footer
         // aligns consistently with the input context (which inherits terminal padding).
-        if self.cli_agent(app).is_some() {
+        if let Some(cli_agent) = self.cli_agent(app) {
+            if !cli_agent.supports_cli_agent_footer() {
+                return Empty::new().finish();
+            }
             let mut container = Container::new(ChildView::new(&self.agent_input_footer).finish())
                 .with_horizontal_padding(*super::PADDING_LEFT);
 
