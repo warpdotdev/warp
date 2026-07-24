@@ -1118,6 +1118,62 @@ impl EditorAction {
                 | EditorAction::Select(_)
         )
     }
+    #[cfg(feature = "voice_input")]
+    fn aborts_voice_input(&self) -> bool {
+        matches!(
+            self,
+            // Text insertion / submission.
+            Self::UserInsert(_)
+                | Self::VimUserInsert(_)
+                | Self::ImeCommit(_)
+                | Self::Tab
+                | Self::ShiftTab
+                | Self::Yank
+                | Self::Newline
+                | Self::CtrlEnter
+                | Self::ShiftEnter
+                | Self::AltEnter
+                | Self::Enter
+                | Self::CmdEnter
+                | Self::InsertLastWordPrevCommand
+                | Self::InsertNonExpandingSpace
+                | Self::InsertAutosuggestion
+                // Clipboard mutations.
+                | Self::Cut
+                | Self::Paste
+                | Self::MiddleClickPaste
+                // Deletion/editing family.
+                | Self::Delete
+                | Self::Backspace
+                | Self::VimBackspace
+                | Self::CutWordLeft
+                | Self::CutWordRight
+                | Self::DeleteWordLeft
+                | Self::DeleteWordRight
+                | Self::CutAllRight
+                | Self::CutAllLeft
+                | Self::DeleteAllRight
+                | Self::DeleteAllLeft
+                | Self::ClearLines
+                | Self::ClearAndCopyLines
+                | Self::CtrlC
+                // History/structural edits.
+                | Self::Undo
+                | Self::Redo
+                | Self::Fold
+                | Self::Unfold
+                | Self::FoldSelectedRanges
+                | Self::AddNextOccurrence
+                | Self::AddCursorAbove
+                | Self::AddCursorBelow
+                // File attachment interactions that require editable handling.
+                | Self::AttachFiles
+                | Self::DragAndDropFiles(_)
+                // Explicit user cancel intent and unbound modifier chords.
+                | Self::Escape
+                | Self::UnhandledModifierKey(_)
+        )
+    }
 
     fn is_new_selection(&self) -> bool {
         matches!(
@@ -4348,11 +4404,6 @@ impl EditorView {
     /// Clears editor buffer if the vim mode allows for it, but does not
     /// clear the undo/redo stack.
     pub fn handle_ctrl_c(&mut self, ctx: &mut ViewContext<Self>) {
-        #[cfg(feature = "voice_input")]
-        {
-            self.stop_voice_input(true, ctx);
-        }
-
         #[cfg(windows)]
         // On Windows, if there is selected text, users expect ctrl-c to copy.
         if !self.selected_text(ctx).is_empty() {
@@ -6162,8 +6213,6 @@ impl EditorView {
                 });
             }
         }
-        #[cfg(feature = "voice_input")]
-        self.stop_voice_input(true, ctx);
     }
 
     fn delete_all(&mut self, direction: CutDirection, cut: bool, ctx: &mut ViewContext<Self>) {
@@ -8514,6 +8563,10 @@ impl TypedActionView for EditorView {
     }
 
     fn handle_action(&mut self, action: &EditorAction, ctx: &mut ViewContext<Self>) {
+        #[cfg(feature = "voice_input")]
+        if self.is_voice_input_active() && action.aborts_voice_input() {
+            self.stop_voice_input(true /* cancel_transcription */, ctx);
+        }
         use EditorAction::*;
         match action {
             Scroll(position) => self.scroll(*position, ctx),
