@@ -8595,10 +8595,9 @@ impl Workspace {
             ctx
         );
 
-        let grouping_on = FeatureFlag::TabbedEditorView.is_enabled()
-            && *EditorSettings::as_ref(ctx)
-                .prefer_tabbed_editor_view
-                .value();
+        let grouping_on = *EditorSettings::as_ref(ctx)
+            .prefer_tabbed_editor_view
+            .value();
 
         if grouping_on {
             let code_view = self
@@ -12900,7 +12899,6 @@ impl Workspace {
             // Check if we can add the new file to an existing code pane (when using split pane
             // layout).
             if layout == EditorLayout::SplitPane
-                && FeatureFlag::TabbedEditorView.is_enabled()
                 && *EditorSettings::as_ref(ctx)
                     .prefer_tabbed_editor_view
                     .value()
@@ -16609,11 +16607,9 @@ impl Workspace {
                         TabBarHoverIndex::OverTab(workspace_tab_index) => {
                             #[cfg(not(target_family = "wasm"))]
                             {
-                                let prefers_tabbed_editor_view = FeatureFlag::TabbedEditorView
-                                    .is_enabled()
-                                    && *EditorSettings::as_ref(ctx)
-                                        .prefer_tabbed_editor_view
-                                        .value();
+                                let prefers_tabbed_editor_view = *EditorSettings::as_ref(ctx)
+                                    .prefer_tabbed_editor_view
+                                    .value();
 
                                 let target_pane_group =
                                     self.get_pane_group_view(workspace_tab_index);
@@ -16756,10 +16752,9 @@ impl Workspace {
                 hidden_pane_preview_direction,
             } => {
                 #[cfg(feature = "local_fs")]
-                let prefers_tabbed_editor_view = FeatureFlag::TabbedEditorView.is_enabled()
-                    && *EditorSettings::as_ref(ctx)
-                        .prefer_tabbed_editor_view
-                        .value();
+                let prefers_tabbed_editor_view = *EditorSettings::as_ref(ctx)
+                    .prefer_tabbed_editor_view
+                    .value();
 
                 #[cfg(not(feature = "local_fs"))]
                 let prefers_tabbed_editor_view = false;

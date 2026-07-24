@@ -361,9 +361,6 @@ pub enum FeatureFlag {
     /// Enables us to render linked code blocks
     LinkedCodeBlocks,
 
-    /// Enables the tabbed file viewer
-    TabbedEditorView,
-
     /// Enables sending telemetry data to a file in addition to the server
     SendTelemetryToFile,
 

@@ -563,7 +563,6 @@ default = [
     "search_codebase_ui",
     "profiles_design_revamp",
     "multi_profile",
-    "tabbed_editor_view",
     "allow_opening_file_links_using_editor_env",
     "read_image_files",
     "selection_as_context",
@@ -923,7 +922,6 @@ fallback_model_load_output_messaging = []
 profiles_design_revamp = []
 search_codebase_ui = []
 linked_code_blocks = []
-tabbed_editor_view = []
 selection_as_context = []
 send_telemetry_to_file = []
 multi_profile = []
