@@ -1525,6 +1525,23 @@ impl TerminalModel {
         status: Option<ConversationTranscriptViewerStatus>,
     ) {
         self.conversation_transcript_viewer_status = status;
+        // When becoming a loaded transcript viewer (not just entering the Loading
+        // state), forcibly exit the alt screen so the block list is always
+        // visible. This fixes the case where a live cloud agent session had an
+        // active alt screen (e.g., from a tool like pnpm running a build) when
+        // the session ended or was reopened: without this, the alt screen persists
+        // and the user sees a blank/black terminal instead of the AI conversation
+        // blocks, with no scrollbar to recover.
+        let is_loaded_viewer = matches!(
+            &self.conversation_transcript_viewer_status,
+            Some(
+                ConversationTranscriptViewerStatus::ViewingAmbientConversation(_)
+                    | ConversationTranscriptViewerStatus::ViewingLocalConversation
+            )
+        );
+        if is_loaded_viewer {
+            self.exit_alt_screen(true);
+        }
     }
 
     pub fn colors(&self) -> color::List {
