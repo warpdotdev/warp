@@ -741,6 +741,31 @@ fn test_pane_focus_on_close() {
 }
 
 #[test]
+fn test_terminal_exit_keeps_pane_open() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let first_pane_id = get_newly_created_pane_id(panes, &[]);
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            let second_pane_id = get_newly_created_pane_id(panes, &[first_pane_id]);
+
+            let terminal_view = panes
+                .terminal_view_from_pane_id(second_pane_id, ctx)
+                .expect("second pane should have a terminal view");
+            terminal_view.update(ctx, |view, ctx| {
+                view.set_login_shell_bootstrapped_for_test();
+                ctx.emit(crate::terminal::view::Event::Exited);
+            });
+
+            assert_eq!(panes.visible_pane_count(), 2);
+            assert!(panes.has_pane_id(second_pane_id));
+        })
+    });
+}
+
+#[test]
 fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
