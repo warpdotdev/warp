@@ -323,6 +323,13 @@ pub struct BlocklistAIHistoryModel {
     /// In-flight optimistic conversation rename state keyed by conversation.
     in_flight_conversation_renames: HashMap<AIConversationId, InFlightConversationRename>,
 
+    /// Server conversation tokens for which a background metadata fetch has been
+    /// started but not yet resolved. Used to deduplicate concurrent fetch
+    /// attempts (e.g. repeated `TasksUpdated` events before the first response
+    /// arrives). Cleared on completion — whether success or failure — so a
+    /// later call retries after a transient error.
+    pending_server_metadata_fetch_tokens: HashSet<ServerConversationToken>,
+
     #[cfg(feature = "local_fs")]
     db_connection: Option<Arc<Mutex<SqliteConnection>>>,
 }
@@ -368,6 +375,27 @@ impl BlocklistAIHistoryModel {
     #[cfg(test)]
     pub(crate) fn new_for_test() -> Self {
         Self::default()
+    }
+
+    /// Test helper: inserts server conversation metadata keyed by `server_token` directly into
+    /// `all_conversations_metadata`, simulating the side-effect produced by
+    /// `fetch_server_conversation_metadata_if_needed` after a successful server response. This lets
+    /// unit tests exercise `resolve_cloud_conversation_continuation_ui_state` with the metadata
+    /// the background fetch would provide (e.g. for API-triggered Claude Code runs whose
+    /// conversations were never materialized as a local Oz conversation).
+    #[cfg(test)]
+    pub(crate) fn insert_server_metadata_for_test(
+        &mut self,
+        server_token: ServerConversationToken,
+        metadata: ServerAIConversationMetadata,
+    ) {
+        let conversation_id =
+            self.get_or_set_canonical_conversation_id_for_server_token(&server_token);
+        let entry = AIConversationMetadata::from_server_metadata(conversation_id, metadata);
+        self.all_conversations_metadata
+            .insert(conversation_id, entry);
+        self.server_token_to_conversation_id
+            .insert(server_token, conversation_id);
     }
 
     /// Returns a flattened and ordered (oldest first) list of live conversations for a terminal surface.
@@ -2580,6 +2608,83 @@ impl BlocklistAIHistoryModel {
                     })
                     .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
             })
+    }
+
+    /// Starts a background fetch of server conversation metadata for `token` if it is not already
+    /// in the local model.
+    ///
+    /// This is used to populate the metadata for ambient agent tasks whose conversations were
+    /// never materialized as a local Oz conversation (e.g. third-party harness runs such as
+    /// Claude Code that were started via the Warp REST API). Without this, the tombstone CTA
+    /// resolver (`resolve_cloud_conversation_continuation_ui_state`) cannot determine the
+    /// correct access level and falls back to `Tombstone { cta: None }` instead of showing the
+    /// "Continue" button.
+    ///
+    /// On success the metadata is inserted into `all_conversations_metadata` under a canonical
+    /// conversation ID keyed by the token, and `UpdatedConversationMetadata` is emitted so that
+    /// `TerminalView::maybe_insert_tombstone_for_non_running_shared_ambient_task` re-resolves the
+    /// tombstone CTA. Concurrent and duplicate calls are no-ops while a fetch is in flight.
+    pub fn fetch_server_conversation_metadata_if_needed(
+        &mut self,
+        token: ServerConversationToken,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // Nothing to do if we already have the metadata.
+        if self
+            .get_server_conversation_metadata_by_server_token(&token)
+            .is_some()
+        {
+            return;
+        }
+        // Don't start a duplicate fetch while one is already in flight.
+        if self.pending_server_metadata_fetch_tokens.contains(&token) {
+            return;
+        }
+        self.pending_server_metadata_fetch_tokens
+            .insert(token.clone());
+        let token_str = token.as_str().to_string();
+        let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move {
+                server_api
+                    .list_ai_conversation_metadata(Some(vec![token_str]))
+                    .await
+            },
+            move |model, result, ctx| {
+                model.pending_server_metadata_fetch_tokens.remove(&token);
+                let Ok(mut metadata_list) = result else {
+                    return;
+                };
+                let Some(metadata) = metadata_list.pop() else {
+                    return;
+                };
+                // Use the token embedded in the returned metadata to key the entry so the
+                // reverse-index lookup in `get_server_conversation_metadata_by_server_token`
+                // finds it. (The server may normalize the token slightly.)
+                let metadata_token = metadata.server_conversation_token.clone();
+                // Skip if another path already stored metadata for this token while the fetch
+                // was in flight.
+                if model
+                    .get_server_conversation_metadata_by_server_token(&metadata_token)
+                    .is_some()
+                {
+                    return;
+                }
+                let conversation_id =
+                    model.get_or_set_canonical_conversation_id_for_server_token(&metadata_token);
+                let entry = AIConversationMetadata::from_server_metadata(conversation_id, metadata);
+                model
+                    .all_conversations_metadata
+                    .insert(conversation_id, entry);
+                model
+                    .server_token_to_conversation_id
+                    .insert(metadata_token, conversation_id);
+                ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                    terminal_surface_id: None,
+                    conversation_id,
+                });
+            },
+        );
     }
 
     /// Finds an AIConversationId by its server conversation token.

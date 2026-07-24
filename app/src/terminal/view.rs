@@ -8098,6 +8098,26 @@ impl TerminalView {
             return;
         }
 
+        // For ambient agent tasks whose conversations were never materialized as a local Oz
+        // conversation (e.g. third-party harness runs started via the Warp REST API), the
+        // server conversation metadata won't be in `BlocklistAIHistoryModel`. Without it,
+        // `resolve_cloud_conversation_continuation_ui_state` may fall back to checking only
+        // `task.creator.uid` — which can mismatch for API-key-based auth — and end up
+        // returning no CTA. Kick off a background metadata fetch so the tombstone can be
+        // re-resolved with the correct access level once the server responds.
+        if let Some(conversation_token_str) = task.conversation_id() {
+            let conversation_token =
+                ServerConversationToken::new(conversation_token_str.to_string());
+            if BlocklistAIHistoryModel::as_ref(ctx)
+                .get_server_conversation_metadata_by_server_token(&conversation_token)
+                .is_none()
+            {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.fetch_server_conversation_metadata_if_needed(conversation_token, ctx);
+                });
+            }
+        }
+
         if FeatureFlag::HandoffCloudCloud.is_enabled() {
             if is_active_shared_session {
                 return;
