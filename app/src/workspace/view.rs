@@ -27506,7 +27506,9 @@ impl View for Workspace {
             );
         }
 
-        let window_corner_radius = app.windows().window_corner_radius();
+        let window_corner_radius = app
+            .windows()
+            .window_corner_radius_for_window(self.window_id);
         let workspace = Container::new(stack.finish()).with_corner_radius(window_corner_radius);
 
         let mut stack = Stack::new();
