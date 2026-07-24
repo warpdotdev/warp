@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+#[cfg(not(target_family = "wasm"))]
+use uuid::Uuid;
+
 #[cfg(not(target_family = "wasm"))]
 use super::{
     GeapRefreshDispatch, ResponseStream, geap_refresh_dispatch_sends, replace_geap_credentials,
@@ -10,9 +15,6 @@ use crate::network::NetworkStatus;
 use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
-use std::sync::Arc;
-#[cfg(not(target_family = "wasm"))]
-use uuid::Uuid;
 
 // Argument order: has_received_client_actions, is_recoverable, has_retry_budget,
 // can_attempt_resume_on_error, is_online.
