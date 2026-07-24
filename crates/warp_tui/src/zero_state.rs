@@ -20,7 +20,9 @@ use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::animation::AnimationClock;
-use warpui_core::elements::tui::{Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiText};
+use warpui_core::elements::tui::{
+    Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiStack, TuiText,
+};
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
 use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
@@ -34,9 +36,9 @@ use crate::zero_state_animation::{
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
 
-/// Fixed width for the text column.  Using a pinned min=max prevents the
-/// animation boundary from shifting as content loads asynchronously at startup
-/// (changelog, MCP status, project context).
+/// Fixed width for the text column. Using a pinned min=max keeps wrapping stable
+/// as content loads asynchronously at startup (changelog, MCP status, project
+/// context) while the animation paints beneath it as a separate stack layer.
 const LEFT_COLUMN_COLS: u16 = 48;
 
 // ---------------------------------------------------------------------------
@@ -144,10 +146,7 @@ impl TuiView for TuiZeroStateView {
             },
         )
         .finish();
-        TuiFlex::row()
-            .child(text_column)
-            .flex_child(animation)
-            .finish()
+        TuiStack::new().child(animation).child(text_column).finish()
     }
 }
 
