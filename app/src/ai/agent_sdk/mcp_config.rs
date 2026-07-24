@@ -182,6 +182,7 @@ fn validate_server_config(server_name: &str, config: &Value) -> anyhow::Result<(
 
     validate_string_map_field(obj, server_name, "env")?;
     validate_string_map_field(obj, server_name, "headers")?;
+    validate_string_array_field(obj, server_name, "allowed_tools")?;
 
     Ok(())
 }
@@ -202,6 +203,28 @@ fn validate_string_map_field(
     for (key, value) in map {
         if !value.is_string() {
             anyhow::bail!("MCP server '{server_name}' field '{field}.{key}' must be a string");
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_string_array_field(
+    obj: &Map<String, Value>,
+    server_name: &str,
+    field: &str,
+) -> anyhow::Result<()> {
+    let Some(value) = obj.get(field) else {
+        return Ok(());
+    };
+
+    let arr = value.as_array().ok_or_else(|| {
+        anyhow::anyhow!("MCP server '{server_name}' field '{field}' must be an array")
+    })?;
+
+    for (idx, item) in arr.iter().enumerate() {
+        if !item.is_string() {
+            anyhow::bail!("MCP server '{server_name}' field '{field}[{idx}]' must be a string");
         }
     }
 
