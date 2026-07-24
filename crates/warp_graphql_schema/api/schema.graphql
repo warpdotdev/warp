@@ -2263,6 +2263,12 @@ type ManagedSecret {
 """A managed secret value representing an Anthropic API key."""
 type ManagedSecretAnthropicApiKeyValue {
   apiKey: String!
+
+  """
+  Optional base URL for the Anthropic API. When set, the harness uses this
+  instead of the provider default (e.g. for custom AI gateway or proxy endpoints).
+  """
+  baseUrl: String
 }
 
 """

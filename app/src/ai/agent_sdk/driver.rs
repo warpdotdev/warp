@@ -3894,8 +3894,14 @@ fn typed_secret_env_names(secrets: &HashMap<String, ManagedSecretValue>) -> Hash
 fn typed_secret_entries(secret: &ManagedSecretValue) -> Vec<(&'static str, &str)> {
     match secret {
         ManagedSecretValue::RawValue { .. } => vec![],
-        ManagedSecretValue::AnthropicApiKey { api_key } => {
-            vec![("ANTHROPIC_API_KEY", api_key.as_str())]
+        ManagedSecretValue::AnthropicApiKey { api_key, base_url } => {
+            let mut entries = vec![("ANTHROPIC_API_KEY", api_key.as_str())];
+            if let Some(url) = base_url.as_deref() {
+                if !url.trim().is_empty() {
+                    entries.push(("ANTHROPIC_BASE_URL", url));
+                }
+            }
+            entries
         }
         ManagedSecretValue::AnthropicBedrockApiKey {
             aws_bearer_token_bedrock,

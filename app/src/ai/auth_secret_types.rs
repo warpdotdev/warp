@@ -57,9 +57,16 @@ pub fn build_managed_secret_value(
         }
     }
     match info.secret_type {
-        ManagedSecretType::AnthropicApiKey => Ok(ManagedSecretValue::anthropic_api_key(
-            field_values[0].clone(),
-        )),
+        ManagedSecretType::AnthropicApiKey => {
+            let base_url = field_values
+                .get(1)
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty());
+            Ok(ManagedSecretValue::anthropic_api_key(
+                field_values[0].clone(),
+                base_url,
+            ))
+        }
         ManagedSecretType::AnthropicBedrockApiKey => {
             Ok(ManagedSecretValue::anthropic_bedrock_api_key(
                 field_values[0].clone(),
@@ -121,12 +128,20 @@ static CLAUDE_AUTH_SECRET_TYPES: [AuthSecretTypeInfo; 3] = [
         display_name: "Anthropic API Key",
         secret_type: ManagedSecretType::AnthropicApiKey,
         learn_more_url: CLAUDE_LEARN_MORE_URL,
-        fields: &[AuthSecretTypeField {
-            label: "ANTHROPIC_API_KEY",
-            placeholder: Some("sk-ant-..."),
-            optional: false,
-            sensitive: true,
-        }],
+        fields: &[
+            AuthSecretTypeField {
+                label: "ANTHROPIC_API_KEY",
+                placeholder: Some("sk-ant-..."),
+                optional: false,
+                sensitive: true,
+            },
+            AuthSecretTypeField {
+                label: "BASE_URL",
+                placeholder: Some("https://your-gateway.example.com/v1"),
+                optional: true,
+                sensitive: false,
+            },
+        ],
     },
     AuthSecretTypeInfo {
         display_name: "Bedrock API Key",
