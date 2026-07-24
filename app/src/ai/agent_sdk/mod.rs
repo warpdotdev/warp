@@ -126,7 +126,7 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
 }
 
 /// Run a Warp CLI command.
-#[tracing::instrument(name = "agent_sdk::run", skip_all, err, fields(tags.cloud_agent = true))]
+#[tracing::instrument(name = "agent_sdk::run", skip_all, err(Debug), fields(tags.cloud_agent = true))]
 pub fn run(
     ctx: &mut AppContext,
     command: CliCommand,
@@ -625,7 +625,7 @@ impl warpui::Entity for AgentDriverRunner {
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
 impl AgentDriverRunner {
-    #[tracing::instrument(skip_all, err, fields(
+    #[tracing::instrument(skip_all, err(Debug), fields(
         tags.cloud_agent = true,
         args.sandboxed = args.sandboxed,
         args.computer_use = args.computer_use.computer_use,
@@ -1368,7 +1368,7 @@ impl AgentDriverRunner {
     /// wraps the returned payload (if any) in [`driver::ResumeOptions::ThirdParty`]; each harness
     /// owns its server call and error mapping. Returns `None` if a third-party harness has no
     /// resume payload to surface.
-    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, conversation_id = conversation_id))]
+    #[tracing::instrument(skip_all, err(Debug), fields(tags.cloud_agent = true, conversation_id = conversation_id))]
     async fn load_conversation_information(
         foreground: &ModelSpawner<Self>,
         conversation_id: String,
@@ -1430,7 +1430,7 @@ impl AgentDriverRunner {
     }
 
     /// Resolve the environment and store into `driver_options`.
-    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, ?environment_id))]
+    #[tracing::instrument(skip_all, err(Debug), fields(tags.cloud_agent = true, ?environment_id))]
     async fn resolve_environment(
         foreground: &ModelSpawner<Self>,
         environment_id: Option<String>,

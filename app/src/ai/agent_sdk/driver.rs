@@ -624,7 +624,7 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
 }
 
 impl AgentDriver {
-    #[tracing::instrument(name = "AgentDriver::new", skip_all, err, fields(
+    #[tracing::instrument(name = "AgentDriver::new", skip_all, err(Debug), fields(
         tags.cloud_agent = true,
         task_id = ?options.task_id,
         parent_run_id = ?options.parent_run_id,
@@ -2108,7 +2108,7 @@ impl AgentDriver {
     /// Driving the agent mostly requires main-thread UI framework updates, but using `async` and
     /// a `ModelSpawner` lets us express the high-level process linearly rather than in a
     /// series of callbacks and state machine updates.
-    #[tracing::instrument(name = "AgentDriver::run_internal", skip_all, err, fields(tags.cloud_agent = true))]
+    #[tracing::instrument(name = "AgentDriver::run_internal", skip_all, err(Debug), fields(tags.cloud_agent = true))]
     async fn run_internal(
         task: Task,
         foreground: ModelSpawner<Self>,

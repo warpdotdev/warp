@@ -162,7 +162,7 @@ impl ManagedSecretManager {
         task_id: String,
     ) -> impl Future<Output = anyhow::Result<HashMap<String, ManagedSecretValue>>> + use<> {
         // Define and invoke an inner async function to simplify tracing instrumentation.
-        #[tracing::instrument(name = "get_task_secrets", skip_all, err, fields(tags.cloud_agent = true))]
+        #[tracing::instrument(name = "get_task_secrets", skip_all, err(Debug), fields(tags.cloud_agent = true))]
         async fn inner(
             client: Arc<dyn ManagedSecretsClient>,
             task_id: String,

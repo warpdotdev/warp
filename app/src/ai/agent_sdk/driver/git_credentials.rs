@@ -327,7 +327,7 @@ pub(crate) fn configure_git_identity(credentials: &[GitCredential]) {
 /// Returns `Ok(())` on success (including when the server returns no
 /// credentials). Returns `Err` when the workload-token issuance or the server
 /// API call fails — these are transient failures worth retrying.
-#[tracing::instrument(name = "git_credentials::try_refresh", skip_all, err, fields(
+#[tracing::instrument(name = "git_credentials::try_refresh", skip_all, err(Debug), fields(
     tags.cloud_agent = true,
     task_id,
 ))]
