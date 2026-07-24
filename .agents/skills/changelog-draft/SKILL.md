@@ -18,31 +18,37 @@ description: Generate a reviewable changelog draft from PRs merged in a release 
 
 ### Step 1 — Determine the release range
 
-Infer the previous release **cut** for comparison. Release tags follow the pattern `v0.YYYY.MM.DD.HH.MM.<channel>_NN`, where `_NN` is the RC/hotfix number within that release cut. Multiple tags can share the same date prefix (e.g. `_00`, `_01`, `_02` are all part of one release cut).
-
-The base tag must be the `_00` tag of the **previous** release cut (i.e. a different date), not just the previous tag. For example, if generating a changelog for `v0.2026.04.29.08.57.stable_01`, the base should be `v0.2026.04.22.08.57.stable_00`, not `v0.2026.04.29.08.57.stable_00`.
+Run the `resolve_release_range.py` script to determine the previous release cut for comparison. Release tags follow the pattern `v0.YYYY.MM.DD.HH.MM.<channel>_NN`, where `_NN` is the RC/hotfix number within that release cut. The base tag is always the `_00` tag of the **previous** release cut (a different date-time prefix), not another tag from the same cut.
 
 ```bash
-# 1. Extract the date prefix from the release_tag (everything before _NN)
-release_date_prefix="${release_tag%_*}"
-
-# 2. List all _00 tags for the channel (these are release cut points), sorted descending
-git tag --list "v0.*.${channel}_00" --sort=-version:refname
-
-# 3. Pick the first _00 tag whose date prefix differs from release_date_prefix
+python3 .agents/skills/changelog-draft/scripts/resolve_release_range.py \
+  --release-tag "${release_tag}" \
+  --channel "${channel}" \
+  --repo-dir . \
+  > range.json
 ```
 
-Record the range as `previous_cut_tag..release_tag`.
+The script outputs JSON to stdout:
+```json
+{"base": "<prev_cut_00>", "head": "<release_tag>", "range": "<prev_cut_00>..<release_tag>"}
+```
+
+Save this to `range.json` and use the `base` and `head` values as `--base-ref` and `--head-ref` for Step 2. The script exits non-zero with a concise stderr message if the tag format is invalid, the channel mismatches, the head tag is missing, or no previous cut exists.
 
 ### Step 2 — Fetch PR data
 
 Run the `fetch_prs.py` script to collect all public-release PRs merged in the release range and extract explicit changelog markers. Pass the repository that the workflow checked out, not necessarily the public repository. Release workflows run from `warpdotdev/warp-internal`, and the script deterministically resolves `warp-repo-sync[bot]` PRs back to their original public `warpdotdev/warp` PR metadata before emitting JSON. When running from `warpdotdev/warp-internal`, the script intentionally omits PRs that were not authored by the repo-sync bot, because those are private internal changes that must not be exposed to the changelog agent or generated artifacts.
 
 ```bash
+# Extract base and head from range.json
+base_tag=$(python3 -c "import json; d=json.load(open('range.json')); print(d['base'])")
+head_tag=$(python3 -c "import json; d=json.load(open('range.json')); print(d['head'])")
+
 python3 .agents/skills/changelog-draft/scripts/fetch_prs.py \
   --repo "${GITHUB_REPOSITORY:-warpdotdev/warp}" \
-  --base-ref <previous_tag> \
-  --head-ref <release_tag>
+  --base-ref "${base_tag}" \
+  --head-ref "${head_tag}" \
+  > prs.json
 ```
 
 The script outputs JSON to stdout with this structure:
@@ -147,113 +153,86 @@ Whenever the markdown draft credits a PR author, contributor, or issue reporter,
 
 ### Step 6 — Classify unmarked PRs
 
-For each PR that has no explicit `CHANGELOG-*` entries, decide whether to include it and under which category.
+Use a two-pass workflow with `classify_pr.py` to classify PRs that have no explicit `CHANGELOG-*` entries.
 
-Follow the classification guidance in `.agents/skills/classify-changelog-pr/SKILL.md`.
+**Pass 1 — Deterministic preclassification:**
 
-For each unmarked PR, produce a classification:
-```json
-{
-  "pr_number": 1234,
-  "include": true,
-  "category": "IMPROVEMENT",
-  "text": "Proposed changelog line",
-  "confidence": "high",
-  "rationale": "...",
-  "feature_flag": null,
-  "needs_review": false
-}
+Run the script to apply mechanical exclusion rules and channel flag gates. It emits a `classifications` list (deterministic excludes) and an `agent_required` list (candidates needing subjective judgment).
+
+```bash
+python3 .agents/skills/changelog-draft/scripts/classify_pr.py \
+  --channel "${channel}" \
+  --prs-json prs.json \
+  --feature-flags-json feature_flags.json \
+  --contributors-json contributors.json \
+  --output preclassifications.json
 ```
 
-**Key rules:**
-- PRs that only touch CI, tests, docs, or internal tooling → `include: false`
-- PRs behind dogfood-only feature flags → `include: false` for stable channel
-- PRs behind preview flags → `include: false` for stable, `include: true` for preview
-- When in doubt, set `needs_review: true` and `confidence: "low"`
-- Bot PRs (dependabot, renovate, etc.) → `include: false`
-
-**Feature-flag detection:** Use the `changed_files` list from Step 2 to check if any PR touches `crates/warp_features/src/lib.rs` or references a `FeatureFlag` variant in its title/body. Cross-reference with the flag lists from Step 4 to determine channel visibility.
-
-**Unknown contributors:** Authors in the `unknown` bucket (org membership check failed due to auth) should be treated conservatively — do not attribute them as external. Note them in the output for manual verification.
-
-### Step 7 — Assemble the draft
-
-Combine explicit entries (Step 2) and inferred entries (Step 6) into the final report. Group by category in this order:
-
-1. `NEW-FEATURE` — New Features
-2. `IMPROVEMENT` — Improvements
-3. `BUG-FIX` — Bug Fixes
-4. `OZ` — Oz Updates
-
-PRs marked with `CHANGELOG-NONE` are explicitly opted out and must never appear in the changelog markdown.
-
-When creating entries, copy `pr_number`, `url`, `author`, `source_repo`, and `internal_pr` from the normalized PR record. The release JSON converter uses `url` directly; do not invent public PR URLs from PR numbers.
-
-### Step 8 — Write output files
-
-Write two files to `output_dir`:
-
-**`changelog-draft.md`** — Human-reviewable markdown, ready for Slack/Notion:
-
-```markdown
-# Changelog Draft
-**Channel:** stable
-**Range:** v0.2026.05.01... → v0.2026.05.06...
-**Generated:** 2026-05-06T15:00:00Z
-
-## New Features
-- Added dark mode ([#1234](https://github.com/warpdotdev/warp/pull/1234)) — [@external-contributor](https://github.com/external-contributor) ✨
-
-## Improvements
-- Faster tab switching ([#1235](https://github.com/warpdotdev/warp/pull/1235))
-
-## Bug Fixes
-- Fixed crash on startup ([#1236](https://github.com/warpdotdev/warp/pull/1236))
-
-## Oz Updates
-- Improved agent memory ([#1237](https://github.com/warpdotdev/warp/pull/1237))
-
-## Community
-### Contributors
-- [@contributor1](https://github.com/contributor1) — [#1234](https://github.com/warpdotdev/warp/pull/1234)  ✨
-
-### Issue Reporters
-Thanks to the community members who reported issues fixed in this release:
-- [@reporter1](https://github.com/reporter1) — [#5678](https://github.com/warpdotdev/warp/issues/5678) "Crash when opening large file"
-```
-
-The markdown draft must **not** include "Needs Review" or "Skipped PRs" sections — those are internal details that belong only in the JSON audit artifact.
-
-**`changelog-draft.json`** — Machine-readable audit artifact (internal only):
+The `agent_required` list contains PRs where the script determined that user-visibility, category choice, and changelog text require subjective judgment. Classify each candidate using the guidance in `.agents/skills/classify-changelog-pr/SKILL.md`. Produce a JSON array of agent classifications:
 
 ```json
-{
-  "channel": "stable",
-  "range": { "base": "v0...", "head": "v0..." },
-  "generated_at": "2026-05-06T15:00:00Z",
-  "entries": [
-    {
-      "pr_number": 1234,
-      "url": "https://github.com/warpdotdev/warp/pull/1234",
-      "category": "NEW-FEATURE",
-      "text": "Added dark mode",
-      "source": "explicit",
-      "author": "external-contributor",
-      "is_external": true,
-      "confidence": "high",
-      "rationale": null,
-      "feature_flag": null,
-      "source_repo": "warpdotdev/warp",
-      "internal_pr": null
-    }
-  ],
-  "skipped": [...],
-  "needs_review": [...],
-  "issue_reporters": [...]
-}
+[
+  {
+    "pr_number": 1234,
+    "include": true,
+    "category": "IMPROVEMENT",
+    "text": "Proposed changelog line",
+    "confidence": "high",
+    "rationale": "...",
+    "needs_review": false
+  }
+]
 ```
 
-The JSON artifact retains `skipped`, `needs_review`, and `issue_reporters` for audit purposes — every PR in the range must appear in either `entries`, `skipped`, or `needs_review`.
+Save this to `agent_classifications.json`.
+
+Before saving classifications, edit every included entry as release copy:
+
+- Lead with the user-visible outcome, not implementation details. Replace internal terms such as protocol names, stream topology, framework types, or feature-flag mechanics with the behavior users will notice.
+- Use concise past tense: `Added`, `Improved`, `Fixed`, `Removed`, `Clarified`, or a direct outcome such as `Warp now ...`. Do not begin entries with imperative `Add`, `Fix`, or `Clarify`.
+- Correct obvious spelling, grammar, and preposition errors. For example, use “Added the installation path to the Windows App Paths Registry,” not “into de Windows App Paths Registry.”
+- Preserve literal product names, commands, settings labels, and platform names.
+- Do not include placeholders such as `{{...}}`, raw `CHANGELOG-*` prefixes, internal repository references, or private PR links.
+- Prefer one user-facing outcome per entry. When several PRs are implementation stages for one feature, select the completed outcome rather than listing every stage.
+- Rank `OZ` entries by user impact. Only the first four are published, so place the four most important Oz updates first.
+
+**Pass 2 — Validate and merge:**
+
+Re-run the script with the agent classifications to produce the final classifications. Mechanical excludes always win over agent answers — conflicts cause a non-zero exit.
+
+```bash
+python3 .agents/skills/changelog-draft/scripts/classify_pr.py \
+  --channel "${channel}" \
+  --prs-json prs.json \
+  --feature-flags-json feature_flags.json \
+  --contributors-json contributors.json \
+  --agent-classifications agent_classifications.json \
+  --output classifications.json
+```
+
+Save the output as `classifications.json` for use in Step 7.
+
+### Step 7+8 — Assemble the draft and write output files
+
+Run `assemble_changelog.py` to combine all intermediate artifacts into the two output files. The script enforces the accounting invariant using unique PR numbers and exits non-zero if any PR appears in multiple buckets or is missing. A PR with multiple explicit markers creates multiple audit entry records but still counts as one unique PR.
+
+```bash
+python3 .agents/skills/changelog-draft/scripts/assemble_changelog.py \
+  --channel "${channel}" \
+  --range-json range.json \
+  --prs-json prs.json \
+  --contributors-json contributors.json \
+  --issue-reporters-json issue_reporters.json \
+  --classifications-json classifications.json \
+  --output-dir "${output_dir}" \
+  --attribution "${attribution:-external-only}"
+```
+
+The script writes two files to `output_dir`:
+
+**`changelog-draft.md`** — Human-reviewable markdown ready for Slack/Notion. Contains only the changelog sections (New Features, Improvements, Bug Fixes, Oz Updates) and the Community attribution section. Does **not** include Needs Review or Skipped PR sections. The Oz Updates section is capped at four entries, preserving the curated source order.
+
+**`changelog-draft.json`** — Machine-readable audit artifact retaining `entries`, `skipped`, `needs_review`, and `issue_reporters`. Every PR in the range appears in exactly one of these buckets.
 
 ### Step 9 — Generate release-pipeline JSON
 
@@ -265,7 +244,7 @@ python3 .agents/skills/changelog-draft/scripts/convert_to_release_json.py \
   --output <output_dir>/changelog-release.json
 ```
 
-This produces the flat JSON structure consumed by the `create_release` workflow for Slack and the in-app "What's New" dialog. Do **not** generate this file manually — always use the script so the output is deterministic and consistent.
+This produces the flat JSON structure consumed by the `create_release` workflow for Slack and the in-app "What's New" dialog. The converter deterministically caps `oz_updates` at four entries, preserving source order. Do **not** generate this file manually — always use the script so the output is deterministic and consistent.
 
 ## Constraints
 
@@ -278,7 +257,9 @@ This produces the flat JSON structure consumed by the `create_release` workflow 
 ## Validation
 
 After generating output, verify:
-1. Every PR in the range is accounted for (entries + skipped + needs_review = total PRs).
+1. Every unique PR number in the range is accounted for. Record counts may exceed unique PR counts when a PR has multiple explicit markers.
 2. Explicit marker entries match what `fetch_prs.py` extracted (no dropped markers).
 3. No duplicate PR numbers across sections.
-4. The markdown renders cleanly (no broken links or formatting).
+4. Markdown and release JSON contain at most four Oz updates in the same order.
+5. User-facing copy uses past tense, explains outcomes rather than implementation details, and contains no placeholders, raw marker prefixes, private links, or internal repository references.
+6. The markdown renders cleanly (no broken links or formatting).
