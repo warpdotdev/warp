@@ -201,6 +201,62 @@ fn test_config_error_preserves_last_known_good_servers() {
 }
 
 #[test]
+fn test_config_diagnostic_appears_and_clears_after_recovery_or_removal() {
+    let root_path = PathBuf::from("/tmp/test-repo");
+    let config_path = root_path.join(".mcp.json");
+    let diagnostic = FileMCPConfigDiagnostic {
+        config_path: config_path.clone(),
+        provider: MCPProvider::Warp,
+        kind: FileMCPConfigDiagnosticKind::Parse,
+        message: "invalid JSON".to_string(),
+    };
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+        manager_handle.update(&mut app, |manager, ctx| {
+            assert_eq!(manager.config_diagnostics().count(), 0);
+
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigError {
+                    diagnostic: diagnostic.clone(),
+                },
+                ctx,
+            );
+            assert_eq!(manager.config_diagnostics().count(), 1);
+
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigParsed {
+                    config_path: config_path.clone(),
+                    root_path: root_path.clone(),
+                    provider: MCPProvider::Warp,
+                    servers: Vec::new(),
+                },
+                ctx,
+            );
+            assert_eq!(manager.config_diagnostics().count(), 0);
+
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigError {
+                    diagnostic: diagnostic.clone(),
+                },
+                ctx,
+            );
+            assert_eq!(manager.config_diagnostics().count(), 1);
+
+            manager.handle_watcher_event(
+                &FileMCPWatcherEvent::ConfigRemoved {
+                    config_path,
+                    root_path,
+                    provider: MCPProvider::Warp,
+                },
+                ctx,
+            );
+            assert_eq!(manager.config_diagnostics().count(), 0);
+        });
+    });
+}
+
+#[test]
 fn test_update_file_based_servers_spawns_new_servers() {
     let repo_path = PathBuf::from("/tmp/test-repo");
     let parsed = parse_mcp_json(

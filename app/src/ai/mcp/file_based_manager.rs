@@ -502,6 +502,11 @@ impl FileBasedMCPManager {
         self.config_diagnostics_by_path.get(config_path)
     }
 
+    /// Returns the current file-based MCP config diagnostics in no particular order.
+    pub fn config_diagnostics(&self) -> impl Iterator<Item = &FileMCPConfigDiagnostic> {
+        self.config_diagnostics_by_path.values()
+    }
+
     #[cfg(feature = "tui")]
     pub fn global_warp_servers(&self) -> Vec<&TemplatableMCPServerInstallation> {
         self.file_based_servers

@@ -39,6 +39,7 @@ use crate::ai::mcp::{
     // Import events for file-based manager and watcher conditionally
     // since their WASM variants don't export events.
     file_based_manager::FileBasedMCPManagerEvent,
+    file_mcp_watcher::{FileMCPConfigDiagnostic, FileMCPConfigDiagnosticKind},
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
@@ -98,6 +99,37 @@ pub enum MCPServersListPageViewAction {
 const EMPTY_STATE_TEXT: &str = "Once you add a MCP server, it will be shown here.";
 const NO_SEARCH_RESULTS_TEXT: &str = "No search results found";
 
+#[cfg(feature = "local_fs")]
+#[derive(Debug, Eq, PartialEq)]
+struct ConfigDiagnosticDisplay {
+    heading: String,
+    message: &'static str,
+}
+
+#[cfg(feature = "local_fs")]
+fn config_diagnostic_display(diagnostic: &FileMCPConfigDiagnostic) -> ConfigDiagnosticDisplay {
+    let message = match diagnostic.kind {
+        FileMCPConfigDiagnosticKind::Read => {
+            "Warp couldn't read this configuration file. Check that the file is accessible."
+        }
+        FileMCPConfigDiagnosticKind::Parse => {
+            "Warp couldn't parse this configuration file. Check its syntax and required fields."
+        }
+        FileMCPConfigDiagnosticKind::MissingEnvironmentVariable => {
+            "This configuration references an environment variable that is missing or empty."
+        }
+    };
+
+    ConfigDiagnosticDisplay {
+        heading: format!(
+            "{} MCP config · {}",
+            diagnostic.provider.display_name(),
+            diagnostic.config_path.display()
+        ),
+        message,
+    }
+}
+
 pub struct MCPServersListPageView {
     server_cards: HashMap<ServerCardItemId, ViewHandle<ServerCardView>>,
     gallery_server_cards: HashMap<ServerCardItemId, ViewHandle<ServerCardView>>,
@@ -136,6 +168,12 @@ impl MCPServersListPageView {
                     | FileBasedMCPManagerEvent::PurgeCredentials { .. } => {
                         // Refresh cards when servers are spawned or removed.
                         me.refresh_file_based_server_cards(ctx);
+                    }
+                    FileBasedMCPManagerEvent::ConfigDiagnosticChanged => {
+                        // The banner reads diagnostics directly from the manager. Notify here,
+                        // after the manager has updated its state, so the banner appears and
+                        // disappears without depending on watcher subscription ordering.
+                        ctx.notify();
                     }
                     _ => {}
                 });
@@ -1195,6 +1233,11 @@ impl MCPServersListPageView {
             .with_spacing(style::PAGE_SPACING)
             .with_child(description);
 
+        #[cfg(feature = "local_fs")]
+        if let Some(diagnostics) = self.render_config_diagnostics(appearance, app) {
+            page.add_child(diagnostics);
+        }
+
         let search_term = self.search_editor.as_ref(app).buffer_text(app);
 
         // Collect filtered server cards by ID.
@@ -1299,6 +1342,72 @@ impl MCPServersListPageView {
         }
 
         page.finish()
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn render_config_diagnostics(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let mut diagnostics = FileBasedMCPManager::as_ref(app)
+            .config_diagnostics()
+            .map(config_diagnostic_display)
+            .collect::<Vec<_>>();
+        diagnostics.sort_by(|left, right| left.heading.cmp(&right.heading));
+
+        if diagnostics.is_empty() {
+            return None;
+        }
+
+        let theme = appearance.theme();
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(style::SERVER_CARD_LIST_SPACING);
+
+        for diagnostic in diagnostics {
+            let icon = ConstrainedBox::new(
+                Icon::AlertTriangle
+                    .to_warpui_icon(theme.ui_error_color().into())
+                    .finish(),
+            )
+            .with_width(14.)
+            .with_height(14.)
+            .finish();
+            let content = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_spacing(4.)
+                .with_child(
+                    Text::new(diagnostic.heading, appearance.ui_font_family(), 13.)
+                        .with_color(theme.active_ui_text_color().into())
+                        .finish(),
+                )
+                .with_child(
+                    Text::new(diagnostic.message, appearance.ui_font_family(), 12.)
+                        .with_color(theme.sub_text_color(theme.surface_2()).into())
+                        .soft_wrap(true)
+                        .finish(),
+                )
+                .finish();
+            let row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(Container::new(icon).with_margin_right(8.).finish())
+                .with_child(Expanded::new(1., content).finish())
+                .finish();
+            column.add_child(
+                Container::new(row)
+                    .with_background(theme.surface_2())
+                    .with_border(Border::all(1.).with_border_color(theme.ui_error_color()))
+                    .with_corner_radius(warpui::elements::CornerRadius::with_all(
+                        warpui::elements::Radius::Pixels(style::CORNER_RADIUS),
+                    ))
+                    .with_horizontal_padding(16.)
+                    .with_vertical_padding(10.)
+                    .finish(),
+            );
+        }
+
+        Some(column.finish())
     }
 
     fn render_controls(&self) -> Box<dyn Element> {
@@ -1810,3 +1919,7 @@ impl TypedActionView for MCPServersListPageView {
         }
     }
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "list_page_tests.rs"]
+mod tests;
