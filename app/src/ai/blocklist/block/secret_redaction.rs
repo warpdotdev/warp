@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use itertools::Itertools;
+use regex_automata::util::iter::Searcher;
+use regex_automata::Input;
 use similar::DiffableStr;
 use warp_errors::report_error;
 use warpui::elements::{MouseStateHandle, PartialClickableElement, SecretRange};
@@ -49,9 +51,17 @@ pub(crate) fn find_secrets_in_text_with_levels_using_regex(
     }
     byte_to_char_index[text.len()] = char_index; // Map the last byte to the last character index
 
+    // Use an explicit cache rather than the regex's internal thread-local pool.
+    // The pool grows proportionally with the number of unique threads that ever
+    // call the regex, and Tokio's large worker/blocking thread pools can cause it
+    // to accumulate many large PikeVM cache objects (observed: 8+ GB). Creating a
+    // per-call cache avoids this unbounded growth.
+    let mut cache = regex.create_cache();
+    let mut it = Searcher::new(Input::new(text));
+
     // Iterate over the text once, finding all matches against secret regex. Map the byte ranges
     // to character ranges and store them.
-    for mat in regex.find_iter(text) {
+    while let Some(mat) = it.advance(|inp| Ok(regex.search_with(&mut cache, inp))) {
         let start_byte = mat.start();
         let end_byte = mat.end();
         let start_char = byte_to_char_index[start_byte];

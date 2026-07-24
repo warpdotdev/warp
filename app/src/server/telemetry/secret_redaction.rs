@@ -22,6 +22,8 @@ use std::ops::Range;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use regex_automata::meta::Regex;
+use regex_automata::util::iter::Searcher;
+use regex_automata::Input;
 use serde_json::Value;
 use warp_errors::report_error;
 
@@ -91,7 +93,20 @@ fn compose_patterns<'a>(
 pub fn redact_secrets_in_string(input: &mut String) {
     let ranges: Vec<Range<usize>> = {
         let regex = TELEMETRY_SECRETS_REGEX.read();
-        regex.find_iter(input.as_str()).map(|m| m.range()).collect()
+        // Use an explicit cache rather than the regex's internal thread-local pool.
+        // The pool grows proportionally with the number of unique threads that ever
+        // call the regex, and Tokio's large worker/blocking thread pools can cause it
+        // to accumulate many large PikeVM cache objects (observed: 8+ GB). Creating a
+        // per-call cache avoids this unbounded growth at the cost of a single
+        // allocation per telemetry send, which is acceptable given how rarely this
+        // code runs.
+        let mut cache = regex.create_cache();
+        let mut it = Searcher::new(Input::new(input.as_str()));
+        let mut ranges = Vec::new();
+        while let Some(m) = it.advance(|inp| Ok(regex.search_with(&mut cache, inp))) {
+            ranges.push(m.range());
+        }
+        ranges
     };
     replace_byte_ranges_with_asterisks(input, ranges);
 }
