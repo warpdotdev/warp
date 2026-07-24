@@ -930,3 +930,116 @@ fn conversation_server_token_assigned_skips_without_task_id() {
         );
     });
 }
+
+/// When `/remote-control` is started before the server assigns a `task_id`
+/// (race condition: `LocalSharedSessionEstablished` fires before the Init
+/// stream event arrives), the session_id must be held in
+/// `pending_session_ids` and flushed together with the status update that
+/// fires when `ConversationServerTokenAssigned` arrives.
+#[test]
+fn shared_session_link_deferred_when_task_id_missing_then_sent_on_token_assignment() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        // Conversation with NO task_id yet (Init event hasn't arrived).
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let session_id = fixed_session_id();
+        let task_id = fixed_task_id();
+
+        register_cli_agent_sessions_model(&mut app);
+        // The mock must be called exactly once, with the session_id included.
+        let mut mock = MockAIClient::new();
+        mock.expect_update_agent_task()
+            .withf(
+                move |arg_task_id, task_state, arg_session_id, _conv_id, _status_msg| {
+                    *arg_task_id == task_id
+                        && task_state.is_some()
+                        && *arg_session_id == Some(session_id)
+                },
+            )
+            .times(1)
+            .returning(|_, _, _, _, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let _model = app.add_singleton_model(|ctx| {
+            LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
+        });
+
+        // Step 1: shared session established (no task_id yet → stored in pending).
+        history_model.update(&mut app, |_, ctx| {
+            ctx.emit(BlocklistAIHistoryEvent::LocalSharedSessionEstablished {
+                conversation_id,
+                session_id,
+            });
+        });
+
+        // Step 2: Init event arrives — assign run_id (task_id) + conversation token.
+        history_model.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.set_run_id(task_id.to_string());
+            conv.set_server_conversation_token("server-conversation-id".to_string());
+            // Simulate ConversationServerTokenAssigned (normally emitted by
+            // initialize_output_for_response_stream).
+            ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                conversation_id,
+                terminal_surface_id: terminal_view_id,
+            });
+        });
+
+        pump_spawned_tasks().await;
+        // Mock drop verifies `.times(1)` and the predicate.
+    });
+}
+
+/// A pending session_id is silently dropped when the conversation is removed
+/// before the task_id arrives, so no stale entry leaks into memory.
+#[test]
+fn shared_session_link_clears_pending_on_conversation_remove() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let (_model, counter) = install_model_with_call_counter(&mut app);
+        let session_id = fixed_session_id();
+
+        // Store session_id in pending (no task_id yet).
+        history_model.update(&mut app, |_, ctx| {
+            ctx.emit(BlocklistAIHistoryEvent::LocalSharedSessionEstablished {
+                conversation_id,
+                session_id,
+            });
+        });
+
+        // Remove the conversation before the task_id arrives.
+        history_model.update(&mut app, |_, ctx| {
+            ctx.emit(BlocklistAIHistoryEvent::RemoveConversation {
+                terminal_surface_id: terminal_view_id,
+                conversation_id,
+                run_id: None,
+            });
+        });
+
+        pump_spawned_tasks().await;
+
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "no RPC must fire when conversation is removed before task_id arrives"
+        );
+    });
+}
