@@ -25,6 +25,7 @@ use crate::model_menu::TuiModelMenuModel;
 use crate::prompt_and_command_history_menu::TuiPromptAndCommandHistoryMenuModel;
 use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
+use crate::status_menu::TuiStatusMenuModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_column_layout::{
     TuiTwoColumnConstraints, TuiTwoColumnLayout, format_tui_first_column, tui_two_column_layout,
@@ -105,6 +106,47 @@ impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
 
     fn scroll_by_delta(&self, delta: isize, ctx: &mut AppContext) {
         self.update(ctx, |model, ctx| model.scroll_by_delta(delta, ctx));
+    }
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TuiStatusMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::Status
+    }
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, _ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        // The /status menu is read-only: accepting a row never produces an action.
+        None
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot(ctx)
     }
 }
 

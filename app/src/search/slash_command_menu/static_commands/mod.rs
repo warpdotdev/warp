@@ -112,6 +112,7 @@ pub enum SlashCommandKind {
     Rewind,
     ExportToClipboard,
     ExportToFile,
+    Status,
 }
 
 /// The application surfaces on which a static slash command is implemented.

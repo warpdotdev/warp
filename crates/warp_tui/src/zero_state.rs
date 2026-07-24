@@ -17,6 +17,7 @@ use ai::project_context::model::{
 use warp::tui_export::{
     ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
     SkillManager, SkillManagerEvent, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
+    TuiUserInfoManager,
 };
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -95,6 +96,9 @@ impl TuiZeroStateView {
             |_, _, SkillManagerEvent::SkillsChanged { .. }, ctx| ctx.notify(),
         );
         ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&TuiUserInfoManager::handle(ctx), |_, _, _, ctx| {
+            ctx.notify();
+        });
         ctx.subscribe_to_model(&active_session, |_, _, event, ctx| {
             let ActiveSessionEvent::UpdatedPwd = event else {
                 return;
@@ -238,7 +242,8 @@ fn render_top_section(builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
                 .truncate()
                 .finish(),
         )
-        .child(render_version_line(builder, app));
+        .child(render_version_line(builder, app))
+        .child(render_login_line(builder, app));
 
     let bullets = changelog_bullets(app);
     if !bullets.is_empty() {
@@ -376,6 +381,28 @@ fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, boo
             (format!("{} · /mcp", parts.join(" · ")), false)
         }
     }
+}
+
+/// The login-info line: the signed-in account (email, falling back to the
+/// display name) when authenticated, or a graceful "Not signed in" state when
+/// not. The zero state is normally only shown after login, but the unauthenticated
+/// branch keeps the surface honest if it is ever rendered before auth completes.
+fn render_login_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiElement> {
+    let muted = builder.muted_text_style();
+    let dim = builder.dim_text_style();
+    let user_info = TuiUserInfoManager::as_ref(app).snapshot(app);
+    let display = user_info
+        .email
+        .filter(|email| !email.is_empty())
+        .or(user_info.username.filter(|username| !username.is_empty()));
+    let (label, style) = if let Some(display) = display {
+        (format!("Signed in as {display}"), muted)
+    } else if user_info.is_logged_in {
+        ("Signed in".to_owned(), muted)
+    } else {
+        ("Not signed in".to_owned(), dim)
+    };
+    TuiText::new(label).with_style(style).truncate().finish()
 }
 
 /// The version line: the release version (or "dev build"), with the

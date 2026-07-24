@@ -6,12 +6,14 @@
 //! — when the user isn't logged in yet — drives the device-authorization login
 //! flow, flipping the model to [`TuiLoginPhase::LoggedIn`] when it completes.
 mod mcp;
+mod user_info;
 
 pub use mcp::{
     TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
 use url::Url;
+pub use user_info::{TuiUserInfoManager, TuiUserInfoManagerEvent, TuiUserInfoSnapshot};
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use crate::TuiMountFn;
@@ -83,6 +85,7 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
         phase: initial_phase,
     });
     ctx.add_singleton_model(TuiMcpManager::new);
+    ctx.add_singleton_model(TuiUserInfoManager::new);
 
     // Keep the auth subscription alive for the full process lifetime so a
     // logged-in TUI can complete device authorization again after logout.

@@ -6,13 +6,14 @@ use warp::tui_export::{
     TuiMcpTransport, register_tui_session_view_test_singletons,
 };
 use warpui::{EntityIdMap, SingletonEntity};
-use warpui_core::App;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, text_width,
 };
+use warpui_core::{App, AppContext};
 
 use super::{LEFT_COLUMN_COLS, build_zero_state_overlay, mcp_status_label};
+use crate::tui_builder::TuiUiBuilder;
 
 fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     TuiMcpServerSnapshot {
@@ -134,6 +135,14 @@ fn render_to_buffer(
     buffer
 }
 
+fn render_element_lines(
+    element: Box<dyn TuiElement>,
+    ctx: &AppContext,
+    width: u16,
+    height: u16,
+) -> Vec<String> {
+    render_to_buffer(element, ctx, width, height).to_lines()
+}
 /// When the terminal is wide enough, the path header must stay on one row and
 /// must not be capped at LEFT_COLUMN_COLS.
 ///
@@ -202,6 +211,25 @@ fn zero_state_path_header_not_truncated_at_wide_terminal() {
                 LEFT_COLUMN_COLS
             );
         });
+    });
+}
+
+#[test]
+fn login_line_shows_signed_in_account_email() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+
+        let lines = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            render_element_lines(super::render_login_line(&builder, ctx), ctx, 48, 1)
+        });
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Signed in as test_user@warp.dev")),
+            "zero-state login line should show the signed-in email:\n{}",
+            lines.join("\n")
+        );
     });
 }
 

@@ -52,6 +52,7 @@ mod resume;
 mod session_registry;
 mod skills_menu;
 mod slash_commands;
+mod status_menu;
 mod statusline_config_view;
 pub mod tab_bar;
 mod terminal_background;

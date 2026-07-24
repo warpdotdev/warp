@@ -1632,6 +1632,78 @@ fn nld_slash_command_toggles_and_reports_its_effects() {
 }
 
 #[test]
+fn status_slash_command_opens_read_only_info_menu() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/status", ctx);
+            });
+            view.execute_tui_slash_command(&slash_commands::STATUS, None, ctx);
+        });
+
+        let snapshot = app.read(|ctx| {
+            assert!(
+                view.status_menu.as_ref(ctx).is_open(ctx),
+                "/status should open the status menu"
+            );
+            view.status_menu.as_ref(ctx).snapshot(ctx)
+        });
+        let snapshot = snapshot.expect("status menu snapshot should render while open");
+
+        assert_eq!(
+            snapshot
+                .header
+                .as_ref()
+                .and_then(|header| header.title.as_deref()),
+            Some("Status")
+        );
+
+        let labels: Vec<&str> = snapshot.rows.iter().map(|row| row.title.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Version",
+                "Session",
+                "Session ID",
+                "Working directory",
+                "Org",
+                "Email",
+            ]
+        );
+        // Read-only info menu: no row is selectable, so accepting is a no-op.
+        assert!(
+            snapshot.rows.iter().all(|row| !row.is_selectable),
+            "status menu rows must be non-selectable"
+        );
+
+        let row_value = |label: &str| {
+            snapshot
+                .rows
+                .iter()
+                .find(|row| row.title == label)
+                .and_then(|row| row.description.clone())
+                .unwrap_or_else(|| panic!("missing {label} row"))
+        };
+        // The fixture signs in as the test user, so the menu surfaces that
+        // email. No workspace is loaded in the fixture (Org degrades to the
+        // dash placeholder) and there is no conversation yet (Session falls
+        // back to "Untitled").
+        assert_eq!(row_value("Email"), "test_user@warp.dev");
+        assert_eq!(row_value("Org"), "—");
+        assert_eq!(row_value("Session"), "Untitled");
+
+        // Dismissing closes the menu and frees the input-suggestions mode.
+        view.update(&mut app, |view, ctx| {
+            view.status_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
+        });
+        assert!(!app.read(|ctx| view.status_menu.as_ref(ctx).is_open(ctx)));
+    });
+}
+
+#[test]
 fn bootstrap_renders_starting_shell_above_input() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);

@@ -104,6 +104,7 @@ use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
+use crate::status_menu::{TuiStatusMenuEvent, TuiStatusMenuModel};
 use crate::statusline_config_view::{TuiStatuslineConfigEvent, TuiStatuslineConfigView};
 use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
 use crate::terminal_background::probed_colors;
@@ -703,6 +704,7 @@ pub(crate) struct TuiTerminalSessionView {
     model_menu: ModelHandle<TuiModelMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
     mcp_menu: ModelHandle<TuiMcpMenuModel>,
+    status_menu: ModelHandle<TuiStatusMenuModel>,
     completion_menu: ModelHandle<TuiCompletionMenuModel>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
@@ -1470,6 +1472,17 @@ impl TuiTerminalSessionView {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
         });
+        let status_menu = ctx.add_model(|ctx| {
+            TuiStatusMenuModel::new(
+                suggestions_mode.clone(),
+                active_session.clone(),
+                conversation_selection.clone(),
+                ctx,
+            )
+        });
+        ctx.subscribe_to_model(&status_menu, |_, _, _: &TuiStatusMenuEvent, ctx| {
+            ctx.notify();
+        });
         let prompt_and_command_history_menu = ctx.add_model(|ctx| {
             TuiPromptAndCommandHistoryMenuModel::new(
                 input_editor_model.clone(),
@@ -1536,6 +1549,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
+            TuiInlineMenu::new(status_menu.clone()),
             TuiInlineMenu::new(prompt_and_command_history_menu.clone()),
             TuiInlineMenu::new(completion_menu.clone()),
         ];
@@ -1891,6 +1905,7 @@ impl TuiTerminalSessionView {
             model_menu,
             skills_menu,
             mcp_menu,
+            status_menu,
             completion_menu,
             slash_commands_source,
             conversation_selection,
@@ -3788,6 +3803,11 @@ impl TuiTerminalSessionView {
             SlashCommandKind::Mcp => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            SlashCommandKind::Status => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                self.status_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::Exit => {
