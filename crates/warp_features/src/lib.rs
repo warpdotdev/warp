@@ -322,9 +322,6 @@ pub enum FeatureFlag {
     /// Remembers the per-conversation fast-forward state across local session restoration.
     RememberFastForwardState,
 
-    /// Enables the find/replace in code editor
-    CodeFindReplace,
-
     /// Enables file search functionality in command palette
     CommandPaletteFileSearch,
 
