@@ -69,3 +69,17 @@ fn relative_line_numbers_use_starting_line_number_for_active_line_only() {
     assert_eq!(config.display_line_number(LineCount::from(4)), 14);
     assert_eq!(config.display_line_number(LineCount::from(1)), 3);
 }
+
+#[test]
+fn gutter_action_icons_are_hidden_for_embedded_code_review_comments() {
+    let _embedded_comments = FeatureFlag::EmbeddedCodeReviewComments.override_enabled(true);
+
+    assert!(!EditorWrapper::<crate::code::editor::view::CodeEditorView>::should_render_gutter_action_icons());
+}
+
+#[test]
+fn gutter_action_icons_render_without_embedded_code_review_comments() {
+    let _embedded_comments = FeatureFlag::EmbeddedCodeReviewComments.override_enabled(false);
+
+    assert!(EditorWrapper::<crate::code::editor::view::CodeEditorView>::should_render_gutter_action_icons());
+}
