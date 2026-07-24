@@ -283,7 +283,52 @@ fn parse_file_outline(path: &Path) -> anyhow::Result<FileOutline> {
         nix::libc::malloc_trim(0);
     }
 
+    // On macOS with jemalloc, flush this thread's allocator cache so that
+    // freed tree-sitter objects are returned to the arena promptly.  The
+    // arena's dirty-decay timer (configured in app/src/profiling.rs via
+    // `dirty_decay_ms`) will then release the pages back to macOS.
+    // Without this, freed pages linger in the per-thread tcache and are
+    // counted as "internal" anonymous memory in macOS `phys_footprint`.
+    //
+    // See: https://github.com/tree-sitter/tree-sitter/issues/3129
+    #[cfg(all(feature = "jemalloc", target_os = "macos"))]
+    flush_jemalloc_thread_cache();
+
     Ok(FileOutline { symbols })
+}
+
+/// Flushes the current thread's jemalloc tcache, returning cached objects
+/// to the arena so they can be purged by the dirty-decay timer.
+///
+/// This is the macOS+jemalloc equivalent of `malloc_trim(0)` on Linux/glibc:
+/// it ensures that freed tree-sitter allocations are visible to jemalloc's
+/// memory-return machinery rather than sitting in a per-thread cache.
+///
+/// Calling this from rayon worker threads is safe — `thread.tcache.flush`
+/// is a thread-local operation that does not take any global locks.
+#[cfg(all(feature = "jemalloc", target_os = "macos"))]
+fn flush_jemalloc_thread_cache() {
+    // SAFETY: `je_mallctl` is provided by jemalloc at link time (via
+    // tikv-jemallocator in the app crate).  The call is a no-op write that
+    // flushes per-thread cached objects back to the arena.
+    extern "C" {
+        fn je_mallctl(
+            name: *const std::ffi::c_char,
+            oldp: *mut std::ffi::c_void,
+            oldlenp: *mut usize,
+            newp: *mut std::ffi::c_void,
+            newlen: usize,
+        ) -> std::ffi::c_int;
+    }
+    unsafe {
+        let _ = je_mallctl(
+            b"thread.tcache.flush\0".as_ptr() as *const std::ffi::c_char,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        );
+    }
 }
 
 /// Given the content of a file, return all the symbols of interest.
