@@ -20,6 +20,17 @@ use notify_debouncer_full::{
 use warp_errors::report_error;
 use warpui_core::{Entity, ModelContext};
 
+/// Maximum number of directories allowed in a single recursive watch registration.
+/// On Linux, the `notify` crate's inotify backend creates one watch descriptor per
+/// directory. Each watch consumes memory for internal bookkeeping (path storage,
+/// event buffers, HashMap entries). When a directory tree contains hundreds of
+/// thousands of subdirectories (e.g., deep `node_modules` trees or monorepos),
+/// the cumulative memory can reach 10+ GB.
+///
+/// When a directory tree exceeds this threshold, the watch falls back to
+/// `RecursiveMode::NonRecursive` to prevent excessive memory usage.
+const MAX_RECURSIVE_WATCH_DIRECTORIES: usize = 100_000;
+
 #[derive(Debug)]
 enum BackgroundFileWatcherCommand {
     AddPath {
@@ -69,9 +80,34 @@ impl BackgroundFileWatcher {
                     response,
                     recursive_mode,
                 } => {
+                    // On Linux, recursive watches create one inotify descriptor
+                    // per directory, which can consume 10+ GB of memory for very
+                    // large trees. Guard against this by checking the directory
+                    // count before registering.
+                    let effective_mode = if recursive_mode == RecursiveMode::Recursive {
+                        match estimate_directory_count(
+                            &path,
+                            MAX_RECURSIVE_WATCH_DIRECTORIES,
+                        ) {
+                            count if count > MAX_RECURSIVE_WATCH_DIRECTORIES => {
+                                log::warn!(
+                                    "Directory tree at {} contains >{} directories \
+                                     (sampled {count}). Falling back to non-recursive \
+                                     watch to prevent excessive memory usage.",
+                                    path.display(),
+                                    MAX_RECURSIVE_WATCH_DIRECTORIES,
+                                );
+                                RecursiveMode::NonRecursive
+                            }
+                            _ => RecursiveMode::Recursive,
+                        }
+                    } else {
+                        recursive_mode
+                    };
+
                     let _ = response.send(
                         self.notifier
-                            .watch_filtered(path, recursive_mode, filter)
+                            .watch_filtered(path, effective_mode, filter)
                             .inspect_err(|err| {
                                 log::warn!("Failed to watch path: {err:?}");
                             })
@@ -382,4 +418,27 @@ fn deduplicate_and_merge_raw_notifier_events(
     }
 
     Ok(update)
+}
+
+/// Estimates the number of directories under `root` by walking the tree up to
+/// `limit + 1` entries. Returns as soon as the count exceeds `limit`, avoiding
+/// a full traversal of very large trees.
+///
+/// Symlinks are *not* followed to avoid infinite loops. Permission errors and
+/// other I/O failures on individual entries are silently skipped.
+fn estimate_directory_count(root: &Path, limit: usize) -> usize {
+    let mut count: usize = 0;
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if entry.file_type().is_dir() {
+            count += 1;
+            if count > limit {
+                return count;
+            }
+        }
+    }
+    count
 }

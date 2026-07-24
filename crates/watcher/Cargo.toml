@@ -14,3 +14,4 @@ log.workspace = true
 anyhow.workspace = true
 notify-debouncer-full.workspace = true
 futures.workspace = true
+walkdir.workspace = true
