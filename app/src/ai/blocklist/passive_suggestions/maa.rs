@@ -9,6 +9,10 @@ use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::super::controller::{BlocklistAIController, BlocklistAIControllerEvent};
+use super::{
+    PASSIVE_CODE_DIFF_LONG_FILE_BYTE_LIMIT, PASSIVE_CODE_DIFF_LONG_FILE_LINE_LIMIT,
+    PASSIVE_CODE_DIFF_TOTAL_BYTE_LIMIT, PASSIVE_CODE_DIFF_TOTAL_LINE_LIMIT,
+};
 use crate::ai::agent::api::generate_multi_agent_output;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
@@ -310,6 +314,24 @@ impl PassiveSuggestionsModel {
                                     })
                                     .collect();
 
+                                // Skip suggestions whose files are too large to
+                                // display. `set_candidate_diffs` materializes
+                                // every file's full content into an editor
+                                // buffer (and re-materializes it for layout and
+                                // line-ending normalization), so a single large
+                                // file can drive a multi-GB spike. The legacy
+                                // path enforces the same limits before
+                                // requesting; the MAA path must enforce them on
+                                // the returned diffs. Passive suggestions are
+                                // auto-generated, so silently dropping oversized
+                                // ones is safe.
+                                if exceeds_passive_code_diff_size_limits(&diffs) {
+                                    log::warn!(
+                                        "[passive-code-diff] skipping suggestion: file content exceeds passive code diff size limits"
+                                    );
+                                    return;
+                                }
+
                                 ctx.emit(PassiveSuggestionsEvent::NewCodeDiffSuggestion {
                                     diffs,
                                     edit_format_kind,
@@ -589,6 +611,42 @@ impl PassiveSuggestionsModel {
 impl Entity for PassiveSuggestionsModel {
     type Event = PassiveSuggestionsEvent;
 }
+
+/// Returns true if the candidate diffs collectively exceed the passive code
+/// diff size limits, either because a single file is too large or because the
+/// totals across all files are too large. Such suggestions are dropped rather
+/// than displayed, because [`set_candidate_diffs`] materializes every file's
+/// full content into an editor buffer.
+fn exceeds_passive_code_diff_size_limits(diffs: &[FileDiff]) -> bool {
+    contents_exceed_passive_code_diff_size_limits(diffs.iter().map(|diff| diff.base.content.as_str()))
+}
+
+/// Core size-limit check over file contents. Split out from
+/// [`exceeds_passive_code_diff_size_limits`] so it can be unit tested without
+/// constructing [`FileDiff`]s.
+fn contents_exceed_passive_code_diff_size_limits<'a>(
+    contents: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    let mut total_bytes = 0usize;
+    let mut total_lines = 0usize;
+    for content in contents {
+        let byte_count = content.len();
+        let line_count = content.lines().count();
+        if byte_count >= PASSIVE_CODE_DIFF_LONG_FILE_BYTE_LIMIT
+            || line_count >= PASSIVE_CODE_DIFF_LONG_FILE_LINE_LIMIT
+        {
+            return true;
+        }
+        total_bytes += byte_count;
+        total_lines += line_count;
+    }
+    total_bytes >= PASSIVE_CODE_DIFF_TOTAL_BYTE_LIMIT
+        || total_lines >= PASSIVE_CODE_DIFF_TOTAL_LINE_LIMIT
+}
+
+#[cfg(test)]
+#[path = "maa_tests.rs"]
+mod tests;
 
 /// Result of extracting a suggestion from an out-of-band response stream.
 struct StreamExtractionResult {

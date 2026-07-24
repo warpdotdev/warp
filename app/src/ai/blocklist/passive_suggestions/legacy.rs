@@ -15,6 +15,10 @@ use warpui::r#async::{FutureExt as AsyncFutureExt, SpawnedFutureHandle, Timer};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::static_prompt_suggestions::static_suggested_query;
+use super::{
+    PASSIVE_CODE_DIFF_LONG_FILE_BYTE_LIMIT, PASSIVE_CODE_DIFF_LONG_FILE_LINE_LIMIT,
+    PASSIVE_CODE_DIFF_TOTAL_BYTE_LIMIT, PASSIVE_CODE_DIFF_TOTAL_LINE_LIMIT,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::PassiveSuggestionTrigger;
 use crate::ai::agent::{AIAgentExchangeId, CancellationReason};
@@ -44,10 +48,6 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const NUM_TOP_BLOCK_LINES: usize = 100;
 const NUM_BOTTOM_BLOCK_LINES: usize = 200;
-const PASSIVE_CODE_DIFF_LONG_FILE_LINE_LIMIT: usize = 2000;
-const PASSIVE_CODE_DIFF_LONG_FILE_BYTE_LIMIT: usize = 100_000;
-const PASSIVE_CODE_DIFF_TOTAL_LINE_LIMIT: usize = 2500;
-const PASSIVE_CODE_DIFF_TOTAL_BYTE_LIMIT: usize = 150_000;
 const PASSIVE_CODE_DIFF_FILE_READING_TIMEOUT: Duration = Duration::from_secs(2);
 const PASSIVE_CODE_DIFF_AI_QUERY_TIMEOUT: Duration = Duration::from_secs(25);
 
