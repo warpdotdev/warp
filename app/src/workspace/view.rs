@@ -9617,10 +9617,7 @@ impl Workspace {
         let appearance = Appearance::as_ref(app);
 
         // Render the subtle autoupdate UI if autoupdate is ready and there is no incoming prominent update version.
-        if FeatureFlag::Autoupdate.is_enabled()
-            && FeatureFlag::AutoupdateUIRevamp.is_enabled()
-            && ChannelState::show_autoupdate_menu_items()
-        {
+        if FeatureFlag::Autoupdate.is_enabled() && ChannelState::show_autoupdate_menu_items() {
             match autoupdate::get_update_state(app) {
                 AutoupdateStage::UpdateReady { new_version, .. }
                 | AutoupdateStage::UpdatedPendingRestart { new_version }
@@ -21555,8 +21552,7 @@ impl Workspace {
 
         // Render the subtle autoupdate UI if autoupdate is ready and there is no incoming prominent update version.
         let autoupdate_stage = autoupdate::get_update_state(ctx);
-        if FeatureFlag::AutoupdateUIRevamp.is_enabled()
-            && autoupdate_stage.ready_for_update()
+        if autoupdate_stage.ready_for_update()
             && autoupdate_stage
                 .available_new_version()
                 .map(|version| {
@@ -21919,13 +21915,12 @@ impl Workspace {
         let autoupdate_stage = autoupdate::get_update_state(app);
         // Render the prominent autoupdate pill if autoupdate is ready and the current version is behind a prominent update version.
         if autoupdate_stage.ready_for_update()
-            && (!FeatureFlag::AutoupdateUIRevamp.is_enabled()
-                || autoupdate_stage
-                    .available_new_version()
-                    .map(|version| {
-                        is_incoming_version_past_current(version.last_prominent_update.as_deref())
-                    })
-                    .unwrap_or(false))
+            && autoupdate_stage
+                .available_new_version()
+                .map(|version| {
+                    is_incoming_version_past_current(version.last_prominent_update.as_deref())
+                })
+                .unwrap_or(false)
         {
             let pill = ConstrainedBox::new(
                 Container::new(

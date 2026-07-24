@@ -531,7 +531,6 @@ default = [
     "suggested_rules",
     "default_waterfall_mode",
     "am_workflows",
-    "autoupdate_ui_revamp",
     "render_agent_mode_output_markdown",
     "agent_mode_primary_xml",
     "agent_mode_pre_plan_xml",
@@ -896,7 +895,6 @@ partial_next_command_suggestions = []
 drive_objects_as_context = []
 iterm_images = []
 validate_autosuggestions = []
-autoupdate_ui_revamp = []
 warp_packs = []
 suggested_rules = []
 command_correction_key = []
