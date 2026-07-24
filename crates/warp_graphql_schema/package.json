@@ -14,6 +14,7 @@
     "typescript": "^5.4.3"
   },
   "resolutions": {
+    "brace-expansion": "^2.1.2",
     "immutable": "3.8.3",
     "lodash": "4.18.1",
     "@babel/core": "7.29.6"
