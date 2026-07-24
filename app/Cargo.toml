@@ -529,7 +529,6 @@ default = [
     "warp_packs",
     "ai_rules",
     "suggested_rules",
-    "default_waterfall_mode",
     "am_workflows",
     "autoupdate_ui_revamp",
     "render_agent_mode_output_markdown",
@@ -715,7 +714,6 @@ embedded_code_review_comments = []
 agent_management_view = []
 agent_management_details_view = []
 interactive_conversation_management_view = []
-default_waterfall_mode = []
 enforce_revisions_to_cloud_objects = []
 suggested_agent_mode_workflows = []
 ssh_enable_host_denylist_in_settings = []
