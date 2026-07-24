@@ -1128,10 +1128,18 @@ pub enum PaneEvent {
     ReplaceWithCodePane {
         path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
+        /// Vertical scroll fraction (`0..=1`) captured from the outgoing pane, to restore on the
+        /// new pane. `None` scrolls to the top. Wrapped in `OrderedFloat` so `PaneEvent` can
+        /// still derive `Eq`.
+        scroll_fraction: Option<ordered_float::OrderedFloat<f32>>,
     },
     #[cfg(feature = "local_fs")]
     ReplaceWithFilePane {
         path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
+        /// Vertical scroll fraction (`0..=1`) captured from the outgoing pane, to restore on the
+        /// new pane. `None` scrolls to the top. Wrapped in `OrderedFloat` so `PaneEvent` can
+        /// still derive `Eq`.
+        scroll_fraction: Option<ordered_float::OrderedFloat<f32>>,
     },
 }
