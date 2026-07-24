@@ -163,6 +163,32 @@ impl PaneContent for NotebookPane {
     fn is_pane_being_dragged(&self, ctx: &AppContext) -> bool {
         self.view.as_ref(ctx).is_being_dragged()
     }
+
+    fn scroll_snapshot(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<crate::workspace::nav_stack::ScrollSnapshot> {
+        let notebook_view = self.notebook_view(ctx);
+        let render_state = notebook_view.as_ref(ctx).editor_render_state(ctx);
+        let snapshot = render_state.as_ref(ctx).snapshot_scroll_position();
+        Some(crate::workspace::nav_stack::ScrollSnapshot::Editor(
+            snapshot,
+        ))
+    }
+
+    fn restore_scroll(
+        &self,
+        snapshot: &crate::workspace::nav_stack::ScrollSnapshot,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) {
+        if let crate::workspace::nav_stack::ScrollSnapshot::Editor(editor_snapshot) = snapshot {
+            let notebook_view = self.notebook_view(ctx);
+            let render_state = notebook_view.as_ref(ctx).editor_render_state(ctx);
+            render_state.update(ctx, |rs, _| {
+                rs.scroll_to(*editor_snapshot);
+            });
+        }
+    }
 }
 
 /// Subscribe to link events from a notebook view.
@@ -241,6 +267,16 @@ fn handle_notebook_event(
             cloud_object_type_and_id: *cloud_object_type_and_id,
             invitee_email: invitee_email.clone(),
         }),
+        NotebookEvent::UserScrolled {
+            pre_scroll_snapshot,
+        } => {
+            ctx.emit(crate::pane_group::Event::PaneUserScrolled {
+                pane_id,
+                pre_scroll_snapshot: crate::workspace::nav_stack::ScrollSnapshot::Editor(
+                    *pre_scroll_snapshot,
+                ),
+            });
+        }
         NotebookEvent::AttachPlanAsContext(ai_document_id) => {
             ctx.emit(crate::pane_group::Event::AttachPlanAsContext {
                 ai_document_id: *ai_document_id,

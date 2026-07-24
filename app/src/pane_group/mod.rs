@@ -606,7 +606,17 @@ pub enum Event {
         cloud_object_type_and_id: CloudObjectTypeAndId,
         space: Space,
     },
-    PaneFocused,
+    PaneFocused {
+        previous_pane_id: PaneId,
+    },
+    PaneUserScrolled {
+        pane_id: PaneId,
+        pre_scroll_snapshot: crate::workspace::nav_stack::ScrollSnapshot,
+    },
+    PaneLspNavigated {
+        pane_id: PaneId,
+        pre_scroll_snapshot: crate::workspace::nav_stack::ScrollSnapshot,
+    },
     DroppedOnTabBar {
         origin: ActionOrigin,
         pane_id: PaneId,
@@ -4205,6 +4215,18 @@ impl PaneGroup {
         self.pane_contents.contains_key(&pane_id)
     }
 
+    /// Get the [`CodeView`] within the pane at `pane_index`, if that pane is a code pane.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn code_view_at_pane_index(
+        &self,
+        pane_index: usize,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<crate::code::view::CodeView>> {
+        self.content_by_pane_index(pane_index)
+            .and_then(|pane| pane.as_any().downcast_ref::<CodePane>())
+            .map(|pane| pane.file_view(ctx))
+    }
+
     /// Get the notebook view within the pane at `pane_index`.
     #[cfg(any(test, feature = "integration_tests"))]
     pub fn notebook_view_at_pane_index(
@@ -4288,6 +4310,10 @@ impl PaneGroup {
 
     fn content_by_pane_id(&self, pane_id: PaneId) -> Option<&dyn AnyPaneContent> {
         self.pane_contents.get(&pane_id).map(|pane| pane.as_ref())
+    }
+
+    pub fn pane_content(&self, pane_id: PaneId) -> Option<&dyn PaneContent> {
+        self.pane_contents.get(&pane_id).map(|pane| pane.as_pane())
     }
 
     fn terminal_session_by_pane_index(&self, index: usize) -> Option<&TerminalPane> {
@@ -4436,6 +4462,10 @@ impl PaneGroup {
             ctx.emit(Event::CloseSharedSessionPaneRequested { pane_id });
             return;
         }
+        let window_id = ctx.window_id();
+        crate::workspace::nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| {
+            stack.retain(|entry| entry.window_id != window_id || entry.pane_id != pane_id);
+        });
 
         let summary = UnsavedStateSummary::for_pane(self, pane_id, ctx);
         if summary.save_unsaved_code_and_should_warn(ctx)
@@ -4763,8 +4793,9 @@ impl PaneGroup {
                 pane.detach(self, DetachType::HiddenForClose, ctx);
 
                 let pane_group_handle = ctx.handle();
+                let window_id = ctx.window_id();
                 UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
-                    stack.handle_pane_closed_by_id(pane_group_handle, pane_id, ctx);
+                    stack.handle_pane_closed_by_id(pane_group_handle, window_id, pane_id, ctx);
                 });
                 self.hide_closed_pane(pane_id, ctx);
             }
@@ -4950,8 +4981,17 @@ impl PaneGroup {
         if success {
             // For permanent replacements, clean up the original pane
             if !is_temporary {
+                let window_id = ctx.window_id();
                 self.clean_up_pane(original_pane_id, ctx);
                 self.pane_contents.remove(&original_pane_id);
+                crate::workspace::nav_stack::NavigationStack::handle(ctx).update(
+                    ctx,
+                    |stack, _| {
+                        stack.retain(|entry| {
+                            entry.window_id != window_id || entry.pane_id != original_pane_id
+                        });
+                    },
+                );
             }
             self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(
                 replacement_pane_id,
@@ -5467,6 +5507,10 @@ impl PaneGroup {
         // Drop any transitive-share tracking entry for this pane so the
         // map doesn't accumulate stale ids.
         self.forget_transitively_shared_pane(pane_id);
+        let window_id = ctx.window_id();
+        crate::workspace::nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| {
+            stack.retain(|entry| entry.window_id != window_id || entry.pane_id != pane_id);
+        });
 
         ctx.notify();
         ctx.emit(Event::TerminalViewStateChanged);
@@ -5773,13 +5817,9 @@ impl PaneGroup {
     }
 
     pub fn focus_pane_by_id(&mut self, id: PaneId, ctx: &mut ViewContext<Self>) {
-        // If user clicks on a pane quickly after dragging the border, a race condition
-        // could happen where the mouse down movement is considered as part of dragging.
-        // We clear the dragging state here to avoid such conditions.
         self.dragged_border = None;
         if self.focus_pane_and_record_in_history(id, ctx) {
             ctx.emit(Event::AppStateChanged);
-            ctx.emit(Event::PaneFocused);
         }
     }
 
@@ -7475,12 +7515,11 @@ impl PaneGroup {
         let maybe_origin_terminal_view =
             self.terminal_view_from_pane_id(self.focused_pane_id(ctx), ctx);
 
-        if self.focused_pane_id(ctx) == id
-            // As a safeguard, don't allow switching to unknown panes.
-            || !self.pane_contents.contains_key(&id)
-        {
+        if self.focused_pane_id(ctx) == id || !self.pane_contents.contains_key(&id) {
             return false;
         }
+
+        let previous_pane_id = self.focused_pane_id(ctx);
 
         self.focus_state.update(ctx, |focus_state, ctx| {
             focus_state.set_focused_pane(id, ctx);
@@ -7503,13 +7542,18 @@ impl PaneGroup {
             });
         }
 
-        // There are some instances of focusing a pane where we don't actually want to focus the pane contents
-        // immediately within the UI framework. For instance, if this pane is being focused in the pane
-        // group as a result of another pane being move, then we don't actually need the contents
-        // to take focus in the ui framework.
         if focus_pane_contents {
             self.focus(ctx);
         }
+
+        let is_navigating = FeatureFlag::NavigationStack.is_enabled()
+            && crate::workspace::nav_stack::NavigationStack::handle(ctx)
+                .as_ref(ctx)
+                .is_navigating();
+        if !is_navigating {
+            ctx.emit(Event::PaneFocused { previous_pane_id });
+        }
+
         true
     }
 
@@ -7951,7 +7995,6 @@ impl PaneGroup {
                     // state, and not manipulate application focus.
                     self.focus_pane(pane_id, false, ctx);
                     self.update_pane_history(pane_id);
-                    ctx.emit(Event::PaneFocused);
                 };
                 break;
             }

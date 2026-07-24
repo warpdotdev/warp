@@ -1994,6 +1994,9 @@ pub enum Event {
     /// so the executor can disambiguate per-request pendings when multiple
     /// StartAgent requests are in flight in parallel.
     StartAgentConversation(StartAgentRequest),
+    UserScrolled {
+        pre_scroll_position: ScrollPosition,
+    },
     /// Emitted when the user clicks a child agent row in the status card to reveal
     /// its hidden pane.
     RevealChildAgent {
@@ -2460,6 +2463,12 @@ pub struct TerminalView {
 
     /// The current scroll position.
     scroll_position: ScrollState,
+
+    /// A scroll position that should be applied after the next layout cycle.
+    /// This is used by navigation-stack restoration so that the restored
+    /// position is not overwritten by the `AfterResize` scroll update that
+    /// fires when a previously-hidden tab becomes visible again.
+    pending_nav_scroll_restore: Option<ScrollPosition>,
 
     /// Cached scroll position from before entering agent view, used to restore on exit.
     scroll_position_before_entering_agent_view: Option<ScrollPosition>,
@@ -4248,6 +4257,7 @@ impl TerminalView {
             snackbar_header_state: Default::default(),
             colors,
             scroll_position: ScrollState::new(ScrollPosition::FollowsBottomOfMostRecentBlock),
+            pending_nav_scroll_restore: None,
             scroll_position_before_entering_agent_view: None,
             blocklist_vertical_scroll_state: Default::default(),
             alt_screen_vertical_scroll_state: Default::default(),
@@ -9465,6 +9475,7 @@ impl TerminalView {
     }
 
     fn scroll(&mut self, delta: Lines, ctx: &mut ViewContext<Self>) {
+        let pre_scroll_position = self.scroll_position.position();
         self.dismiss_tooltips(ctx);
         self.update_scroll_position_locking(
             ScrollPositionUpdate::AfterScrollEvent {
@@ -9472,6 +9483,11 @@ impl TerminalView {
             },
             ctx,
         );
+        if self.scroll_position.position() != pre_scroll_position {
+            ctx.emit(Event::UserScrolled {
+                pre_scroll_position,
+            });
+        }
         ctx.notify();
     }
 
@@ -16097,6 +16113,11 @@ impl TerminalView {
         let size_update = SizeUpdateBuilder::after_layout(*self.size_info, size).build(self, ctx);
         self.resize_internal(size_update, ctx);
 
+        if let Some(position) = self.pending_nav_scroll_restore.take() {
+            self.scroll_position.set_position(position);
+            ctx.notify();
+        }
+
         // Update the height of the "gap" - the space we would need to clear
         // in the terminal to accommodate a clear or ctrl-L.
         let mut model = self.model.lock();
@@ -16247,6 +16268,14 @@ impl TerminalView {
 
     pub fn scroll_position(&self) -> ScrollPosition {
         self.scroll_position.position()
+    }
+
+    pub fn set_scroll_position(&mut self, position: ScrollPosition) {
+        self.scroll_position.set_position(position);
+    }
+
+    pub fn set_pending_nav_scroll_restore(&mut self, position: ScrollPosition) {
+        self.pending_nav_scroll_restore = Some(position);
     }
 
     pub fn shell_family(&self, ctx: &mut ViewContext<Self>) -> ShellFamily {

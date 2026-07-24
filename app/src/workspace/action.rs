@@ -825,6 +825,9 @@ pub enum WorkspaceAction {
         image: lightbox::LightboxImage,
     },
     StartAgentOnboardingTutorial(OnboardingTutorial),
+    NavigateBack,
+    NavigateForward,
+    ClearNavigationStack,
     ShowSessionConfigModal,
     DismissSessionConfigTabConfigChip,
     /// Dismiss the non-blocking feature-intro popover without requiring it to hold focus.
@@ -1180,6 +1183,9 @@ impl WorkspaceAction {
             | OpenLightbox { .. }
             | UpdateLightboxImage { .. }
             | StartAgentOnboardingTutorial(_)
+            | NavigateBack
+            | NavigateForward
+            | ClearNavigationStack
             | ShowSessionConfigModal
             | DismissSessionConfigTabConfigChip
             | DismissFeatureIntroModal

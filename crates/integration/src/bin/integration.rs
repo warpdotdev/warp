@@ -485,6 +485,36 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_keyboard_protocol_modifier_self_bit);
     register_test!(test_keyboard_protocol_alternate_keys_and_text);
 
+    // Navigation stack tests
+    register_test!(test_nav_stack_empty_on_startup);
+    register_test!(test_nav_stack_feature_flag_gates_bindings_and_buttons);
+    register_test!(test_nav_stack_navigation_buttons_setting_toggle);
+    register_test!(test_nav_stack_command_palette_back_forward);
+    register_test!(test_nav_stack_command_palette_clear);
+    register_test!(test_nav_stack_clear_command_preserves_tab_and_scroll_context);
+    register_test!(test_nav_stack_clear_command_preserves_focused_pane);
+    register_test!(test_nav_stack_clear_command_allows_new_history_afterward);
+    register_test!(test_nav_stack_tab_switch_records_and_restores);
+    register_test!(test_nav_stack_tab_bar_buttons_navigate);
+    register_test!(test_nav_stack_new_action_clears_forward);
+    register_test!(test_nav_stack_feature_flag_gates_recording);
+    register_test!(test_nav_stack_multiple_back_forward);
+    register_test!(test_nav_stack_pane_operations_no_entry);
+    register_test!(test_nav_stack_pane_focus_tracking);
+    register_test!(test_nav_stack_pane_focus_preserved_across_tabs);
+    register_test!(test_nav_stack_multi_window_isolation);
+    register_test!(test_nav_stack_cross_window_focus);
+    register_test!(test_nav_stack_scroll_position_restored);
+    register_test!(test_nav_stack_session_restore_no_entries);
+    register_test!(test_nav_stack_forward_after_back);
+    register_test!(test_nav_stack_pane_focus_scroll_captured);
+    register_test!(test_nav_stack_scroll_within_pane);
+    register_test!(test_nav_stack_scroll_updates_back_button_state);
+    register_test!(test_nav_stack_code_editor_scroll);
+    register_test!(test_nav_stack_restores_closed_pane_when_available);
+    register_test!(test_nav_stack_restores_closed_tab_when_available);
+    register_test!(test_nav_stack_restores_closed_window_when_available);
+    register_test!(test_nav_stack_prunes_expired_closed_tab_entries);
     // Video recording test (manual only)
     register_test!(test_video_recording);
 

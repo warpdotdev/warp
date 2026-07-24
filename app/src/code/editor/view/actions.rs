@@ -871,11 +871,30 @@ impl TypedActionView for CodeEditorView {
                     }
                 }
             }
-            ScrollVertical(delta) => self.model.update(ctx, |model, ctx| {
-                model.render_state().update(ctx, |render_state, ctx| {
-                    render_state.scroll(*delta, ctx);
-                })
-            }),
+            ScrollVertical(delta) => {
+                let pre = self
+                    .model
+                    .as_ref(ctx)
+                    .render_state()
+                    .as_ref(ctx)
+                    .snapshot_scroll_position();
+                self.model.update(ctx, |model, ctx| {
+                    model.render_state().update(ctx, |render_state, ctx| {
+                        render_state.scroll(*delta, ctx);
+                    })
+                });
+                let post = self
+                    .model
+                    .as_ref(ctx)
+                    .render_state()
+                    .as_ref(ctx)
+                    .snapshot_scroll_position();
+                if pre != post {
+                    ctx.emit(CodeEditorEvent::UserScrolled {
+                        pre_scroll_snapshot: pre,
+                    });
+                }
+            }
             ScrollHorizontal(delta) => self.model.update(ctx, |model, ctx| {
                 model.render_state().update(ctx, |render_state, ctx| {
                     render_state.scroll_horizontal(*delta, ctx);

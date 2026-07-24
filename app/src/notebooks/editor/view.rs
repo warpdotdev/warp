@@ -935,6 +935,9 @@ fn mermaid_diagram_needs_loaded_layout(
 pub enum EditorViewEvent {
     Edited,
     Focused,
+    UserScrolled {
+        pre_scroll_snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+    },
     /// Cmd/Ctrl+Enter was pressed (emitted in comment editor mode).
     CmdEnter,
     Navigate(NavigationKey),
@@ -1697,11 +1700,28 @@ impl RichTextEditorView {
 
     /// Scroll by `delta` pixels.
     fn scroll(&mut self, delta: Pixels, ctx: &mut ViewContext<Self>) {
+        let pre = self
+            .model
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .snapshot_scroll_position();
         self.model.update(ctx, |model, ctx| {
             model.render_state().update(ctx, |render_state, ctx| {
                 render_state.scroll(delta, ctx);
             })
-        })
+        });
+        let post = self
+            .model
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .snapshot_scroll_position();
+        if pre != post {
+            ctx.emit(EditorViewEvent::UserScrolled {
+                pre_scroll_snapshot: pre,
+            });
+        }
     }
 
     /// Move the cursor to the start of the buffer.

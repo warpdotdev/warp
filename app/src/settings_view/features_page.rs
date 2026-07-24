@@ -108,7 +108,9 @@ use crate::util::bindings::{
 };
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::workspace::WorkspaceAction;
-use crate::workspace::tab_settings::{NewTabPlacement, TabSettings, TabSettingsChangedEvent};
+use crate::workspace::tab_settings::{
+    NewTabPlacement, ShowNavigationButtons, TabSettings, TabSettingsChangedEvent,
+};
 use crate::{GlobalResourceHandles, send_telemetry_from_ctx, themes};
 
 cfg_if::cfg_if! {
@@ -702,6 +704,18 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         }
     }
 
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "navigation buttons in tab bar",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleShowNavigationButtons,
+            )),
+            context,
+            flags::SHOW_NAVIGATION_BUTTONS_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::NavigationStack.is_enabled()),
+    );
+
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(toggle_binding_pairs, app);
 
     app.register_fixed_bindings([FixedBinding::empty(
@@ -808,6 +822,7 @@ pub enum FeaturesPageAction {
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
     TogglePreserveInputFocusOnBlockSelection,
+    ToggleShowNavigationButtons,
     ToggleAgentInAppNotifications,
     MakeWarpDefaultTerminal,
     SetCodeEditorLineNumberMode(CodeEditorLineNumberMode),
@@ -1319,6 +1334,10 @@ impl FeaturesPageAction {
                 value: to_string(
                     *GeneralSettings::as_ref(ctx).auto_open_code_review_pane_on_first_agent_change,
                 ),
+            },
+            Self::ToggleShowNavigationButtons => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleShowNavigationButtons".to_string(),
+                value: to_string(*TabSettings::as_ref(ctx).show_navigation_buttons),
             },
             Self::TogglePreserveInputFocusOnBlockSelection => {
                 let settings = BlockListSettings::as_ref(ctx);
@@ -2145,6 +2164,15 @@ impl TypedActionView for FeaturesPageView {
                     );
                 });
             }
+            ToggleShowNavigationButtons => {
+                TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
+                    report_if_error!(
+                        tab_settings
+                            .show_navigation_buttons
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+            }
             SetNotificationToastDuration => {
                 let user_input = self
                     .notification_toast_duration_editor
@@ -2808,6 +2836,10 @@ impl FeaturesPageView {
             && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
         {
             general_widgets.push(Box::new(AutoOpenCodeReviewPaneWidget::default()));
+        }
+
+        if FeatureFlag::NavigationStack.is_enabled() {
+            general_widgets.push(Box::new(NavigationButtonsWidget::default()));
         }
 
         if DefaultTerminal::can_warp_become_default() {
@@ -7717,6 +7749,57 @@ impl SettingsWidget for GraphicsBackendWidget {
     }
 }
 
+#[derive(Default)]
+struct NavigationButtonsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for NavigationButtonsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "navigation back forward buttons tab bar history"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+        render_body_item::<FeaturesPageAction>(
+            "Show navigation buttons in tab bar".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ShowNavigationButtons::storage_key(),
+                ShowNavigationButtons::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.show_navigation_buttons)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleShowNavigationButtons);
+                })
+                .finish(),
+            Some(
+                "Show Go Back and Go Forward buttons in the tab bar. Hiding the buttons does \
+                not disable navigation — the keyboard shortcuts and Command Palette actions \
+                still work."
+                    .into(),
+            ),
+        )
+    }
+}
 #[derive(Default)]
 struct AsyncFindWidget {
     switch_state: SwitchStateHandle,

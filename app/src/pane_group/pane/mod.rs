@@ -640,6 +640,20 @@ pub trait PaneContent: 'static {
     fn pane_configuration(&self) -> ModelHandle<PaneConfiguration>;
 
     fn is_pane_being_dragged(&self, ctx: &AppContext) -> bool;
+
+    fn scroll_snapshot(
+        &self,
+        _ctx: &AppContext,
+    ) -> Option<crate::workspace::nav_stack::ScrollSnapshot> {
+        None
+    }
+
+    fn restore_scroll(
+        &self,
+        _snapshot: &crate::workspace::nav_stack::ScrollSnapshot,
+        _ctx: &mut ViewContext<PaneGroup>,
+    ) {
+    }
 }
 
 /// Trait for untyped pane contents. This is a workaround for trait upcasting being

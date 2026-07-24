@@ -576,6 +576,16 @@ define_settings_group!(TabSettings, settings: [
     new_tab_placement: NewTabPlacement,
     workspace_decoration_visibility: WorkspaceDecorationVisibility,
     close_button_position: TabCloseButtonPosition,
+    show_navigation_buttons: ShowNavigationButtons {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.tabs.show_navigation_buttons",
+        description: "Whether to show navigation buttons in the tab bar.",
+    },
     directory_tab_colors: DirectoryTabColors,
 ]);
 

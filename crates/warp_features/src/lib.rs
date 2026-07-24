@@ -738,6 +738,11 @@ pub enum FeatureFlag {
     /// model chip, then restores that prompt when the selector closes.
     RestorePromptOnInlineModelSelectorSearch,
 
+    /// Enables the "Full Terminal Use" tab in the inline model picker.
+    ModelPickerFTUTab,
+
+    /// Enables IDE-style forward/backward navigation stack.
+    NavigationStack,
     /// Enables associating a tab color with a directory so tabs automatically
     /// adopt the configured color when their working directory matches.
     DirectoryTabColors,
@@ -999,6 +1004,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
+    FeatureFlag::ModelPickerFTUTab,
+    FeatureFlag::NavigationStack,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

@@ -14,6 +14,7 @@ pub mod hoa_onboarding;
 mod home;
 mod lightbox_view;
 mod native_modal;
+pub mod nav_stack;
 mod one_time_modal_model;
 mod registry;
 pub mod rewind_confirmation_dialog;
@@ -83,6 +84,7 @@ pub fn init(app: &mut AppContext) {
     modal::init(app);
     native_modal::init(app);
     lightbox_view::init(app);
+    nav_stack::init(app);
     rewind_confirmation_dialog::init(app);
     delete_conversation_confirmation_dialog::init(app);
     crate::tab_configs::remove_confirmation_dialog::init(app);
@@ -926,6 +928,46 @@ pub fn init(app: &mut AppContext) {
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
+    ]);
+
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "workspace:navigate_back",
+            BindingDescription::new("Go Back").with_search_keywords([
+                "navigate",
+                "navigation",
+                "history",
+            ]),
+            WorkspaceAction::NavigateBack,
+        )
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("LongRunningCommand"))
+        .with_enabled(|| FeatureFlag::NavigationStack.is_enabled())
+        .with_mac_key_binding("ctrl--")
+        .with_linux_or_windows_key_binding("alt-left"),
+        EditableBinding::new(
+            "workspace:navigate_forward",
+            BindingDescription::new("Go Forward").with_search_keywords([
+                "navigate",
+                "navigation",
+                "history",
+            ]),
+            WorkspaceAction::NavigateForward,
+        )
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("LongRunningCommand"))
+        .with_enabled(|| FeatureFlag::NavigationStack.is_enabled())
+        .with_mac_key_binding("ctrl-shift--")
+        .with_linux_or_windows_key_binding("alt-right"),
+        EditableBinding::new(
+            "workspace:clear_navigation_stack",
+            BindingDescription::new("Clear Navigation Stack")
+                .with_search_keywords(["navigate", "history"]),
+            WorkspaceAction::ClearNavigationStack,
+        )
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace"))
+        .with_enabled(|| FeatureFlag::NavigationStack.is_enabled()),
     ]);
 
     // TODO(PLAT-113): Support a11y on non-MacOS platforms
