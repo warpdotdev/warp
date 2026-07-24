@@ -52,12 +52,14 @@ pub fn validate_agent_mode_base_model_id(
 ///
 /// This is the pure core of [`validate_agent_mode_base_model_id`], extracted so
 /// the two distinct error cases are unit-testable without an app context. When
-/// `list_unavailable` is true (the most recent authed model-list fetch failed
-/// or returned an empty list) and the id is not among the (cached/default or
-/// custom-endpoint) choices, the error points at the server/model-list
-/// availability rather than blaming the user's model id — which previously hid
-/// the real server issue. A genuinely-invalid id against a non-empty, available
-/// list still produces the existing "Unknown model id" error with suggestions.
+/// `list_unavailable` is true (the most recent authed model-list fetch failed —
+/// which includes a server response with an empty agent-mode list, since
+/// `AvailableLLMs::new` rejects empty choices and surfaces that as an `Err`)
+/// and the id is not among the (cached/default or custom-endpoint) choices, the
+/// error points at the server/model-list availability rather than blaming the
+/// user's model id — which previously hid the real server issue. A
+/// genuinely-invalid id against a non-empty, available list still produces the
+/// existing "Unknown model id" error with suggestions.
 fn classify_agent_mode_base_model_id(
     model_id: &str,
     valid_ids: &[LLMId],

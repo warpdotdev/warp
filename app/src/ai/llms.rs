@@ -725,10 +725,14 @@ struct AvailableLLMsUpdate {
 /// use as well as the user's preferred LLM for Agent Mode.
 pub struct LLMPreferences {
     models_by_feature: ModelsByFeature,
-    /// Whether the most recent authed agent-mode model-list fetch failed (or
-    /// returned an empty list), meaning the server-provided model list is
-    /// currently unavailable. Set in [`Self::refresh_authed_models`] on a fetch
-    /// error and cleared on the next successful authed fetch. Lets validators
+    /// Whether the most recent authed agent-mode model-list fetch failed,
+    /// meaning the server-provided model list is currently unavailable. Set
+    /// in [`Self::refresh_authed_models`] on a fetch error — which also covers
+    /// a server response whose agent-mode list is empty, since
+    /// [`AvailableLLMs::new`] rejects empty choices and surfaces that as an
+    /// `Err` — and cleared on the next successful model-list update in
+    /// [`Self::on_server_update`] (the shared success path for the authed
+    /// fetch, login, and workspace-metadata updates). Lets validators
     /// distinguish "model list unavailable (server unhealthy)" from "id
     /// genuinely not in a valid list" instead of blaming the user's model id
     /// when the list never populated.
@@ -1433,16 +1437,20 @@ impl LLMPreferences {
     }
 
     /// Returns `true` when the most recent authed agent-mode model-list fetch
-    /// failed (or returned an empty list), so the server-provided model list is
-    /// currently unavailable. Validators use this to surface a
-    /// server/model-list-availability error instead of blaming the user's model
-    /// id when the list never populated (e.g. the server is unhealthy).
+    /// failed, so the server-provided model list is currently unavailable (a
+    /// server response with an empty agent-mode list also fails here, since
+    /// [`AvailableLLMs::new`] rejects empty choices). Validators use this to
+    /// surface a server/model-list-availability error instead of blaming the
+    /// user's model id when the list never populated (e.g. the server is
+    /// unhealthy).
     pub fn agent_mode_models_unavailable(&self) -> bool {
         self.agent_mode_models_unavailable
     }
 
     /// Sets whether the authed agent-mode model list is currently unavailable.
-    /// Called from the authed fetch path on success/failure and from tests.
+    /// Called from the authed fetch path on failure, from
+    /// [`Self::on_server_update`] on any successful model-list update, and
+    /// from tests.
     pub(crate) fn set_agent_mode_models_unavailable(&mut self, unavailable: bool) {
         self.agent_mode_models_unavailable = unavailable;
     }
@@ -1683,6 +1691,9 @@ impl LLMPreferences {
                     // A successful authed fetch means the server-provided model
                     // list is available again; clear the unavailable flag a
                     // prior failed fetch may have set (see the `Err` branch).
+                    // `on_server_update` clears it too, but this branch skips
+                    // `on_server_update` when the list is unchanged, so clear
+                    // unconditionally to cover that case as well.
                     me.set_agent_mode_models_unavailable(false);
                 }
                 Err(e) => {
@@ -1735,6 +1746,17 @@ impl LLMPreferences {
     }
 
     fn on_server_update(&mut self, update: ModelsByFeature, ctx: &mut ModelContext<Self>) {
+        // A successful model-list update means the server-provided agent-mode
+        // list is available again, so clear the unavailable flag a prior failed
+        // fetch may have set. This is the shared success path for every
+        // model-list refresh — the authed fetch (`refresh_authed_models`), the
+        // login/workspace-metadata updates (`update_feature_model_choices`),
+        // and the pre-login public fetch — so clearing here (rather than only
+        // in `refresh_authed_models`'s Ok branch) ensures a later successful
+        // login/workspace update can't leave the flag stuck at `true`, which
+        // would misreport a genuinely-invalid id as "model list unavailable".
+        self.set_agent_mode_models_unavailable(false);
+
         let has_existing_persisted_config = get_cached_models(ctx).is_some();
 
         let old = std::mem::replace(&mut self.models_by_feature, update);
