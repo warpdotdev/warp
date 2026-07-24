@@ -120,9 +120,11 @@ use session_sharing_protocol::sharer::{
     RoleUpdateReason, SessionEndedReason, SessionRetentionReason,
 };
 use settings::{Setting, ToggleableSetting};
-use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 pub(crate) use shared_session::cloud_conversation_continuation::{
     AIQueryRouting, resolve_ai_query_routing,
+};
+use shared_session::cloud_conversation_continuation::{
+    CloudConversationContinuationUiState, TombstoneCta,
 };
 use shared_session::{SharedSessionAdapter, Viewer};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
@@ -2711,6 +2713,14 @@ pub struct TerminalView {
     /// The inserted conversation-ended tombstone, if this view currently has one.
     conversation_ended_tombstone_view_id: Option<EntityId>,
 
+    /// The CTA shown by the current conversation-ended tombstone, if any.
+    /// `None` means no tombstone is currently shown.
+    /// `Some(None)` means a tombstone is shown without a CTA button.
+    /// `Some(Some(cta))` means a tombstone is shown with the given CTA button.
+    /// Used to skip unnecessary remove+reinsert cycles when the CTA has not changed
+    /// (e.g. on repeated task-data-refresh events for 3p runs).
+    conversation_ended_tombstone_cta: Option<Option<TombstoneCta>>,
+
     /// The ID of the containing window.
     window_id: WindowId,
 
@@ -4340,6 +4350,7 @@ impl TerminalView {
             pending_share_source: None,
             auto_stop_sharing_on_cli_end: false,
             conversation_ended_tombstone_view_id: None,
+            conversation_ended_tombstone_cta: None,
             ai_input_model,
             ai_context_model,
             window_id,

@@ -1782,6 +1782,12 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         if self.conversation_ended_tombstone_view_id.is_some() {
+            // If the existing tombstone already shows the same CTA, skip the remove+reinsert
+            // to prevent the tombstone from flickering on repeated task-data-refresh events
+            // (e.g. 3p runs where TasksUpdated fires frequently while task data is loaded).
+            if self.conversation_ended_tombstone_cta == Some(tombstone_cta) {
+                return;
+            }
             self.remove_conversation_ended_tombstone(ctx);
         }
         let task_id = self.ambient_agent_task_id_for_details_panel(ctx);
@@ -1815,6 +1821,7 @@ impl TerminalView {
             });
         self.insert_rich_content(None, tombstone_view_handle, None, insertion_position, ctx);
         self.conversation_ended_tombstone_view_id = Some(tombstone_view_id);
+        self.conversation_ended_tombstone_cta = Some(tombstone_cta);
     }
 
     pub(crate) fn insert_conversation_ended_tombstone_with_resolved_cta(
@@ -1850,6 +1857,7 @@ impl TerminalView {
         let Some(view_id) = self.conversation_ended_tombstone_view_id.take() else {
             return;
         };
+        self.conversation_ended_tombstone_cta = None;
         self.model
             .lock()
             .block_list_mut()
