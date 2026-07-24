@@ -705,6 +705,10 @@ impl QueuedPromptsPanelView {
 
 #[cfg(test)]
 impl QueuedPromptsPanelView {
+    /// Test accessor for dispatching keystrokes directly to the inline edit editor.
+    pub(super) fn edit_editor_for_test(&self) -> ViewHandle<EditorView> {
+        self.edit_editor.clone()
+    }
     /// Test accessor: whether the "send now" button for `query_id` is currently disabled.
     pub(super) fn send_now_button_disabled_for_test(
         &self,
