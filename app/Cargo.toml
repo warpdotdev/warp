@@ -645,7 +645,6 @@ default = [
     "oz_changelog_updates",
     "skill_arguments",
     "incremental_auto_reload",
-    "active_conversation_requires_interaction",
     "figma_detection",
     "file_based_mcp",
     "inline_repo_menu",
@@ -1000,7 +999,6 @@ orchestration_launch_modal = []
 new_tab_styling = []
 file_based_mcp = []
 skill_arguments = []
-active_conversation_requires_interaction = []
 incremental_auto_reload = []
 wait_for_events_parent_registration = []
 pending_user_query_indicator = []
