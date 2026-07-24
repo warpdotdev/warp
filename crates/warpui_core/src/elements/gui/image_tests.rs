@@ -74,6 +74,23 @@ fn failed_to_load_prefers_failure_element_when_provided() {
 }
 
 #[test]
+fn failed_to_load_uses_failure_element_without_before_load() {
+    let image = test_image().on_load_failure(test_element());
+
+    assert_eq!(
+        image.failed_to_load_backup_element_kind(),
+        Some(BackupElementKind::FailedToLoad)
+    );
+}
+
+#[test]
+fn no_backup_element_when_none_configured() {
+    let image = test_image();
+
+    assert_eq!(image.failed_to_load_backup_element_kind(), None);
+}
+
+#[test]
 fn failed_to_load_falls_back_to_before_load_element() {
     let image = test_image().before_load(test_element());
 

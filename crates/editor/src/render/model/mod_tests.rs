@@ -29,7 +29,33 @@ use crate::content::text::{
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
 use crate::render::model::{
     ColumnUnit, Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+    image_alt_texts_announcement,
 };
+
+#[test]
+fn alt_text_announcement_is_none_without_labeled_images() {
+    assert_eq!(image_alt_texts_announcement(std::iter::empty()), None);
+    assert_eq!(
+        image_alt_texts_announcement(["", "   ", "\t"].into_iter()),
+        None
+    );
+}
+
+#[test]
+fn alt_text_announcement_labels_and_trims_single_image() {
+    assert_eq!(
+        image_alt_texts_announcement(["  A red bicycle  "].into_iter()),
+        Some("Image: A red bicycle".to_string())
+    );
+}
+
+#[test]
+fn alt_text_announcement_joins_labeled_images_and_skips_unlabeled() {
+    assert_eq!(
+        image_alt_texts_announcement(["First", "", "Second"].into_iter()),
+        Some("Image: First. Image: Second".to_string())
+    );
+}
 
 #[test]
 fn test_height() {

@@ -47,10 +47,10 @@ use warp_editor::editor::TextDecoration;
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::multiline::{AnyMultilineString, LF, MultilineString};
 use warp_editor::render::model::{
-    AutoScrollMode, BlockItem, BlockSpacings, BrokenLinkStyle, CheckBoxStyle, ColumnUnit,
-    Decoration, HorizontalRuleStyle, InlineCodeStyle, LineCount, LineDecoration, ParagraphStyles,
-    RenderEvent, RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction, TableStyle,
-    UpdateDecorationAfterLayout, WidthSetting,
+    AutoScrollMode, BlockItem, BlockSpacings, BrokenImageStyle, BrokenLinkStyle, CheckBoxStyle,
+    ColumnUnit, Decoration, HorizontalRuleStyle, InlineCodeStyle, LineCount, LineDecoration,
+    ParagraphStyles, RenderEvent, RenderLineLocation, RenderState, RichTextStyles,
+    StyleUpdateAction, TableStyle, UpdateDecorationAfterLayout, WidthSetting,
 };
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
 use warp_util::standardized_path::StandardizedPath;
@@ -524,6 +524,10 @@ impl CodeEditorModel {
                 color: TRANSPARENT,
             },
             broken_link_style: BrokenLinkStyle {
+                icon_path: "",
+                icon_color: TRANSPARENT,
+            },
+            broken_image_style: BrokenImageStyle {
                 icon_path: "",
                 icon_color: TRANSPARENT,
             },

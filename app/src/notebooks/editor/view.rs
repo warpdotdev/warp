@@ -14,7 +14,9 @@ use warp_editor::model::{CoreEditorModel, RichTextEditorModel};
 use warp_editor::render::element::{
     DisplayOptions, DisplayStateHandle, RichTextAction, RichTextElement, VerticalExpansionBehavior,
 };
-use warp_editor::render::model::{BlockItem, HitTestBlockType, Location, RenderState};
+use warp_editor::render::model::{
+    BlockItem, HitTestBlockType, Location, RenderState, image_alt_texts_announcement,
+};
 use warp_editor::selection::{TextDirection, TextUnit};
 use warp_util::path::LineAndColumnArg;
 use warp_util::user_input::UserInput;
@@ -2799,6 +2801,26 @@ impl View for RichTextEditorView {
             ctx.notify();
         }
         self.has_focus_within = false;
+    }
+
+    fn accessibility_contents(&self, ctx: &AppContext) -> Option<AccessibilityContent> {
+        // Warp's a11y is a single per-view announcement, so images can only reach
+        // a screen reader through the announcement of the view that renders them.
+        // Surface each image's alt text; images without alt text carry nothing a
+        // screen reader can convey and are omitted (see the announcement builder).
+        let render_state = self.model.as_ref(ctx).render_state().clone();
+        let render_state = render_state.as_ref(ctx);
+        let value = image_alt_texts_announcement(render_state.content().block_items().filter_map(
+            |block| match block {
+                BlockItem::Image { alt_text, .. } => Some(alt_text.as_str()),
+                _ => None,
+            },
+        ))?;
+
+        Some(AccessibilityContent::new_without_help(
+            value,
+            WarpA11yRole::ImageRole,
+        ))
     }
 }
 

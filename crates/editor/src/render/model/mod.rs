@@ -1101,6 +1101,8 @@ pub struct RichTextStyles {
     pub horizontal_rule_style: HorizontalRuleStyle,
     /// Path to the broken link icon svg.
     pub broken_link_style: BrokenLinkStyle,
+    /// Icon and color for the placeholder shown when an image fails to load.
+    pub broken_image_style: BrokenImageStyle,
     /// Spacing configuration for blocks.
     pub block_spacings: BlockSpacings,
     /// Minimum height a paragraph will take. This currently
@@ -1194,6 +1196,12 @@ pub struct CheckBoxStyle {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BrokenLinkStyle {
+    pub icon_path: &'static str,
+    pub icon_color: ColorU,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BrokenImageStyle {
     pub icon_path: &'static str,
     pub icon_color: ColorU,
 }
@@ -1483,6 +1491,10 @@ pub enum BlockItem {
         source: String,
         asset_source: AssetSource,
         config: ImageBlockConfig,
+        /// Persists hover state across re-layouts so the alt-text tooltip's
+        /// hover tracking is stable, mirroring [`BlockItem::TaskList`] and
+        /// [`HiddenBlockConfig`].
+        mouse_state: MouseStateHandle,
     },
     Table(Box<LaidOutTable>),
     TrailingNewLine(Cursor),
@@ -2282,6 +2294,30 @@ pub fn gutter_expansion_button_types(
             }
         }
     }
+}
+
+/// Builds the screen-reader announcement describing the images in a document,
+/// from their alt texts. Alt text is the only image content a screen reader can
+/// convey, so an image with empty or whitespace-only alt text is treated as
+/// decorative and omitted entirely — the equivalent of a browser mapping
+/// `alt=""` to `role="presentation"`. Announcing it as an unlabeled image would
+/// add noise without conveying meaning.
+///
+/// Returns [`None`] when no image carries alt text (the caller then contributes
+/// nothing to the view's accessibility contents). Each labeled image is prefixed
+/// with `Image:` so screen-reader users can tell an image label apart from the
+/// surrounding prose.
+pub fn image_alt_texts_announcement<'a>(
+    alt_texts: impl Iterator<Item = &'a str>,
+) -> Option<String> {
+    let labels: Vec<String> = alt_texts
+        .filter_map(|alt| {
+            let trimmed = alt.trim();
+            (!trimmed.is_empty()).then(|| format!("Image: {trimmed}"))
+        })
+        .collect();
+
+    (!labels.is_empty()).then(|| labels.join(". "))
 }
 // `Clone`, not `Copy`: holds a `MouseStateHandle` (`Arc`-backed), like
 // `BlockItem::TaskList`. The hidden-range dedupe paths clone configs accordingly.

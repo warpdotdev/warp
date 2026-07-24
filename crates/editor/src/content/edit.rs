@@ -17,6 +17,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warp_errors::report_error;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::fonts::Weight;
 use warpui_core::image_cache::ImageType;
 use warpui_core::text::char_slice;
@@ -890,6 +891,7 @@ impl LayoutTask {
                         source,
                         asset_source,
                         config,
+                        mouse_state: MouseStateHandle::default(),
                     },
                     true, // Images are always followed by a trailing newline in the buffer
                 ))
