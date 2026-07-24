@@ -217,6 +217,26 @@ const ADEBERRY_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
     AnsiColor::from_u32(0x4D9989FF),
     AnsiColor::from_u32(0xFFFFFFFF),
 );
+const OLIVE_GROVE_NORMAL_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x1A2214FF),
+    AnsiColor::from_u32(0xC26F6FFF),
+    AnsiColor::from_u32(0x8FAE4AFF),
+    AnsiColor::from_u32(0xC8A85DFF),
+    AnsiColor::from_u32(0x7B6FB0FF),
+    AnsiColor::from_u32(0x9D76C7FF),
+    AnsiColor::from_u32(0x87A97BFF),
+    AnsiColor::from_u32(0xE9EED8FF),
+);
+const OLIVE_GROVE_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x4B5535FF),
+    AnsiColor::from_u32(0xD98A8AFF),
+    AnsiColor::from_u32(0xB4CF68FF),
+    AnsiColor::from_u32(0xE0C579FF),
+    AnsiColor::from_u32(0xA197D8FF),
+    AnsiColor::from_u32(0xC09AE8FF),
+    AnsiColor::from_u32(0xA8C79AFF),
+    AnsiColor::from_u32(0xF7F9EEFF),
+);
 
 pub(super) fn light_mode_colors() -> TerminalColors {
     TerminalColors::new(LIGHT_MODE_NORMAL_COLORS, LIGHT_MODE_BRIGHT_COLORS)
@@ -256,6 +276,9 @@ pub(super) fn solarflare_colors() -> TerminalColors {
 
 pub(super) fn adeberry_colors() -> TerminalColors {
     TerminalColors::new(ADEBERRY_NORMAL_COLORS, ADEBERRY_BRIGHT_COLORS)
+}
+pub(super) fn olive_grove_colors() -> TerminalColors {
+    TerminalColors::new(OLIVE_GROVE_NORMAL_COLORS, OLIVE_GROVE_BRIGHT_COLORS)
 }
 
 /// Default bundled themes
@@ -386,6 +409,25 @@ pub(super) fn willow_dream() -> WarpTheme {
         dark_mode_colors(),
         None,
         Some("Willow Dream".to_string()),
+    )
+}
+
+pub(super) fn olive_grove() -> WarpTheme {
+    WarpTheme::new(
+        Fill::VerticalGradient(VerticalGradient::new(
+            ColorU::from_u32(0x4A5A28FF),
+            ColorU::from_u32(0x121B0DFF),
+        )),
+        ColorU::from_u32(0xF0F3E4FF),
+        Fill::HorizontalGradient(HorizontalGradient::new(
+            ColorU::from_u32(0x8EA43BFF),
+            ColorU::from_u32(0x8A63C2FF),
+        )),
+        None,
+        Some(Details::Darker),
+        olive_grove_colors(),
+        None,
+        Some("Olive Grove".to_string()),
     )
 }
 
