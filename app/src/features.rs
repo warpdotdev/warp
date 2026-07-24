@@ -137,8 +137,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::DefaultAdeberryTheme,
         #[cfg(feature = "agent_mode_primary_xml")]
         FeatureFlag::AgentModePrimaryXML,
-        #[cfg(feature = "agent_mode_pre_plan_xml")]
-        FeatureFlag::AgentModePrePlanXML,
         #[cfg(feature = "agent_onboarding")]
         FeatureFlag::AgentOnboarding,
         #[cfg(feature = "agent_shared_sessions")]

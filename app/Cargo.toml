@@ -479,7 +479,6 @@ agent_mode_computer_use = []
 background_computer_use = []
 agent_mode_debug = []
 agent_mode_primary_xml = []
-agent_mode_pre_plan_xml = []
 agent_onboarding = []
 account_first_onboarding = []
 agent_shared_sessions = []
@@ -534,7 +533,6 @@ default = [
     "autoupdate_ui_revamp",
     "render_agent_mode_output_markdown",
     "agent_mode_primary_xml",
-    "agent_mode_pre_plan_xml",
     "command_correction_key",
     "kitty_images",
     "global_ai_analytics_collection",
