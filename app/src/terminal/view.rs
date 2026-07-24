@@ -7413,22 +7413,24 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ShellCommandExecutorEvent::ExecuteCommand { command, action_id } => {
+            ShellCommandExecutorEvent::ExecuteCommand {
+                command,
+                action_id,
+                conversation_id,
+            } => {
                 let Some(session_id) = self.active_block_session_id() else {
                     return;
                 };
 
                 let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-                let Some(conversation) = history_model
-                    .conversation_id_for_action(action_id, ctx.view_id())
-                    .and_then(|id| history_model.conversation(&id))
-                else {
+                let Some(conversation) = history_model.conversation(conversation_id) else {
                     safe_error!(
-                        safe: ("No conversation ID found for command with ID: {:?}", action_id),
+                        safe: ("No conversation found for command with ID: {:?}", action_id),
                         full: (
-                            "No conversation ID found for requested command: ID: {:?}, command: \
-                            {command}",
-                            action_id
+                            "No conversation found for requested command: ID: {:?}, \
+                            conversation_id={:?}, command: {command}",
+                            action_id,
+                            conversation_id
                         )
                     );
                     return;
