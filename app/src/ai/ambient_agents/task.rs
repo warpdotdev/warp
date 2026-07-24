@@ -47,6 +47,7 @@ pub enum AgentSource {
     Interactive,
     WebApp,
     GitHubAction,
+    GitHubWebhook,
     CloudMode,
 }
 
@@ -63,6 +64,7 @@ impl AgentSource {
             AgentSource::Interactive => "LOCAL",
             AgentSource::WebApp => "WEB_APP",
             AgentSource::GitHubAction => "GITHUB_ACTION",
+            AgentSource::GitHubWebhook => "GITHUB_WEBHOOK",
             AgentSource::CloudMode => "CLOUD_MODE",
         }
     }
@@ -77,13 +79,14 @@ impl AgentSource {
             AgentSource::Interactive | AgentSource::CloudMode => "Warp App",
             AgentSource::WebApp => "Oz Web",
             AgentSource::GitHubAction => "GitHub Action",
+            AgentSource::GitHubWebhook => "GitHub",
         }
     }
 
     /// Returns true when tasks from this source must not accept user-triggered cloud follow-ups.
     pub fn blocks_cloud_followups(&self) -> bool {
         match self {
-            AgentSource::GitHubAction => true,
+            AgentSource::GitHubAction | AgentSource::GitHubWebhook => true,
             AgentSource::Linear
             | AgentSource::AgentWebhook
             | AgentSource::Slack
@@ -107,7 +110,8 @@ impl AgentSource {
             AgentSource::Cli
             | AgentSource::ScheduledAgent
             | AgentSource::AgentWebhook
-            | AgentSource::GitHubAction => false,
+            | AgentSource::GitHubAction
+            | AgentSource::GitHubWebhook => false,
         }
     }
 }
@@ -129,6 +133,7 @@ where
             "SCHEDULED_AGENT" => Some(AgentSource::ScheduledAgent),
             "WEB_APP" => Some(AgentSource::WebApp),
             "GITHUB_ACTION" => Some(AgentSource::GitHubAction),
+            "GITHUB_WEBHOOK" => Some(AgentSource::GitHubWebhook),
             "CLOUD_MODE" => Some(AgentSource::CloudMode),
             _ => {
                 report_error!(anyhow!("Unknown AmbientAgentSource: {}", s));
