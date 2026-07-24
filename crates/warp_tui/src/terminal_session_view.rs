@@ -876,7 +876,7 @@ impl TuiTerminalSessionView {
                     initial_requested_command_action_id.as_ref(),
                 );
                 self.input_view
-                    .update(ctx, |input, ctx| input.exit_shell_mode(ctx));
+                    .update(ctx, |input, ctx| input.lock_for_agent_control(ctx));
                 if let Some(target) = self
                     .cli_subagent_controller
                     .as_ref(ctx)
@@ -918,11 +918,9 @@ impl TuiTerminalSessionView {
                 // the terminal-use block. Once that block completes, restore
                 // the setting-derived unlocked state so the next prompt can
                 // resume natural-language detection.
-                if self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
-                    self.input_view.update(ctx, |input, ctx| {
-                        input.reset_to_default_agent_mode(ctx);
-                    });
-                }
+                self.input_view.update(ctx, |input, ctx| {
+                    input.reset_after_agent_control(ctx);
+                });
             }
             CLISubagentEvent::UpdatedControl { .. }
             | CLISubagentEvent::UpdatedInstruction { .. }
@@ -2723,7 +2721,7 @@ impl TuiTerminalSessionView {
         }
         if self.send_terminal_use_prompt(&text, ctx) {
             self.input_view
-                .update(ctx, |input, ctx| input.exit_shell_mode(ctx));
+                .update(ctx, |input, ctx| input.lock_for_agent_control(ctx));
         } else if self.is_shell_mode(ctx) {
             self.execute_user_command(&text, ctx);
         } else {

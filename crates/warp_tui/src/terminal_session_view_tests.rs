@@ -80,7 +80,7 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
 }
 
 #[test]
-fn nld_unlocks_when_input_resumes_after_agent_control() {
+fn nld_reset_only_unlocks_after_agent_control_and_not_on_user_edit() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -92,26 +92,38 @@ fn nld_unlocks_when_input_resumes_after_agent_control() {
                     .set_value(true, ctx)
                     .expect("test setting should update");
             });
-            view.ai_input_model.update(ctx, |input, ctx| {
-                input.set_input_config(AI_LOCKED_CONFIG, true, None, ctx);
-            });
             view.input_view.update(ctx, |input, ctx| {
+                input.exit_shell_mode(ctx);
                 input.set_text("git status", ctx);
             });
             assert_eq!(
                 view.ai_input_model.as_ref(ctx).input_config(),
                 AI_LOCKED_CONFIG,
-                "agent control should leave the input locked until it ends"
+                "an explicit Agent lock should be retained while the user edits"
             );
 
-            // This is the first user edit after the agent-controlled block has
-            // ended. Before the fix, detection saw the stale lock and returned
-            // without ever restoring the unlocked NLD state.
+            // User edits must not reinterpret an explicit Agent lock as stale
+            // agent-control state.
             view.handle_input_content_changed(true, ctx);
             assert_eq!(
                 view.ai_input_model.as_ref(ctx).input_config(),
+                AI_LOCKED_CONFIG,
+                "user edits must not unlock an explicit Agent lock"
+            );
+
+            // A lock installed for agent terminal control is reset when that
+            // control completes, which restores the first post-agent prompt to
+            // the setting-derived NLD state.
+            view.input_view.update(ctx, |input, ctx| {
+                input.lock_for_agent_control(ctx);
+            });
+            view.input_view.update(ctx, |input, ctx| {
+                input.reset_after_agent_control(ctx);
+            });
+            assert_eq!(
+                view.ai_input_model.as_ref(ctx).input_config(),
                 AI_UNLOCKED_CONFIG,
-                "the first post-agent input should resume NLD"
+                "agent-control completion should resume NLD"
             );
         });
     });
