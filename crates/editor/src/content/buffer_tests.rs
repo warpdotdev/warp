@@ -13020,6 +13020,53 @@ fn test_clipboard_table_copy_uses_source_offsets_for_later_formatted_cells() {
 }
 
 #[test]
+fn test_clipboard_table_copy_emits_real_newline_for_in_cell_break() {
+    App::test((), |mut app| async move {
+        // Product decision (#13732): the two clipboard flavors carry a `<br>` differently.
+        //
+        // - The plain-text flavor is *rendered text*: it already strips styling, so an
+        //   authored hard break emits a real `\n`, never the literal HTML string "<br>".
+        //   Injecting HTML the user didn't select would violate that rendered-text contract.
+        // - The HTML flavor (see serialize_table_cell_inline / selected_text_as_html) carries
+        //   the break as a real `<br>` element, so Warp-to-Warp paste round-trips faithfully.
+        //
+        // Accepted cost: a plain-text-only re-paste of this row into a Warp table may split it,
+        // because the in-cell newline collides with the tab/newline row delimiter. That is a
+        // standard TSV-class limitation we consciously accept — it is NOT an oversight. Do not
+        // "fix" it by re-emitting "<br>" here; that regresses the plain-text contract above.
+        let table_source = "a<br>b\tc";
+        let markdown = format!("```{TABLE_BLOCK_MARKDOWN_LANG}\n{table_source}\n```\n");
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        buffer.update(&mut app, |buffer, _ctx| {
+            let block_start = buffer.containing_block_start(CharOffset::from(1));
+            let max_offset = buffer.max_charoffset();
+
+            let copied = buffer.clipboard_table_text_in_range(
+                block_start,
+                block_start..max_offset,
+                LineEnding::LF,
+            );
+
+            assert!(
+                !copied.contains("<br>"),
+                "plain-text flavor must not contain literal HTML the user didn't select, got {copied:?}"
+            );
+            // The in-cell break renders as a real newline; the trailing `\n` terminates the row.
+            assert_eq!(
+                copied, "a\nb\tc\n",
+                "in-cell break should emit a real newline in the plain-text flavor"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_multiselect_text_styling() {
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));

@@ -14,6 +14,7 @@ use warpui_core::{App, SingletonEntity};
 
 use super::{
     BlockLocation, LayOutArgs, layout_mermaid_diagram_block, layout_table_block, layout_text_block,
+    measure_table_cells,
 };
 use crate::content::buffer::{StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
@@ -838,6 +839,156 @@ fn test_layout_table_block_caches_cell_text_frames() {
             assert!(
                 table.cell_text_frames[0][1].max_width()
                     <= table.column_widths[1].as_f32() - table.config.style.cell_padding * 2.0
+            );
+        });
+    })
+}
+
+/// Lays out the given internal-format table string and returns the measured cell text strings
+/// (header row first, then body rows). The returned `String`s are the exact inputs handed to the
+/// text layout system, so a trailing `\n` here means the cell will render a trailing empty line.
+///
+/// This asserts on `measure_table_cells`' output rather than laid-out line counts because
+/// `App::test`'s text layout backend is a stub (`platform::test::delegate`'s `layout_text` ignores
+/// its input and always returns a single empty line), so `line_heights.len()` cannot observe
+/// newline handling.
+fn measured_cell_texts(text_layout: &TextLayout<'_>, content: &str) -> Vec<Vec<String>> {
+    let table =
+        crate::content::text::table_from_internal_format_with_inline_markdown(content, Vec::new());
+    let table_style = text_layout.rich_text_styles().table_style;
+    let mut header_style = text_layout.paragraph_styles(&BufferBlockStyle::table(Vec::new()));
+    header_style.font_weight = Weight::Bold;
+    let body_style = text_layout.paragraph_styles(&BufferBlockStyle::table(Vec::new()));
+
+    let (_widths, cell_text_layouts) =
+        measure_table_cells(&table, text_layout, &table_style, header_style, body_style);
+    cell_text_layouts
+        .into_iter()
+        .map(|row| row.into_iter().map(|cell| cell.text_layout.text).collect())
+        .collect()
+}
+
+/// A trailing `<br>` at the end of a table cell must preserve the trailing newline in the cell's
+/// measured text so it renders an extra empty line, matching GitHub's rendering of a trailing hard
+/// break inside a GFM pipe-table cell.
+#[test]
+fn test_measure_table_cells_trailing_br_keeps_newline() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            // Body cell 0 ends in `<br>`; control cell 1 is a plain single-line cell.
+            let cells = measured_cell_texts(&text_layout, "a\tb\none<br>\ttwo\n");
+
+            assert_eq!(
+                cells[1][0], "one\n",
+                "cell ending in <br> must keep its trailing newline (extra empty line)"
+            );
+            assert_eq!(
+                cells[1][1], "two",
+                "control cell without <br> must be unchanged"
+            );
+        });
+    })
+}
+
+/// A cell containing only `<br>` parses to a lone `\n` fragment; its measured text must be a lone
+/// newline (an empty content line plus a trailing empty line), not the empty string.
+#[test]
+fn test_measure_table_cells_lone_br_keeps_newline() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let cells = measured_cell_texts(&text_layout, "a\tb\n<br>\ttwo\n");
+
+            assert_eq!(cells[1][0], "\n", "a lone <br> cell must keep its newline");
+        });
+    })
+}
+
+/// Embedded `<br>` (text on both sides) is the control path: the interior newline was never
+/// stripped, so it must remain untouched by the trailing-break fix.
+#[test]
+fn test_measure_table_cells_embedded_br_unchanged() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let cells = measured_cell_texts(&text_layout, "a\tb\none<br>two\tthree\n");
+
+            assert_eq!(
+                cells[1][0], "one\ntwo",
+                "embedded <br> must keep its single interior newline"
+            );
+        });
+    })
+}
+
+/// A `<br>` that falls between two styled runs (e.g. `**bold**<br>**plain**`) parses to a
+/// standalone `\n` fragment sitting in a non-final run position. `layout_run` strips that run's
+/// trailing `\n` and reports the break, but the following run reports no break — so tracking only
+/// the final run's flag would drop the interior newline and collapse the two lines into one. The
+/// break must be reinserted per-run, at the run boundary.
+#[test]
+fn test_measure_table_cells_style_boundary_br_keeps_newline() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            // Body cell 0: bold "bold", a <br> break, bold "plain". The <br> becomes a standalone
+            // `\n` fragment between the two bold runs — a non-final run that ends in the break.
+            let cells = measured_cell_texts(&text_layout, "a\tb\n**bold**<br>**plain**\ttwo\n");
+
+            assert_eq!(
+                cells[1][0], "bold\nplain",
+                "a <br> at a style-run boundary must keep its newline between the runs"
+            );
+        });
+    })
+}
+
+/// A cell with breaks in both an interior style-boundary position and a trailing position must
+/// preserve every newline, proving the per-run reinsertion handles multiple breaks rather than
+/// only the last one.
+#[test]
+fn test_measure_table_cells_style_boundary_and_trailing_br() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            // Body cell 0: an interior style-boundary break (between the two bold runs) plus a
+            // trailing break at the end of the cell.
+            let cells = measured_cell_texts(&text_layout, "a\tb\n**bold**<br>**plain**<br>\ttwo\n");
+
+            assert_eq!(
+                cells[1][0], "bold\nplain\n",
+                "breaks at a style boundary and at the trailing position must both be preserved"
             );
         });
     })

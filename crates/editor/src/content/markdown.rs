@@ -1172,7 +1172,25 @@ where
             serializer.start_elem(QualName::new(None, ns!(html), "code".into()), iter::empty())?;
         }
 
-        serializer.write_text(&fragment.text)?;
+        // An authored hard break (raw HTML `<br>`) is stored as an embedded newline. In an
+        // HTML table cell a raw newline collapses to a space, silently dropping the break, so
+        // emit a real `<br>` element between the split parts instead. Inline code cannot
+        // contain such a newline (the `.md` inline parser never produces one), so it is written
+        // verbatim. Mirrors the guard in `inline_to_markdown`.
+        if !styles.is_inline_code() && fragment.text.contains('\n') {
+            let mut parts = fragment.text.split('\n');
+            if let Some(first) = parts.next() {
+                serializer.write_text(first)?;
+            }
+            for part in parts {
+                let br_tag = QualName::new(None, ns!(html), "br".into());
+                serializer.start_elem(br_tag.clone(), iter::empty())?;
+                serializer.end_elem(br_tag)?;
+                serializer.write_text(part)?;
+            }
+        } else {
+            serializer.write_text(&fragment.text)?;
+        }
 
         if styles.is_inline_code() {
             serializer.end_elem(QualName::new(None, ns!(html), "code".into()))?;
@@ -1249,14 +1267,49 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
     let mut previous_styles = TextStylesWithMetadata::default();
     for fragment in inline {
         let next_styles = TextStylesWithMetadata::from(fragment.styles.clone());
-        let content = BufferMarkdownParser::append_formatting(
-            &previous_styles,
-            &next_styles,
-            fragment.text.as_str(),
-            &mut markdown,
-        );
-        previous_styles = next_styles;
-        BufferMarkdownParser::append_content(content, true, &mut markdown);
+        // An authored hard break (raw HTML `<br>`) is stored as an embedded newline. Emit it as
+        // literal `<br>` so it survives the GFM pipe-table serialization without splitting the
+        // cell into a spurious extra row. Inline code cannot contain a newline from the `.md`
+        // inline parser, so it is left untouched. Mirrors the guard in
+        // `markdown_parser::inline_to_markdown`.
+        //
+        // Rather than allocate a newline-replaced copy of the (potentially large) fragment on
+        // this hot path, iterate the fragment's lines and emit a literal `<br>` between them.
+        // The styles never change between lines of one fragment, so `append_formatting` only
+        // does real work at the fragment boundary (first line); its per-line whitespace
+        // handling still applies to each line's start/end.
+        if !next_styles.is_inline_code() && fragment.text.contains('\n') {
+            let mut lines = fragment.text.split('\n');
+            // `contains('\n')` guarantees at least two segments, so `next()` is `Some`.
+            let first = lines.next().unwrap_or("");
+            let content = BufferMarkdownParser::append_formatting(
+                &previous_styles,
+                &next_styles,
+                first,
+                &mut markdown,
+            );
+            previous_styles = next_styles.clone();
+            BufferMarkdownParser::append_content(content, true, &mut markdown);
+            for line in lines {
+                markdown.push_str("<br>");
+                let content = BufferMarkdownParser::append_formatting(
+                    &previous_styles,
+                    &next_styles,
+                    line,
+                    &mut markdown,
+                );
+                BufferMarkdownParser::append_content(content, true, &mut markdown);
+            }
+        } else {
+            let content = BufferMarkdownParser::append_formatting(
+                &previous_styles,
+                &next_styles,
+                fragment.text.as_str(),
+                &mut markdown,
+            );
+            previous_styles = next_styles;
+            BufferMarkdownParser::append_content(content, true, &mut markdown);
+        }
     }
     BufferMarkdownParser::append_formatting(
         &previous_styles,

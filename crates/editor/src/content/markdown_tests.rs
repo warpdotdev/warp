@@ -179,6 +179,40 @@ fn test_gfm_table_html_serialization() {
 }
 
 #[test]
+fn test_gfm_table_html_serialization_preserves_br_in_cell() {
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        let markdown = "\
+| header 1 | header 2 |\n\
+| --- | --- |\n\
+| line one<br>line two | value 2 |\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let html = app.read_model(&buffer, |buffer, ctx| {
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+        });
+
+        let html = html.expect("table should export HTML");
+        // The in-cell break must serialize as a real <br> element, not a raw newline (which
+        // HTML collapses to a space, silently dropping the break).
+        assert!(
+            html.contains("<td align=\"left\">line one<br>line two</td>"),
+            "cell break should become a <br> element, got {html}"
+        );
+        assert!(
+            !html.contains("line one\nline two"),
+            "cell HTML must not contain a raw newline, got {html:?}"
+        );
+    });
+}
+
+#[test]
 fn test_apply_formatted_text_delta_append() {
     App::test((), |mut app| async move {
         let old_markdown = "hello world\n";
@@ -353,6 +387,61 @@ fn test_table_markdown_export_escapes_pipe_characters() {
         assert_eq!(
             exported_markdown,
             "| head\\|er 1 | header 2 |\n| --- | --- |\n| value \\| 1 | value 2 |\n"
+        );
+    });
+}
+
+#[test]
+fn test_table_markdown_export_preserves_br_line_breaks() {
+    App::test((), |mut app| async move {
+        // A cell whose text contains a `<br>` hard break is stored internally as an
+        // embedded newline. The GFM export must emit it back as literal `<br>` so the
+        // newline does not split the pipe-table row into a spurious extra row.
+        let markdown = format!(
+            "```{}\nheader 1\theader 2\nline one<br>line two\tvalue 2\n```\n",
+            TABLE_BLOCK_MARKDOWN_LANG
+        );
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert_eq!(
+            exported_markdown,
+            "| header 1 | header 2 |\n| --- | --- |\n| line one<br>line two | value 2 |\n"
+        );
+        assert!(
+            !exported_markdown.contains("line one\nline two"),
+            "in-cell hard break must not emit a raw newline that splits the table row: {exported_markdown:?}"
+        );
+    });
+}
+
+#[test]
+fn test_table_markdown_export_preserves_br_at_cell_edges() {
+    App::test((), |mut app| async move {
+        // Guards the per-line GFM export path against dropping or misplacing breaks at the
+        // edges of a cell: a leading break, a trailing break, consecutive breaks, and a break
+        // followed by leading whitespace on the next line. Each must round-trip to literal
+        // `<br>` with the surrounding whitespace preserved and no spurious pipe-table rows.
+        let markdown = format!(
+            "```{}\nh1\th2\n<br>lead\ttrail<br>\na<br><br>b\tword<br>  spaced\n```\n",
+            TABLE_BLOCK_MARKDOWN_LANG
+        );
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert_eq!(
+            exported_markdown,
+            "| h1 | h2 |\n| --- | --- |\n| <br>lead | trail<br> |\n| a<br><br>b | word<br>  spaced |\n"
         );
     });
 }
