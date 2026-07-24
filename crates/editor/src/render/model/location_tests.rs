@@ -151,7 +151,7 @@ fn test_hit_within_line() {
 fn test_table_hit_testing_accounts_for_horizontal_scroll() {
     let mut model =
         RenderState::new_for_test(TEST_STYLES.clone(), 30.0.into_pixels(), 60.0.into_pixels());
-    model.set_content(SumTree::from_item(BlockItem::Table(Box::new(
+    model.set_content(SumTree::from_item(BlockItem::Table(Arc::new(
         test_table_layout(),
     ))));
 
