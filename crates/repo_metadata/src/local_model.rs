@@ -1698,11 +1698,8 @@ impl LocalRepoMetadataModel {
                         });
                     }
                 }
-                FileTreeMutation::AddDirectorySubtree {
-                    ref dir_path,
-                    ref subtree,
-                } => {
-                    let Some(std_dir) = StandardizedPath::try_from_local(dir_path).ok() else {
+                FileTreeMutation::AddDirectorySubtree { dir_path, subtree } => {
+                    let Some(std_dir) = StandardizedPath::try_from_local(&dir_path).ok() else {
                         continue;
                     };
                     if lazy_load && !Self::is_parent_loaded_in_entry(root_entry, &std_dir) {
@@ -1717,18 +1714,25 @@ impl LocalRepoMetadataModel {
                         {
                             directory.loaded = true;
                         }
-                        root_entry.remove(subtree.path());
-                        root_entry.insert_entry_at_path(
-                            Arc::new(subtree.path().clone()),
-                            subtree.clone(),
-                        );
-                        if emit {
+                        // Build the emit metadata from a borrow first so the
+                        // freshly-built `subtree` can be *moved* into the tree
+                        // below rather than deep-cloned. `subtree` is an owned
+                        // recursive `Entry` used exactly once here, so cloning it
+                        // just to hand it to `insert_entry_at_path` copied the
+                        // whole directory subtree and was a major source of
+                        // memory spikes during large filesystem-watcher updates.
+                        let emit_update = emit.then(|| {
                             let parent_std = std_dir.parent().unwrap_or(std_dir.clone());
-                            let metadata = flatten_entry_metadata(subtree);
-                            update_entries.push(FileTreeEntryUpdate {
+                            FileTreeEntryUpdate {
                                 parent_path_to_replace: parent_std,
-                                subtree_metadata: metadata,
-                            });
+                                subtree_metadata: flatten_entry_metadata(&subtree),
+                            }
+                        });
+                        let subtree_path = Arc::new(subtree.path().clone());
+                        root_entry.remove(&subtree_path);
+                        root_entry.insert_entry_at_path(subtree_path, subtree);
+                        if let Some(update) = emit_update {
+                            update_entries.push(update);
                         }
                     }
                 }
