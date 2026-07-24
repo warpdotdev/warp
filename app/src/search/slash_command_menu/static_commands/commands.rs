@@ -101,15 +101,15 @@ pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
 };
 pub const THEME: StaticCommand = StaticCommand {
     name: "/theme",
-    description: "Cycle color theme",
+    description: "Set color theme",
     kind: SlashCommandKind::Theme,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: Some(Argument {
         hint_text: Some("<auto|light|dark>"),
-        is_optional: true,
-        should_execute_on_selection: true,
+        is_optional: false,
+        should_execute_on_selection: false,
     }),
 };
 

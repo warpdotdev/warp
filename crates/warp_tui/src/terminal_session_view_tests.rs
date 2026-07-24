@@ -226,6 +226,17 @@ fn theme_slash_command_accepts_direct_selection_and_rejects_invalid_values() {
                 TuiTheme::Light
             );
         });
+        let dark = "dark".to_owned();
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, Some(&dark), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Dark
+            );
+        });
 
         let auto = "auto".to_owned();
         view.update(&mut app, |view, ctx| {
@@ -552,36 +563,17 @@ fn auto_approve_slash_command_toggles_selected_conversation_off_on_off() {
 }
 
 #[test]
-fn theme_argument_selects_or_cycles_supported_modes() {
-    assert_eq!(
-        theme_from_argument(TuiTheme::Auto, None),
-        Some(TuiTheme::Light)
-    );
-    assert_eq!(
-        theme_from_argument(TuiTheme::Light, None),
-        Some(TuiTheme::Dark)
-    );
-    assert_eq!(
-        theme_from_argument(TuiTheme::Dark, None),
-        Some(TuiTheme::Auto)
-    );
-    assert_eq!(
-        theme_from_argument(TuiTheme::Dark, Some(" auto ")),
-        Some(TuiTheme::Auto)
-    );
-    assert_eq!(
-        theme_from_argument(TuiTheme::Auto, Some("LIGHT")),
-        Some(TuiTheme::Light)
-    );
-    assert_eq!(
-        theme_from_argument(TuiTheme::Auto, Some("dark")),
-        Some(TuiTheme::Dark)
-    );
-    assert_eq!(theme_from_argument(TuiTheme::Auto, Some("sepia")), None);
+fn theme_argument_selects_supported_modes() {
+    assert_eq!(theme_from_argument(None), None);
+    assert_eq!(theme_from_argument(Some("  ")), None);
+    assert_eq!(theme_from_argument(Some(" auto ")), Some(TuiTheme::Auto));
+    assert_eq!(theme_from_argument(Some("LIGHT")), Some(TuiTheme::Light));
+    assert_eq!(theme_from_argument(Some("dark")), Some(TuiTheme::Dark));
+    assert_eq!(theme_from_argument(Some("sepia")), None);
 }
 
 #[test]
-fn theme_slash_command_cycles_and_persists_all_modes() {
+fn theme_slash_command_rejects_a_missing_argument() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -598,34 +590,20 @@ fn theme_slash_command_cycles_and_persists_all_modes() {
             view.execute_tui_slash_command(&slash_commands::THEME, None, ctx);
         });
         app.read(|ctx| {
-            assert_eq!(super::active_theme(ctx), TuiTheme::Light);
-            assert_eq!(
-                TuiThemeSettings::as_ref(ctx).selected_theme(),
-                TuiTheme::Light
-            );
-        });
-
-        view.update(&mut app, |view, ctx| {
-            view.execute_tui_slash_command(&slash_commands::THEME, None, ctx);
-        });
-        app.read(|ctx| {
-            assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
-            assert_eq!(
-                TuiThemeSettings::as_ref(ctx).selected_theme(),
-                TuiTheme::Dark
-            );
-        });
-
-        view.update(&mut app, |view, ctx| {
-            view.execute_tui_slash_command(&slash_commands::THEME, None, ctx);
-        });
-        app.read(|ctx| {
             assert_eq!(super::active_theme(ctx), TuiTheme::Dark);
             assert_eq!(
                 TuiThemeSettings::as_ref(ctx).selected_theme(),
                 TuiTheme::Auto
             );
         });
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(super::THEME_INVALID_ARGUMENT_HINT.to_owned())
+        );
     });
 }
 

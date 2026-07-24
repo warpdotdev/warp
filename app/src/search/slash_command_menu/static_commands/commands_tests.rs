@@ -338,9 +338,9 @@ fn theme_command_is_registered_only_for_tui_mode() {
     let argument = command
         .argument
         .as_ref()
-        .expect("expected /theme to accept an optional argument");
-    assert!(argument.is_optional);
-    assert!(argument.should_execute_on_selection);
+        .expect("expected /theme to require an argument");
+    assert!(!argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
     assert_eq!(argument.hint_text, Some("<auto|light|dark>"));
     assert!(
         all_commands(settings::SettingsMode::Gui)

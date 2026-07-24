@@ -201,12 +201,12 @@ const SWITCH_UNAVAILABLE_HINT: &str = "That conversation is no longer available.
 const LOADING_CONVERSATION_HINT: &str = "Loading conversation…";
 const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model.";
 const THEME_INVALID_ARGUMENT_HINT: &str = "Theme must be auto, light, or dark.";
-fn theme_from_argument(current: TuiTheme, argument: Option<&str>) -> Option<TuiTheme> {
+fn theme_from_argument(argument: Option<&str>) -> Option<TuiTheme> {
     match argument
         .map(str::trim)
         .filter(|argument| !argument.is_empty())
     {
-        None => Some(current.cycled()),
+        None => None,
         Some(argument) if argument.eq_ignore_ascii_case("auto") => Some(TuiTheme::Auto),
         Some(argument) if argument.eq_ignore_ascii_case("light") => Some(TuiTheme::Light),
         Some(argument) if argument.eq_ignore_ascii_case("dark") => Some(TuiTheme::Dark),
@@ -3577,8 +3577,7 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-        let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
-        let Some(theme) = theme_from_argument(selected_theme, argument) else {
+        let Some(theme) = theme_from_argument(argument) else {
             self.show_transient_hint(THEME_INVALID_ARGUMENT_HINT.to_owned(), ctx);
             record_static_slash_command_accepted(command_name, true, ctx);
             return;

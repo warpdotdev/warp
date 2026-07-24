@@ -26,14 +26,6 @@ pub enum TuiTheme {
 }
 
 impl TuiTheme {
-    pub fn cycled(self) -> Self {
-        match self {
-            Self::Auto => Self::Light,
-            Self::Light => Self::Dark,
-            Self::Dark => Self::Auto,
-        }
-    }
-
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Auto => "auto",

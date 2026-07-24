@@ -276,7 +276,7 @@ fn slash_command_menu_renders_theme_row() {
             assert!(
                 lines
                     .iter()
-                    .any(|line| line.contains("Cycle color theme (currently auto: dark)"))
+                    .any(|line| line.contains("Set color theme (currently auto: dark)"))
             );
 
             TuiThemeSettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -293,7 +293,7 @@ fn slash_command_menu_renders_theme_row() {
             assert!(
                 lines
                     .iter()
-                    .any(|line| line.contains("Cycle color theme (currently light)"))
+                    .any(|line| line.contains("Set color theme (currently light)"))
             );
         });
     });
