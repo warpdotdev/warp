@@ -406,6 +406,40 @@ pub fn set_user_and_enterprise_secret_regexes<'a>(
     *SECRETS_REGEX.lock() = Arc::new(secrets_regex);
 }
 
+/// Sets [`SECRETS_REGEX`] for the duration of a test, restoring the previous value when the
+/// returned guard is dropped.
+///
+/// [`SECRETS_REGEX`] is a single process-global (not thread-local), so this guard only protects
+/// against state leaking *across* tests — it does not, by itself, prevent two tests running
+/// concurrently from clobbering each other's regexes mid-test. Callers must also serialize with
+/// `#[serial(secrets_regex)]` (from the `serial_test` crate) on every test that reads or writes
+/// this global, using the same key, so they never interleave.
+#[cfg(any(test, feature = "test-util"))]
+#[must_use = "if unused the override will be immediately cleared"]
+pub struct SecretsRegexTestGuard {
+    previous: Arc<SecretsRegex>,
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl Drop for SecretsRegexTestGuard {
+    fn drop(&mut self) {
+        *SECRETS_REGEX.lock() = self.previous.clone();
+    }
+}
+
+/// Test helper: installs `user_secrets`/`enterprise_secrets` into [`SECRETS_REGEX`] and returns a
+/// guard that restores the previous value on drop. See [`SecretsRegexTestGuard`] for the
+/// serialization requirement this helper does not provide on its own.
+#[cfg(any(test, feature = "test-util"))]
+pub fn test_set_secrets_regex<'a>(
+    user_secrets: impl IntoIterator<Item = &'a regex::Regex>,
+    enterprise_secrets: impl IntoIterator<Item = &'a regex::Regex>,
+) -> SecretsRegexTestGuard {
+    let previous = SECRETS_REGEX.lock().clone();
+    set_user_and_enterprise_secret_regexes(user_secrets, enterprise_secrets);
+    SecretsRegexTestGuard { previous }
+}
+
 /// A wrapper around a [`Point`] that implements [`StepLite`], allowing us to store it in a
 /// `RangeMap`. Used for secret redaction so we efficiently map from a given range to an underlying
 /// secret stored at that range.

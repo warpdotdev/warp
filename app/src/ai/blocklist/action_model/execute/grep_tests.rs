@@ -1,10 +1,13 @@
+use serial_test::serial;
+
 use super::*;
 use crate::terminal::model::secrets::regexes::FIREBASE_AUTH_DOMAIN;
 use crate::terminal::shell::ShellType;
 
 #[test]
+#[serial(secrets_regex)]
 fn test_create_redacted_grep_error_event() {
-    crate::terminal::model::set_user_and_enterprise_secret_regexes(
+    let _secrets_regex_guard = crate::terminal::model::secrets::test_set_secrets_regex(
         [&regex::Regex::new(FIREBASE_AUTH_DOMAIN).expect("Should be able to construct regex")],
         std::iter::empty(), // No enterprise secrets
     );
