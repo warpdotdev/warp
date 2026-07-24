@@ -336,6 +336,12 @@ fn test_detect_no_match() {
             assert_eq!(CLIAgent::detect("ls -la", None, None, ctx), None);
             assert_eq!(CLIAgent::detect("vim", None, None, ctx), None);
             assert_eq!(CLIAgent::detect("claude_wrapper", None, None, ctx), None);
+            // The Warp TUI is recognized via `command_is_warp_tui`, not via
+            // `detect` (it is not a third-party CLI agent), so bare TUI launch
+            // commands must not be detected as a CLI agent here.
+            assert_eq!(CLIAgent::detect("warp", None, None, ctx), None);
+            assert_eq!(CLIAgent::detect("warp-dev", None, None, ctx), None);
+            assert_eq!(CLIAgent::detect("./script/run-tui", None, None, ctx), None);
         });
     });
 }
@@ -629,4 +635,29 @@ fn test_command_is_warp_tui_negatives() {
         "cargo run -p warp_tui",
         None
     ));
+}
+
+#[test]
+fn test_warp_tui_variant_properties() {
+    // The Warp TUI is a CLI-agent-equivalent code-review destination, not a
+    // detectable third-party agent. It has no command prefix (detected via
+    // `command_is_warp_tui`), a human-readable display name, no brand color or
+    // icon, no skill providers, and maps to its own telemetry variant so the
+    // code review panel can target it at parity with claude-code.
+    assert_eq!(CLIAgent::WarpTui.command_prefix(), "");
+    assert_eq!(CLIAgent::WarpTui.display_name(), "Warp TUI");
+    assert_eq!(CLIAgent::WarpTui.brand_color(), None);
+    assert_eq!(CLIAgent::WarpTui.icon(), None);
+    assert!(CLIAgent::WarpTui.supported_skill_providers().is_empty());
+    assert!(!CLIAgent::WarpTui.supports_bash_mode());
+    assert_eq!(
+        crate::server::telemetry::CLIAgentType::from(CLIAgent::WarpTui),
+        crate::server::telemetry::CLIAgentType::WarpTui,
+    );
+    // Serialized name round-trips (also covered by
+    // `test_serialized_name_round_trips_known_agents`, asserted explicitly here).
+    assert_eq!(
+        CLIAgent::from_serialized_name(&CLIAgent::WarpTui.to_serialized_name()),
+        CLIAgent::WarpTui
+    );
 }

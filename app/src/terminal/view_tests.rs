@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -21,7 +21,7 @@ use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
-    UserQueryMode,
+    AgentReviewCommentBatch, UserQueryMode,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
@@ -43,6 +43,9 @@ use crate::ai::llms::LLMId;
 use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions};
+use crate::code_review::comments::{
+    AttachedReviewComment, AttachedReviewCommentTarget, CommentOrigin,
+};
 use crate::context_chips::prompt::Prompt;
 use crate::editor::{AutosuggestionLocation, AutosuggestionType, CrdtOperation};
 use crate::features::FeatureFlag;
@@ -8199,4 +8202,141 @@ fn copy_does_not_forward_on_normal_screen() {
             "Copy must not write anything to the PTY on the normal screen with no selection"
         );
     })
+}
+
+/// Builds a minimal review batch with a single non-outdated general comment.
+fn single_general_review_comment(content: &str) -> AgentReviewCommentBatch {
+    AgentReviewCommentBatch {
+        comments: vec![AttachedReviewComment {
+            id: Default::default(),
+            content: content.to_string(),
+            target: AttachedReviewCommentTarget::General,
+            last_update_time: Local::now(),
+            base: None,
+            head: None,
+            outdated: false,
+            origin: CommentOrigin::Native,
+        }],
+        diff_set: HashMap::new(),
+    }
+}
+
+/// While the Warp TUI is the active long-running command, the code review panel
+/// must recognize it as a CLI-agent-equivalent destination (parity with
+/// claude-code) so comment sending and diff/hunk attachment route to its PTY.
+/// The TUI owns no `CLIAgentSession`; `active_cli_agent` recognizes it directly
+/// via `is_running_warp_tui`, gated under `HoaCodeReview`.
+#[test]
+fn active_cli_agent_recognizes_warp_tui_when_running() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_long_running_block("warp", "");
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.active_cli_agent(ctx),
+                Some(CLIAgent::WarpTui),
+                "Warp TUI should be recognized as a code-review destination while running"
+            );
+        });
+    });
+}
+
+/// `active_cli_agent` must return `None` for the Warp TUI when `HoaCodeReview`
+/// is disabled, preserving the pre-feature behavior (no review destination).
+#[test]
+fn active_cli_agent_ignores_warp_tui_when_hoa_code_review_disabled() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(false);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_long_running_block("warp", "");
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.active_cli_agent(ctx),
+                None,
+                "Warp TUI should not be a review destination when HoaCodeReview is disabled"
+            );
+        });
+    });
+}
+
+/// A non-TUI long-running command (e.g. `vim`) must not be recognized as a CLI
+/// agent review destination — only `command_is_warp_tui` commands qualify, plus
+/// real CLI agents tracked via `CLIAgentSessionsModel`.
+#[test]
+fn active_cli_agent_ignores_non_tui_long_running_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_long_running_block("vim", "");
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.active_cli_agent(ctx),
+                None,
+                "a non-TUI long-running command must not be a review destination"
+            );
+        });
+    });
+}
+
+/// Sending review comments while the Warp TUI is running writes the built prompt
+/// directly to the TUI's PTY (PTY routing, not rich input — the TUI has no rich
+/// input session), at parity with the claude-code path.
+#[test]
+fn send_review_comments_to_warp_tui_writes_prompt_to_pty() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_long_running_block("warp", "");
+            // Sanity check: the TUI is recognized as the active review destination.
+            assert_eq!(view.active_cli_agent(ctx), Some(CLIAgent::WarpTui));
+            assert!(!view.is_cli_agent_rich_input_open(ctx));
+
+            let review = single_general_review_comment("please fix the off-by-one");
+            view.send_review_to_cli_agent_or_rich_input(&review, ctx)
+                .expect("send should succeed");
+        });
+
+        // The review prompt is written to the PTY in a single write (no rich
+        // input session for the TUI, so no delayed/batched enter strategy).
+        let writes = pty_writes.borrow();
+        assert_eq!(
+            writes.len(),
+            1,
+            "expected a single PTY write, got {writes:?}"
+        );
+        let prompt = std::str::from_utf8(&writes[0]).expect("prompt is valid UTF-8");
+        assert!(
+            prompt.contains("please fix the off-by-one"),
+            "PTY write should contain the review prompt, got: {prompt}"
+        );
+    });
 }

@@ -136,6 +136,12 @@ const MISTRAL_ORANGE: ColorU = ColorU {
 };
 
 /// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
+///
+/// [`CLIAgent::WarpTui`] is a special case: it represents Warp's own headless
+/// TUI (`warp`, `warp-dev`, `warp-preview`, …), which is **not** a third-party
+/// CLI agent and is never returned by [`CLIAgent::detect`]. It exists so the
+/// code review panel can route comment sending and diff/hunk attachment to the
+/// TUI's PTY at parity with claude-code (see `TerminalView::active_cli_agent`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -153,6 +159,10 @@ pub enum CLIAgent {
     Hermes,
     Vibe,
     Antigravity,
+    /// Warp's own headless TUI. Not detected via [`CLIAgent::detect`] (which
+    /// matches third-party agent binaries); recognized separately via
+    /// [`CLIAgent::command_is_warp_tui`] so the code review panel can target it.
+    WarpTui,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
     Unknown,
 }
@@ -176,6 +186,11 @@ impl CLIAgent {
             CLIAgent::Hermes => "hermes",
             CLIAgent::Vibe => "vibe",
             CLIAgent::Antigravity => "agy",
+            // The Warp TUI is not invoked via a single command prefix — it is
+            // launched as `warp`/`warp-dev`/`warp-preview`/`run-tui`/… and
+            // recognized via `command_is_warp_tui`, not via `detect`. Return an
+            // empty prefix (like `Unknown`) so `detect` never matches it.
+            CLIAgent::WarpTui => "",
             CLIAgent::Unknown => "",
         }
     }
@@ -225,6 +240,7 @@ impl CLIAgent {
             CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
             CLIAgent::Antigravity => "Antigravity",
+            CLIAgent::WarpTui => "Warp TUI",
             CLIAgent::Unknown => "CLI Agent",
         }
     }
@@ -250,6 +266,7 @@ impl CLIAgent {
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
+            CLIAgent::WarpTui => None,
             CLIAgent::Unknown => None,
         }
     }
@@ -282,6 +299,7 @@ impl CLIAgent {
             CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
             CLIAgent::Antigravity => &[],
+            CLIAgent::WarpTui => &[],
             CLIAgent::Unknown => &[],
         }
     }
@@ -326,6 +344,7 @@ impl CLIAgent {
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
             CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
+            CLIAgent::WarpTui => None,
             CLIAgent::Unknown => None,
         }
     }
@@ -393,8 +412,12 @@ impl CLIAgent {
         // Check if resolved command matches any known CLI agent.
         // Also matches `aifx agent run claude` as Claude for Uber employees,
         // and the `vibe-acp` ACP-mode binary as Mistral Vibe.
+        // `WarpTui` is intentionally excluded — it is detected separately via
+        // `command_is_warp_tui` (see `TerminalView::active_cli_agent`), not via
+        // command-prefix matching, so a bare `warp` command is not treated as a
+        // third-party CLI agent here.
         enum_iterator::all::<CLIAgent>()
-            .filter(|agent| !matches!(agent, CLIAgent::Unknown))
+            .filter(|agent| !matches!(agent, CLIAgent::Unknown | CLIAgent::WarpTui))
             .find(|agent| {
                 resolved_first_word == agent.command_prefix()
                     || (matches!(agent, CLIAgent::Claude)
@@ -619,6 +642,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
             CLIAgent::Antigravity => CLIAgentType::Antigravity,
+            CLIAgent::WarpTui => CLIAgentType::WarpTui,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }
     }
