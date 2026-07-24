@@ -263,8 +263,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CreateProjectFlow,
         #[cfg(feature = "vim_code_editor")]
         FeatureFlag::VimCodeEditor,
-        #[cfg(feature = "allow_opening_file_links_using_editor_env")]
-        FeatureFlag::AllowOpeningFileLinksUsingEditorEnv,
         #[cfg(feature = "revert_diff_hunk")]
         FeatureFlag::RevertDiffHunk,
         #[cfg(feature = "code_review_save_changes")]
