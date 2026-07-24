@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use warp::cmd_or_ctrl_shift;
-use warp::features::FeatureFlag;
 use warp::integration_testing::pane_group::assert_focused_pane_index;
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::ExpectedExitStatus;
@@ -24,7 +23,6 @@ use super::{Builder, new_builder};
 /// 4. Restore the pane with cmd+shift+t
 /// 5. Assert the pane is restored in the correct location with previous state
 pub fn test_restore_single_closed_pane() -> Builder {
-    FeatureFlag::UndoClosedPanes.set_enabled(true);
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
@@ -73,7 +71,6 @@ pub fn test_restore_single_closed_pane() -> Builder {
 /// 4. Restore both closed panes using undo close twice
 /// 5. Assert both panes are restored correctly with their previous state
 pub fn test_restore_multiple_closed_panes() -> Builder {
-    FeatureFlag::UndoClosedPanes.set_enabled(true);
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(execute_command(
@@ -168,7 +165,6 @@ pub fn test_restore_multiple_closed_panes() -> Builder {
 /// 4. Attempt to restore the pane with cmd+shift+t
 /// 5. Assert the pane is NOT restored because it was cleaned up
 pub fn test_undo_close_grace_period_cleanup() -> Builder {
-    FeatureFlag::UndoClosedPanes.set_enabled(true);
     new_builder()
         .with_user_defaults(HashMap::from([(
             "UndoCloseGracePeriod".to_owned(),
@@ -234,7 +230,6 @@ pub fn test_undo_close_grace_period_cleanup() -> Builder {
 /// 4. Attempt to restore the closed pane with cmd+shift+t
 /// 5. Assert the pane is NOT restored because it was cleared during rearrangement
 pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
-    FeatureFlag::UndoClosedPanes.set_enabled(true);
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(execute_command(
@@ -386,7 +381,6 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
 /// 4. Verify the tab is closed (not just showing empty)
 /// 5. Restore the pane and verify it creates a new tab
 pub fn test_tab_closes_when_last_visible_pane_closed() -> Builder {
-    FeatureFlag::UndoClosedPanes.set_enabled(true);
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(execute_command(

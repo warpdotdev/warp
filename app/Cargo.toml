@@ -567,7 +567,6 @@ default = [
     "allow_opening_file_links_using_editor_env",
     "read_image_files",
     "selection_as_context",
-    "undo_closed_panes",
     "revert_diff_hunk",
     "code_review_save_changes",
     "create_project_flow",
@@ -936,7 +935,6 @@ sync_ambient_plans = []
 projects = []
 vim_code_editor = []
 allow_opening_file_links_using_editor_env = []
-undo_closed_panes = []
 revert_diff_hunk = []
 code_review_save_changes = []
 remote_code_review = []
