@@ -10,7 +10,6 @@ cfg_if::cfg_if! {
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
-use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
@@ -30,9 +29,6 @@ pub struct Outline {
 
     /// Mapping the leaf file nodes to their outline.
     file_id_to_outline: HashMap<FileId, FileOutline>,
-
-    /// List of gitignore patterns.
-    gitignores: Vec<Gitignore>,
 }
 
 impl Outline {
@@ -127,9 +123,6 @@ impl Outline {
         self.file_id_to_outline.len()
     }
 
-    pub fn gitignores(&self) -> Vec<Gitignore> {
-        self.gitignores.clone()
-    }
 }
 
 /// An identifier symbol in the code file. For now this is just the top-level functions.
