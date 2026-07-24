@@ -23,6 +23,14 @@ const NUM_CHANNELS: u16 = 1;
 // Voice input is typically sampled at 16000Hz (and required by Wispr)
 const TARGET_SAMPLE_RATE: f32 = 16000.0;
 const STREAM_TIMEOUT: Duration = Duration::from_secs(60 * 6);
+// Upper bound on how much audio a single voice session retains. The `resampled`
+// buffer grows by one frame per audio callback and is only drained on stop, so an
+// unbounded session (e.g. a stuck or forgotten recording) would accumulate audio
+// until memory is exhausted. Capping it at ~10 minutes of 16000Hz mono f32 samples
+// (~38 MB of samples) bounds that growth; reaching the cap auto-stops the session and forwards
+// whatever has been captured so far.
+const MAX_RECORDING_SECS: usize = 60 * 10;
+const MAX_RECORDING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * MAX_RECORDING_SECS;
 
 pub struct VoiceInput {
     state: VoiceInputState,
@@ -368,6 +376,23 @@ impl VoiceInput {
 
     // Enqueues a single audio frame to be processed on a background thread.
     fn on_audio_frame(&mut self, mut input_buffer: Vec<f32>, ctx: &mut ModelContext<Self>) {
+        // Once the session has captured the maximum amount of audio, auto-stop and
+        // forward what we have instead of accumulating frames forever (#12568).
+        let reached_cap = matches!(
+            &self.state,
+            VoiceInputState::Listening { resampled, .. }
+                if resampled.lock().len() >= MAX_RECORDING_SAMPLES
+        );
+        if reached_cap {
+            log::warn!(
+                "Voice input reached the {MAX_RECORDING_SECS}s recording cap; auto-stopping and forwarding captured audio"
+            );
+            if let Err(e) = self.stop_listening(ctx) {
+                log::error!("Failed to auto-stop voice input at recording cap: {e}");
+            }
+            return;
+        }
+
         let VoiceInputState::Listening {
             resampler,
             resampled,
@@ -403,8 +428,23 @@ impl VoiceInput {
     ) -> Result<(), anyhow::Error> {
         let mut resampler = resampler.lock();
         let mut resampled = resampled.lock();
-        resampled.extend(resampler.process(&[input_buffer], None)?[0].to_vec());
+        Self::append_resampled_capped(
+            &mut resampled,
+            resampler.process(&[input_buffer], None)?[0].as_slice(),
+        );
         Ok(())
+    }
+
+    // Appends resampled samples to the session buffer, clamping its total length to
+    // `MAX_RECORDING_SAMPLES`. This hard-bounds memory even if additional frames are
+    // in flight before `on_audio_frame` observes the cap and auto-stops (#12568).
+    fn append_resampled_capped(resampled: &mut Vec<f32>, frame: &[f32]) {
+        if resampled.len() >= MAX_RECORDING_SAMPLES {
+            return;
+        }
+        let remaining = MAX_RECORDING_SAMPLES - resampled.len();
+        let take = remaining.min(frame.len());
+        resampled.extend_from_slice(&frame[..take]);
     }
 
     // Converts the resampled audio to a WAV file and returns the base64 encoded WAV data.
@@ -439,3 +479,35 @@ impl Entity for VoiceInput {
 }
 
 impl SingletonEntity for VoiceInput {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Guards #12568: the resampled buffer must never grow past MAX_RECORDING_SAMPLES,
+    // no matter how many frames arrive.
+    #[test]
+    fn append_resampled_capped_bounds_buffer() {
+        let mut resampled: Vec<f32> = Vec::new();
+
+        // Appending well past the cap must clamp to exactly the cap, not grow unbounded.
+        let frame = vec![0.5_f32; MAX_RECORDING_SAMPLES / 4];
+        for _ in 0..10 {
+            VoiceInput::append_resampled_capped(&mut resampled, &frame);
+        }
+        assert_eq!(resampled.len(), MAX_RECORDING_SAMPLES);
+
+        // Once at the cap, further appends are no-ops.
+        VoiceInput::append_resampled_capped(&mut resampled, &frame);
+        assert_eq!(resampled.len(), MAX_RECORDING_SAMPLES);
+    }
+
+    #[test]
+    fn append_resampled_capped_keeps_samples_below_cap() {
+        let mut resampled: Vec<f32> = Vec::new();
+        let frame = vec![0.25_f32; 100];
+        VoiceInput::append_resampled_capped(&mut resampled, &frame);
+        assert_eq!(resampled.len(), 100);
+        assert!(resampled.iter().all(|&s| s == 0.25));
+    }
+}
