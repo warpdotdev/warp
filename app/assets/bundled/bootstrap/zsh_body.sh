@@ -1176,26 +1176,26 @@ esac
 
   # If this is a subshell, the user and system RC files have already been sourced.
   if [[ -z $WARP_IS_SUBSHELL ]]; then
-      if [[ -e ${ZDOTDIR:-$HOME}/.zshenv ]]; then
-          source ${ZDOTDIR:-$HOME}/.zshenv;
+      if [[ -e "${ZDOTDIR:-$HOME}/.zshenv" ]]; then
+          source "${ZDOTDIR:-$HOME}/.zshenv";
       fi
       if [[ -e /etc/zprofile ]]; then
           source /etc/zprofile;
       fi
-      if [[ -e ${ZDOTDIR:-$HOME}/.zprofile ]]; then
-          source ${ZDOTDIR:-$HOME}/.zprofile;
+      if [[ -e "${ZDOTDIR:-$HOME}/.zprofile" ]]; then
+          source "${ZDOTDIR:-$HOME}/.zprofile";
       fi
       if [[ -e /etc/zshrc ]]; then
           source /etc/zshrc;
       fi
-      if [[ -e ${ZDOTDIR:-$HOME}/.zshrc ]]; then
-          source ${ZDOTDIR:-$HOME}/.zshrc;
+      if [[ -e "${ZDOTDIR:-$HOME}/.zshrc" ]]; then
+          source "${ZDOTDIR:-$HOME}/.zshrc";
       fi
       if [[ -e /etc/zlogin ]]; then
           source /etc/zlogin;
       fi
-      if [[ -e ${ZDOTDIR:-$HOME}/.zlogin ]]; then
-          source ${ZDOTDIR:-$HOME}/.zlogin;
+      if [[ -e "${ZDOTDIR:-$HOME}/.zlogin" ]]; then
+          source "${ZDOTDIR:-$HOME}/.zlogin";
       fi
   fi
 
