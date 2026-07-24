@@ -201,6 +201,7 @@ async fn prepare_environment_impl(
 
     #[cfg(feature = "local_fs")]
     if let Some(cache_root) = cache_setup::enabled_cache_root() {
+        log::info!("Configuring build cache");
         let result = setup_events
             .record_result(
                 SetupStep::CacheSetup,
@@ -210,7 +211,10 @@ async fn prepare_environment_impl(
         if let Err(error) = result {
             log::warn!("Build cache setup degraded; continuing environment preparation: {error}");
         }
+    } else {
+        log::info!("Build cache not available");
     }
+
     let has_setup_commands = !setup_commands.is_empty();
     if has_setup_commands {
         setup_events
