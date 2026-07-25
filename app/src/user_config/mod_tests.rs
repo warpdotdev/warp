@@ -96,9 +96,47 @@ fn test_materialized_default_worktree_config_renders_full_worktree_path() {
         assert_eq!(commands.len(), 2);
         assert_eq!(
             commands[0].exec,
-            format!("git worktree add -b my-feature {expected_worktree_path}")
+            format!("git worktree add -b my-feature \"{expected_worktree_path}\"")
         );
-        assert_eq!(commands[1].exec, format!("cd {expected_worktree_path}"));
+        assert_eq!(commands[1].exec, format!("cd \"{expected_worktree_path}\""));
+    } else {
+        panic!("expected terminal pane template");
+    }
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_materialized_default_worktree_config_quotes_path_with_spaces() {
+    // APP-4982 / GH#11144: a repo whose name contains spaces yields a
+    // worktree path with spaces; the materialized default-worktree config
+    // must double-quote that path in both commands so the shell does not
+    // word-split it.
+    let template = include_str!("../../resources/tab_configs/default_worktree.toml");
+    let repo_path = "/tmp/my project";
+    let (_, tab_config) = materialize_default_worktree_config(
+        template,
+        "Worktree: my project",
+        repo_path,
+        "terminal",
+    )
+    .expect("expected template materialization to succeed");
+
+    let (_, pane_template) = render_tab_config(&tab_config, &HashMap::new(), Some("my-feature"));
+
+    if let PaneTemplateType::PaneTemplate { commands, .. } = pane_template {
+        let expected_worktree_path = generated_worktree_repo_dir(Path::new(repo_path))
+            .join("my-feature")
+            .display()
+            .to_string();
+        let quoted_path = format!("\"{expected_worktree_path}\"");
+        assert_eq!(commands.len(), 2);
+        assert_eq!(
+            commands[0].exec,
+            format!("git worktree add -b my-feature {quoted_path}")
+        );
+        assert_eq!(commands[1].exec, format!("cd {quoted_path}"));
+        assert!(commands[0].exec.contains(&quoted_path));
+        assert!(commands[1].exec.contains(&quoted_path));
     } else {
         panic!("expected terminal pane template");
     }
