@@ -732,6 +732,8 @@ impl VimFSA {
             pending_operand_count: None,
             pending_visual_object: None,
             last_find_motion: None,
+            // When doing an operation that reads/writes to a register, the default (unnamed) register
+            // is called ".
             register: '"',
             dot_repeat_event: None,
         }

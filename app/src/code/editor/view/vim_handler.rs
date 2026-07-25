@@ -286,7 +286,7 @@ impl VimHandler for CodeEditorView {
                         }
 
                         let include_newline = operator.includes_trailing_newline()
-                            && !matches!(operator, VimOperator::ToggleComment);
+                            && *operator != VimOperator::ToggleComment;
                         model.vim_extend_selection_linewise(include_newline, ctx);
                     }
                     VimOperand::TextObject(text_object) => {
