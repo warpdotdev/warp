@@ -975,7 +975,7 @@ impl RemoteServerClient {
                     );
                 }
                 if !e.is_write_recoverable() {
-                    log::error!("Writer task fatal error: request_id={request_id} error={e}");
+                    log::error!("Writer task fatal error: request_id={request_id}: {e:#}");
                     pending_requests.clear();
                     break;
                 }
