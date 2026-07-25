@@ -488,6 +488,85 @@ pub fn convert_wsl_to_windows_host_path(
     }
 }
 
+/// A path that lives inside a WSL distribution, expressed on the Windows host
+/// as a UNC path. This is the decomposed form of what
+/// [`convert_wsl_to_windows_host_path`] produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WslUncPath {
+    /// The distribution name exactly as it appears in the UNC path (case
+    /// preserved).
+    pub distro: String,
+    /// The corresponding Linux absolute path, using `/` separators. A UNC path
+    /// that points at the distribution root maps to `/`.
+    pub linux_path: String,
+}
+
+/// The verbatim UNC prefix (`\\?\UNC\`), normalized to forward slashes.
+const VERBATIM_UNC_PREFIX: &str = "//?/UNC/";
+
+/// The host components that identify a WSL UNC path.
+const WSL_UNC_HOSTS: &[&str] = &["wsl$", "wsl.localhost"];
+
+/// Parses a WSL UNC path into its distribution and Linux path, the inverse of
+/// [`convert_wsl_to_windows_host_path`]. Accepts the `\\wsl$\...`,
+/// `\\wsl.localhost\...`, verbatim `\\?\UNC\wsl$\...`, and forward-slash
+/// `//wsl$/...` spellings; the host component is matched case-insensitively.
+/// Returns `None` for non-WSL UNC paths, drive-letter paths, and relative
+/// paths.
+pub fn parse_wsl_unc_path(path: &Path) -> Option<WslUncPath> {
+    // Normalize both separators to `/` so the forward-slash and backslash
+    // spellings share a single parser.
+    let normalized = path.to_str()?.replace('\\', "/");
+
+    // Strip the leading UNC marker, handling the verbatim form first.
+    let rest = match strip_prefix_ci(&normalized, VERBATIM_UNC_PREFIX) {
+        Some(after_verbatim) => after_verbatim,
+        None => normalized.strip_prefix("//")?,
+    };
+
+    // The host component runs up to the next separator; without a separator
+    // there is no room for a distribution name.
+    let (host, after_host) = rest.split_once('/')?;
+    if !WSL_UNC_HOSTS.iter().any(|h| host.eq_ignore_ascii_case(h)) {
+        return None;
+    }
+
+    // The distribution name is the next component; whatever follows is the
+    // Linux path.
+    let (distro, linux_rest) = match after_host.split_once('/') {
+        Some((distro, linux_rest)) => (distro, linux_rest),
+        None => (after_host, ""),
+    };
+    if distro.is_empty() {
+        return None;
+    }
+
+    // Trailing separators are dropped; the distribution root becomes `/`.
+    let trimmed = linux_rest.trim_end_matches('/');
+    let linux_path = if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{trimmed}")
+    };
+
+    Some(WslUncPath {
+        distro: distro.to_string(),
+        linux_path,
+    })
+}
+
+/// Case-insensitive [`str::strip_prefix`]. Uses [`str::get`] so a prefix length
+/// that lands inside a multi-byte character is treated as a non-match rather
+/// than panicking.
+fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        Some(&s[prefix.len()..])
+    } else {
+        None
+    }
+}
+
 #[cfg(windows)]
 fn prefix(path: &Path) -> Option<std::path::Prefix<'_>> {
     use std::path::Component;

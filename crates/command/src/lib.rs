@@ -14,6 +14,5 @@ pub mod unix;
 #[cfg(windows)]
 pub mod windows;
 pub mod wsl;
-pub mod wsl_windows;
 
 pub use std::process::{ExitStatus, Output, Stdio};

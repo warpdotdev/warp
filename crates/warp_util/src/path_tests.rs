@@ -627,6 +627,62 @@ fn test_convert_wsl_to_windows_host_path() {
     ));
 }
 
+/// Asserts that `input` parses into the given distribution and Linux path.
+fn assert_parses_wsl_unc(input: &str, distro: &str, linux_path: &str) {
+    assert_eq!(
+        parse_wsl_unc_path(Path::new(input)),
+        Some(WslUncPath {
+            distro: distro.to_string(),
+            linux_path: linux_path.to_string(),
+        }),
+        "input: {input:?}"
+    );
+}
+
+#[test]
+fn test_parse_wsl_unc_path() {
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\home\user", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc(r"\\wsl.localhost\Ubuntu\home", "Ubuntu", "/home");
+    assert_parses_wsl_unc(r"\\?\UNC\wsl$\Ubuntu\home\user", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc(
+        r"\\?\UNC\wsl.localhost\Ubuntu\srv\repo",
+        "Ubuntu",
+        "/srv/repo",
+    );
+    assert_parses_wsl_unc("//wsl$/Ubuntu/home/user", "Ubuntu", "/home/user");
+    // The host and the verbatim prefix are matched case-insensitively.
+    assert_parses_wsl_unc(r"\\WSL$\Ubuntu\src", "Ubuntu", "/src");
+    assert_parses_wsl_unc(r"\\Wsl.LocalHost\Ubuntu\src", "Ubuntu", "/src");
+    assert_parses_wsl_unc(r"\\?\unc\wsl$\Ubuntu\src", "Ubuntu", "/src");
+    // Trailing separators are dropped.
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\home\user\", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc("//wsl$/Ubuntu/home/user/", "Ubuntu", "/home/user");
+    // Distribution names may contain dots and dashes.
+    assert_parses_wsl_unc(
+        r"\\wsl.localhost\Ubuntu-24.04\home\krag",
+        "Ubuntu-24.04",
+        "/home/krag",
+    );
+    // The distribution root maps to `/`.
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu", "Ubuntu", "/");
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\", "Ubuntu", "/");
+    assert_parses_wsl_unc("//wsl$/archlinux", "archlinux", "/");
+}
+
+#[test]
+fn test_parse_wsl_unc_path_rejects_other_paths() {
+    // Non-WSL UNC share.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\server\share\dir")), None);
+    // Drive-letter path.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"C:\Users\foo")), None);
+    // Relative paths.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"foo\bar")), None);
+    assert_eq!(parse_wsl_unc_path(Path::new("foo/bar")), None);
+    // WSL host without a distribution name.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\wsl$")), None);
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\wsl$\")), None);
+}
+
 #[test]
 fn test_convert_windows_path_to_wsl() {
     assert_eq!(
