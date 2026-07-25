@@ -630,21 +630,34 @@ impl ResponseStream {
                     self.should_resume_conversation_after_stream_finished,
                 );
                 scope.set_tag("is_online", is_online);
-                scope.set_tag("retry_count", self.retry_count);
             },
             || {
-                report_error!(anyhow!(error.clone()).context(format!(
-                    "MultiAgent request failed after {} retries",
-                    self.retry_count
-                )));
+                report_error!(
+                    error.as_ref(),
+                    extra: {
+                        "has_received_client_actions" => self.has_received_client_actions,
+                        "is_recoverable" => error.is_recoverable(),
+                        "will_attempt_resume" => self.should_resume_conversation_after_stream_finished,
+                        "is_online" => is_online,
+                        "retry_count" => self.retry_count,
+                        "error_debug" => %format!("{error:?}"),
+                    }
+                );
             },
         );
         #[cfg(not(feature = "crash_reporting"))]
         {
-            report_error!(anyhow!(error.clone()).context(format!(
-                "MultiAgent request failed after {} retries",
-                self.retry_count
-            )));
+            report_error!(
+                error.as_ref(),
+                extra: {
+                    "has_received_client_actions" => self.has_received_client_actions,
+                    "is_recoverable" => error.is_recoverable(),
+                    "will_attempt_resume" => self.should_resume_conversation_after_stream_finished,
+                    "is_online" => is_online,
+                    "retry_count" => self.retry_count,
+                    "error_debug" => %format!("{error:?}"),
+                }
+            );
         }
     }
 

@@ -146,3 +146,46 @@ fn new_macro_forms_log_as_expected() {
     report_if_error!(err, extra: { "k" => 1 });
     assert_eq!(logged_report_count("nope [k=1]"), 1);
 }
+
+#[cfg(feature = "reqwest-errors")]
+#[test]
+fn preserved_reqwest_error_chain_delegates_actionability() {
+    use crate::AnyhowErrorExt as _;
+
+    // A connection failure is registered as non-actionable. Wrapping the typed error with
+    // anyhow::Error::new preserves the source chain so the classification is retained.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let non_actionable = reqwest::blocking::Client::new()
+        .get(format!("http://{address}"))
+        .send()
+        .expect_err("the closed local port should reject the connection");
+    assert!(non_actionable.is_connect(), "{non_actionable:?}");
+    assert!(!anyhow::Error::new(non_actionable).is_actionable());
+
+    // An unfiltered client error is actionable and should remain so through the same
+    // typed-anyhow boundary.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        use std::io::{Read, Write};
+
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0; 1024];
+        let request_bytes = stream.read(&mut request).unwrap();
+        assert!(request_bytes > 0);
+        stream
+            .write_all(
+                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+    });
+    let response = reqwest::blocking::get(format!("http://{address}")).unwrap();
+    let actionable = response
+        .error_for_status()
+        .expect_err("a 400 response should produce a reqwest error");
+    server.join().unwrap();
+    assert_eq!(actionable.status(), Some(http::StatusCode::BAD_REQUEST));
+    assert!(anyhow::Error::new(actionable).is_actionable());
+}
