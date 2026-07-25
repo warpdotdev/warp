@@ -109,6 +109,8 @@
         @"glitch": @"glitch",
         @"glow": @"glow",
         @"holographic": @"holographic",
+        @"liquidglassdark": @"liquid_glass_dark",
+        @"liquidglasslight": @"liquid_glass_light",
         @"mono": @"mono",
         @"neon": @"neon",
         @"original": @"original",
