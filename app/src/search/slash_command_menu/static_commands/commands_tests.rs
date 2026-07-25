@@ -135,6 +135,23 @@ fn auto_approve_command_is_local_agent_action_without_arguments() {
 }
 
 #[test]
+fn statusline_command_is_always_available_only_in_tui_mode() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::Statusline)
+        .expect("expected /statusline to be registered in TUI mode");
+    assert_eq!(command, STATUSLINE);
+    assert_eq!(command.availability, Availability::ALWAYS);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Statusline)
+    );
+}
+#[test]
 fn logout_command_is_registered_only_for_tui_mode() {
     assert!(
         all_commands(settings::SettingsMode::Tui)

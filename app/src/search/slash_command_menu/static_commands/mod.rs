@@ -55,6 +55,7 @@ pub enum SlashCommandKind {
     CloudAgent,
     AddMcp,
     AutoApprove,
+    Statusline,
     Mcp,
     ViewLogs,
     Voice,

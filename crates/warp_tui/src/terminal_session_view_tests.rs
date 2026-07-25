@@ -5,13 +5,15 @@ use std::time::Duration;
 use instant::Instant;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
-use warp::settings::{AISettings, TuiUsageDisplayMode, TuiZeroStateObject};
+use warp::settings::{
+    AISettings, TuiStatuslineConfig, TuiStatuslineItem, TuiUsageDisplayMode, TuiZeroStateObject,
+};
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
     AIAgentActionId, AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId,
     AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel, ConversationStatus,
-    ConversationUsageTotals, Harness, LLMPreferences, PtyIntent, PtyIntentEvent, SizeInfo,
-    SizeUpdate, TaskId, TranscriptScope, export_conversation_markdown,
+    ConversationUsageTotals, Harness, LLMPreferences, PtyIntent, PtyIntentEvent, QueuedQueryModel,
+    SizeInfo, SizeUpdate, TaskId, TranscriptScope, export_conversation_markdown,
     register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::settings::Setting as _;
@@ -36,14 +38,14 @@ use super::{
     ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, AUTO_APPROVE_FEEDBACK_DURATION,
     AUTO_APPROVE_TOGGLE_BINDING_NAME, COST_CONVERSATION_IN_PROGRESS_HINT,
     COST_EMPTY_CONVERSATION_HINT, COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT,
-    ConversationRestoreState, FooterSegments, INLINE_MENU_TOP_PADDING_ROWS,
+    ConversationRestoreState, FooterSegment, FooterSegments, INLINE_MENU_TOP_PADDING_ROWS,
     LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
     SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
     SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
-    log_bundle_success_message, raw_prompt_if_not_blank, render_status_footer_row,
-    voice_argument_is_empty, voice_command_argument,
+    format_context_window_usage, log_bundle_success_message, raw_prompt_if_not_blank,
+    render_status_footer_row, voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -58,6 +60,7 @@ use crate::orchestration_tab_bar::{
 };
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
+use crate::statusline_config_view::TuiStatuslineConfigEvent;
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
@@ -72,6 +75,120 @@ use crate::zero_state_animation::{
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
+}
+
+#[test]
+fn footer_supports_arbitrary_order_and_branch_without_a_leading_arrow() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let row = render_status_footer_row(
+                FooterSegments {
+                    ordered: vec![
+                        FooterSegment::ContextWindowUsage(format_context_window_usage(0.426)),
+                        FooterSegment::GitBranch("feature/statusline".to_owned()),
+                        FooterSegment::ActiveIndicator("Auto-queue"),
+                        FooterSegment::WorkingDirectory("/tmp/warp".to_owned()),
+                    ],
+                },
+                &builder,
+            )
+            .finish();
+            assert_eq!(
+                render_element(row, ctx, 120).to_lines(),
+                vec!["43% context used • feature/statusline • Auto-queue • /tmp/warp".to_owned()],
+            );
+
+            let branch_only = render_status_footer_row(
+                FooterSegments {
+                    ordered: vec![FooterSegment::GitBranch("main".to_owned())],
+                },
+                &builder,
+            )
+            .finish();
+            assert_eq!(
+                render_element(branch_only, ctx, 80).to_lines(),
+                vec!["main".to_owned()],
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_configurable_footer_has_zero_height() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let row = render_status_footer_row(
+                FooterSegments {
+                    ordered: Vec::new(),
+                },
+                &builder,
+            )
+            .finish();
+            assert!(render_element(row, ctx, 80).to_lines().is_empty());
+        });
+    });
+}
+
+#[test]
+fn enabled_auto_indicators_render_only_while_their_effective_states_are_on() {
+    App::test((), |mut app| async move {
+        let _queue_flag =
+            warp_core::features::FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let conversation_id = view.update(&mut app, |view, ctx| {
+            let conversation_id = view.conversation_selection.update(ctx, |selection, ctx| {
+                selection
+                    .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
+                    .expect("test conversation should start")
+            });
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.toggle_pending_query_autoexecute(ctx);
+            });
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.toggle_queue_next_prompt(conversation_id, ctx);
+            });
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .tui_statusline
+                    .set_value(
+                        TuiStatuslineConfig {
+                            order: vec![
+                                TuiStatuslineItem::AutoApprove,
+                                TuiStatuslineItem::AutoQueue,
+                            ],
+                            enabled: vec![
+                                TuiStatuslineItem::AutoApprove,
+                                TuiStatuslineItem::AutoQueue,
+                            ],
+                        }
+                        .normalized(),
+                        ctx,
+                    )
+                    .expect("statusline setting should persist");
+            });
+            conversation_id
+        });
+
+        assert_eq!(
+            render_footer_lines(&mut app, &view, 80),
+            vec!["Auto-approve • Auto-queue".to_owned()],
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.toggle_pending_query_autoexecute(ctx);
+            });
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.toggle_queue_next_prompt(conversation_id, ctx);
+            });
+        });
+        assert!(render_footer_lines(&mut app, &view, 80).is_empty());
+    });
 }
 
 #[test]
@@ -484,6 +601,96 @@ fn auto_approve_slash_command_toggles_selected_conversation_off_on_off() {
 }
 
 #[test]
+fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/statusline", ctx);
+            });
+            view.execute_tui_slash_command(&slash_commands::STATUSLINE, None, ctx);
+        });
+
+        let picker_id = view.read(&app, |view, ctx| {
+            let picker = view
+                .statusline_config_view
+                .as_ref()
+                .expect("statusline picker should be open");
+            assert_eq!(
+                view.input_view
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .content()
+                    .as_ref(ctx)
+                    .text()
+                    .into_string(),
+                ""
+            );
+            assert!(ctx.check_view_or_child_focused(fixture.window_id, &picker.id()));
+            picker.id()
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::STATUSLINE, None, ctx);
+        });
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.statusline_config_view.as_ref().map(ViewHandle::id)
+            }),
+            Some(picker_id),
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_statusline_config_event(&TuiStatuslineConfigEvent::Cancelled, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert!(view.statusline_config_view.is_none());
+            assert!(ctx.check_view_or_child_focused(fixture.window_id, &view.input_view.id()));
+        });
+    });
+}
+
+#[test]
+fn saving_statusline_configuration_persists_and_restores_input_focus() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let config = TuiStatuslineConfig {
+            order: vec![
+                TuiStatuslineItem::ContextWindowUsage,
+                TuiStatuslineItem::CreditUsage,
+            ],
+            enabled: Vec::new(),
+        }
+        .normalized();
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::STATUSLINE, None, ctx);
+            view.handle_statusline_config_event(
+                &TuiStatuslineConfigEvent::Saved(config.clone()),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).tui_statusline.normalized()),
+            config,
+        );
+        view.read(&app, |view, ctx| {
+            assert!(view.statusline_config_view.is_none());
+            assert!(ctx.check_view_or_child_focused(fixture.window_id, &view.input_view.id()));
+            assert_eq!(
+                view.transient_hint.current().map(|(text, _)| text),
+                Some(super::STATUSLINE_SAVED_HINT),
+            );
+        });
+    });
+}
+
+#[test]
 fn cost_slash_command_rejects_an_empty_conversation_like_the_gui() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -536,18 +743,15 @@ fn render_usage_footer_row(app: &mut App, totals: ConversationUsageTotals) -> Ve
         let usage = UsageToggle::default().render_entry(mode, totals, ctx, |_, _| {});
         let row = render_status_footer_row(
             FooterSegments {
-                shell_mode: false,
-                model_label: Some(
-                    TuiText::new("TestModel")
-                        .with_style(builder.primary_text_style())
-                        .truncate()
-                        .finish(),
-                ),
-                cwd: None,
-                branch: None,
-                usage: Some(usage),
-                diff_additions: 0,
-                diff_deletions: 0,
+                ordered: vec![
+                    FooterSegment::Model(
+                        TuiText::new("TestModel")
+                            .with_style(builder.primary_text_style())
+                            .truncate()
+                            .finish(),
+                    ),
+                    FooterSegment::CreditUsage(usage),
+                ],
             },
             &builder,
         )
@@ -1667,18 +1871,21 @@ fn footer_renders_agent_sections_left_aligned() {
             );
             let row = render_status_footer_row(
                 FooterSegments {
-                    shell_mode: false,
-                    model_label: Some(
-                        TuiText::new("TestModel")
-                            .with_style(builder.primary_text_style())
-                            .truncate()
-                            .finish(),
-                    ),
-                    cwd: Some("/home/user/warp".to_owned()),
-                    branch: Some("main".to_owned()),
-                    usage: Some(usage),
-                    diff_additions: 3,
-                    diff_deletions: 1,
+                    ordered: vec![
+                        FooterSegment::Model(
+                            TuiText::new("TestModel")
+                                .with_style(builder.primary_text_style())
+                                .truncate()
+                                .finish(),
+                        ),
+                        FooterSegment::WorkingDirectory("/home/user/warp".to_owned()),
+                        FooterSegment::GitBranch("main".to_owned()),
+                        FooterSegment::CreditUsage(usage),
+                        FooterSegment::GitDiff {
+                            additions: 3,
+                            deletions: 1,
+                        },
+                    ],
                 },
                 &builder,
             )
@@ -1725,29 +1932,17 @@ fn footer_renders_shell_mode_sections_without_model_or_usage() {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
             let builder = TuiUiBuilder::from_app(ctx);
-            let usage = UsageToggle::default().render_entry(
-                TuiUsageDisplayMode::default(),
-                ConversationUsageTotals {
-                    credits_spent: 2.5,
-                    cost_in_cents: 0.0,
-                },
-                ctx,
-                |_, _| {},
-            );
             let row = render_status_footer_row(
                 FooterSegments {
-                    shell_mode: true,
-                    model_label: Some(
-                        TuiText::new("TestModel")
-                            .with_style(builder.primary_text_style())
-                            .truncate()
-                            .finish(),
-                    ),
-                    cwd: Some("/home/user/warp".to_owned()),
-                    branch: Some("main".to_owned()),
-                    usage: Some(usage),
-                    diff_additions: 3,
-                    diff_deletions: 1,
+                    ordered: vec![
+                        FooterSegment::ShellMode,
+                        FooterSegment::WorkingDirectory("/home/user/warp".to_owned()),
+                        FooterSegment::GitBranch("main".to_owned()),
+                        FooterSegment::GitDiff {
+                            additions: 3,
+                            deletions: 1,
+                        },
+                    ],
                 },
                 &builder,
             )

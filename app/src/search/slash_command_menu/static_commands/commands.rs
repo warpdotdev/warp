@@ -45,6 +45,15 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
     auto_enter_ai_mode: false,
     argument: None,
 };
+pub const STATUSLINE: StaticCommand = StaticCommand {
+    name: "/statusline",
+    description: "Configure the statusline",
+    kind: SlashCommandKind::Statusline,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
 
 pub const AUTO_APPROVE: StaticCommand = StaticCommand {
     name: "/auto-approve",
@@ -863,6 +872,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
+        STATUSLINE,
         NATURAL_LANGUAGE_DETECTION,
         USAGE,
         CONVERSATIONS,
