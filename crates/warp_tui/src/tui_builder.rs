@@ -215,7 +215,7 @@ impl TuiUiBuilder {
         )
     }
 
-    /// Cyan-overlay background for the shortcut reference panel.
+    /// Theme-accent overlay for the shortcut reference panel.
     pub(crate) fn shortcuts_background(&self) -> Color {
         let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
         cell_color(self.base_background().blend(&accent.with_opacity(10)))

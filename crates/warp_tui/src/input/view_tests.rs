@@ -2605,7 +2605,7 @@ fn question_mark_at_empty_shell_input_toggles_shortcuts() {
 }
 
 #[test]
-fn escape_from_shell_shortcuts_executes_the_advertised_agent_mode_transition() {
+fn escape_closes_shortcuts_before_exiting_shell_mode() {
     App::test((), |mut app| async move {
         register_tui_session_view_test_singletons(&mut app);
         app.update(|ctx| {
@@ -2630,7 +2630,15 @@ fn escape_from_shell_shortcuts_executes_the_advertised_agent_mode_transition() {
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
                 TuiInputSuggestionsMode::Closed
             );
-            assert!(!view.as_ref(ctx).is_shell_mode(ctx));
+            assert!(
+                view.as_ref(ctx).is_shell_mode(ctx),
+                "the first Escape should only close shortcuts"
+            );
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert!(
+                !view.as_ref(ctx).is_shell_mode(ctx),
+                "the second Escape should exit shell mode"
+            );
         });
     });
 }

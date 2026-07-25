@@ -1020,9 +1020,6 @@ impl TuiInputView {
     /// one Escape always closes the most local surface first.
     fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         if self.close_shortcuts(ctx) {
-            if self.is_shell_mode(ctx) {
-                self.exit_shell_mode(ctx);
-            }
             return true;
         }
         if let Some(inline_menu) = self.active_inline_menu(ctx) {

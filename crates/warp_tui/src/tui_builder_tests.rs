@@ -58,6 +58,10 @@ fn text_styles_follow_light_theme_foreground() {
             .blend(&shell_command_fill.with_opacity(10)),
     )
     .into();
+    let shortcut_accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
+    let shortcuts_background: Color =
+        CoreFill::from(theme.background().blend(&shortcut_accent.with_opacity(10))).into();
+    assert_eq!(builder.shortcuts_background(), shortcuts_background);
     assert_eq!(builder.shell_command_background(), shell_command_background);
     let shell_command_prefix_style = builder.shell_command_prefix_style();
     assert_eq!(
