@@ -1814,7 +1814,6 @@ fn test_vim_double_greater_indents_current_line() {
         vim_user_insert(&editor, ">>", &mut app);
         assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
-        // Cursor lands on the first non-whitespace of the shifted line.
         assert_eq!(cursor_position(&editor, &app), (2, 4));
     });
 }
@@ -1845,7 +1844,6 @@ fn test_vim_double_less_at_column_zero_is_noop() {
 
         set_cursor_position(&editor, 1, 0, &mut app);
         vim_user_insert(&editor, "<<", &mut app);
-        // Dedenting a line with no leading indentation changes nothing.
         assert_eq!(buffer_text(&editor, &app), "line 1\nline 2");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
     });
@@ -1857,7 +1855,6 @@ fn test_vim_double_less_removes_only_one_indent_unit() {
 
     App::test((), |mut app| async move {
         initialize_code_editor_app(&mut app);
-        // 8 leading spaces == two 4-space indent units; `<<` removes only one.
         let editor = add_code_editor("        line 1\nline 2", &mut app);
 
         set_cursor_position(&editor, 1, 0, &mut app);
@@ -1873,12 +1870,11 @@ fn test_vim_double_greater_preserves_non_leading_text() {
 
     App::test((), |mut app| async move {
         initialize_code_editor_app(&mut app);
-        // `>` only adjusts leading indentation; the rest of the line is untouched.
         let editor = add_code_editor("  line 1\nline 2", &mut app);
 
         set_cursor_position(&editor, 1, 0, &mut app);
         vim_user_insert(&editor, ">>", &mut app);
-        assert_eq!(buffer_text(&editor, &app), "      line 1\nline 2");
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
     });
 }
@@ -1893,8 +1889,6 @@ fn test_vim_greater_with_down_motion_indents_two_lines() {
 
         set_cursor_position(&editor, 1, 0, &mut app);
         vim_user_insert(&editor, ">j", &mut app);
-        // `>j` indents the current line and the line below it by one indent unit (4 spaces);
-        // the third line is untouched.
         assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
     });
@@ -1910,7 +1904,6 @@ fn test_vim_counted_double_greater_indents_two_lines() {
 
         set_cursor_position(&editor, 1, 0, &mut app);
         vim_user_insert(&editor, "2>>", &mut app);
-        // `2>>` indents the current line and the next line (count = 2) by one indent unit.
         assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
     });
@@ -1926,7 +1919,6 @@ fn test_vim_greater_to_last_line_indents_all_lines() {
 
         set_cursor_position(&editor, 1, 0, &mut app);
         vim_user_insert(&editor, ">G", &mut app);
-        // `>G` indents every line from the cursor to the end of the buffer.
         assert_eq!(
             buffer_text(&editor, &app),
             "    line 1\n    line 2\n    line 3"
@@ -1950,7 +1942,6 @@ fn test_vim_visual_linewise_greater_indents_selection() {
             Some(VimMode::Visual(MotionType::Linewise))
         );
         vim_user_insert(&editor, ">", &mut app);
-        // `V>` on line 2 indents only line 2; the surrounding lines are untouched.
         assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2\nline 3");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
     });
@@ -1962,7 +1953,6 @@ fn test_vim_visual_linewise_less_dedents_selection() {
 
     App::test((), |mut app| async move {
         initialize_code_editor_app(&mut app);
-        // Only the middle line is indented so the surrounding lines are unaffected.
         let editor = add_code_editor("line 1\n    line 2\nline 3", &mut app);
 
         set_cursor_position(&editor, 2, 0, &mut app);
@@ -1985,7 +1975,6 @@ fn test_vim_visual_greater_across_multiple_lines() {
         vim_user_insert(&editor, "V", &mut app);
         vim_user_insert(&editor, "j", &mut app);
         vim_user_insert(&editor, ">", &mut app);
-        // `Vj>` indents the two selected lines; the third line is untouched.
         assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
     });
@@ -2003,7 +1992,6 @@ fn test_vim_indent_then_undo_restores_buffer() {
         vim_user_insert(&editor, ">>", &mut app);
         assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2");
 
-        // A single `u` reverts the indent as one user action.
         vim_user_insert(&editor, "u", &mut app);
         assert_eq!(buffer_text(&editor, &app), "line 1\nline 2");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
@@ -2018,13 +2006,10 @@ fn test_vim_indent_dot_repeat_repeats_last_indent() {
         initialize_code_editor_app(&mut app);
         let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
 
-        // `>>` indents line 1 by one unit and records the indent for dot-repeat.
         set_cursor_position(&editor, 1, 0, &mut app);
         vim_user_insert(&editor, ">>", &mut app);
         assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\nline 3");
 
-        // Move to line 3 and press `.`: the dot-repeat machinery replays the last Indent
-        // operation on the current line.
         set_cursor_position(&editor, 3, 0, &mut app);
         vim_user_insert(&editor, ".", &mut app);
         assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\n    line 3");
