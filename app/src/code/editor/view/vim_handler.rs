@@ -257,12 +257,7 @@ impl VimHandler for CodeEditorView {
                                 );
 
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = !matches!(
-                                        *operator,
-                                        VimOperator::Change
-                                            | VimOperator::Indent
-                                            | VimOperator::Dedent
-                                    );
+                                    let include_newline = operator.includes_trailing_newline();
                                     model.vim_extend_selection_linewise(include_newline, ctx);
                                 }
                             }
