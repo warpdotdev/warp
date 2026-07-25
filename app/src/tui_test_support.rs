@@ -43,7 +43,9 @@ use crate::server::sync_queue::SyncQueue;
 #[cfg(feature = "voice_input")]
 use crate::server::voice_transcriber::ServerVoiceTranscriber;
 use crate::settings::manager::SettingsManager;
-use crate::settings::{AISettings, PrivacySettings, init_and_register_user_preferences};
+use crate::settings::{
+    AISettings, PrivacySettings, TuiVoiceSettings, init_and_register_user_preferences,
+};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::event::Event;
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -231,6 +233,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
         warpui_extras::secure_storage::register_noop("test", ctx);
     });
     app.update(AISettings::register_and_subscribe_to_events);
+    app.update(TuiVoiceSettings::register);
     CloudAgentSettings::register(app);
     app.add_singleton_model(ApiKeyManager::new);
 

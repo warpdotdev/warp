@@ -36,8 +36,10 @@ use warpui::SingletonEntity as _;
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
+use warpui_core::event::KeyState;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, Keystroke};
+use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
@@ -59,7 +61,9 @@ use crate::keybindings::{
 use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
-use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
+use crate::voice_input::{
+    TuiVoiceInputEvent, TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource,
+};
 
 /// Keymap-context flag set while the input has contextual Escape behavior.
 ///
@@ -316,7 +320,16 @@ impl TuiInputView {
         // on the config (shell-mode gutter/border), so every event re-renders.
         ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
-        ctx.subscribe_to_model(&voice_input, |_, _, _, ctx| ctx.notify());
+        // Only the voice lifecycle state reaches this view's render (the
+        // suppressed shell gutter and the Escape keymap flag). Transcribed text
+        // arrives through `insert_text`, and failure or cancellation notices
+        // render in the session footer, so neither repaints the input.
+        ctx.subscribe_to_model(&voice_input, |_, _, event, ctx| {
+            if matches!(event, TuiVoiceInputEvent::StateChanged(_)) {
+                ctx.notify();
+            }
+        });
+
         Self {
             model,
             input_mode,
@@ -409,6 +422,12 @@ impl TuiInputView {
         self.voice_input.as_ref(ctx).animation_clock()
     }
 
+    /// The physical modifier holding the current recording open, set only while
+    /// a hold-to-talk press started it.
+    pub(crate) fn voice_hold_key(&self, ctx: &AppContext) -> Option<KeyCode> {
+        self.voice_input.as_ref(ctx).hold_key()
+    }
+
     pub(crate) fn start_voice_input(
         &mut self,
         available: bool,
@@ -423,6 +442,23 @@ impl TuiInputView {
     pub(crate) fn stop_voice_input(&mut self, ctx: &mut ViewContext<Self>) {
         self.voice_input
             .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+    }
+
+    pub(crate) fn stop_active_voice_hold(&mut self, ctx: &mut ViewContext<Self>) {
+        self.voice_input
+            .update(ctx, |voice_input, ctx| voice_input.stop_hold(ctx));
+    }
+
+    pub(crate) fn handle_voice_hold_key(
+        &mut self,
+        key: KeyCode,
+        state: KeyState,
+        available: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.voice_input.update(ctx, |voice_input, ctx| {
+            voice_input.handle_hold_key(key, state, available, ctx);
+        });
     }
 
     /// Returns a handle to the backing [`CodeEditorModel`].

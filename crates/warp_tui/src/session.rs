@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use clap::error::ErrorKind;
 use inquire::{InquireError, Password, PasswordDisplayMode};
-use warp::settings::TuiThemeSettings;
+use warp::settings::{TuiThemeSettings, TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
@@ -32,6 +32,7 @@ use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::{
     TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
 };
+use crate::voice_input::requires_modifier_key_reporting;
 
 /// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
 /// local cargo builds fall back to a numeric placeholder.
@@ -39,9 +40,6 @@ const CLI_VERSION: &str = match option_env!("GIT_RELEASE_TAG") {
     Some(version) => version,
     None => "v0.0.0.0.0.0",
 };
-
-// Crossterm 0.29 drops associated text in all-key mode, which breaks AltGr and dead-key input.
-const REPORT_MODIFIER_KEY_LIFECYCLE: bool = false;
 
 #[derive(Debug, Parser)]
 #[command(name = "warp", version = CLI_VERSION)]
@@ -233,10 +231,29 @@ fn init(
         },
         |_| RootTuiView::new(),
     );
-    match spawn_tui_driver(ctx, window_id, root.clone(), REPORT_MODIFIER_KEY_LIFECYCLE) {
+    match spawn_tui_driver(
+        ctx,
+        window_id,
+        root.clone(),
+        requires_modifier_key_reporting(ctx),
+    ) {
         Ok(driver) => {
             let sessions =
                 ctx.add_singleton_model(|_| TuiSessions::new(driver, exit_summary, resume_token));
+            let sessions_for_voice_settings = sessions.clone();
+            ctx.subscribe_to_model(&TuiVoiceSettings::handle(ctx), move |_, event, ctx| {
+                let TuiVoiceSettingsChangedEvent::TuiVoiceInputHoldKeySetting { .. } = event;
+                let enabled = requires_modifier_key_reporting(ctx);
+                let result = sessions_for_voice_settings.update(ctx, |sessions, ctx| {
+                    sessions.set_modifier_key_lifecycle_enabled(enabled, ctx)
+                });
+                if let Err(error) = result {
+                    report_error!(
+                        anyhow::Error::new(error)
+                            .context("failed to update TUI modifier key reporting")
+                    );
+                }
+            });
             root.update(ctx, |_, ctx| {
                 ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
                     TuiSessionsEvent::SessionRemoved(_) => ctx.notify(),
