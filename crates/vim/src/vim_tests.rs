@@ -80,6 +80,38 @@ fn assert_operation_motion(
     }
 }
 
+fn assert_operation_line(event: &VimEvent, expected_operator: VimOperator) {
+    match &event.event_type {
+        VimEventType::Operation {
+            operator,
+            operand: VimOperand::Line,
+            register_name: _,
+            replacement_text: _,
+        } => {
+            assert_eq!(*operator, expected_operator, "operator mismatch");
+        }
+        other => panic!("expected Operation with Line operand, got {other:?}"),
+    }
+}
+
+fn assert_visual_operator(
+    event: &VimEvent,
+    expected_operator: VimOperator,
+    expected_motion_type: MotionType,
+) {
+    match &event.event_type {
+        VimEventType::VisualOperator {
+            operator,
+            motion_type,
+            register_name: _,
+        } => {
+            assert_eq!(*operator, expected_operator, "operator mismatch");
+            assert_eq!(*motion_type, expected_motion_type, "motion_type mismatch");
+        }
+        other => panic!("expected VisualOperator, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_normal_mode_gg_jumps_to_first_line() {
     let mut fsa = enter_normal_mode();
@@ -329,5 +361,156 @@ fn test_operator_pending_d1gg_deletes_to_line_1() {
         &VimMotion::JumpToLine(1),
         MotionType::Linewise,
     );
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_double_greater_indents_line() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, ">>");
+    assert_eq!(events.len(), 1, ">> should produce exactly one event");
+    assert_operation_line(&events[0], VimOperator::Indent);
+    assert_eq!(events[0].count, 1, ">> should have count 1");
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_double_less_dedents_line() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, "<<");
+    assert_eq!(events.len(), 1, "<< should produce exactly one event");
+    assert_operation_line(&events[0], VimOperator::Dedent);
+    assert_eq!(events[0].count, 1, "<< should have count 1");
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_greater_with_down_motion_is_linewise() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, ">j");
+    assert_eq!(events.len(), 1, ">j should produce exactly one event");
+    assert_operation_motion(
+        &events[0],
+        VimOperator::Indent,
+        &VimMotion::Character(CharacterMotion::Down),
+        MotionType::Linewise,
+    );
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_greater_with_word_motion_is_charwise() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, ">w");
+    assert_eq!(events.len(), 1, ">w should produce exactly one event");
+    assert_operation_motion(
+        &events[0],
+        VimOperator::Indent,
+        &VimMotion::Word(WordMotion::new(
+            Direction::Forward,
+            WordBound::Start,
+            WordType::Default,
+        )),
+        MotionType::Charwise,
+    );
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_greater_to_last_line_is_linewise() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, ">G");
+    assert_eq!(events.len(), 1, ">G should produce exactly one event");
+    assert_operation_motion(
+        &events[0],
+        VimOperator::Indent,
+        &VimMotion::JumpToLastLine,
+        MotionType::Linewise,
+    );
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_counted_double_greater_indents_count_lines() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, "2>>");
+    assert_eq!(events.len(), 1, "2>> should produce exactly one event");
+    assert_operation_line(&events[0], VimOperator::Indent);
+    assert_eq!(events[0].count, 2, "2>> should have count 2");
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_counted_greater_with_motion_multiplies_count() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, "3>j");
+    assert_eq!(events.len(), 1, "3>j should produce exactly one event");
+    assert_operation_motion(
+        &events[0],
+        VimOperator::Indent,
+        &VimMotion::Character(CharacterMotion::Down),
+        MotionType::Linewise,
+    );
+    assert_eq!(events[0].count, 3, "3>j should have count 3");
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_visual_linewise_greater_emits_visual_indent_operator() {
+    let mut fsa = enter_visual_mode(MotionType::Linewise);
+    let events = type_chars(&mut fsa, ">");
+    assert_eq!(
+        events.len(),
+        1,
+        "> in visual linewise should produce one event"
+    );
+    assert_visual_operator(&events[0], VimOperator::Indent, MotionType::Linewise);
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_visual_charwise_less_emits_visual_dedent_operator() {
+    let mut fsa = enter_visual_mode(MotionType::Charwise);
+    let events = type_chars(&mut fsa, "<");
+    assert_eq!(
+        events.len(),
+        1,
+        "< in visual charwise should produce one event"
+    );
+    assert_visual_operator(&events[0], VimOperator::Dedent, MotionType::Charwise);
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_double_greater_is_dot_repeatable() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, ">>");
+    assert_eq!(events.len(), 1, ">> should produce exactly one event");
+    assert_operation_line(&events[0], VimOperator::Indent);
+
+    let repeat_events = type_chars(&mut fsa, ".");
+    assert_eq!(
+        repeat_events.len(),
+        1,
+        ". should replay the indent operation"
+    );
+    assert_operation_line(&repeat_events[0], VimOperator::Indent);
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_double_less_is_dot_repeatable() {
+    let mut fsa = enter_normal_mode();
+    let events = type_chars(&mut fsa, "<<");
+    assert_eq!(events.len(), 1, "<< should produce exactly one event");
+    assert_operation_line(&events[0], VimOperator::Dedent);
+
+    let repeat_events = type_chars(&mut fsa, ".");
+    assert_eq!(
+        repeat_events.len(),
+        1,
+        ". should replay the dedent operation"
+    );
+    assert_operation_line(&repeat_events[0], VimOperator::Dedent);
     assert_eq!(fsa.mode, VimMode::Normal);
 }

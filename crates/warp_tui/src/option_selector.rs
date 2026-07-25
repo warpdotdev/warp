@@ -121,6 +121,9 @@ pub(crate) enum TuiOptionSelectorEvent {
     /// The selector asked to be dismissed (element-level Escape fallback for
     /// hosts without their own Escape binding).
     Dismissed,
+    /// The host-requested row order changed.
+    #[allow(dead_code)]
+    RowsReordered { ordered_ids: Vec<String> },
     /// The selector's intrinsic height changed. `ctx.notify()` rerenders this
     /// view, but the block list may reuse a stable-width cached rich-content
     /// height. The host forwards this event so the containing rich-content
@@ -150,6 +153,14 @@ pub(crate) enum TuiOptionSelectorAction {
     FocusSearchAndInsert(char),
     /// Handle contextual Escape behavior, falling back to dismissal.
     HandleEscape,
+}
+
+// The next stacked change consumes this row-reordering API.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TuiOptionSelectorMoveDirection {
+    Backward,
+    Forward,
 }
 
 /// One navigable entry in the selector, in display order.
@@ -481,6 +492,83 @@ impl TuiOptionSelector {
             .flatten()
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn ordered_row_ids(&self) -> Vec<String> {
+        self.page
+            .snapshot
+            .rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect()
+    }
+
+    /// Moves `row_id` one step among the currently filtered rows, while
+    /// updating the full unfiltered catalog and preserving the current
+    /// selection.
+    #[allow(dead_code)]
+    pub(crate) fn move_row(
+        &mut self,
+        row_id: &str,
+        direction: TuiOptionSelectorMoveDirection,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let selected_id = self.selected_row_id();
+        let visible_row_ids = self
+            .items()
+            .into_iter()
+            .filter_map(|item| match item {
+                SelectorItem::Row(index) => {
+                    self.page.snapshot.rows.get(index).map(|row| row.id.clone())
+                }
+                SelectorItem::Retry | SelectorItem::CustomText => None,
+            })
+            .collect::<Vec<_>>();
+        let Some(visible_index) = visible_row_ids.iter().position(|id| id == row_id) else {
+            return false;
+        };
+        let target_visible_index = match direction {
+            TuiOptionSelectorMoveDirection::Backward => visible_index.checked_sub(1),
+            TuiOptionSelectorMoveDirection::Forward => visible_index.checked_add(1),
+        };
+        let Some(target_id) =
+            target_visible_index.and_then(|index| visible_row_ids.get(index).cloned())
+        else {
+            return false;
+        };
+        let Some(source_index) = self
+            .page
+            .snapshot
+            .rows
+            .iter()
+            .position(|row| row.id == row_id)
+        else {
+            return false;
+        };
+        let row = self.page.snapshot.rows.remove(source_index);
+        let Some(target_index) = self
+            .page
+            .snapshot
+            .rows
+            .iter()
+            .position(|row| row.id == target_id)
+        else {
+            self.page.snapshot.rows.insert(source_index, row);
+            return false;
+        };
+        let insertion_index = match direction {
+            TuiOptionSelectorMoveDirection::Backward => target_index,
+            TuiOptionSelectorMoveDirection::Forward => target_index + 1,
+        };
+        self.page.snapshot.rows.insert(insertion_index, row);
+        self.select_id(selected_id);
+        self.sync_after_items_changed();
+        ctx.emit(TuiOptionSelectorEvent::RowsReordered {
+            ordered_ids: self.ordered_row_ids(),
+        });
+        self.invalidate_layout(ctx);
+        true
+    }
+
     /// Whether host shortcuts scoped to the bare option list should be active.
     pub(crate) fn list_is_focused(&self, ctx: &AppContext) -> bool {
         matches!(self.focus_zone(ctx), SelectorFocusZone::List)
@@ -744,7 +832,7 @@ impl TuiOptionSelector {
     }
 
     /// The row id currently selected, when the selection is on a row.
-    fn selected_row_id(&self) -> Option<String> {
+    pub(crate) fn selected_row_id(&self) -> Option<String> {
         let items = self.items();
         match self
             .interaction

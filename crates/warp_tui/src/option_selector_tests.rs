@@ -18,6 +18,7 @@ use warpui_core::{App, AppContext, TuiView as _, TypedActionView as _, ViewHandl
 use super::{
     OptionSelectorHeader, OptionSelectorPage, SELECTOR_NAVIGATION_ACTIVE, SelectorFocusZone,
     SelectorItem, TuiOptionSelector, TuiOptionSelectorAction, TuiOptionSelectorEvent,
+    TuiOptionSelectorMoveDirection,
 };
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::TuiEditorCommand;
@@ -34,6 +35,60 @@ fn row(id: &str) -> OptionRow {
         badge: None,
         disabled_reason: None,
     }
+}
+
+#[test]
+fn reordering_an_explicit_filtered_row_updates_the_full_catalog_and_preserves_selection() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        set_searchable_page(
+            &mut app,
+            &selector,
+            snapshot(&["alpha", "hidden", "alpine"], Some("alpha")),
+        );
+        selector.update(&mut app, |selector, ctx| {
+            selector.interaction.search_query = "al".to_owned();
+            selector.sync_after_items_changed();
+            ctx.focus_self();
+            assert!(selector.move_row("alpine", TuiOptionSelectorMoveDirection::Backward, ctx));
+        });
+
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.ordered_row_ids()),
+            ["alpine", "alpha", "hidden"]
+        );
+        assert!(selected_line(&app, &selector).contains("alpha"));
+        assert_eq!(
+            primary_events(&events),
+            [TuiOptionSelectorEvent::RowsReordered {
+                ordered_ids: vec!["alpine".to_owned(), "alpha".to_owned(), "hidden".to_owned(),],
+            }]
+        );
+    });
+}
+
+#[test]
+fn moving_a_hidden_or_boundary_row_is_a_noop() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        set_searchable_page(
+            &mut app,
+            &selector,
+            snapshot(&["alpha", "hidden", "alpine"], Some("alpha")),
+        );
+        selector.update(&mut app, |selector, ctx| {
+            selector.interaction.search_query = "al".to_owned();
+            selector.sync_after_items_changed();
+            assert!(!selector.move_row("hidden", TuiOptionSelectorMoveDirection::Forward, ctx));
+            assert!(!selector.move_row("alpha", TuiOptionSelectorMoveDirection::Backward, ctx));
+        });
+
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.ordered_row_ids()),
+            ["alpha", "hidden", "alpine"]
+        );
+        assert!(primary_events(&events).is_empty());
+    });
 }
 
 #[test]

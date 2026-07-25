@@ -335,7 +335,9 @@ impl TuiAskQuestionView {
                 self.handle_effect(effect, ctx);
             }
             TuiOptionSelectorEvent::LayoutInvalidated => self.invalidate_layout(ctx),
-            TuiOptionSelectorEvent::RetryRequested | TuiOptionSelectorEvent::Dismissed => {}
+            TuiOptionSelectorEvent::RetryRequested
+            | TuiOptionSelectorEvent::Dismissed
+            | TuiOptionSelectorEvent::RowsReordered { .. } => {}
         }
     }
 
