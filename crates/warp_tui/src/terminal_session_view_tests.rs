@@ -1646,10 +1646,10 @@ fn status_slash_command_opens_read_only_info_menu() {
 
         let snapshot = app.read(|ctx| {
             assert!(
-                view.status_menu.as_ref(ctx).is_open(ctx),
+                view.as_ref(ctx).status_menu.as_ref(ctx).is_open(ctx),
                 "/status should open the status menu"
             );
-            view.status_menu.as_ref(ctx).snapshot(ctx)
+            view.as_ref(ctx).status_menu.as_ref(ctx).snapshot(ctx)
         });
         let snapshot = snapshot.expect("status menu snapshot should render while open");
 
@@ -1699,7 +1699,7 @@ fn status_slash_command_opens_read_only_info_menu() {
         view.update(&mut app, |view, ctx| {
             view.status_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
         });
-        assert!(!app.read(|ctx| view.status_menu.as_ref(ctx).is_open(ctx)));
+        assert!(!app.read(|ctx| view.as_ref(ctx).status_menu.as_ref(ctx).is_open(ctx)));
     });
 }
 
