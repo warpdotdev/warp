@@ -2,14 +2,24 @@ use std::fs;
 use std::future::Future;
 
 use ignore::gitignore::Gitignore;
+use warp_errors::ErrorExt;
 
-use super::{Entry, IgnoredPathStrategy, matches_gitignores};
+use super::{BuildTreeError, Entry, IgnoredPathStrategy, matches_gitignores};
 #[cfg(unix)]
 use crate::StandingQueryContent;
 use crate::{StandingQueryDefinitions, StandingQueryResults};
 
 fn run<T>(future: impl Future<Output = T>) -> T {
     futures::executor::block_on(future)
+}
+
+#[test]
+fn build_tree_errors_are_non_actionable() {
+    assert!(!BuildTreeError::ExceededMaxFileLimit.is_actionable());
+    assert!(!BuildTreeError::Ignored.is_actionable());
+    assert!(!BuildTreeError::IOError(std::io::Error::other("permission denied")).is_actionable());
+    assert!(!BuildTreeError::Symlink.is_actionable());
+    assert!(!BuildTreeError::MaxDepthExceeded.is_actionable());
 }
 #[test]
 fn test_git_path_filtering_allowlist() {

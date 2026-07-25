@@ -21,6 +21,7 @@ pub use snapshot::SnapshotStorage;
 use string_offset::ByteOffset;
 pub use sync_client::SyncTask;
 use thiserror::Error;
+use warp_errors::{AnyhowErrorExt, ErrorExt, register_error};
 use warp_graphql::queries::rerank_fragments::FragmentLocationInput;
 
 #[derive(Error, Debug)]
@@ -56,6 +57,34 @@ pub enum Error {
     #[error("Failed to parse snapshot")]
     SnapshotParsingFailed,
 }
+
+impl ErrorExt for Error {
+    fn is_actionable(&self) -> bool {
+        match self {
+            Self::Io(_)
+            | Self::NotAGitRepository
+            | Self::BuildTreeError(_)
+            | Self::UnsupportedPlatform
+            | Self::FileSizeExceeded
+            | Self::FileSystemStateChanged => false,
+            Self::InvalidHash(_)
+            | Self::EmptyNodeContent
+            | Self::FailedToGetMetadata(_)
+            | Self::InconsistentState(_)
+            | Self::FailedToGenerateEmbeddings(_)
+            | Self::FailedToSyncIntermediateNodes(_)
+            | Self::DiffMerkleTreeError(_)
+            | Self::SnapshotParsingFailed => true,
+            Self::Other(error) => error.is_actionable(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
+
+register_error!(Error);
 
 // Based off of BuildTreeError in entry.rs
 #[derive(Debug, Error)]
