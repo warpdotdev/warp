@@ -434,9 +434,6 @@ pub(crate) fn build_worktree_config_toml(
         let worktree_branch_name = handlebars_placeholder("worktree_branch_name");
         let worktree_path = generated_worktree_path_string(Path::new(repo), &worktree_branch_name);
         doc.insert("title".into(), Value::String(worktree_branch_name.clone()));
-        // Double-quote the worktree path so a repo directory whose name
-        // contains spaces is not word-split by the shell (APP-4982 / GH#11144).
-        // `base_branch` is a git ref (no spaces) and stays unquoted.
         pane.insert(
             "commands".into(),
             Value::Array(vec![

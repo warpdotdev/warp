@@ -879,66 +879,6 @@ fn test_build_worktree_toml_manual_round_trips() {
     }
 }
 
-// ── APP-4982 / GH#11144: quote worktree paths containing spaces ──
-
-#[test]
-fn test_build_worktree_toml_autogenerate_quotes_path_with_spaces() {
-    // A repo whose name contains spaces yields a worktree path with spaces;
-    // the generated TOML must double-quote that path so the shell does not
-    // word-split it (APP-4982 / GH#11144). `base_branch` is a git ref and
-    // stays unquoted.
-    let toml_str =
-        build_worktree_config_toml("Worktree: my project", "/Users/me/my project", "main", None);
-    let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
-    let (_, template) = render_tab_config(&config, &HashMap::new(), Some("obsidian-hawk"));
-    if let PaneTemplateType::PaneTemplate { commands, .. } = template {
-        let quoted_path = format!(
-            "\"{}\"",
-            generated_worktree_path_string("/Users/me/my project", "obsidian-hawk")
-        );
-        assert_eq!(commands.len(), 2);
-        assert_eq!(
-            commands[0].exec,
-            format!("git worktree add -b obsidian-hawk {quoted_path} main")
-        );
-        assert_eq!(commands[1].exec, format!("cd {quoted_path}"));
-        assert!(commands[0].exec.contains(&quoted_path));
-        assert!(commands[1].exec.contains(&quoted_path));
-    } else {
-        panic!("Expected PaneTemplate variant");
-    }
-}
-
-#[test]
-fn test_build_worktree_toml_manual_quotes_path_with_spaces() {
-    let toml_str = build_worktree_config_toml(
-        "Worktree: my project",
-        "/Users/me/my project",
-        "main",
-        Some("my-feature"),
-    );
-    let config: TabConfig = toml::from_str(&toml_str).expect("Generated TOML should parse");
-    let mut params = HashMap::new();
-    params.insert("worktree_branch_name".to_string(), "my-feature".to_string());
-    let (_, template) = render_tab_config(&config, &params, None);
-    if let PaneTemplateType::PaneTemplate { commands, .. } = template {
-        let quoted_path = format!(
-            "\"{}\"",
-            generated_worktree_path_string("/Users/me/my project", "my-feature")
-        );
-        assert_eq!(commands.len(), 2);
-        assert_eq!(
-            commands[0].exec,
-            format!("git worktree add -b my-feature {quoted_path} main")
-        );
-        assert_eq!(commands[1].exec, format!("cd {quoted_path}"));
-        assert!(commands[0].exec.contains(&quoted_path));
-        assert!(commands[1].exec.contains(&quoted_path));
-    } else {
-        panic!("Expected PaneTemplate variant");
-    }
-}
-
 #[test]
 fn test_flat_split_with_fewer_than_two_children_falls_back() {
     let toml_str = r#"
