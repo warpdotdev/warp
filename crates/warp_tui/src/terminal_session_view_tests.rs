@@ -57,7 +57,7 @@ use super::{
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
-use crate::inline_menu::MAX_INLINE_MENU_ROWS;
+use crate::inline_menu::{MAX_INLINE_MENU_ROWS, render_inline_menu};
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::keybindings::{
@@ -1694,6 +1694,48 @@ fn status_slash_command_opens_read_only_info_menu() {
         assert_eq!(row_value("Email"), "test_user@warp.dev");
         assert_eq!(row_value("Org"), "—");
         assert_eq!(row_value("Session"), "Untitled");
+
+        // Render the open menu through `render_inline_menu` + `TuiBuffer::to_lines`
+        // (mirroring `login_line_shows_signed_in_account_email`) so the proof
+        // exercises the actual rendered output, not just the model snapshot.
+        let lines = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            render_element_with_size(render_inline_menu(&snapshot, &builder), ctx, 60, 12)
+                .to_lines()
+        });
+        let rendered = lines.join("\n");
+        assert!(
+            lines.iter().any(|line| line.trim() == "Status"),
+            "Status header should render on its own line:\n{rendered}"
+        );
+        // Each row renders as `<label>  <value>` on a single line. The helper
+        // matches the label followed by the two-space description separator so
+        // "Session" does not also match the "Session ID" row, and trims the
+        // buffer's trailing column padding from the value.
+        let rendered_row_value = |label: &str| -> String {
+            for line in &lines {
+                let trimmed = line.trim_start();
+                if let Some(rest) = trimmed.strip_prefix(label) {
+                    if rest.starts_with("  ") {
+                        return rest.trim().to_owned();
+                    }
+                }
+            }
+            panic!("missing {label} row in rendered status menu:\n{rendered}")
+        };
+        assert_eq!(rendered_row_value("Session"), "Untitled");
+        assert_eq!(rendered_row_value("Org"), "—");
+        assert_eq!(rendered_row_value("Email"), "test_user@warp.dev");
+        // Version, Session ID, and Working directory are fixture-dependent
+        // (app version, generated session id, test cwd), so assert each row
+        // rendered a non-empty value rather than pinning the exact string.
+        for label in ["Version", "Session ID", "Working directory"] {
+            let value = rendered_row_value(label);
+            assert!(
+                !value.is_empty(),
+                "{label} row should render a value:\n{rendered}"
+            );
+        }
 
         // Dismissing closes the menu and frees the input-suggestions mode.
         view.update(&mut app, |view, ctx| {
