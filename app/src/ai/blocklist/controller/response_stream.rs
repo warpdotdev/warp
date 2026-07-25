@@ -614,7 +614,6 @@ impl ResponseStream {
 
     /// Reports a non-retried request failure to crash reporting with classification
     /// tags.
-    #[cfg_attr(not(feature = "crash_reporting"), expect(unused_variables))]
     fn report_request_failure(&self, error: &Arc<AIApiError>, is_online: bool) {
         #[cfg(feature = "crash_reporting")]
         sentry::with_scope(
