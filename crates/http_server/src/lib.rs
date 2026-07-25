@@ -52,7 +52,7 @@ impl HttpServer {
             let listener = match tokio::net::TcpListener::bind(addr).await {
                 Ok(listener) => listener,
                 Err(err) => {
-                    log::error!("Failed to bind local HTTP server (addr={addr}, error={err})");
+                    log::error!("Failed to bind local HTTP server on {addr}: {err:#}");
                     return;
                 }
             };
