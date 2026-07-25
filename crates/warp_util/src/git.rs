@@ -147,14 +147,33 @@ fn translate_for_wsl_unc_cwd(
         unc.linux_path,
         "--exec".to_string(),
     ];
-    // A caller-supplied `PATH` is prepended to the executed program as an `env`
-    // assignment rather than propagated through `WSLENV`; see the rationale
-    // above.
-    if let Some((_, path_value)) = env.iter().find(|(key, _)| is_path_env_key(key)) {
-        translated_args.push("/usr/bin/env".to_string());
-        translated_args.push(format!("PATH={path_value}"));
+    match env.iter().find(|(key, _)| is_path_env_key(key)) {
+        // A caller-supplied `PATH` is applied to the executed program as an
+        // `env` assignment rather than propagated through `WSLENV`; see the
+        // rationale above. It already names the directories `git` lives in, so
+        // no further resolution is needed.
+        Some((_, path_value)) => {
+            translated_args.push("/usr/bin/env".to_string());
+            translated_args.push(format!("PATH={path_value}"));
+            translated_args.push("git".to_string());
+        }
+        // Without one, `git` has to be resolved inside the distribution.
+        // `wsl.exe --exec` runs the program with a minimal default `PATH`
+        // (`/usr/bin`, `/bin`, ...), which resolves `git` on distributions that
+        // install it there but not on ones that do not — NixOS, for instance,
+        // exposes it only under `/etc/profiles` — so the invocation goes
+        // through a login shell to pick up the distribution's own `PATH`. This
+        // mirrors the "run through a shell" shape of
+        // `WslCommandExecutor::execute_local_command`. The arguments are passed
+        // as positional parameters rather than interpolated into the script, so
+        // no shell quoting is involved.
+        None => {
+            translated_args.push("/bin/sh".to_string());
+            translated_args.push("-lc".to_string());
+            translated_args.push(r#"exec git "$@""#.to_string());
+            translated_args.push("git".to_string());
+        }
     }
-    translated_args.push("git".to_string());
     translated_args.extend(args.iter().map(|arg| translate_arg(arg, &unc.distro)));
 
     Some(WslGitCommand {

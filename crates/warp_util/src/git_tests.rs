@@ -20,6 +20,9 @@ fn translates_git_in_unc_cwd() {
             "--cd",
             "/home/user/repo",
             "--exec",
+            "/bin/sh",
+            "-lc",
+            r#"exec git "$@""#,
             "git",
             "status",
             "--short",
@@ -56,6 +59,9 @@ fn rewrites_same_distro_unc_argument_to_linux_path() {
             "--cd",
             "/home/user/repo",
             "--exec",
+            "/bin/sh",
+            "-lc",
+            r#"exec git "$@""#,
             "git",
             "-C",
             "/home/user/other",
@@ -81,6 +87,9 @@ fn rewrites_argument_with_case_insensitive_distro_match() {
             "--cd",
             "/home/user/repo",
             "--exec",
+            "/bin/sh",
+            "-lc",
+            r#"exec git "$@""#,
             "git",
             "-C",
             "/home/user/other",
@@ -101,6 +110,9 @@ fn leaves_other_distro_unc_argument_unchanged() {
             "--cd",
             "/home/user/repo",
             "--exec",
+            "/bin/sh",
+            "-lc",
+            r#"exec git "$@""#,
             "git",
             "-C",
             other,
@@ -149,6 +161,7 @@ fn omits_wslenv_when_no_env_keys() {
 fn carries_explicit_path_through_argv() {
     // A caller-supplied `PATH` is threaded into the distribution as
     // `env PATH=<value>` in front of `git`, and must not leak into `WSLENV`.
+    // The `PATH` already resolves `git`, so no login shell is needed.
     let translated = translate(
         &["commit"],
         r"\\wsl$\Ubuntu\repo",
@@ -193,9 +206,10 @@ fn carries_case_insensitive_path_through_argv() {
 }
 
 #[test]
-fn omits_env_wrapper_when_no_path() {
-    // Without an explicit `PATH`, `git` is executed directly with no `env`
-    // wrapper; other variables still travel via `WSLENV`.
+fn routes_through_login_shell_when_no_path() {
+    // Without an explicit `PATH`, `git` is resolved by a login shell inside the
+    // distribution — `wsl.exe --exec` alone only searches a minimal default
+    // `PATH`. Other variables still travel via `WSLENV`.
     let translated = translate(
         &["status"],
         r"\\wsl$\Ubuntu\repo",
@@ -210,6 +224,9 @@ fn omits_env_wrapper_when_no_path() {
             "--cd",
             "/repo",
             "--exec",
+            "/bin/sh",
+            "-lc",
+            r#"exec git "$@""#,
             "git",
             "status",
         ]
