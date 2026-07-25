@@ -1714,11 +1714,10 @@ fn status_slash_command_opens_read_only_info_menu() {
         // buffer's trailing column padding from the value.
         let rendered_row_value = |label: &str| -> String {
             for line in &lines {
-                let trimmed = line.trim_start();
-                if let Some(rest) = trimmed.strip_prefix(label) {
-                    if rest.starts_with("  ") {
-                        return rest.trim().to_owned();
-                    }
+                if let Some(rest) = line.trim_start().strip_prefix(label)
+                    && rest.starts_with("  ")
+                {
+                    return rest.trim().to_owned();
                 }
             }
             panic!("missing {label} row in rendered status menu:\n{rendered}")
