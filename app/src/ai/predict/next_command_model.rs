@@ -16,7 +16,6 @@ use warp_completer::meta::Spanned;
 use warp_completer::parsers::ParsedExpression;
 use warp_completer::parsers::hir::{Command, Expression, FlagType};
 use warp_core::features::FeatureFlag;
-use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -626,9 +625,7 @@ impl NextCommandModel {
                 ctx.emit(NextCommandModelEvent::NextCommandSuggestionReady);
             }
             Err(err) => {
-                report_error!(
-                    anyhow::anyhow!(err).context("Failed to generate Next Command suggestion")
-                );
+                log::error!("Failed to generate Next Command suggestion: {err:#}");
             }
         };
     }
