@@ -214,9 +214,6 @@ pub struct TuiInputView {
     can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
     /// TUI voice state used for Escape routing and shell-gutter suppression.
     voice_input: ModelHandle<TuiVoiceInputModel>,
-    /// Whether the current AI lock was installed while a CLI subagent owned terminal control.
-    /// User-forced AI locks must not be reset by a later edit.
-    agent_controlled_lock: bool,
 }
 
 impl Entity for TuiInputView {
@@ -311,7 +308,6 @@ impl TuiInputView {
             orchestration_tabs_available: Rc::new(orchestration_tabs_available),
             can_accept_inline_menu: Rc::new(|_| true),
             voice_input,
-            agent_controlled_lock: false,
         }
     }
 
@@ -877,7 +873,6 @@ impl TuiInputView {
 
     /// Locks the shared input mode to shell with the `!` shell-prefix source.
     fn enter_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
-        self.agent_controlled_lock = false;
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
         self.input_mode.clone().update(ctx, |input_mode, ctx| {
             input_mode.set_input_config(
@@ -893,7 +888,6 @@ impl TuiInputView {
     /// preserved. Clearing or submitting the buffer resumes setting-derived
     /// autodetection.
     pub(crate) fn exit_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
-        self.agent_controlled_lock = false;
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
         self.input_mode.clone().update(ctx, |input_mode, ctx| {
             input_mode.set_input_config(
@@ -905,12 +899,19 @@ impl TuiInputView {
         });
     }
 
-    /// Locks the input to Agent while a CLI subagent owns terminal control.
+    /// Locks the input to Agent while a CLI subagent owns terminal control. The
+    /// `AgentTerminalControl` autodetection source marks the lock as
+    /// agent-installed so the post-agent reset can distinguish it from a
+    /// user-forced `ManualToggle` lock.
     pub(crate) fn lock_for_agent_control(&mut self, ctx: &mut ViewContext<Self>) {
-        self.agent_controlled_lock = true;
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
         self.input_mode.clone().update(ctx, |input_mode, ctx| {
-            input_mode.set_input_config(AI_LOCKED_CONFIG, is_input_buffer_empty, None, ctx);
+            input_mode.set_input_config(
+                AI_LOCKED_CONFIG,
+                is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::AgentTerminalControl),
+                ctx,
+            );
         });
     }
 
@@ -930,13 +931,17 @@ impl TuiInputView {
         });
     }
 
-    /// Restores the setting-derived mode only when the lock was installed for
-    /// agent terminal control. Explicit user locks are left untouched.
+    /// Restores the setting-derived mode only when the current AI lock was
+    /// installed for agent terminal control. Reuses the shared model's
+    /// `last_ai_autodetection_source` rather than a parallel bool: an explicit
+    /// user lock carries a `ManualToggle` (or `ShellPrefix`) source, so it is
+    /// left untouched.
     pub(crate) fn reset_after_agent_control(&mut self, ctx: &mut ViewContext<Self>) {
-        if !self.agent_controlled_lock {
+        let is_agent_controlled = self.input_mode.as_ref(ctx).last_ai_autodetection_source()
+            == Some(InputTypeAutoDetectionSource::AgentTerminalControl);
+        if !is_agent_controlled {
             return;
         }
-        self.agent_controlled_lock = false;
         self.reset_to_default_agent_mode(ctx);
     }
 
