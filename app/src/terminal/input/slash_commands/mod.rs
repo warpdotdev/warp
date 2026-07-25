@@ -1255,6 +1255,7 @@ impl Input {
                 return false;
             }
             SlashCommandKind::AutoApprove
+            | SlashCommandKind::Statusline
             | SlashCommandKind::ViewLogs
             | SlashCommandKind::Voice
             | SlashCommandKind::NaturalLanguageDetection
