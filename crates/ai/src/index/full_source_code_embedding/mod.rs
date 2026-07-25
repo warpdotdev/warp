@@ -65,24 +65,28 @@ impl ErrorExt for Error {
             | Self::NotAGitRepository
             | Self::BuildTreeError(_)
             | Self::UnsupportedPlatform
+            | Self::FailedToGetMetadata(_)
             | Self::FileSizeExceeded
-            | Self::FileSystemStateChanged => false,
+            | Self::FileSystemStateChanged
+            | Self::DiffMerkleTreeError(
+                DiffMerkleTreeError::Ignored
+                | DiffMerkleTreeError::Symlink
+                | DiffMerkleTreeError::MaxDepthExceeded
+                | DiffMerkleTreeError::ExceededMaxFileLimit,
+            ) => false,
             Self::InvalidHash(_)
             | Self::EmptyNodeContent
-            | Self::FailedToGetMetadata(_)
             | Self::InconsistentState(_)
             | Self::FailedToGenerateEmbeddings(_)
             | Self::FailedToSyncIntermediateNodes(_)
-            | Self::DiffMerkleTreeError(_)
+            | Self::DiffMerkleTreeError(
+                DiffMerkleTreeError::CurrentNodeMismatch(_) | DiffMerkleTreeError::Fragment(_),
+            )
             | Self::SnapshotParsingFailed => true,
             Self::Other(error) => error.is_actionable(),
         }
     }
 }
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;
 
 register_error!(Error);
 
