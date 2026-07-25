@@ -215,6 +215,12 @@ impl TuiUiBuilder {
         )
     }
 
+    /// Theme-accent overlay for the shortcut reference panel.
+    pub(crate) fn shortcuts_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        cell_color(self.base_background().blend(&accent.with_opacity(10)))
+    }
+
     /// Pale-green overlay behind shell command rows in the transcript.
     /// Pre-blended because terminal cells cannot preserve alpha.
     pub(crate) fn shell_command_background(&self) -> Color {

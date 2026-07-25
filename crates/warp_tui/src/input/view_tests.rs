@@ -15,6 +15,7 @@ use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIHistoryModel, BlocklistAIInputModel,
     ConversationSelectionEvent, InputConfig, InputModePolicy, InputType, LLMId, PolicyConfigUpdate,
     SlashCommandId, SlashCommandMixer, VoiceInput, blocklist_ai_history_model_with_queries,
+    register_tui_session_view_test_singletons,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
@@ -479,7 +480,14 @@ fn agent_mode_placeholder_hint_renders_only_while_empty() {
             let buffer = render_input_buffer(&view, ctx);
             let line = &buffer.to_lines()[0];
             // One pad cell separates the cursor from the hint.
-            let hint = crate::input_hints::agent_input_hint(true, false);
+            let hint = view
+                .as_ref(ctx)
+                .session_state
+                .as_ref(ctx)
+                .resolve(ctx)
+                .expect("input test dependencies are available")
+                .hint_text()
+                .expect("agent composer has a hint");
             assert!(
                 line.starts_with(&format!(" {hint}")),
                 "unexpected line: {line:?}"
@@ -514,11 +522,11 @@ fn orchestration_hint_is_ghosted_only_while_tabs_are_available_and_input_is_empt
         orchestration_tabs_available.set(true);
         app.read(|ctx| {
             let line = &render_input_buffer(&view, ctx).to_lines()[0];
-            let hint = crate::input_hints::agent_input_hint(true, true);
             assert!(
-                line.starts_with(&format!(" {hint}")),
+                line.starts_with(" ? for shortcuts"),
                 "unexpected line: {line:?}"
             );
+            assert!(line.contains("Shift + ↑ for other agents"));
         });
 
         app.update(|ctx| type_str(&view, ctx, "x"));
@@ -543,7 +551,10 @@ fn shell_mode_placeholder_hint_teaches_exit() {
             let buffer = render_input_buffer(&view, ctx);
             let line = &buffer.to_lines()[0];
             assert!(
-                line.starts_with(&format!(" {}", crate::input_hints::SHELL_HINT)),
+                line.starts_with(&format!(
+                    " {}",
+                    crate::terminal_session_view::state::SHELL_HINT
+                )),
                 "unexpected line: {line:?}"
             );
 
@@ -842,7 +853,9 @@ fn build_view_with_orchestration_tabs(
 ) -> ViewHandle<TuiInputView> {
     // `CodeEditorModel::new_tui` reads syntax colors from the `Appearance`
     // singleton, so register a mock one before constructing the editor.
-    ctx.add_singleton_model(|_| Appearance::mock());
+    if !ctx.has_singleton_model::<Appearance>() {
+        ctx.add_singleton_model(|_| Appearance::mock());
+    }
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
     let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
@@ -1390,6 +1403,11 @@ fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
 
         orchestration_tabs_available.set(true);
         app.update(|ctx| {
+            type_str(&view, ctx, "?");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Shortcuts
+            );
             dispatch(
                 &view,
                 ctx,
@@ -1397,6 +1415,12 @@ fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
             );
         });
         assert_eq!(*requests.borrow(), 1);
+        app.read(|ctx| {
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+        });
 
         app.update(|ctx| {
             view.update(ctx, |view, ctx| {
@@ -1555,6 +1579,32 @@ fn move_left_on_empty_buffer_opens_conversation_menu() {
                     .any(|line| line.trim() == "No conversations found")
             );
             assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+        });
+    });
+}
+
+#[test]
+fn move_left_from_shortcuts_replaces_it_with_conversation_menu() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, menu_model, _) = build_view_with_conversation_menu(ctx);
+            type_str(&view, ctx, "?");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Shortcuts
+            );
+
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveLeft)],
+            );
+
+            assert!(menu_model.as_ref(ctx).is_open);
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ConversationMenu
+            );
         });
     });
 }
@@ -2503,6 +2553,111 @@ fn bang_at_start_enters_shell_mode() {
 }
 
 #[test]
+fn question_mark_at_empty_agent_input_toggles_shortcuts() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "?");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Shortcuts
+            );
+            assert_eq!(text(&view, ctx), "");
+            assert!(
+                view.as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(INPUT_HANDLES_ESCAPE_FLAG)
+            );
+
+            type_str(&view, ctx, "?");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert_eq!(text(&view, ctx), "");
+        });
+    });
+}
+
+#[test]
+fn question_mark_at_empty_shell_input_toggles_shortcuts() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "!?");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Shortcuts
+            );
+            assert_eq!(text(&view, ctx), "");
+
+            type_str(&view, ctx, "?");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert_eq!(text(&view, ctx), "");
+        });
+    });
+}
+
+#[test]
+fn escape_closes_shortcuts_before_exiting_shell_mode() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "?");
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert!(!view.as_ref(ctx).is_shell_mode(ctx));
+
+            type_str(&view, ctx, "!");
+            type_str(&view, ctx, "?");
+            assert!(view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Shortcuts
+            );
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert!(
+                view.as_ref(ctx).is_shell_mode(ctx),
+                "the first Escape should only close shortcuts"
+            );
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert!(
+                !view.as_ref(ctx).is_shell_mode(ctx),
+                "the second Escape should exit shell mode"
+            );
+        });
+    });
+}
+
+#[test]
+fn typing_into_an_open_shortcuts_surface_closes_it_and_inserts() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "?a");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            assert_eq!(text(&view, ctx), "a");
+        });
+    });
+}
+#[test]
 fn explicit_shell_mode_survives_deleting_the_buffer() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
@@ -2841,6 +2996,33 @@ fn up_on_first_row_opens_prompt_history_menu() {
     });
 }
 
+#[test]
+fn up_from_shortcuts_replaces_it_with_prompt_history() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let (view, menu) =
+                build_view_with_prompt_history(ctx, &["deploy the app", "run the tests"]);
+            type_str(&view, ctx, "?");
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Shortcuts
+            );
+
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp)],
+            );
+
+            assert!(menu.as_ref(ctx).is_open(ctx));
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::PromptHistory
+            );
+            assert_eq!(text(&view, ctx), "run the tests");
+        });
+    });
+}
 /// Up on a lower visual row still moves the cursor and does not open the menu.
 #[test]
 fn up_on_lower_row_moves_cursor_without_opening_prompt_history() {
