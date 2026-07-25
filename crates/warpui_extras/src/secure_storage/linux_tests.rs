@@ -1,4 +1,6 @@
-use super::{Error, SecureStorage};
+use std::time::{Duration, Instant};
+
+use super::{Error, SecureStorage, run_with_timeout};
 
 #[test]
 fn test_encrypt_decrypt_returns_same_value() {
@@ -76,4 +78,31 @@ fn default_fallback_does_not_create_missing_directory() {
 
     assert!(storage.write_fallback_value("key", "value").is_err());
     assert!(!fallback_dir.exists());
+}
+
+#[test]
+fn run_with_timeout_returns_result_of_fast_operations() {
+    let result = run_with_timeout("test-fast-operation", Duration::from_secs(30), || 42);
+
+    assert_eq!(result, Some(42));
+}
+
+#[test]
+fn run_with_timeout_gives_up_on_slow_operations() {
+    let timeout = Duration::from_millis(50);
+    let started_at = Instant::now();
+
+    // Stands in for a D-Bus activation request against a provider that never
+    // comes up, which the session bus only abandons after two minutes.
+    let result = run_with_timeout("test-slow-operation", timeout, || {
+        std::thread::sleep(Duration::from_secs(120));
+        true
+    });
+    let elapsed = started_at.elapsed();
+
+    assert_eq!(result, None);
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "expected to give up promptly after {timeout:?}, but waited {elapsed:?}"
+    );
 }

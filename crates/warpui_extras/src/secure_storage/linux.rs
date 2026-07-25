@@ -6,6 +6,9 @@ use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use rand::RngCore;
@@ -13,8 +16,25 @@ use ring::aead;
 use secret_service::EncryptionType;
 use secret_service::blocking::{Item, SecretService};
 use warp_errors::report_error;
+use zbus::blocking::Connection;
+use zbus::blocking::fdo::DBusProxy;
+use zbus::names::{BusName, WellKnownName};
 
 use super::Error;
+
+/// The well-known D-Bus name that a Secret Service API provider (GNOME
+/// Keyring, KWallet, KeePassXC, ...) takes ownership of.
+const SECRET_SERVICE_BUS_NAME: &str = "org.freedesktop.secrets";
+
+/// How long we are willing to wait for a Secret Service provider to become
+/// available on the session bus before falling back to file-based storage.
+///
+/// D-Bus applies its own, far more generous, activation timeout
+/// (`service_start_timeout`, 120 seconds by default). A provider that is
+/// installed but broken makes every connection attempt block for that entire
+/// window, which stalls application startup, so we impose a much shorter bound
+/// of our own.
+const SECRET_SERVICE_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Implementation of the SecureStorage service using the Secret Service API.
 pub struct SecureStorage {
@@ -72,6 +92,19 @@ impl SecureStorage {
     fn collection(&self) -> Result<&secret_service::blocking::Collection<'_>, Error> {
         self.collection
             .get_or_init(|| {
+                // Probing the bus first keeps a missing or broken Secret
+                // Service provider from blocking on D-Bus activation, which
+                // can take up to `service_start_timeout` (120s by default) to
+                // fail. See https://github.com/warpdotdev/warp/issues/13978.
+                let timeout = SECRET_SERVICE_ACTIVATION_TIMEOUT;
+                if !secret_service_is_available(timeout) {
+                    log::info!(
+                        "No Secret Service provider available after {timeout:?}; \
+                         falling back to encrypted file storage"
+                    );
+                    return None;
+                }
+
                 match Collection::open_default_collection()
                     .context("Failed to acquire default Secret Service collection")
                 {
@@ -355,6 +388,92 @@ impl From<ring::error::Unspecified> for Error {
     fn from(value: ring::error::Unspecified) -> Self {
         Error::Unknown(anyhow!(value))
     }
+}
+
+/// Returns whether a Secret Service provider can be reached on the D-Bus
+/// session bus within `timeout`, activating one if the bus knows how to.
+///
+/// This exists because `SecretService::connect` triggers D-Bus activation of
+/// [`SECRET_SERVICE_BUS_NAME`], and activation of a missing or misconfigured
+/// provider only fails once the bus hits its own `service_start_timeout`
+/// (120 seconds by default). Bounding the wait here keeps startup fast on
+/// systems without a working keyring, at the cost of falling back to encrypted
+/// file storage for the rest of the session.
+fn secret_service_is_available(timeout: Duration) -> bool {
+    run_with_timeout("secret-service-probe", timeout, probe_secret_service).unwrap_or(false)
+}
+
+/// Asks the session bus for a running Secret Service provider, requesting
+/// activation of one if it is not already running.
+///
+/// This may block for as long as the session bus's activation timeout, so it
+/// is expected to be called via [`run_with_timeout`].
+fn probe_secret_service() -> bool {
+    let Ok(connection) = Connection::session() else {
+        // No session bus at all (headless sessions, containers, some remote
+        // shells): there is nothing to talk to.
+        return false;
+    };
+    let Ok(dbus) = DBusProxy::new(&connection) else {
+        return false;
+    };
+    let Ok(bus_name) = WellKnownName::try_from(SECRET_SERVICE_BUS_NAME) else {
+        return false;
+    };
+
+    // A provider is already running, so connecting will not block on activation.
+    if dbus
+        .name_has_owner(BusName::from(bus_name.clone()))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // Nothing owns the name and the bus has no activation entry for it, so no
+    // provider is installed and asking for one would only waste time.
+    let is_activatable = dbus
+        .list_activatable_names()
+        .map(|names| {
+            names
+                .iter()
+                .any(|name| name.as_str() == SECRET_SERVICE_BUS_NAME)
+        })
+        .unwrap_or(false);
+    if !is_activatable {
+        return false;
+    }
+
+    // The name is activatable but nothing owns it yet. This is the call that
+    // hangs when a provider is installed but cannot start.
+    dbus.start_service_by_name(bus_name, 0).is_ok()
+}
+
+/// Runs `operation` on a worker thread, returning its result if it completes
+/// within `timeout` and [`None`] otherwise.
+///
+/// The worker thread is deliberately detached rather than joined: a blocked
+/// D-Bus call cannot be cancelled, so waiting for the thread to unwind would
+/// reintroduce exactly the stall this is meant to avoid. The thread finishes on
+/// its own once the underlying call returns.
+fn run_with_timeout<T: Send + 'static>(
+    thread_name: &str,
+    timeout: Duration,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (sender, receiver) = mpsc::channel();
+    let spawned = thread::Builder::new()
+        .name(thread_name.to_owned())
+        .spawn(move || {
+            // A send error means the caller already timed out and went away,
+            // which is expected and requires no handling here.
+            let _ = sender.send(operation());
+        });
+    if let Err(err) = spawned {
+        report_error!(anyhow!("Failed to spawn {thread_name} thread: {err}"));
+        return None;
+    }
+
+    receiver.recv_timeout(timeout).ok()
 }
 
 /// A helper structure that maintains access to the default collection.
