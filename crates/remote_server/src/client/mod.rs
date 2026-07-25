@@ -975,10 +975,7 @@ impl RemoteServerClient {
                     );
                 }
                 if !e.is_write_recoverable() {
-                    report_error!(
-                        anyhow::Error::new(e).context("Writer task fatal error"),
-                        extra: { "request_id" => %request_id }
-                    );
+                    log::error!("Writer task fatal error: request_id={request_id}: {e:#}");
                     pending_requests.clear();
                     break;
                 }

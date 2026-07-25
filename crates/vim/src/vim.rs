@@ -271,6 +271,14 @@ impl From<char> for PendingAction {
                 operator: VimOperator::Yank,
                 pending_operand: None,
             },
+            '>' => Self::Operation {
+                operator: VimOperator::Indent,
+                pending_operand: None,
+            },
+            '<' => Self::Operation {
+                operator: VimOperator::Dedent,
+                pending_operand: None,
+            },
             'g' => Self::G,
             'z' => Self::Z,
             'f' => Self::FindChar {
@@ -613,7 +621,10 @@ impl VimEventType {
             | VimEventType::JoinLine
             | VimEventType::DeleteForward => Some(self.clone()),
             VimEventType::Operation { operator, .. }
-                if *operator == VimOperator::Change || *operator == VimOperator::Delete =>
+                if *operator == VimOperator::Change
+                    || *operator == VimOperator::Delete
+                    || *operator == VimOperator::Indent
+                    || *operator == VimOperator::Dedent =>
             {
                 Some(self.clone())
             }
@@ -675,8 +686,15 @@ pub enum VimOperator {
     Uppercase,
     Lowercase,
     ToggleComment,
+    Indent,
+    Dedent,
 }
 
+impl VimOperator {
+    pub fn includes_trailing_newline(self) -> bool {
+        !matches!(self, Self::Change | Self::Indent | Self::Dedent)
+    }
+}
 impl From<char> for VimOperator {
     fn from(c: char) -> Self {
         match c {
@@ -686,6 +704,8 @@ impl From<char> for VimOperator {
             '~' => Self::ToggleCase,
             'u' => Self::Lowercase,
             'U' => Self::Uppercase,
+            '>' => Self::Indent,
+            '<' => Self::Dedent,
             _ => panic!("invalid char for VimOperator: {c}"),
         }
     }
@@ -956,6 +976,10 @@ impl VimFSA {
                     self.pending_action = Some(PendingAction::from(c));
                     return None;
                 }
+                '<' | '>' => {
+                    self.pending_action = Some(PendingAction::from(c));
+                    return None;
+                }
                 'D' => self.create_operation(
                     VimOperator::Delete,
                     VimOperand::Motion {
@@ -1173,6 +1197,12 @@ impl VimFSA {
             }
             // Support gcc (toggle comment line)
             'c' if operator == VimOperator::ToggleComment => {
+                self.create_operation(operator, VimOperand::Line)
+            }
+            '>' if operator == VimOperator::Indent => {
+                self.create_operation(operator, VimOperand::Line)
+            }
+            '<' if operator == VimOperator::Dedent => {
                 self.create_operation(operator, VimOperand::Line)
             }
             'i' | 'a' | 'g' | 'f' | 'F' | 't' | 'T' | '[' | ']' => {
@@ -1493,6 +1523,11 @@ impl VimFSA {
                 }
             }
             'd' | 'D' | 'y' | 'Y' | 'x' | 'X' | '~' | 'u' | 'U' => {
+                let event_type = self.create_visual_operator(c, motion_type);
+                self.mode = VimMode::Normal;
+                event_type
+            }
+            '<' | '>' => {
                 let event_type = self.create_visual_operator(c, motion_type);
                 self.mode = VimMode::Normal;
                 event_type
