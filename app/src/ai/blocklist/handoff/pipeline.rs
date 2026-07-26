@@ -55,8 +55,6 @@ use crate::server::server_api::ai::{
 };
 use crate::settings::AISettings;
 
-const HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT: &str =
-    "Continue. Apply the workspace changes from my previous session.";
 const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
 
@@ -68,21 +66,98 @@ const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my
 /// consumes these values synchronously and returns a frontend-neutral
 /// [`PendingHandoff`].
 pub struct HandoffPrepareInput {
-    pub terminal_surface_id: EntityId,
-    pub expected_conversation_id: Option<AIConversationId>,
-    pub history: ModelHandle<BlocklistAIHistoryModel>,
-    pub controller: ModelHandle<BlocklistAIController>,
-    pub context: ModelHandle<BlocklistAIContextModel>,
-    pub current_working_directory: Option<String>,
-    pub snapshot_target: SnapshotUploadTarget,
-    pub has_long_running_command: bool,
-    pub launch: Option<PendingCloudLaunch>,
-    pub environment_id: Option<SyncId>,
-    pub environment_required: bool,
-    pub entry_point: HandoffEntryPoint,
-    pub surface: HandoffSurface,
-    pub cancellation_reason: CancellationReason,
-    pub require_in_progress_source: bool,
+    terminal_surface_id: EntityId,
+    expected_conversation_id: Option<AIConversationId>,
+    history: ModelHandle<BlocklistAIHistoryModel>,
+    controller: ModelHandle<BlocklistAIController>,
+    context: ModelHandle<BlocklistAIContextModel>,
+    current_working_directory: Option<String>,
+    snapshot_target: SnapshotUploadTarget,
+    has_long_running_command: bool,
+    launch: Option<PendingCloudLaunch>,
+    environment_id: Option<SyncId>,
+    environment_required: bool,
+    entry_point: HandoffEntryPoint,
+    surface: HandoffSurface,
+    cancellation_reason: CancellationReason,
+    require_in_progress_source: bool,
+}
+
+impl HandoffPrepareInput {
+    pub fn new(
+        terminal_surface_id: EntityId,
+        history: ModelHandle<BlocklistAIHistoryModel>,
+        controller: ModelHandle<BlocklistAIController>,
+        context: ModelHandle<BlocklistAIContextModel>,
+        snapshot_target: SnapshotUploadTarget,
+        entry_point: HandoffEntryPoint,
+        surface: HandoffSurface,
+    ) -> Self {
+        Self {
+            terminal_surface_id,
+            expected_conversation_id: None,
+            history,
+            controller,
+            context,
+            current_working_directory: None,
+            snapshot_target,
+            has_long_running_command: false,
+            launch: None,
+            environment_id: None,
+            environment_required: false,
+            entry_point,
+            surface,
+            cancellation_reason: CancellationReason::ManuallyCancelled,
+            require_in_progress_source: false,
+        }
+    }
+
+    pub fn with_expected_conversation_id(
+        mut self,
+        expected_conversation_id: Option<AIConversationId>,
+    ) -> Self {
+        self.expected_conversation_id = expected_conversation_id;
+        self
+    }
+
+    pub fn with_current_working_directory(
+        mut self,
+        current_working_directory: Option<String>,
+    ) -> Self {
+        self.current_working_directory = current_working_directory;
+        self
+    }
+
+    pub fn with_long_running_command(mut self, has_long_running_command: bool) -> Self {
+        self.has_long_running_command = has_long_running_command;
+        self
+    }
+
+    pub fn with_launch(mut self, launch: Option<PendingCloudLaunch>) -> Self {
+        self.launch = launch;
+        self
+    }
+
+    pub fn with_environment_id(mut self, environment_id: Option<SyncId>) -> Self {
+        self.environment_id = environment_id;
+        self
+    }
+
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    pub fn with_environment_required(mut self, environment_required: bool) -> Self {
+        self.environment_required = environment_required;
+        self
+    }
+
+    pub fn with_cancellation_reason(mut self, cancellation_reason: CancellationReason) -> Self {
+        self.cancellation_reason = cancellation_reason;
+        self
+    }
+
+    pub fn with_require_in_progress_source(mut self, require_in_progress_source: bool) -> Self {
+        self.require_in_progress_source = require_in_progress_source;
+        self
+    }
 }
 
 /// A reason handoff preparation or execution revalidation could not proceed.
@@ -94,7 +169,7 @@ pub struct HandoffPrepareInput {
 pub enum HandoffPrepareError {
     /// The explicitly requested source is no longer the selected conversation.
     SourceConversationChanged,
-    /// There is neither a non-empty source conversation nor a prompt to launch.
+    /// There is no source conversation, prompt, or valid workspace path to launch.
     EmptySourceAndPrompt,
     /// A caller that requires a running source observed a non-running source.
     SourceNotInProgress,
@@ -222,8 +297,15 @@ impl PendingHandoff {
         if !is_explicit && self.model_selection_is_explicit {
             return;
         }
-        self.model_is_cloud_runnable = LLMPreferences::as_ref(ctx)
-            .is_cloud_runnable_oz_model_id(&LLMId::from(model_id.as_str()));
+        let preferences = LLMPreferences::as_ref(ctx);
+        let model_id = if is_explicit {
+            model_id
+        } else {
+            preferences.cloud_runnable_oz_model_id_or_fallback(&LLMId::from(model_id.as_str()))
+        };
+
+        self.model_is_cloud_runnable =
+            preferences.is_cloud_runnable_oz_model_id(&LLMId::from(model_id.as_str()));
         self.selected_model_id = model_id.clone();
         self.model_selection_is_explicit |= is_explicit;
         self.config.model_id = Some(model_id);
@@ -325,9 +407,6 @@ pub fn prepare_handoff(
             .filter_map(|id| history.as_ref(ctx).conversation(&id))
             .any(|child| child.status().is_in_progress() || child.status().is_blocked())
     });
-    if source_conversation.is_none() && prompt.is_empty() {
-        return Err(HandoffPrepareError::EmptySourceAndPrompt);
-    }
     if require_in_progress_source && !source_in_progress {
         return Err(HandoffPrepareError::SourceNotInProgress);
     }
@@ -369,6 +448,9 @@ pub fn prepare_handoff(
         && !source_paths.contains(&path)
     {
         source_paths.push(path);
+    }
+    if source_conversation.is_none() && prompt.is_empty() && source_paths.is_empty() {
+        return Err(HandoffPrepareError::EmptySourceAndPrompt);
     }
 
     let HandoffLaunchAttachments {
@@ -416,15 +498,16 @@ pub fn prepare_handoff(
         .into_iter()
         .map(|environment| environment.id)
         .collect();
-    let model_id = LLMPreferences::as_ref(ctx)
+    let preferences = LLMPreferences::as_ref(ctx);
+    let active_model_id = &preferences
         .get_active_base_model(ctx, Some(terminal_surface_id))
-        .id
-        .clone();
+        .id;
+    let model_id = preferences.cloud_runnable_oz_model_id_or_fallback(active_model_id);
     let model_is_cloud_runnable =
-        LLMPreferences::as_ref(ctx).is_cloud_runnable_oz_model_id(&model_id);
+        preferences.is_cloud_runnable_oz_model_id(&LLMId::from(model_id.as_str()));
     let config = AgentConfigSnapshot {
         environment_id: environment_id.map(|id| id.to_string()),
-        model_id: Some(model_id.to_string()),
+        model_id: Some(model_id.clone()),
         computer_use_enabled: Some(resolve_cloud_agent_computer_use_state(ctx).enabled),
         worker_host: resolve_default_host_slug(ctx),
         ..Default::default()
@@ -462,7 +545,7 @@ pub fn prepare_handoff(
         environment_required,
         environment_selection_is_explicit,
         valid_environment_ids,
-        selected_model_id: model_id.to_string(),
+        selected_model_id: model_id,
         model_selection_is_explicit: false,
         model_is_cloud_runnable,
         config,
@@ -747,7 +830,9 @@ fn build_spawn_request(
     let prompt = (!prompt.trim().is_empty()).then_some(prompt);
     let raw_wire_prompt = match (prompt, source_conversation_active, has_snapshot_content) {
         (Some(prompt), _, _) => Some(prompt),
-        (None, true, true) => Some(HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT.to_owned()),
+        (None, true, true) => Some(format!(
+            "{HANDOFF_CONTINUE_PROMPT}. {HANDOFF_APPLY_SNAPSHOT_PROMPT}"
+        )),
         (None, true, false) => Some(HANDOFF_CONTINUE_PROMPT.to_owned()),
         (None, false, true) => Some(HANDOFF_APPLY_SNAPSHOT_PROMPT.to_owned()),
         (None, false, false) => None,

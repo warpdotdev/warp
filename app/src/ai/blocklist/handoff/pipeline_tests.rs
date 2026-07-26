@@ -17,7 +17,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::{
     PendingAttachment, PendingFile, RequestInput, ResponseStream, ResponseStreamId,
 };
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::features::FeatureFlag;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
@@ -91,6 +91,12 @@ fn model_selection_refreshes_cloud_compatibility_in_both_directions() {
         initialize_app_for_terminal_view(&mut app);
         let mock = Arc::new(MockAIClient::new());
         let mut pending = pending(mock, None, false, "continue");
+        app.update(|ctx| {
+            pending.set_model_id("custom-router:local:byok".to_owned(), false, ctx);
+        });
+        assert_eq!(pending.selected_model_id, "auto");
+        assert_eq!(pending.config.model_id.as_deref(), Some("auto"));
+        assert!(pending.validate().is_ok());
 
         app.update(|ctx| {
             pending.set_model_id("custom-router:local:byok".to_owned(), true, ctx);
@@ -111,6 +117,57 @@ fn model_selection_refreshes_cloud_compatibility_in_both_directions() {
             pending.set_model_id("custom-router:local:byok".to_owned(), true, ctx);
         });
         assert_eq!(pending.validate(), Err(HandoffPrepareError::InvalidModel));
+    });
+}
+
+#[test]
+fn prepare_falls_back_to_auto_for_an_implicit_local_model() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |_view, ctx| {
+            let models = ModelsByFeature {
+                agent_mode: AvailableLLMs::new(
+                    "custom-router:local:byok".into(),
+                    vec![LLMInfo::new_for_test("custom-router:local:byok")],
+                    None,
+                )
+                .expect("valid available llms"),
+                ..Default::default()
+            };
+            LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+                preferences.update_feature_model_choices(Ok(models), ctx);
+            });
+        });
+
+        let pending = terminal
+            .update(&mut app, |view, ctx| {
+                let provider = ServerApiProvider::as_ref(ctx);
+                prepare_handoff(
+                    HandoffPrepareInput::new(
+                        view.id(),
+                        BlocklistAIHistoryModel::handle(ctx),
+                        view.ai_controller().clone(),
+                        view.ai_context_model().clone(),
+                        SnapshotUploadTarget::Local {
+                            ai_client: provider.get_ai_client(),
+                            http: provider.get_http_client(),
+                        },
+                        HandoffEntryPoint::Ampersand,
+                        HandoffSurface::Gui,
+                    )
+                    .with_launch(Some(PendingCloudLaunch {
+                        prompt: "new task".to_owned(),
+                        attachments: HandoffLaunchAttachments::default(),
+                    })),
+                    ctx,
+                )
+            })
+            .expect("implicit local model should fall back");
+
+        assert_eq!(pending.selected_model_id, "auto");
+        assert_eq!(pending.config.model_id.as_deref(), Some("auto"));
+        assert!(pending.validate().is_ok());
     });
 }
 
@@ -301,26 +358,18 @@ fn prepare_rejects_an_empty_source_without_a_prompt() {
         let result = terminal.update(&mut app, |view, ctx| {
             let provider = ServerApiProvider::as_ref(ctx);
             prepare_handoff(
-                HandoffPrepareInput {
-                    terminal_surface_id: view.id(),
-                    expected_conversation_id: None,
-                    history: BlocklistAIHistoryModel::handle(ctx),
-                    controller: view.ai_controller().clone(),
-                    context: view.ai_context_model().clone(),
-                    current_working_directory: None,
-                    snapshot_target: SnapshotUploadTarget::Local {
+                HandoffPrepareInput::new(
+                    view.id(),
+                    BlocklistAIHistoryModel::handle(ctx),
+                    view.ai_controller().clone(),
+                    view.ai_context_model().clone(),
+                    SnapshotUploadTarget::Local {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
                     },
-                    has_long_running_command: false,
-                    launch: None,
-                    environment_id: None,
-                    environment_required: false,
-                    entry_point: HandoffEntryPoint::Ampersand,
-                    surface: HandoffSurface::Gui,
-                    cancellation_reason: CancellationReason::ManuallyCancelled,
-                    require_in_progress_source: false,
-                },
+                    HandoffEntryPoint::Ampersand,
+                    HandoffSurface::Gui,
+                ),
                 ctx,
             )
         });
@@ -328,6 +377,40 @@ fn prepare_rejects_an_empty_source_without_a_prompt() {
             result,
             Err(HandoffPrepareError::EmptySourceAndPrompt)
         ));
+    });
+}
+
+#[test]
+fn prepare_accepts_a_cwd_snapshot_without_a_source_or_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pending = terminal
+            .update(&mut app, |view, ctx| {
+                let provider = ServerApiProvider::as_ref(ctx);
+                prepare_handoff(
+                    HandoffPrepareInput::new(
+                        view.id(),
+                        BlocklistAIHistoryModel::handle(ctx),
+                        view.ai_controller().clone(),
+                        view.ai_context_model().clone(),
+                        SnapshotUploadTarget::Local {
+                            ai_client: provider.get_ai_client(),
+                            http: provider.get_http_client(),
+                        },
+                        HandoffEntryPoint::Ampersand,
+                        HandoffSurface::Gui,
+                    )
+                    .with_current_working_directory(Some("/repo".to_owned())),
+                    ctx,
+                )
+            })
+            .expect("cwd snapshot should be sufficient for a fresh launch");
+
+        assert_eq!(
+            pending.source_paths,
+            vec![StandardizedPath::try_new("/repo").expect("absolute repo path")]
+        );
     });
 }
 
@@ -394,29 +477,23 @@ fn prepare_collects_completed_descendant_paths() {
             .update(&mut app, |view, ctx| {
                 let provider = ServerApiProvider::as_ref(ctx);
                 prepare_handoff(
-                    HandoffPrepareInput {
-                        terminal_surface_id: view.id(),
-                        expected_conversation_id: Some(parent_id),
-                        history: BlocklistAIHistoryModel::handle(ctx),
-                        controller: view.ai_controller().clone(),
-                        context: view.ai_context_model().clone(),
-                        current_working_directory: None,
-                        snapshot_target: SnapshotUploadTarget::Local {
+                    HandoffPrepareInput::new(
+                        view.id(),
+                        BlocklistAIHistoryModel::handle(ctx),
+                        view.ai_controller().clone(),
+                        view.ai_context_model().clone(),
+                        SnapshotUploadTarget::Local {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
                         },
-                        has_long_running_command: false,
-                        launch: Some(PendingCloudLaunch {
-                            prompt: "continue".to_owned(),
-                            attachments: HandoffLaunchAttachments::default(),
-                        }),
-                        environment_id: None,
-                        environment_required: false,
-                        entry_point: HandoffEntryPoint::Ampersand,
-                        surface: HandoffSurface::Gui,
-                        cancellation_reason: CancellationReason::ManuallyCancelled,
-                        require_in_progress_source: false,
-                    },
+                        HandoffEntryPoint::Ampersand,
+                        HandoffSurface::Gui,
+                    )
+                    .with_expected_conversation_id(Some(parent_id))
+                    .with_launch(Some(PendingCloudLaunch {
+                        prompt: "continue".to_owned(),
+                        attachments: HandoffLaunchAttachments::default(),
+                    })),
                     ctx,
                 )
             })
@@ -496,26 +573,22 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
         let guarded = terminal.update(&mut app, |view, ctx| {
             let provider = ServerApiProvider::as_ref(ctx);
             prepare_handoff(
-                HandoffPrepareInput {
-                    terminal_surface_id: view.id(),
-                    expected_conversation_id: Some(conversation_id),
-                    history: BlocklistAIHistoryModel::handle(ctx),
-                    controller: view.ai_controller().clone(),
-                    context: view.ai_context_model().clone(),
-                    current_working_directory: None,
-                    snapshot_target: SnapshotUploadTarget::Local {
+                HandoffPrepareInput::new(
+                    view.id(),
+                    BlocklistAIHistoryModel::handle(ctx),
+                    view.ai_controller().clone(),
+                    view.ai_context_model().clone(),
+                    SnapshotUploadTarget::Local {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
                     },
-                    has_long_running_command: true,
-                    launch: Some(launch.clone()),
-                    environment_id: None,
-                    environment_required: false,
-                    entry_point: HandoffEntryPoint::Ampersand,
-                    surface: HandoffSurface::Gui,
-                    cancellation_reason: CancellationReason::ManuallyCancelled,
-                    require_in_progress_source: true,
-                },
+                    HandoffEntryPoint::Ampersand,
+                    HandoffSurface::Gui,
+                )
+                .with_expected_conversation_id(Some(conversation_id))
+                .with_long_running_command(true)
+                .with_launch(Some(launch.clone()))
+                .with_require_in_progress_source(true),
                 ctx,
             )
         });
@@ -542,26 +615,21 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
         let missing_token = terminal.update(&mut app, |view, ctx| {
             let provider = ServerApiProvider::as_ref(ctx);
             prepare_handoff(
-                HandoffPrepareInput {
-                    terminal_surface_id: view.id(),
-                    expected_conversation_id: Some(conversation_id),
-                    history: BlocklistAIHistoryModel::handle(ctx),
-                    controller: view.ai_controller().clone(),
-                    context: view.ai_context_model().clone(),
-                    current_working_directory: None,
-                    snapshot_target: SnapshotUploadTarget::Local {
+                HandoffPrepareInput::new(
+                    view.id(),
+                    BlocklistAIHistoryModel::handle(ctx),
+                    view.ai_controller().clone(),
+                    view.ai_context_model().clone(),
+                    SnapshotUploadTarget::Local {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
                     },
-                    has_long_running_command: false,
-                    launch: Some(launch.clone()),
-                    environment_id: None,
-                    environment_required: false,
-                    entry_point: HandoffEntryPoint::Ampersand,
-                    surface: HandoffSurface::Gui,
-                    cancellation_reason: CancellationReason::ManuallyCancelled,
-                    require_in_progress_source: true,
-                },
+                    HandoffEntryPoint::Ampersand,
+                    HandoffSurface::Gui,
+                )
+                .with_expected_conversation_id(Some(conversation_id))
+                .with_launch(Some(launch.clone()))
+                .with_require_in_progress_source(true),
                 ctx,
             )
         });
@@ -594,26 +662,20 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
         let mut pending = terminal.update(&mut app, |view, ctx| {
             let provider = ServerApiProvider::as_ref(ctx);
             prepare_handoff(
-                HandoffPrepareInput {
-                    terminal_surface_id: view.id(),
-                    expected_conversation_id: Some(conversation_id),
-                    history: BlocklistAIHistoryModel::handle(ctx),
-                    controller: view.ai_controller().clone(),
-                    context: view.ai_context_model().clone(),
-                    current_working_directory: None,
-                    snapshot_target: SnapshotUploadTarget::Local {
+                HandoffPrepareInput::new(
+                    view.id(),
+                    BlocklistAIHistoryModel::handle(ctx),
+                    view.ai_controller().clone(),
+                    view.ai_context_model().clone(),
+                    SnapshotUploadTarget::Local {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
                     },
-                    has_long_running_command: false,
-                    launch: Some(launch),
-                    environment_id: None,
-                    environment_required: false,
-                    entry_point: HandoffEntryPoint::Ampersand,
-                    surface: HandoffSurface::Gui,
-                    cancellation_reason: CancellationReason::ManuallyCancelled,
-                    require_in_progress_source: false,
-                },
+                    HandoffEntryPoint::Ampersand,
+                    HandoffSurface::Gui,
+                )
+                .with_expected_conversation_id(Some(conversation_id))
+                .with_launch(Some(launch)),
                 ctx,
             )
             .expect("terminal source with a token should prepare")

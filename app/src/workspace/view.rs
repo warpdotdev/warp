@@ -15509,23 +15509,22 @@ impl Workspace {
         } else {
             CancellationReason::ManuallyCancelled
         };
-        let prepare_input = HandoffPrepareInput {
+        let prepare_input = HandoffPrepareInput::new(
             terminal_surface_id,
-            expected_conversation_id: intent.expected_conversation_id(),
             history,
             controller,
             context,
-            current_working_directory,
             snapshot_target,
-            has_long_running_command,
-            launch: launch.clone(),
-            environment_id,
-            environment_required: false,
-            entry_point: intent.entry_point(),
-            surface: HandoffSurface::Gui,
-            cancellation_reason,
-            require_in_progress_source: intent.expected_conversation_id().is_some(),
-        };
+            intent.entry_point(),
+            HandoffSurface::Gui,
+        )
+        .with_expected_conversation_id(intent.expected_conversation_id())
+        .with_current_working_directory(current_working_directory)
+        .with_long_running_command(has_long_running_command)
+        .with_launch(launch.clone())
+        .with_environment_id(environment_id)
+        .with_cancellation_reason(cancellation_reason)
+        .with_require_in_progress_source(intent.expected_conversation_id().is_some());
         let pending = match prepare_handoff(prepare_input, ctx) {
             Ok(pending) => pending,
             Err(error) => {

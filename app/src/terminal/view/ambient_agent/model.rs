@@ -45,11 +45,6 @@ use crate::server::server_api::ai::{
 use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
 
-/// Cloud `config.model_id` fallback slug used when the pane's active Oz model
-/// is not cloud-runnable (e.g. a custom-endpoint/BYOK model or local custom
-/// router). `auto` defers to Warp's automatic server-side model selection.
-const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
-
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
 pub struct AgentProgress {
@@ -999,15 +994,7 @@ impl AmbientAgentViewModel {
             let active_id = &prefs
                 .get_active_base_model(ctx, Some(self.terminal_view_id))
                 .id;
-            // The cloud `start_agent` endpoint only accepts Oz model slugs; a
-            // custom-endpoint (BYOK) model or local custom router id would be
-            // rejected, so fall back to `auto`. See
-            // `LLMPreferences::is_cloud_runnable_oz_model_id`.
-            if prefs.is_cloud_runnable_oz_model_id(active_id) {
-                active_id.to_string()
-            } else {
-                CLOUD_FALLBACK_OZ_MODEL_ID.to_owned()
-            }
+            prefs.cloud_runnable_oz_model_id_or_fallback(active_id)
         });
         let third_party_harness = (selected_harness != Harness::Oz).then(|| HarnessConfig {
             harness_type: selected_harness,
