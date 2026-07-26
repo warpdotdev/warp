@@ -15,9 +15,9 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::extract_user_query_mode;
 use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier};
-use crate::ai::ambient_agents::spawn::{
-    AmbientAgentEvent, monitor_spawned_task, spawn_task, submit_run_followup,
-};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::ambient_agents::spawn::monitor_spawned_task;
+use crate::ai::ambient_agents::spawn::{AmbientAgentEvent, spawn_task, submit_run_followup};
 use crate::ai::ambient_agents::task::{HarnessAuthSecretsConfig, HarnessConfig};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
@@ -1486,8 +1486,11 @@ impl AmbientAgentViewModel {
 
         self.status = Status::Cancelled { progress };
         self.pending_followup_prompt = None;
-        if let Some(cancellation) = &self.handoff_cancellation {
-            cancellation.cancel();
+        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+        {
+            if let Some(cancellation) = &self.handoff_cancellation {
+                cancellation.cancel();
+            }
         }
 
         ctx.emit(AmbientAgentViewModelEvent::Cancelled);

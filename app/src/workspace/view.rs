@@ -217,7 +217,9 @@ use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::view::AIFactPage;
 use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
-use crate::ai::llms::{LLMId, LLMPreferences};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::llms::LLMId as HandoffLLMId;
+use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
@@ -412,9 +414,9 @@ use crate::terminal::session_settings::{
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::ambient_agent::{
-    AmbientAgentViewModel, AuthSecretFtuxView, AuthSecretFtuxViewEvent,
-};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel as HandoffAmbientAgentViewModel;
+use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::view::docker_sandbox::DEFAULT_DOCKER_SANDBOX_BASE_IMAGE;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
@@ -15541,7 +15543,7 @@ impl Workspace {
         };
 
         let presentation = pending.presentation_snapshot();
-        let model_slot: Arc<Mutex<Option<ModelHandle<AmbientAgentViewModel>>>> =
+        let model_slot: Arc<Mutex<Option<ModelHandle<HandoffAmbientAgentViewModel>>>> =
             Arc::new(Mutex::new(None));
         let materialize_slot = model_slot.clone();
         let workspace_spawner = ctx.spawner();
@@ -15611,7 +15613,7 @@ impl Workspace {
         materialization: HandoffTargetMaterialization,
         presentation: HandoffPresentationSnapshot,
         intent: LocalToCloudHandoffIntent,
-        model_slot: Arc<Mutex<Option<ModelHandle<AmbientAgentViewModel>>>>,
+        model_slot: Arc<Mutex<Option<ModelHandle<HandoffAmbientAgentViewModel>>>>,
         ctx: &mut ViewContext<Self>,
     ) -> anyhow::Result<()> {
         debug_assert_eq!(
@@ -15660,7 +15662,7 @@ impl Workspace {
         let handoff_terminal_view_id = model_handle.as_ref(ctx).terminal_view_id();
         LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
             preferences.update_preferred_agent_mode_llm(
-                &LLMId::from(presentation.model_id.as_str()),
+                &HandoffLLMId::from(presentation.model_id.as_str()),
                 handoff_terminal_view_id,
                 ctx,
             );
@@ -15733,7 +15735,7 @@ impl Workspace {
                 "Can't hand off while a command is running. Cancel the command or wait for it to finish."
             }
             HandoffPrepareError::ActiveOrBlockedChild => {
-                "Can't hand off while a child agent is running or waiting for input."
+                "Can't hand off while a child agent is running or blocked."
             }
             HandoffPrepareError::MissingServerConversationToken => {
                 "Your conversation hasn't synced to the cloud yet. Try sending another message, then hand off again."
