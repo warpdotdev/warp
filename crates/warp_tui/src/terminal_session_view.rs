@@ -838,12 +838,8 @@ impl TuiTerminalSessionView {
     fn focus_blocking_input_source(source: BlockingInputSource, ctx: &mut ViewContext<Self>) {
         match source {
             BlockingInputSource::LongRunningCommand => ctx.focus_self(),
-            BlockingInputSource::AskQuestion(view) => {
-                view.update(ctx, |view, ctx| view.focus(ctx));
-            }
-            BlockingInputSource::Permission(view) => {
-                view.update(ctx, |view, ctx| view.focus(ctx));
-            }
+            BlockingInputSource::AskQuestion(view) => ctx.focus(&view),
+            BlockingInputSource::Permission(view) => ctx.focus(&view),
             BlockingInputSource::Orchestration(view) => ctx.focus(&view),
         }
     }
@@ -1258,9 +1254,16 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
-        // Reconcile input focus on every action-queue transition.
-        ctx.subscribe_to_model(&action_model, |view, _, _, ctx| {
-            view.refresh_input_focus(ctx);
+        // Only action lifecycle transitions can change the blocking input
+        // owner. Presentation updates stay within the focused blocker.
+        ctx.subscribe_to_model(&action_model, |view, _, event, ctx| match event {
+            BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+            | BlocklistAIActionEvent::ExecutingAction(_)
+            | BlocklistAIActionEvent::FinishedAction { .. } => view.refresh_input_focus(ctx),
+            BlocklistAIActionEvent::QueuedAction(_)
+            | BlocklistAIActionEvent::InitProject(_)
+            | BlocklistAIActionEvent::ToggleCodeReview(_)
+            | BlocklistAIActionEvent::InsertCodeReviewComments { .. } => {}
         });
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));

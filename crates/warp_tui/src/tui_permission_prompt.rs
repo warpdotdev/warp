@@ -11,7 +11,8 @@ use warpui_core::elements::tui::{
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
 use warpui_core::{
-    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelHandle, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 
 use crate::editor_view::TuiEditorView;
@@ -158,7 +159,14 @@ impl TuiPermissionPrompt {
             ) {
                 prompt.focus(ctx);
             }
-            ctx.emit(TuiPermissionPromptEvent::BlockingStateChanged);
+            if matches!(
+                event,
+                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                    | BlocklistAIActionEvent::ExecutingAction(_)
+                    | BlocklistAIActionEvent::FinishedAction { .. }
+            ) {
+                ctx.emit(TuiPermissionPromptEvent::BlockingStateChanged);
+            }
             prompt.invalidate_layout(ctx);
         });
 
@@ -331,6 +339,11 @@ impl TuiView for TuiPermissionPrompt {
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
         vec![self.selector.id()]
+    }
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() && self.is_active(ctx) {
+            self.focus(ctx);
+        }
     }
 
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {

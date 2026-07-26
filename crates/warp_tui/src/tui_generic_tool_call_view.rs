@@ -1,8 +1,8 @@
 //! Permission-capable view for tool calls without bespoke TUI bodies.
 
 use warp::tui_export::{
-    AIActionStatus, AIAgentAction, AIAgentActionType, AIConversationId, BlocklistAIActionModel,
-    CancellationReason, NewConversationDecision,
+    AIActionStatus, AIAgentAction, AIAgentActionType, AIConversationId, BlocklistAIActionEvent,
+    BlocklistAIActionModel, CancellationReason, NewConversationDecision,
 };
 use warpui_core::elements::tui::{TuiElement, TuiText};
 use warpui_core::{AppContext, Entity, EntityId, ModelHandle, TuiView, ViewContext, ViewHandle};
@@ -57,11 +57,18 @@ impl TuiGenericToolCallView {
             }
             if matches!(
                 event,
-                warp::tui_export::BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
             ) {
                 view.ensure_permission_prompt(ctx);
             }
-            ctx.emit(TuiGenericToolCallViewEvent::BlockingStateChanged);
+            if matches!(
+                event,
+                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                    | BlocklistAIActionEvent::ExecutingAction(_)
+                    | BlocklistAIActionEvent::FinishedAction { .. }
+            ) {
+                ctx.emit(TuiGenericToolCallViewEvent::BlockingStateChanged);
+            }
             view.invalidate_layout(ctx);
         });
         view

@@ -28,7 +28,8 @@ use warpui_core::elements::tui::TuiElement;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, FixedBinding};
 use warpui_core::{
-    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelHandle, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 mod configuration;
 mod render;
@@ -417,7 +418,7 @@ impl TuiOrchestrationBlock {
         self.orchestration_edit_state = OrchestrationEditState::new(new_state);
         self.resolve_interactive_defaults(ctx);
         self.refresh_active_page(ctx);
-        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
     }
 
@@ -482,7 +483,7 @@ impl TuiOrchestrationBlock {
             selector.set_page(selector_page, ctx);
         });
         ctx.focus(&self.selector);
-        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
     }
 
@@ -491,7 +492,7 @@ impl TuiOrchestrationBlock {
         self.mode = CardMode::Acceptance;
         self.pending_page_navigation = None;
         ctx.focus_self();
-        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
     }
 
@@ -652,7 +653,7 @@ impl TuiOrchestrationBlock {
             ctx,
         ) {
             self.accept_error = Some(reason);
-            ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+            ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
             ctx.notify();
             return;
         }
@@ -732,6 +733,12 @@ impl TuiView for TuiOrchestrationBlock {
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
         vec![self.selector.id()]
+    }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() && matches!(self.mode, CardMode::Configuring { .. }) {
+            ctx.focus(&self.selector);
+        }
     }
 
     fn keymap_context(&self, _ctx: &AppContext) -> keymap::Context {

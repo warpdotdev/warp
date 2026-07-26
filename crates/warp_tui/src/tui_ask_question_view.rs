@@ -18,7 +18,8 @@ use warpui_core::elements::tui::{
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
 use warpui_core::{
-    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelHandle, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 
 use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
@@ -163,10 +164,6 @@ impl TuiAskQuestionView {
 
     pub(super) fn is_awaiting_answers(&self, app: &AppContext) -> bool {
         self.session.is_editing() && self.is_waiting_on_answers(app)
-    }
-
-    pub(super) fn focus(&self, ctx: &mut ViewContext<Self>) {
-        ctx.focus(&self.selector);
     }
 
     pub(super) fn matches_action(
@@ -613,6 +610,12 @@ impl TuiView for TuiAskQuestionView {
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
         vec![self.selector.id()]
+    }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() && self.is_awaiting_answers(ctx) {
+            ctx.focus(&self.selector);
+        }
     }
 
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {

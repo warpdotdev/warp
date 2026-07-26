@@ -440,7 +440,14 @@ impl TuiAIBlock {
                     ) {
                         me.sync_action_views(&action_model, ctx);
                     }
-                    ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+                    if matches!(
+                        event,
+                        BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                            | BlocklistAIActionEvent::ExecutingAction(_)
+                            | BlocklistAIActionEvent::FinishedAction { .. }
+                    ) {
+                        ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+                    }
                     me.invalidate_action(event.action_id(), ctx);
                 }
             },
