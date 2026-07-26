@@ -709,6 +709,10 @@ pub struct AgentCreateArgs {
     #[arg(long = "environment", short = 'e', value_name = "ENVIRONMENT_ID")]
     pub environment: Option<String>,
 
+    /// Default idle timeout in minutes for runs executed by this agent.
+    #[arg(long = "idle-timeout-minutes", value_name = "MINUTES")]
+    pub idle_timeout_minutes: Option<i32>,
+
     /// JSON formatting configuration.
     #[command(flatten)]
     pub json_output: JsonOutput,
@@ -802,6 +806,18 @@ pub struct AgentUpdateArgs {
     /// Remove the agent default environment.
     #[arg(long = "remove-environment", conflicts_with = "environment")]
     pub remove_environment: bool,
+
+    /// Replacement default idle timeout in minutes for runs executed by this agent.
+    #[arg(
+        long = "idle-timeout-minutes",
+        value_name = "MINUTES",
+        conflicts_with = "remove_idle_timeout"
+    )]
+    pub idle_timeout_minutes: Option<i32>,
+
+    /// Remove the agent default idle timeout.
+    #[arg(long = "remove-idle-timeout", conflicts_with = "idle_timeout_minutes")]
+    pub remove_idle_timeout: bool,
 
     /// JSON formatting configuration.
     #[command(flatten)]
