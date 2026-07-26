@@ -1520,6 +1520,11 @@ pub enum NewWorkspaceSource {
     NotebookFromFilePath {
         file_path: Option<PathBuf>,
     },
+    /// Opens a new window whose first tab is the given Tab Config. Used when a
+    /// `tab_config` deeplink cold-starts Warp (no existing window to open into).
+    TabConfig {
+        tab_config: crate::tab_configs::TabConfig,
+    },
     NotebookById {
         id: SyncId,
         settings: OpenWarpDriveObjectSettings,

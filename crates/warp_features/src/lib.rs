@@ -911,6 +911,10 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Populates the Windows taskbar jump list with a "New Window" task and a
+    /// "Tab Configs" category listing the user's saved Tab Configs.
+    WindowsJumpList,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -984,6 +988,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
+    #[cfg(windows)]
+    FeatureFlag::WindowsJumpList,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

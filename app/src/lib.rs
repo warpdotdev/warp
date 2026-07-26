@@ -1621,6 +1621,9 @@ pub(crate) fn initialize_app(
     #[cfg(feature = "local_tty")]
     terminal::available_shells::register(ctx);
 
+    #[cfg(windows)]
+    crate::platform::windows::jump_list::register(ctx);
+
     // Add truly global actions that don't depend on the existence of any view here
     ctx.add_global_action("app:toggle_user_ps1", move |_args: &(), ctx| {
         SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
@@ -2780,13 +2783,26 @@ fn on_close_window_cancelled(
     }
 }
 
-fn is_cloud_agent_web_home_launch_url(url: &Url) -> bool {
-    url.scheme() == ChannelState::url_scheme()
-        && url.host_str() == Some("action")
-        && url.path() == "/new_cloud_agent_conversation"
-        && url
-            .query_pairs()
-            .any(|(key, value)| key == "source" && value == "web_home")
+/// A startup URL that already carries a full "open this" intent (a fresh
+/// window from the Windows jump list, a Tab Config deeplink, or a cloud
+/// agent web-home launch). When any is present, session restore is skipped —
+/// otherwise restore reopens prior windows and the URL then opens another
+/// window/tab on top, yielding duplicates.
+fn is_launch_intent_url(url: &Url) -> bool {
+    if url.scheme() != ChannelState::url_scheme() {
+        return false;
+    }
+    match url.host_str() {
+        Some("action") => {
+            url.path() == "/new_window"
+                || (url.path() == "/new_cloud_agent_conversation"
+                    && url
+                        .query_pairs()
+                        .any(|(key, value)| key == "source" && value == "web_home"))
+        }
+        Some("tab_config") => true,
+        _ => false,
+    }
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
@@ -2810,11 +2826,7 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
         // before reaching launch().
         LaunchMode::Tui { .. } => unreachable!("LaunchMode::Tui is handled before launch()"),
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
-            let should_skip_restore = launch_mode
-                .args()
-                .urls
-                .iter()
-                .any(is_cloud_agent_web_home_launch_url);
+            let should_skip_restore = launch_mode.args().urls.iter().any(is_launch_intent_url);
             let app_state = if should_skip_restore { None } else { app_state };
             // Attempt to restore windows from the persisted application state.
             let arg = OpenFromRestoredArg { app_state };

@@ -808,25 +808,28 @@ fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &m
         primary_window_id.filter(|id| WorkspaceRegistry::as_ref(ctx).get(*id, ctx).is_some())
     };
 
-    let workspace = match target_window_id {
-        Some(window_id) => WorkspaceRegistry::as_ref(ctx).get(window_id, ctx),
-        None => {
-            let new_window_id = open_new_window_get_handles(None, ctx).0;
-            WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx)
+    match target_window_id {
+        Some(window_id) => {
+            let Some(workspace) = WorkspaceRegistry::as_ref(ctx).get(window_id, ctx) else {
+                log::warn!(
+                    "no workspace available to open tab config '{}'",
+                    config.name
+                );
+                return;
+            };
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.open_tab_config(config, ctx);
+            });
         }
-    };
-
-    let Some(workspace) = workspace else {
-        log::warn!(
-            "no workspace available to open tab config '{}'",
-            config.name
-        );
-        return;
-    };
-
-    workspace.update(ctx, |workspace, ctx| {
-        workspace.open_tab_config(config, ctx);
-    });
+        None => {
+            // No existing window: open a new one whose first tab is the config,
+            // rather than a homepage tab plus the config as a second tab.
+            open_new_with_workspace_source(
+                NewWorkspaceSource::TabConfig { tab_config: config },
+                ctx,
+            );
+        }
+    }
 }
 
 /// Case-insensitive match against each tab config's file stem. Tab config
