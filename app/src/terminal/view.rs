@@ -8645,6 +8645,29 @@ impl TerminalView {
         cleared_buffer_len: usize,
         ctx: &mut ViewContext<Self>,
     ) {
+        // In Cloud Mode, while a cloud-handoff run is still provisioning its
+        // environment (the ambient pane is in `WaitingForSession`), ctrl-c should
+        // cancel the run so it matches the PaneHeader Stop button, which dispatches
+        // `TerminalAction::CancelAmbientAgentTask` under the same gate (see
+        // `render_header_actions` in `pane_impl.rs`). The gate is intentionally
+        // tight (CloudMode + ambient model present + waiting-for-session) so ctrl-c
+        // keeps all of its normal meanings (copy-on-selection, SIGINT-to-PTY,
+        // agent-view exit, input clear) in every other terminal/pane state.
+        if FeatureFlag::CloudMode.is_enabled() {
+            if let Some(ambient_agent_view_model) = self.ambient_agent_view_model.as_ref() {
+                if ambient_agent_view_model
+                    .as_ref(ctx)
+                    .is_waiting_for_session()
+                {
+                    ambient_agent_view_model.update(ctx, |model, ctx| {
+                        model.cancel_task(ctx);
+                    });
+                    ctx.notify();
+                    return;
+                }
+            }
+        }
+
         let did_resolve_prompt_suggestion = self
             .resolve_passive_suggestion(PromptSuggestionResolution::Reject { ctrl_c: true }, ctx);
         if did_resolve_prompt_suggestion {
