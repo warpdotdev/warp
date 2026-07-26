@@ -15472,31 +15472,29 @@ impl Workspace {
             return;
         }
 
-        let source_attachments = source_view.update(ctx, |view, ctx| {
-            let input = view.input().clone();
-            input.update(ctx, |input, ctx| {
-                input.collect_cloud_launch_attachments(ctx)
-            })
-        });
         let launch = match launch {
-            Some(mut launch)
-                if launch.attachments.request_attachments.is_empty()
-                    && launch.attachments.display_attachments.is_empty() =>
-            {
-                launch.attachments = source_attachments;
-                Some(launch)
-            }
             Some(launch) => Some(launch),
-            None if intent.shows_user_feedback() => Some(PendingCloudLaunch {
-                prompt: String::new(),
-                attachments: source_attachments,
-            }),
+            None if intent.shows_user_feedback() => {
+                let attachments = source_view.update(ctx, |view, ctx| {
+                    let input = view.input().clone();
+                    input.update(ctx, |input, ctx| {
+                        input.collect_cloud_launch_attachments(ctx)
+                    })
+                });
+                Some(PendingCloudLaunch {
+                    prompt: String::new(),
+                    attachments,
+                })
+            }
             None => None,
         };
         let history = BlocklistAIHistoryModel::handle(ctx);
         let controller = source_view.as_ref(ctx).ai_controller().clone();
         let context = source_view.as_ref(ctx).ai_context_model().clone();
         let terminal_surface_id = source_view.id();
+        let source_conversation_id = history
+            .as_ref(ctx)
+            .active_conversation_id(terminal_surface_id);
         let current_working_directory = source_view.as_ref(ctx).pwd();
         let session_id = source_view
             .as_ref(ctx)
@@ -15519,9 +15517,11 @@ impl Workspace {
             HandoffSurface::Gui,
         )
         .with_expected_conversation_id(intent.expected_conversation_id())
+        .with_source_conversation_id(source_conversation_id)
         .with_current_working_directory(current_working_directory)
         .with_long_running_command(has_long_running_command)
         .with_launch(launch.clone())
+        .with_transfer_pending_attachments(intent.shows_user_feedback())
         .with_environment_id(environment_id)
         .with_cancellation_reason(cancellation_reason)
         .with_require_in_progress_source(intent.expected_conversation_id().is_some());
@@ -15592,6 +15592,7 @@ impl Workspace {
                     );
                 }
             }
+            HandoffCommitOutcome::Cancelled => {}
             HandoffCommitOutcome::Created(created) => {
                 let model = model_slot.lock().ok().and_then(|slot| slot.clone());
                 if let Some(model) = model {
@@ -15624,8 +15625,14 @@ impl Workspace {
                 .as_ref()
                 .map(AIConversation::id)
         );
-        let local_fork = materialization
-            .source_conversation
+        let HandoffTargetMaterialization {
+            source_conversation,
+            forked_conversation_id,
+            title,
+            request,
+            cancellation,
+        } = materialization;
+        let local_fork = source_conversation
             .as_ref()
             .map(|source_conversation| {
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
@@ -15633,7 +15640,7 @@ impl Workspace {
                         source_conversation,
                         FORK_PREFIX,
                         true,
-                        materialization.title.as_deref(),
+                        title.as_deref(),
                         ctx,
                     )
                 })
@@ -15676,7 +15683,7 @@ impl Workspace {
                     ctx,
                 );
             });
-            if let Some(forked_conversation_id) = materialization.forked_conversation_id {
+            if let Some(forked_conversation_id) = forked_conversation_id {
                 history.update(ctx, |history, ctx| {
                     history.set_server_conversation_token_for_conversation_and_persist(
                         local_fork_id,
@@ -15689,7 +15696,7 @@ impl Workspace {
         }
         model_handle.update(ctx, |model, ctx| {
             model.set_environment_id(presentation.environment_id, ctx);
-            model.begin_local_to_cloud_handoff(ctx);
+            model.begin_local_to_cloud_handoff(request, cancellation, ctx);
         });
 
         if let Ok(mut slot) = model_slot.lock() {

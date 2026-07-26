@@ -278,6 +278,7 @@ fn pending(
         },
         snapshot_disabled: true,
         orchestration_handoff: Some(true),
+        cancellation: HandoffCancellation::default(),
     }
 }
 
@@ -411,6 +412,64 @@ fn prepare_accepts_a_cwd_snapshot_without_a_source_or_prompt() {
             pending.source_paths,
             vec![StandardizedPath::try_new("/repo").expect("absolute repo path")]
         );
+    });
+}
+
+#[test]
+fn prepare_preserves_untransferred_source_attachments() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let attachment_file = NamedTempFile::new().expect("temporary attachment file");
+        terminal.update(&mut app, |view, ctx| {
+            view.ai_context_model().update(ctx, |context, ctx| {
+                context.append_pending_attachments(
+                    vec![PendingAttachment::File(PendingFile {
+                        file_name: "draft.txt".to_owned(),
+                        file_path: attachment_file.path().to_path_buf(),
+                        mime_type: "text/plain".to_owned(),
+                    })],
+                    ctx,
+                );
+            });
+        });
+
+        terminal
+            .update(&mut app, |view, ctx| {
+                let provider = ServerApiProvider::as_ref(ctx);
+                prepare_handoff(
+                    HandoffPrepareInput::new(
+                        view.id(),
+                        BlocklistAIHistoryModel::handle(ctx),
+                        view.ai_controller().clone(),
+                        view.ai_context_model().clone(),
+                        SnapshotUploadTarget::Local {
+                            ai_client: provider.get_ai_client(),
+                            http: provider.get_http_client(),
+                        },
+                        HandoffEntryPoint::Ampersand,
+                        HandoffSurface::Gui,
+                    )
+                    .with_source_conversation_id(None)
+                    .with_launch(Some(PendingCloudLaunch {
+                        prompt: "fresh task".to_owned(),
+                        attachments: HandoffLaunchAttachments::default(),
+                    }))
+                    .with_transfer_pending_attachments(false),
+                    ctx,
+                )
+            })
+            .expect("handoff preparation");
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.ai_context_model()
+                    .as_ref(ctx)
+                    .pending_attachments()
+                    .len(),
+                1
+            );
+        });
     });
 }
 
@@ -740,6 +799,8 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
                     input.forked_conversation_id.as_deref(),
                     Some("forked-conversation")
                 );
+                assert_eq!(input.request.prompt.as_deref(), Some("Continue"));
+                assert!(input.request.initial_snapshot_token.is_none());
                 materialized.store(true, Ordering::SeqCst);
                 Ok(())
             })
@@ -811,6 +872,7 @@ async fn fresh_launch_skips_fork_and_materializes_before_spawn() {
             Box::pin(async move {
                 assert!(input.source_conversation.is_none());
                 assert!(input.forked_conversation_id.is_none());
+                assert_eq!(input.request.prompt.as_deref(), Some("new task"));
                 materialized.store(true, Ordering::SeqCst);
                 Ok(())
             })
@@ -828,6 +890,29 @@ async fn fresh_launch_skips_fork_and_materializes_before_spawn() {
     };
     assert!(created.at_capacity);
     assert!(!created.derived_workspace_had_content);
+}
+
+#[tokio::test]
+async fn cancellation_after_materialization_stops_before_spawn() {
+    let mut mock = MockAIClient::new();
+    mock.expect_fork_conversation().times(0);
+    mock.expect_spawn_agent().times(0);
+    let client: Arc<dyn AIClient> = Arc::new(mock);
+    let materialize: MaterializeHandoffTarget = Box::new(move |input| {
+        Box::pin(async move {
+            input.cancellation.cancel();
+            Ok(())
+        })
+    });
+
+    let outcome = execute_validated_handoff(
+        pending(client.clone(), None, false, "new task"),
+        client,
+        Some(materialize),
+    )
+    .await;
+
+    assert!(matches!(outcome, HandoffCommitOutcome::Cancelled));
 }
 
 #[tokio::test]

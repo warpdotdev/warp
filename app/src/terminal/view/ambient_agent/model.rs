@@ -23,7 +23,7 @@ use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::{HandoffCommitFailure, HandoffCreated};
+use crate::ai::blocklist::handoff::{HandoffCancellation, HandoffCommitFailure, HandoffCreated};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::{
     CloudAgentComputerUseState, resolve_cloud_agent_computer_use_state,
@@ -183,6 +183,8 @@ pub struct AmbientAgentViewModel {
     is_local_to_cloud_handoff: bool,
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     handoff_completion_received: bool,
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    handoff_cancellation: Option<HandoffCancellation>,
 }
 
 impl AmbientAgentViewModel {
@@ -253,6 +255,8 @@ impl AmbientAgentViewModel {
             is_local_to_cloud_handoff: false,
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
             handoff_completion_received: false,
+            #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+            handoff_cancellation: None,
         }
     }
 
@@ -497,10 +501,18 @@ impl AmbientAgentViewModel {
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn begin_local_to_cloud_handoff(&mut self, ctx: &mut ModelContext<Self>) {
+    pub(crate) fn begin_local_to_cloud_handoff(
+        &mut self,
+        request: SpawnAgentRequest,
+        cancellation: HandoffCancellation,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let previous_harness = self.selected_harness();
         self.is_local_to_cloud_handoff = true;
         self.handoff_completion_received = false;
+        self.handoff_cancellation = Some(cancellation);
+        self.request = Some(request);
+        self.source = None;
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
             kind: SessionStartupKind::InitialRun,
@@ -510,6 +522,7 @@ impl AmbientAgentViewModel {
             ctx.emit(AmbientAgentViewModelEvent::HarnessSelected);
         }
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
+        ctx.emit(AmbientAgentViewModelEvent::DispatchedAgent);
     }
     /// `HandoffInitiated.injection_path`. No-op when no handoff context is set.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -536,7 +549,6 @@ impl AmbientAgentViewModel {
         }
         self.request = Some(created.request);
         self.source = None;
-        ctx.emit(AmbientAgentViewModelEvent::DispatchedAgent);
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let stream = monitor_spawned_task(
             created.task_id,
@@ -558,10 +570,26 @@ impl AmbientAgentViewModel {
         failure: HandoffCommitFailure,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !self.is_local_to_cloud_handoff || self.handoff_completion_received {
+        if !self.is_local_to_cloud_handoff
+            || self.handoff_completion_received
+            || matches!(self.status, Status::Cancelled { .. })
+        {
             return;
         }
         self.handoff_completion_received = true;
+        let error = match &failure.issue {
+            CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
+                message,
+                ..
+            })
+            | CloudAgentStartupIssue::Failed(
+                CloudAgentStartupFailure::Capacity { message }
+                | CloudAgentStartupFailure::OutOfCredits { message }
+                | CloudAgentStartupFailure::ServerOverloaded { message }
+                | CloudAgentStartupFailure::Other { message },
+            ) => message.clone(),
+        };
+        send_telemetry_from_ctx!(CloudAgentTelemetryEvent::DispatchFailed { error }, ctx);
         if let Some(derived_workspace_had_content) = failure.derived_workspace_had_content {
             send_telemetry_from_ctx!(
                 CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
@@ -961,6 +989,7 @@ impl AmbientAgentViewModel {
         {
             self.is_local_to_cloud_handoff = false;
             self.handoff_completion_received = false;
+            self.handoff_cancellation = None;
         }
         self.setup_commands_state = Default::default();
         self.stop_progress_timer();
@@ -1457,6 +1486,9 @@ impl AmbientAgentViewModel {
 
         self.status = Status::Cancelled { progress };
         self.pending_followup_prompt = None;
+        if let Some(cancellation) = &self.handoff_cancellation {
+            cancellation.cancel();
+        }
 
         ctx.emit(AmbientAgentViewModelEvent::Cancelled);
     }

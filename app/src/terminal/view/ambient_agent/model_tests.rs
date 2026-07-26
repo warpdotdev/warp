@@ -164,7 +164,11 @@ fn duplicate_handoff_completion_is_ignored() {
         let model = add_model(&mut app);
 
         model.update(&mut app, |model, ctx| {
-            model.begin_local_to_cloud_handoff(ctx);
+            model.begin_local_to_cloud_handoff(
+                retry_request("initial request"),
+                HandoffCancellation::default(),
+                ctx,
+            );
             model.handle_handoff_commit_failure(
                 HandoffCommitFailure {
                     issue: CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
@@ -199,6 +203,54 @@ fn duplicate_handoff_completion_is_ignored() {
                 Some("first request")
             );
             assert_eq!(model.error_message(), Some("first failure"));
+        });
+    });
+}
+
+#[test]
+fn handoff_cancellation_is_signalled_and_late_failure_is_ignored() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let cancellation = HandoffCancellation::default();
+
+        model.update(&mut app, |model, ctx| {
+            model.begin_local_to_cloud_handoff(
+                retry_request("queued prompt"),
+                cancellation.clone(),
+                ctx,
+            );
+            assert_eq!(
+                model
+                    .request()
+                    .and_then(|request| request.prompt.as_deref()),
+                Some("queued prompt")
+            );
+
+            model.handle_cancellation(ctx);
+            model.handle_handoff_commit_failure(
+                HandoffCommitFailure {
+                    issue: CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
+                        message: "late failure".to_owned(),
+                    }),
+                    request: Some(retry_request("late request")),
+                    restoration: None,
+                    derived_workspace_had_content: None,
+                    snapshot_failed: false,
+                },
+                ctx,
+            );
+        });
+
+        assert!(cancellation.is_cancelled());
+        model.read(&app, |model, _| {
+            assert!(matches!(model.status(), Status::Cancelled { .. }));
+            assert_eq!(
+                model
+                    .request()
+                    .and_then(|request| request.prompt.as_deref()),
+                Some("queued prompt")
+            );
         });
     });
 }

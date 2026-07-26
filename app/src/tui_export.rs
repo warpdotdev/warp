@@ -69,10 +69,11 @@ pub use crate::ai::blocklist::diff_storage::{
 pub use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff, changed_lines_from_op};
 #[cfg(feature = "local_fs")]
 pub use crate::ai::blocklist::handoff::{
-    HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated, HandoffLaunchAttachments,
-    HandoffPrepareError, HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
-    HandoffTargetMaterialization, MaterializeHandoffTarget, PendingCloudLaunch, PendingHandoff,
-    SnapshotUploadTarget, execute_handoff, prepare_handoff,
+    HandoffCancellation, HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated,
+    HandoffLaunchAttachments, HandoffPrepareError, HandoffPrepareInput,
+    HandoffPresentationSnapshot, HandoffRestoration, HandoffTargetMaterialization,
+    MaterializeHandoffTarget, PendingCloudLaunch, PendingHandoff, SnapshotUploadTarget,
+    execute_handoff, prepare_handoff,
 };
 pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
