@@ -419,7 +419,10 @@ impl AmbientAgentViewModel {
         if self.harness == harness {
             return;
         }
-        self.handoff_completion_received = true;
+        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+        {
+            self.handoff_completion_received = true;
+        }
         self.harness = harness;
         self.harness_model_id = None;
         self.harness_reasoning_level = None;
