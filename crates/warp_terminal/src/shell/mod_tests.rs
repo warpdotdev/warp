@@ -322,3 +322,66 @@ fn test_rc_file_paths_use_target_os_separator() {
     assert!(ShellType::Bash.rc_file_paths(TargetOS::Windows).is_empty());
     assert!(ShellType::Fish.rc_file_paths(TargetOS::Windows).is_empty());
 }
+
+/// Regression test for #13475: valid external binaries were dropped from the
+/// Bash executable cache when any command name on `PATH` contained a space.
+///
+/// The discovery snippet pairs `COMMANDS` and `TYPES` by index. Word splitting
+/// on a name like `my tool` turned one command into two array entries, and
+/// `type -t` printed nothing for the resulting non-existent names, so `TYPES`
+/// came back shorter and every later index read the wrong type.
+///
+/// This runs the real snippet through `bash`, so it fails against the previous
+/// unquoted version and passes with the `IFS`/`set -f` guard.
+#[cfg(unix)]
+#[test]
+fn test_bash_executable_discovery_survives_names_with_spaces() {
+    use command::blocking::Command;
+    use std::os::unix::fs::PermissionsExt;
+
+    // `PATH` is replaced below so `compgen -c` only sees the stubs, which means
+    // bash itself has to be invoked by absolute path.
+    let bash = std::path::Path::new("/bin/bash");
+    if !bash.exists() {
+        return;
+    }
+
+    let Ok(dir) = tempfile::tempdir() else {
+        // Sandboxed environments without a writable temp dir cannot run this.
+        return;
+    };
+
+    // `zz-*` sorts after the space-containing name, so a misalignment starting
+    // at `my tool` swallows it. `aa-plain` sorts before and should survive
+    // either way — it is the control that proves the harness itself works.
+    for name in ["aa-plain", "my tool", "zz-after-space"] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, "#!/bin/sh\n").expect("write stub executable");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod stub executable");
+    }
+
+    let output = Command::new(bash)
+        .arg("-c")
+        .arg(ShellType::Bash.shell_command_to_get_executables())
+        .env("PATH", dir.path())
+        .output()
+        .expect("run the bash executable-discovery command");
+    assert!(
+        output.status.success(),
+        "discovery command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let listed: Vec<&str> = std::str::from_utf8(&output.stdout)
+        .expect("discovery output is utf-8")
+        .lines()
+        .collect();
+
+    for expected in ["aa-plain", "zz-after-space"] {
+        assert!(
+            listed.contains(&expected),
+            "`{expected}` missing from the executable cache; got {listed:?}"
+        );
+    }
+}
