@@ -340,7 +340,7 @@ impl QueryFilter {
                 if !FeatureFlag::AgentMode.is_enabled() {
                     Some(Icon::AiAssistant.into())
                 } else {
-                    Some(Icon::Warp.into())
+                    Some(Icon::Stars.into())
                 }
             }
             QueryFilter::Actions => None,

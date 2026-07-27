@@ -23,7 +23,7 @@ const OZ_AMBIENT_BACKGROUND_COLOR: ColorU = ColorU {
 
 /// Background color used for the Oz agent's circle when it is running locally (non-ambient).
 /// Pure black (#000000) to match the "white Warp logo on black" design for local conversations.
-const OZ_LOCAL_BACKGROUND_COLOR: ColorU = ColorU {
+pub(crate) const OZ_LOCAL_BACKGROUND_COLOR: ColorU = ColorU {
     r: 0,
     g: 0,
     b: 0,
@@ -222,7 +222,7 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             let agent_glyph = if is_ambient {
                 WarpIcon::OzCloud
             } else {
-                WarpIcon::Warp
+                WarpIcon::Agent
             };
             // Cloud (ambient) runs use a black glyph on the light-purple background
             // for consistency with the web app; local runs use a white Warp glyph on

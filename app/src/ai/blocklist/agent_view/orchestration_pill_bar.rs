@@ -131,7 +131,7 @@ pub(crate) fn render_orchestrator_avatar_disc(
 ) -> Box<dyn Element> {
     render_avatar_disc(
         theme.ansi_fg_cyan(),
-        AvatarGlyph::Icon(Icon::Warp),
+        AvatarGlyph::Icon(Icon::Agent),
         size,
         theme,
         appearance,
@@ -633,7 +633,7 @@ impl OrchestrationPillBar {
             conversation_id: orchestrator_id,
             label: orchestrator_label(orchestrator),
             avatar_color: theme.ansi_fg_cyan(),
-            avatar_glyph: AvatarGlyph::Icon(Icon::Warp),
+            avatar_glyph: AvatarGlyph::Icon(Icon::Agent),
             status: Some(aggregated_orchestrator_status(history, orchestrator_id)),
             is_selected: orchestrator_id == active_id,
             kind: PillKind::Orchestrator,
@@ -2287,7 +2287,7 @@ pub fn render_orchestration_breadcrumbs(
         conversation_id: parent_id,
         label: parent_label,
         avatar_color: theme.ansi_fg_cyan(),
-        avatar_glyph: AvatarGlyph::Icon(Icon::Warp),
+        avatar_glyph: AvatarGlyph::Icon(Icon::Agent),
         is_active: false,
     };
 

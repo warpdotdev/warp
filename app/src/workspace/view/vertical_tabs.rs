@@ -63,7 +63,9 @@ use crate::terminal::{CLIAgent, TerminalView};
 use crate::themes::theme::Fill as ThemeFill;
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::combo_inner_button;
-use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
+use crate::ui_components::icon_with_status::{
+    IconWithStatusVariant, OZ_LOCAL_BACKGROUND_COLOR, render_icon_with_status,
+};
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::color::Opacity;
@@ -1464,15 +1466,18 @@ fn render_detail_kind_badge_icon(
                 .selected_conversation_display_title(app)
                 .is_some()
             {
-                // Local agent conversation: use Warp logo (white) to match
-                // the icon-with-status rendering for the tab row.
-                WarpIcon::Warp
+                // Local agent conversation: use the Warp agent logo glyph to
+                // match the icon-with-status rendering for the tab row.
+                WarpIcon::Agent
             } else {
                 WarpIcon::Terminal
             };
             let color = match icon {
                 WarpIcon::OzCloud => oz_icon_fill(theme),
-                WarpIcon::Warp => WarpThemeFill::Solid(ColorU::white()),
+                // Theme-adaptive fill: no black chip behind this glyph in the
+                // sidecar context, so use the main text color to stay visible
+                // on both dark and light themes.
+                WarpIcon::Agent => theme.main_text_color(theme.background()),
                 WarpIcon::Terminal => disabled_text,
                 _ => sub_text,
             };
@@ -4949,11 +4954,11 @@ pub(super) fn render_summary_pane_kind_icon_circle(
     let padding = total_size * SUMMARY_INLINE_PADDING_RATIO;
     let (icon_element, background): (Box<dyn Element>, ElementFill) = match kind {
         SummaryPaneKind::OzAgent { .. } => (
-            // Non-ambient local agent: white Warp logo on black, matching the tab row.
-            WarpIcon::Warp
+            // Non-ambient local agent: white agent-brand logo on black circle.
+            WarpIcon::Agent
                 .to_warpui_icon(WarpThemeFill::Solid(ColorU::white()))
                 .finish(),
-            ThemeFill::Solid(ColorU::black()).into(),
+            ThemeFill::Solid(OZ_LOCAL_BACKGROUND_COLOR).into(),
         ),
         SummaryPaneKind::CLIAgent { agent, .. } => {
             let icon_color = agent.brand_icon_color();
@@ -5053,8 +5058,11 @@ fn summary_pane_kind_icon(
 
     match kind {
         SummaryPaneKind::Terminal => (WarpIcon::Terminal, main_text),
-        // Local agent: white Warp logo, consistent with the tab row and summary circle.
-        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Warp, WarpThemeFill::Solid(ColorU::white())),
+        // Local agent: white agent-brand logo, consistent with the tab row and summary circle.
+        // Note: this arm is currently unreachable — OzAgent is matched by the dedicated arm in
+        // render_summary_pane_kind_icon_circle before summary_pane_kind_icon is called.
+        // Kept for completeness in case callers change.
+        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Agent, WarpThemeFill::Solid(ColorU::white())),
         SummaryPaneKind::CLIAgent { agent, .. } => (
             agent.icon().unwrap_or(WarpIcon::Terminal),
             WarpThemeFill::Solid(agent.brand_icon_color()),
