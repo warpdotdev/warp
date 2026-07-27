@@ -19,6 +19,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
 use warp_core::settings::Setting as _;
 use warp_errors::report_error;
+use warp_server_client::auth::AuthEvent;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
@@ -26,9 +27,6 @@ use super::{
     MCPServerState, SpawnedServerInfo, TemplatableMCPServerInfo, TemplatableMCPServerManager,
     TemplatableMCPServerManagerEvent,
 };
-use warp_server_client::auth::AuthEvent;
-
-use crate::ai::mcp::builtin;
 use crate::ai::mcp::file_based_manager::FileBasedMCPManagerEvent;
 use crate::ai::mcp::parsing::resolve_json;
 use crate::ai::mcp::templatable::{CloudTemplatableMCPServer, GalleryData};
@@ -37,7 +35,7 @@ use crate::ai::mcp::templatable_manager::FigmaMcpStatus;
 use crate::ai::mcp::{
     Author, CloudMCPServer, FileBasedMCPManager, JsonTemplate, MCPGalleryManager, MCPServer,
     MCPServerExt, MCPServerUpdate, ParsedTemplatableMCPServerResult, StaticEnvVar,
-    TemplatableMCPServer, TemplatableMCPServerInstallation, TransportType, logs,
+    TemplatableMCPServer, TemplatableMCPServerInstallation, TransportType, builtin, logs,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
