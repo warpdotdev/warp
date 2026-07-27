@@ -579,7 +579,6 @@ default = [
     "mcp_oauth",
     "expand_edit_to_pane",
     "fallback_model_load_output_messaging",
-    "api_key_authentication",
     "api_key_management",
     "summarization_cancellation_confirmation",
     "ui_zoom",
@@ -942,7 +941,6 @@ code_review_save_changes = []
 remote_code_review = []
 file_tree = []
 code_launch_modal = []
-api_key_authentication = []
 api_key_management = []
 diff_set_as_context = []
 discard_per_file_and_all_changes = []

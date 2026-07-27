@@ -383,7 +383,6 @@ pub(crate) enum LaunchMode {
     App {
         args: warp_cli::AppArgs,
         /// API key for server authentication, if provided via `--api-key` or `WARP_API_KEY`.
-        /// Only used on dogfood channels.
         api_key: Option<String>,
     },
 
@@ -429,9 +428,8 @@ pub(crate) enum LaunchMode {
         /// this mode.
         mount: TuiMountFn,
         /// API key for server authentication, if provided via `--api-key` or
-        /// `WARP_API_KEY`. Parsed by the TUI front-end and only used on dogfood
-        /// channels (mirrors `App`); lets the TUI log in non-interactively
-        /// instead of the device-auth flow.
+        /// `WARP_API_KEY`. Parsed by the TUI front-end and lets the TUI log in
+        /// non-interactively instead of the device-auth flow.
         api_key: Option<String>,
     },
 }
@@ -1337,6 +1335,16 @@ fn refresh_user_after_iap_access(ctx: &mut AppContext) {
     iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
 }
 
+fn api_key_from_launch_mode(launch_mode: &LaunchMode) -> Option<String> {
+    match launch_mode {
+        LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
+        LaunchMode::App { api_key, .. } | LaunchMode::Tui { api_key, .. } => api_key.clone(),
+        LaunchMode::Test { .. }
+        | LaunchMode::RemoteServerProxy
+        | LaunchMode::RemoteServerDaemon { .. } => None,
+    }
+}
+
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub(crate) fn initialize_app(
     launch_mode: &LaunchMode,
@@ -1391,38 +1399,7 @@ pub(crate) fn initialize_app(
     }
 
     // Extract API key from command line options, if applicable.
-    let api_key = match launch_mode {
-        LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
-        LaunchMode::App { api_key, .. } if ChannelState::channel().is_dogfood() => api_key.clone(),
-        LaunchMode::Tui { api_key, .. } if ChannelState::channel().is_dogfood() => api_key.clone(),
-        _ => None,
-    };
-    let api_key = if FeatureFlag::APIKeyAuthentication.is_enabled() {
-        api_key
-    } else {
-        None
-    };
-
-    // A key supplied to an App launch but dropped here means Warp will start logged out
-    // (non-dogfood channel or feature disabled). Surface this loudly so it isn't silent.
-    if api_key.is_none()
-        && matches!(
-            launch_mode,
-            LaunchMode::App {
-                api_key: Some(_),
-                ..
-            } | LaunchMode::Tui {
-                api_key: Some(_),
-                ..
-            }
-        )
-    {
-        let channel = ChannelState::channel();
-        let warning = format!(
-            "WARNING: --api-key/WARP_API_KEY was provided but IGNORED on the '{channel}' channel — Warp is starting LOGGED OUT. API-key auth is only available on internal (dogfood) builds."
-        );
-        eprintln!("{warning}");
-    }
+    let api_key = api_key_from_launch_mode(launch_mode);
 
     let auth_state = Arc::new(AuthState::initialize(ctx, api_key));
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
