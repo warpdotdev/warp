@@ -7,6 +7,41 @@ use cloud_objects::ids::GenericStringObjectId;
 use serde::{Deserialize, Serialize};
 
 use crate::{JsonModel, JsonSerializer};
+mod optional_base_image {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::BaseImage;
+
+    #[derive(Serialize)]
+    struct SerializableBaseImage<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        docker_image: Option<&'a str>,
+    }
+
+    #[derive(Deserialize)]
+    struct DeserializableBaseImage {
+        #[serde(default)]
+        docker_image: Option<String>,
+    }
+
+    pub fn serialize<S>(base_image: &Option<BaseImage>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let docker_image = base_image.as_ref().map(|base_image| match base_image {
+            BaseImage::DockerImage(docker_image) => docker_image.as_str(),
+        });
+        SerializableBaseImage { docker_image }.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<BaseImage>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let base_image = DeserializableBaseImage::deserialize(deserializer)?;
+        Ok(base_image.docker_image.map(BaseImage::DockerImage))
+    }
+}
 
 /// Source-control provider hosting an environment's repositories.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -182,8 +217,8 @@ pub struct AmbientAgentEnvironment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_repos: Option<Vec<SourceRepo>>,
     /// Base image specification
-    #[serde(flatten)]
-    pub base_image: BaseImage,
+    #[serde(flatten, with = "optional_base_image")]
+    pub base_image: Option<BaseImage>,
     /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
@@ -212,7 +247,7 @@ impl AmbientAgentEnvironment {
             code_forge: None,
             github_repos,
             source_repos: None,
-            base_image: BaseImage::DockerImage(docker_image),
+            base_image: Some(BaseImage::DockerImage(docker_image)),
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,

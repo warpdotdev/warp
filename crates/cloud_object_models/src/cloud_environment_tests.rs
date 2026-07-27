@@ -28,7 +28,7 @@ fn deserialize_legacy_environment_without_providers() {
     );
     assert_eq!(
         env.base_image,
-        BaseImage::DockerImage("ubuntu:latest".into())
+        Some(BaseImage::DockerImage("ubuntu:latest".into()))
     );
     assert_eq!(env.setup_commands, vec!["echo hello"]);
 }
@@ -93,6 +93,90 @@ fn legacy_environment_serialization_omits_provider_neutral_fields() {
 
     assert!(!json.as_object().unwrap().contains_key("code_forge"));
     assert!(!json.as_object().unwrap().contains_key("source_repos"));
+}
+#[test]
+fn deserialize_environment_without_base_image() {
+    let json = serde_json::json!({
+        "name": "no-image-env",
+        "github_repos": []
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.base_image, None);
+}
+
+#[test]
+fn deserialize_environment_with_null_base_image() {
+    let json = serde_json::json!({
+        "name": "null-image-env",
+        "github_repos": [],
+        "docker_image": null
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.base_image, None);
+}
+
+#[test]
+fn deserialize_environment_without_base_image_ignores_unknown_fields() {
+    let json = serde_json::json!({
+        "name": "future-env",
+        "github_repos": [],
+        "future_base_image": "future:image"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.base_image, None);
+}
+
+#[test]
+fn serialize_environment_without_base_image_omits_docker_image() {
+    let mut env = AmbientAgentEnvironment::new(
+        "no-image-env".into(),
+        None,
+        vec![],
+        "temporary:image".into(),
+        vec![],
+    );
+    env.base_image = None;
+
+    let json = serde_json::to_value(env).unwrap();
+
+    assert!(!json.as_object().unwrap().contains_key("docker_image"));
+}
+
+#[test]
+fn base_image_roundtrip_preserves_legacy_wire_format() {
+    let json = serde_json::json!({
+        "name": "legacy-env",
+        "github_repos": [],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    let serialized = serde_json::to_value(env).unwrap();
+
+    assert_eq!(
+        serialized.get("docker_image"),
+        Some(&serde_json::json!("ubuntu:latest"))
+    );
+    assert!(!serialized.as_object().unwrap().contains_key("base_image"));
+}
+
+#[test]
+fn environment_without_base_image_roundtrips_without_adding_one() {
+    let json = serde_json::json!({
+        "name": "no-image-env",
+        "github_repos": []
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    let serialized = serde_json::to_value(env).unwrap();
+
+    assert!(!serialized.as_object().unwrap().contains_key("docker_image"));
 }
 
 #[test]
