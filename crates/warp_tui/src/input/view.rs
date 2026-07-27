@@ -299,7 +299,7 @@ impl TuiInputView {
             suggestions_mode,
             inline_menus,
             editor_state: TuiEditorState::default(),
-            editor_behavior: TuiEditorBehavior::multiline(6),
+            editor_behavior: TuiEditorBehavior::multiline(6).with_copy_on_highlight(),
             prefix_mouse_state: MouseStateHandle::default(),
             focused: false,
             session_state,

@@ -55,6 +55,10 @@ pub(crate) enum TuiEditorLineMode {
 pub(crate) struct TuiEditorBehavior {
     line_mode: TuiEditorLineMode,
     viewport_rows: u32,
+    /// When `true`, completing a mouse drag-selection automatically copies the
+    /// selected text to the clipboard (matching the transcript view's behavior).
+    /// Disabled by default; opt in with [`Self::with_copy_on_highlight`].
+    copy_on_highlight: bool,
 }
 
 impl TuiEditorBehavior {
@@ -63,6 +67,7 @@ impl TuiEditorBehavior {
         Self {
             line_mode: TuiEditorLineMode::SingleLine,
             viewport_rows: 1,
+            copy_on_highlight: false,
         }
     }
 
@@ -71,7 +76,16 @@ impl TuiEditorBehavior {
         Self {
             line_mode: TuiEditorLineMode::Multiline,
             viewport_rows,
+            copy_on_highlight: false,
         }
+    }
+
+    /// Enables automatic clipboard copy when the user completes a drag
+    /// selection (mouse up), mirroring the transcript view's highlight-to-copy
+    /// behavior. Any editor that opts in will auto-copy on highlight.
+    pub(crate) fn with_copy_on_highlight(mut self) -> Self {
+        self.copy_on_highlight = true;
+        self
     }
 
     /// Returns the number of visible editor rows.
@@ -574,6 +588,9 @@ pub(crate) fn apply_editor_action(
         }
         TuiEditorAction::SelectionEnd => {
             model.update(ctx, |model, ctx| model.end_selection(ctx));
+            if behavior.copy_on_highlight {
+                return TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Copy);
+            }
         }
         TuiEditorAction::Scroll { rows } => {
             scroll_editor_viewport(model, *rows, behavior, ctx);
