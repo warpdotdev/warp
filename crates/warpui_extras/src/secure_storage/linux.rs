@@ -103,13 +103,14 @@ impl SecureStorage {
             // fail. See https://github.com/warpdotdev/warp/issues/13978.
             let timeout = SECRET_SERVICE_ACTIVATION_TIMEOUT;
             match secret_service_availability(timeout) {
-                ServiceAvailability::TimedOut => {
+                ServiceAvailability::Indeterminate => {
                     log::info!(
-                        "Secret Service activation did not complete within {timeout:?}; \
-                         falling back to encrypted file storage for now"
+                        "Could not determine Secret Service availability within {timeout:?} \
+                         (timed out or hit a D-Bus error); falling back to encrypted file \
+                         storage for now"
                     );
                     return Err(Error::Unknown(anyhow!(
-                        "Secret Service activation timed out"
+                        "Could not determine Secret Service availability"
                     )));
                 }
                 ServiceAvailability::Unavailable => {
@@ -425,67 +426,70 @@ enum ServiceAvailability {
     /// A Secret Service provider is running (or was just activated) and
     /// ready to be connected to.
     Available,
-    /// There is no Secret Service provider installed, and none can be
-    /// activated. This is a stable answer that is safe to cache.
+    /// The bus was reachable and confirmed there is no Secret Service
+    /// provider installed, and none can be activated. This is a stable
+    /// answer that is safe to cache.
     Unavailable,
-    /// The probe did not finish within the allotted timeout. This is
-    /// deliberately distinct from [`Self::Unavailable`]: the provider may
-    /// simply be slow to activate, so callers should not treat this as a
-    /// permanent answer.
-    TimedOut,
+    /// The probe either did not finish within the allotted timeout, or hit a
+    /// D-Bus/proxy/listing error while talking to the bus. Both are
+    /// transient conditions: the provider may simply be slow to activate, or
+    /// the bus call may succeed on a later attempt. Callers should not treat
+    /// this as a permanent answer.
+    Indeterminate,
 }
 
 fn secret_service_availability(timeout: Duration) -> ServiceAvailability {
     match run_with_timeout("secret-service-probe", timeout, probe_secret_service) {
-        Some(true) => ServiceAvailability::Available,
-        Some(false) => ServiceAvailability::Unavailable,
-        None => ServiceAvailability::TimedOut,
+        Some(Some(true)) => ServiceAvailability::Available,
+        Some(Some(false)) => ServiceAvailability::Unavailable,
+        Some(None) | None => ServiceAvailability::Indeterminate,
     }
 }
 
 /// Asks the session bus for a running Secret Service provider, requesting
 /// activation of one if it is not already running.
 ///
+/// Returns [`None`] if a D-Bus/proxy/listing error prevents us from reaching
+/// a confirmed answer; that is distinct from confirming there is no provider
+/// to talk to, and callers must not treat it as such (see
+/// [`ServiceAvailability::Indeterminate`]).
+///
 /// This may block for as long as the session bus's activation timeout, so it
 /// is expected to be called via [`run_with_timeout`].
-fn probe_secret_service() -> bool {
-    let Ok(connection) = Connection::session() else {
-        // No session bus at all (headless sessions, containers, some remote
-        // shells): there is nothing to talk to.
-        return false;
-    };
-    let Ok(dbus) = DBusProxy::new(&connection) else {
-        return false;
-    };
-    let Ok(bus_name) = WellKnownName::try_from(SECRET_SERVICE_BUS_NAME) else {
-        return false;
-    };
+fn probe_secret_service() -> Option<bool> {
+    // No session bus at all (headless sessions, containers, some remote
+    // shells) or a proxy/name-parsing failure: these are transport-level
+    // errors, not a confirmation that no provider exists, so they must not
+    // be cached as `Unavailable`.
+    let connection = Connection::session().ok()?;
+    let dbus = DBusProxy::new(&connection).ok()?;
+    let bus_name = WellKnownName::try_from(SECRET_SERVICE_BUS_NAME).ok()?;
 
     // A provider is already running, so connecting will not block on activation.
     if dbus
         .name_has_owner(BusName::from(bus_name.clone()))
         .unwrap_or(false)
     {
-        return true;
+        return Some(true);
     }
 
-    // Nothing owns the name and the bus has no activation entry for it, so no
-    // provider is installed and asking for one would only waste time.
+    // Nothing owns the name; ask the bus whether it has an activation entry
+    // for it. A failure here is a listing error, not a confirmation that no
+    // provider is installed, so it must also be left indeterminate.
     let is_activatable = dbus
         .list_activatable_names()
-        .map(|names| {
-            names
-                .iter()
-                .any(|name| name.as_str() == SECRET_SERVICE_BUS_NAME)
-        })
-        .unwrap_or(false);
+        .ok()?
+        .iter()
+        .any(|name| name.as_str() == SECRET_SERVICE_BUS_NAME);
     if !is_activatable {
-        return false;
+        // The bus positively confirmed there is no activation entry: no
+        // provider is installed and asking for one would only waste time.
+        return Some(false);
     }
 
     // The name is activatable but nothing owns it yet. This is the call that
     // hangs when a provider is installed but cannot start.
-    dbus.start_service_by_name(bus_name, 0).is_ok()
+    Some(dbus.start_service_by_name(bus_name, 0).is_ok())
 }
 
 /// Runs `operation` on a worker thread, returning its result if it completes
