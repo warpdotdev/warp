@@ -5455,7 +5455,7 @@ impl TerminalView {
                 let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
                 match action {
                     Some(AutofireAction::Submit { query_id, text }) => {
-                        let dispatched = self.input.update(ctx, |input, ctx| {
+                        let started = self.input.update(ctx, |input, ctx| {
                             input.submit_queued_prompt_for_active_pane(
                                 text,
                                 conversation_id,
@@ -5463,7 +5463,7 @@ impl TerminalView {
                                 ctx,
                             )
                         });
-                        if dispatched {
+                        if started {
                             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                                 model.remove_fired_row(conversation_id, query_id, ctx);
                             });
@@ -5615,19 +5615,18 @@ impl TerminalView {
             .map(|row| (row.id(), row.text().to_owned()))
             .collect();
         for (query_id, text) in rows {
-            let dispatched = self.input.update(ctx, |input, ctx| {
+            let started = self.input.update(ctx, |input, ctx| {
                 input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx)
             });
-            if dispatched {
-                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.remove_fired_row(conversation_id, query_id, ctx);
-                });
-            } else {
+            if !started {
                 // A failed head dispatch leaves the row queued; stop draining so later rows
                 // don't jump ahead of it and violate FIFO ordering. The next completion retry
                 // re-fires the head row.
                 break;
             }
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.remove_fired_row(conversation_id, query_id, ctx);
+            });
         }
     }
 
