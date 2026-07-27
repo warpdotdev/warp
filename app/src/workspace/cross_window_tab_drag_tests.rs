@@ -7,8 +7,8 @@
 //! is reordering it back in the source window removed the visible drop zone and
 //! made the slot oscillate every frame.
 
-use warpui::WindowId;
 use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::{EntityId, WindowId};
 
 use super::CrossWindowTabDrag;
 
@@ -22,6 +22,7 @@ fn begin_multi_tab_drag(
     drag.begin_multi_tab_drag(
         source_window_id,
         SOURCE_TAB_INDEX,
+        EntityId::from_usize(42),
         Vector2F::zero(),
         vec2f(800.0, 600.0),
         Vector2F::zero(),
@@ -91,6 +92,7 @@ fn single_tab_drag_never_collapses_a_slot() {
     // placeholder to collapse.
     drag.begin_single_tab_drag(
         source,
+        EntityId::from_usize(42),
         Vector2F::zero(),
         vec2f(800.0, 600.0),
         Vector2F::zero(),
