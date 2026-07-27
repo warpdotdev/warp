@@ -469,7 +469,10 @@ fn run_with_timeout<T: Send + 'static>(
             let _ = sender.send(operation());
         });
     if let Err(err) = spawned {
-        report_error!(anyhow!("Failed to spawn {thread_name} thread: {err}"));
+        report_error!(
+            anyhow::Error::new(err).context("Failed to spawn worker thread"),
+            extra: { "thread_name" => %thread_name }
+        );
         return None;
     }
 
