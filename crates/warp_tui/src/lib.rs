@@ -74,6 +74,7 @@ mod tui_markdown;
 mod tui_permission_prompt;
 mod tui_plan_view;
 mod tui_shell_command_view;
+mod tui_vim_input;
 mod usage;
 mod voice_input;
 mod warping_indicator;

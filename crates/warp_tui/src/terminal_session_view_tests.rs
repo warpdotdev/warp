@@ -718,6 +718,7 @@ fn render_usage_footer_row(app: &mut App, totals: ConversationUsageTotals) -> Ve
         let row = render_status_footer_row(
             FooterSegments {
                 shell_mode: false,
+                vim_mode_indicator: None,
                 model_label: Some(
                     TuiText::new("TestModel")
                         .with_style(builder.primary_text_style())
@@ -1900,6 +1901,7 @@ fn footer_renders_agent_sections_left_aligned() {
             let row = render_status_footer_row(
                 FooterSegments {
                     shell_mode: false,
+                    vim_mode_indicator: None,
                     model_label: Some(
                         TuiText::new("TestModel")
                             .with_style(builder.primary_text_style())
@@ -1969,6 +1971,7 @@ fn footer_renders_shell_mode_sections_without_model_or_usage() {
             let row = render_status_footer_row(
                 FooterSegments {
                     shell_mode: true,
+                    vim_mode_indicator: None,
                     model_label: Some(
                         TuiText::new("TestModel")
                             .with_style(builder.primary_text_style())

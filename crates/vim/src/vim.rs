@@ -530,8 +530,8 @@ impl From<VimMode> for ModeTransition {
 /// Representation of a single, atomic Vim operation.
 #[derive(Clone, Debug)]
 pub struct VimEvent {
-    event_type: VimEventType,
-    count: u32,
+    pub event_type: VimEventType,
+    pub count: u32,
 }
 
 impl From<VimEventType> for VimEvent {
@@ -1687,6 +1687,23 @@ impl VimFSA {
         self.pending_operand_count
             .as_ref()
             .and_then(|s| s.parse().ok())
+    }
+
+    /// Process a printable character through the VimFSA and return the resulting event.
+    ///
+    /// This is the public entry point for character-by-character vim input processing.
+    /// Returns `None` when the character was consumed as part of a pending multi-key sequence
+    /// (e.g. the first `d` in `dd`).
+    pub fn process_char(&mut self, c: char) -> Option<VimEvent> {
+        self.typed_character(c)
+    }
+
+    /// Process a named special key (e.g. `"escape"`, `"backspace"`, `"enter"`) through the VimFSA.
+    ///
+    /// This is the public entry point for special-key vim input processing.
+    /// Returns `None` when the key has no action in the current mode.
+    pub fn process_keystroke(&mut self, key: &str) -> Option<VimEvent> {
+        self.keypress(key)
     }
 
     /// This is for when the view needs to initiate a switch to insert mode, e.g. when the user

@@ -785,6 +785,16 @@ pub static EXPORT_TO_FILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticComm
     argument: Some(Argument::optional().with_hint_text("<optional filename>")),
 });
 
+pub const VIM_MODE: StaticCommand = StaticCommand {
+    name: "/vim-mode",
+    description: "Toggle Vim mode",
+    kind: SlashCommandKind::VimMode,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static COMMAND_REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
 /// A unique identifier for a static slash command.
@@ -878,6 +888,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         SET_TAB_COLOR.clone(),
         NATURAL_LANGUAGE_DETECTION,
         THEME,
+        VIM_MODE,
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,

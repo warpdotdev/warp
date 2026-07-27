@@ -1259,6 +1259,7 @@ impl Input {
             | SlashCommandKind::Voice
             | SlashCommandKind::NaturalLanguageDetection
             | SlashCommandKind::Theme
+            | SlashCommandKind::VimMode
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout
             | SlashCommandKind::Version => {
