@@ -101,6 +101,7 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shell::ShellType;
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
+use crate::terminal::view::init::KEYBOARD_PROTOCOL_ENABLED_KEY;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -9443,5 +9444,120 @@ fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
                  (the default); got Emit instead"
             );
         });
+    });
+}
+
+/// The seven readline-style line-editing bindings whose context predicate this change widens.
+const EXECUTING_COMMAND_LINE_EDITING_ACTIONS: &[&str] = &[
+    "terminal:executing_command_move_cursor_word_left",
+    "terminal:executing_command_move_cursor_word_right",
+    "terminal:executing_command_move_cursor_home",
+    "terminal:executing_command_move_cursor_end",
+    "terminal:executing_command_delete_word_left",
+    "terminal:executing_command_delete_line_start",
+    "terminal:executing_command_delete_line_end",
+];
+
+/// Build a keymap context containing exactly `keys`, mirroring what
+/// `TerminalView::keymap_context` inserts in the corresponding terminal state.
+fn keymap_context_with(keys: &[&'static str]) -> warpui::keymap::Context {
+    let mut context = warpui::keymap::Context::default();
+    for key in keys {
+        context.set.insert(key);
+    }
+    context
+}
+
+/// Assert how every line-editing binding evaluates against `context`.
+///
+/// Reads the predicate off the binding as actually registered by
+/// `crate::terminal::view::init`, so this exercises the shipped predicate rather than a
+/// copy of it.
+fn assert_line_editing_bindings(app: &App, context: &warpui::keymap::Context, expected: bool) {
+    app.read(|ctx| {
+        for name in EXECUTING_COMMAND_LINE_EDITING_ACTIONS {
+            let binding = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == *name)
+                .unwrap_or_else(|| panic!("`{name}` should be a registered editable binding"));
+            assert_eq!(
+                binding.in_context(context),
+                expected,
+                "`{name}` in context {:?} should be {}",
+                context.set,
+                if expected { "active" } else { "inactive" },
+            );
+        }
+    });
+}
+
+/// The `terminal:executing_command_*` line-editing bindings must be active inside an
+/// alt-screen TUI that has not enabled the Kitty keyboard protocol.
+///
+/// Before this change they were gated on `LongRunningCommand` alone, and
+/// `TerminalView::keymap_context` explicitly declines to insert that key while the alt
+/// screen is active — so all seven were unreachable in fullscreen TUIs.
+#[test]
+fn test_line_editing_bindings_apply_in_alt_screen_without_keyboard_protocol() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        // `initialize_app` registers the *input* bindings; the line-editing bindings under
+        // test are registered by the terminal view's own `init`.
+        app.update(crate::terminal::view::init::init);
+
+        // The regression under test: a plain alt-screen TUI.
+        assert_line_editing_bindings(&app, &keymap_context_with(&["Terminal", "AltScreen"]), true);
+
+        // Unchanged: a long-running command on the normal screen still matches.
+        assert_line_editing_bindings(
+            &app,
+            &keymap_context_with(&["Terminal", "LongRunningCommand"]),
+            true,
+        );
+
+        // Not over-broadened: an idle terminal at the prompt must not match, so these
+        // chords keep reaching Warp's own input editor.
+        assert_line_editing_bindings(&app, &keymap_context_with(&["Terminal"]), false);
+
+        // The pre-existing IME guard still wins over the widened clause.
+        assert_line_editing_bindings(
+            &app,
+            &keymap_context_with(&["Terminal", "AltScreen", "IMEOpen"]),
+            false,
+        );
+    });
+}
+
+/// The same bindings must stay out of the way when the alt-screen TUI *has* enabled the
+/// Kitty keyboard protocol: it asked for rich key events, and the encoder — not a
+/// readline control byte — is what should answer.
+///
+/// Bindings are matched before the encoder runs, so without this clause a matching
+/// binding would win over KKP encoding. This was the review concern that blocked #11605.
+#[test]
+fn test_line_editing_bindings_suppressed_in_alt_screen_with_keyboard_protocol() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        // `initialize_app` registers the *input* bindings; the line-editing bindings under
+        // test are registered by the terminal view's own `init`.
+        app.update(crate::terminal::view::init::init);
+
+        assert_line_editing_bindings(
+            &app,
+            &keymap_context_with(&["Terminal", "AltScreen", KEYBOARD_PROTOCOL_ENABLED_KEY]),
+            false,
+        );
+
+        // A long-running command on the normal screen is unaffected by the protocol: the
+        // alt screen is the only place the new clause applies.
+        assert_line_editing_bindings(
+            &app,
+            &keymap_context_with(&[
+                "Terminal",
+                "LongRunningCommand",
+                KEYBOARD_PROTOCOL_ENABLED_KEY,
+            ]),
+            true,
+        );
     });
 }
