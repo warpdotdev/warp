@@ -14491,7 +14491,10 @@ impl Input {
     }
 
     /// Upload pending attachments to the task definition before emitting the text-only cloud
-    /// follow-up event. A new VM execution downloads these attachments during startup.
+    /// follow-up event. `SubmitCloudFollowup` only carries the prompt text, so this helper owns
+    /// the prompt and attachment payloads until the async upload either succeeds and submits the
+    /// prompt or fails and restores the input. A new VM execution downloads these task attachments
+    /// during startup.
     fn upload_files_then_submit_cloud_followup(
         &mut self,
         task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
