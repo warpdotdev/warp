@@ -497,7 +497,10 @@ fn queued_prompt_retains_attachments_through_fire_and_retry_restore() {
         // The queued row owns its attachment while it is being fired, allowing the async upload
         // path to read it before the row is removed.
         model.read(&app, |model, _| {
-            assert_eq!(model.attachments_for(conv, query_id), &[attachment.clone()]);
+            assert_eq!(
+                model.attachments_for(conv, query_id),
+                std::slice::from_ref(&attachment)
+            );
             assert!(matches!(
                 model.peek_autofire(conv),
                 Some(AutofireAction::Submit {
