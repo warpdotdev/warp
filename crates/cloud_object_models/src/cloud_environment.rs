@@ -122,6 +122,42 @@ impl fmt::Display for BaseImage {
     }
 }
 
+/// Serde adapter for [`AmbientAgentEnvironment::base_image`].
+///
+/// Maps the `Option<BaseImage>` Rust field to the legacy top-level
+/// `docker_image` string key in the JSON wire format:
+/// - `Some(BaseImage::DockerImage(s))` round-trips through
+///   `"docker_image": "s"`.
+/// - `None` is omitted on serialize (no sentinel key is injected) and
+///   deserializes from a missing or null `docker_image` field.
+///
+/// This avoids the `#[serde(flatten)]` + `#[serde(default)]` composition
+/// issue (serde#1626) by using an explicit, named-field adapter instead of a
+/// flattened enum.
+mod base_image_field {
+    use super::BaseImage;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<BaseImage>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(BaseImage::DockerImage(image)) => serializer.serialize_str(image),
+            // Unreachable when paired with `skip_serializing_if = "Option::is_none"`,
+            // but kept so the adapter is correct in isolation.
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<BaseImage>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Option::<String>::deserialize(deserializer)?.map(BaseImage::DockerImage))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GcpProviderConfig {
     pub project_number: String,
@@ -181,9 +217,19 @@ pub struct AmbientAgentEnvironment {
     /// `github_repos`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_repos: Option<Vec<SourceRepo>>,
-    /// Base image specification
-    #[serde(flatten)]
-    pub base_image: BaseImage,
+    /// Base image specification.
+    ///
+    /// Optional: an environment without a pinned docker image deserializes
+    /// successfully (`None`) and omits the `docker_image` key on serialize.
+    /// When present, the wire format is the legacy top-level `docker_image`
+    /// string key.
+    #[serde(
+        rename = "docker_image",
+        default,
+        with = "base_image_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base_image: Option<BaseImage>,
     /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
@@ -212,7 +258,7 @@ impl AmbientAgentEnvironment {
             code_forge: None,
             github_repos,
             source_repos: None,
-            base_image: BaseImage::DockerImage(docker_image),
+            base_image: Some(BaseImage::DockerImage(docker_image)),
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
@@ -238,6 +284,14 @@ impl AmbientAgentEnvironment {
                 .iter()
                 .map(|repo| SourceRepo::new(code_forge, repo.owner.clone(), repo.repo.clone()))
                 .collect(),
+        }
+    }
+
+    /// Returns the configured docker image, if any.
+    pub fn docker_image(&self) -> Option<&str> {
+        match &self.base_image {
+            Some(BaseImage::DockerImage(image)) => Some(image),
+            None => None,
         }
     }
 }

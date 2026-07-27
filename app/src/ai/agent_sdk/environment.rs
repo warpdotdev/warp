@@ -301,8 +301,11 @@ impl EnvironmentCommandRunner {
             println!("Description: {desc}");
         }
         match &env.base_image {
-            BaseImage::DockerImage(img) => {
+            Some(BaseImage::DockerImage(img)) => {
                 println!("Docker image: {img}");
+            }
+            None => {
+                println!("Docker image: None");
             }
         }
         if env.github_repos.is_empty() {
@@ -952,7 +955,7 @@ impl EnvironmentCommandRunner {
         }
 
         if let Some(new_docker_image) = docker_image {
-            updated_env.base_image = BaseImage::DockerImage(new_docker_image);
+            updated_env.base_image = Some(BaseImage::DockerImage(new_docker_image));
         }
 
         for repo in add_repos {
@@ -1121,7 +1124,8 @@ struct EnvironmentInfo {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
-    base_image: BaseImage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_image: Option<BaseImage>,
     github_repos: Vec<GithubRepo>,
     setup_commands: Vec<String>,
     creator_email: String,
@@ -1156,12 +1160,16 @@ impl TableFormat for EnvironmentInfo {
             .join(", ");
         let setup_commands_display = self.setup_commands.join("\n");
         let description_display = self.description.as_deref().unwrap_or("");
+        let base_image_display = match &self.base_image {
+            Some(base_image) => base_image.to_string(),
+            None => String::new(),
+        };
 
         vec![
             Cell::new(&self.id),
             Cell::new(&self.name),
             Cell::new(description_display),
-            Cell::new(self.base_image.to_string()),
+            Cell::new(base_image_display),
             Cell::new(github_repos_display),
             Cell::new(setup_commands_display),
             Cell::new(&self.creator_email),
