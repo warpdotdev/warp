@@ -11476,7 +11476,14 @@ impl Workspace {
         {
             if drag_model.has_dedicated_preview_window() {
                 // Multi-tab drag: skip the dedicated-preview placeholder.
-                drag_model.source_placeholder_tab_index()
+                // Resolve it by identity — the drag-start index goes stale if
+                // the source tab list changes mid-drag, and skipping a stale
+                // index would omit a bystander from the snapshot while keeping
+                // the placeholder.
+                drag_model
+                    .source_placeholder_tab_index()
+                    .and_then(|_| drag_model.source_pane_group_id())
+                    .and_then(|id| self.tab_index_for_pane_group_id(id))
             } else if drag_model.source_was_single_tab() && drag_model.handed_off_target().is_some()
             {
                 // Single-tab drag in InsertedInTarget phase: the source's
@@ -20785,8 +20792,14 @@ impl Workspace {
             // drag and must stay full width, otherwise the drop zone vanishes
             // and the slot oscillates ("fuzzy shake"). See
             // `CrossWindowTabDrag::collapsed_source_placeholder_index`.
-            let transferred_tab_index =
-                drag_model.collapsed_source_placeholder_index(self.window_id);
+            // Resolved by identity: `collapsed_source_placeholder_index` decides
+            // WHETHER to collapse a slot, but the index it carries is frozen at
+            // drag start, so after a mid-drag tab close it would zero-width an
+            // innocent neighbour.
+            let transferred_tab_index = drag_model
+                .collapsed_source_placeholder_index(self.window_id)
+                .and_then(|_| drag_model.source_pane_group_id())
+                .and_then(|id| self.tab_index_for_pane_group_id(id));
             // Ghost state for cross-window drag hovering over this tab bar.
             let ghost = drag_model.ghost_state_for_window(self.window_id);
 
@@ -27970,6 +27983,11 @@ impl Workspace {
         let source_tab_index = CrossWindowTabDrag::as_ref(ctx)
             .transferred_tab_index()
             .unwrap_or(0);
+        // Identity of the dragged pane group. The put-back branch below resolves
+        // the source tab through this rather than through `source_tab_index`,
+        // which is frozen at drag start and goes stale if the source tab list
+        // changes mid-drag.
+        let source_pane_group_id = CrossWindowTabDrag::as_ref(ctx).source_pane_group_id();
         let source_was_single_tab = CrossWindowTabDrag::as_ref(ctx).source_was_single_tab();
 
         log::info!(
@@ -28014,10 +28032,12 @@ impl Workspace {
                 return;
             }
 
-            let caller_draggable_state = self
-                .tabs
-                .get(source_tab_index)
-                .map(|tab| tab.draggable_state.clone());
+            // Resolve once by identity and reuse for the draggable-state clone,
+            // the unsubscribe and the removal below.
+            let source_index =
+                source_pane_group_id.and_then(|id| self.tab_index_for_pane_group_id(id));
+            let caller_draggable_state =
+                source_index.map(|index| self.tabs[index].draggable_state.clone());
 
             let Some(caller_draggable_state) = caller_draggable_state else {
                 CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
@@ -28036,13 +28056,13 @@ impl Workspace {
             });
 
             if let Some(info) = result {
-                if let Some(tab) = self.tabs.get(source_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
+                if let Some(index) = source_index {
+                    ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
                 }
                 if source_was_single_tab {
                     self.close_window_for_content_transfer(ctx);
-                } else {
-                    self.remove_tab_without_undo(source_tab_index, ctx);
+                } else if let Some(index) = source_index {
+                    self.remove_tab_without_undo(index, ctx);
                 }
                 // The source placeholder is now removed, so `source_tab_index`
                 // is stale. Mark it consumed so a later reverse_handoff +
@@ -28493,6 +28513,16 @@ impl Workspace {
             return;
         };
         ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
+        if self.tabs.len() == 1 {
+            // `remove_tab` treats the last tab as "close the window" and does so
+            // with a plain `ctx.close_window()`, which leaves
+            // `suppress_detach_panes_on_window_close` false — `on_window_closed`
+            // would then detach the panes of every tab, including this pane
+            // group, which now lives in the target window. Close the same way
+            // the other content-transfer paths do instead.
+            self.close_window_for_content_transfer(ctx);
+            return;
+        }
         self.remove_tab_without_undo(index, ctx);
     }
 

@@ -408,6 +408,16 @@ impl CrossWindowTabDrag {
         self.active_drag.as_ref().map(|d| d.source_tab_index())
     }
 
+    /// Identity of the pane group being dragged, captured at drag start.
+    ///
+    /// Prefer this over [`Self::transferred_tab_index`] anywhere the result is
+    /// used to pick a tab out of the source window: the index is a position
+    /// frozen at drag start, and the source tab list can change underneath it
+    /// while the drag is in flight.
+    pub fn source_pane_group_id(&self) -> Option<EntityId> {
+        self.active_drag.as_ref().map(|d| d.source_pane_group_id)
+    }
+
     /// Returns the tab index in the source window of the detached placeholder
     /// that should be hidden (rendered with 0 width / skipped in snapshots)
     /// while a cross-window drag is in progress.
@@ -530,7 +540,6 @@ impl CrossWindowTabDrag {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     pub fn begin_single_tab_drag(
         &mut self,

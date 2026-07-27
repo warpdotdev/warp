@@ -4138,6 +4138,86 @@ fn test_cross_window_drop_removes_the_dragged_tab_not_whatever_took_its_index() 
 }
 
 #[test]
+fn test_cross_window_drop_of_the_last_source_tab_closes_without_detaching_panes() {
+    // When the handed-off tab is the only one left, removing it has to close
+    // the window the content-transfer way. `remove_tab` treats the last tab as
+    // "close the window" using a bare close, which leaves
+    // `suppress_detach_panes_on_window_close` false - and `on_window_closed`
+    // would then detach the panes of a pane group that now lives in the target
+    // window.
+    let _drag_guard = FeatureFlag::DragTabsToWindows.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Two tabs; the second is dragged out, then the first one's shell
+            // exits mid-drag, leaving the dragged tab as the only tab.
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 2);
+
+            let dragged_id = workspace.tabs[1].pane_group.id();
+            workspace.remove_tab_without_undo(0, ctx);
+            assert_eq!(workspace.tab_count(), 1);
+            assert!(!workspace.suppress_detach_panes_on_window_close);
+
+            workspace.handle_drop_result(
+                DropResult::RemoveSourceTab {
+                    pane_group_id: dragged_id,
+                },
+                ctx,
+            );
+
+            assert!(
+                workspace.suppress_detach_panes_on_window_close,
+                "the transferred pane group must not be detached when the source window closes"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_cross_window_drop_ignores_a_source_tab_that_is_already_gone() {
+    // If the dragged tab's own shell exits mid-drag its tab is closed, so at
+    // drop time there is nothing left to remove. Doing nothing is correct;
+    // falling back to an index would remove some other tab.
+    let _drag_guard = FeatureFlag::DragTabsToWindows.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let survivors: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            let vanished_id = EntityId::from_usize(999_999);
+
+            workspace.handle_drop_result(
+                DropResult::RemoveSourceTab {
+                    pane_group_id: vanished_id,
+                },
+                ctx,
+            );
+
+            let after: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            assert_eq!(survivors, after, "no tab should have been removed");
+        });
+    });
+}
+
+#[test]
 fn test_toggle_tab_group_collapsed_flips_state() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 
