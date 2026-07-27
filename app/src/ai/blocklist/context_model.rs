@@ -59,7 +59,7 @@ pub struct PendingAttachmentSummary {
 }
 
 /// A pending attachment — either an image (base64 in memory) or a file (path reference).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum PendingAttachment {
     Image(ImageContext),
     File(PendingFile),

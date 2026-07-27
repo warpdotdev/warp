@@ -3987,7 +3987,8 @@ impl Input {
         let dispatched = if is_command {
             self.execute_queued_command(&text, conversation_id, ctx)
         } else {
-            self.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx)
+            self.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
+            true
         };
         if !dispatched {
             return;
@@ -4130,8 +4131,6 @@ impl Input {
                             task_id,
                             prompt,
                             pending_attachments,
-                            None,
-                            true,
                             ctx,
                         );
                     }
@@ -13944,7 +13943,7 @@ impl Input {
         conversation_id: AIConversationId,
         query_id: QueuedQueryId,
         ctx: &mut ViewContext<Self>,
-    ) -> bool {
+    ) {
         // Cloud follow-up path: the cloud run has ended an execution and the next queued
         // prompt should start a new one. Wins over the viewer path because the old shared
         // session is no longer live to receive a SendAgentPrompt.
@@ -13957,49 +13956,18 @@ impl Input {
                 });
 
         if is_ready_for_cloud_followup {
-            let pending_attachments = QueuedQueryModel::as_ref(ctx)
+            // Cloud follow-up does not support attachments; a queued row's attachments are dropped
+            // when the row is removed after dispatch.
+            let drops_attachments = !QueuedQueryModel::as_ref(ctx)
                 .attachments_for(conversation_id, query_id)
-                .to_vec();
-            let queued_query_retry = QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .iter()
-                .enumerate()
-                .find(|(_, query)| query.id() == query_id)
-                .map(|(index, query)| (conversation_id, index, query.clone()));
-
-            if pending_attachments.is_empty() {
-                ctx.emit(Event::SubmitCloudFollowup { prompt });
-            } else {
-                let task_id = self
-                    .ambient_agent_view_model()
-                    .and_then(|ambient_agent_model| ambient_agent_model.as_ref(ctx).task_id());
-                if let Some(task_id) = task_id {
-                    // Mirror the shared-session viewer path: only borrow the loading-state UI when
-                    // the editor is empty. A queued row can auto-fire while the user is typing a
-                    // different prompt, and freezing would clobber that in-progress draft. When the
-                    // editor is empty we show the "<prompt> ◌" affordance and restore it on upload
-                    // failure; when the user has a draft we upload + submit without touching the
-                    // editor buffer.
-                    let editor_is_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
-                    if editor_is_empty {
-                        self.freeze_input_in_loading_state_with_text(&prompt, ctx);
-                    }
-                    self.upload_files_then_submit_cloud_followup(
-                        task_id,
-                        prompt,
-                        pending_attachments,
-                        queued_query_retry,
-                        editor_is_empty,
-                        ctx,
-                    );
-                } else {
-                    log::warn!(
-                        "Cannot upload queued cloud follow-up attachments: no task_id available"
-                    );
-                    return false;
-                }
+                .is_empty();
+            if drops_attachments {
+                log::warn!(
+                    "Dropping attachments on a queued cloud follow-up prompt; cloud follow-up does not support attachments"
+                );
             }
-            return true;
+            ctx.emit(Event::SubmitCloudFollowup { prompt });
+            return;
         }
 
         // Shared-session viewer path (covers an in-flight cloud run from the owner's client).
@@ -14052,12 +14020,11 @@ impl Input {
                 queued_query_retry,
                 ctx,
             );
-            return true;
+            return;
         }
 
         // Local Agent Mode path.
         self.submit_queued_prompt(prompt, conversation_id, query_id, ctx);
-        true
     }
 
     /// Queues the current input instead of submitting it when the active conversation is
@@ -14530,8 +14497,6 @@ impl Input {
         task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
         prompt: String,
         pending_attachments: Vec<PendingAttachment>,
-        queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
-        froze_input: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -14615,19 +14580,7 @@ impl Input {
             },
             move |input, result, ctx| {
                 if let Err(error) = result {
-                    if let Some((conversation_id, insert_index, query)) = queued_query_retry.clone()
-                    {
-                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                            model.restore_fired_row(conversation_id, insert_index, query, ctx);
-                        });
-                    }
-                    // Only restore the editor when we froze it. When the user had a draft we
-                    // skipped the freeze, so restoring the queued prompt into the buffer would
-                    // clobber their in-progress text; the fired row is already back in the queue
-                    // for retry and the toast explains the failure.
-                    if froze_input {
-                        input.restore_cloud_followup_input_after_upload_failure(&prompt, ctx);
-                    }
+                    input.restore_cloud_followup_input_after_upload_failure(&prompt, ctx);
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
@@ -14639,11 +14592,9 @@ impl Input {
                     return;
                 }
 
-                if queued_query_retry.is_none() {
-                    input.ai_context_model.update(ctx, |context_model, ctx| {
-                        context_model.clear_pending_attachments(ctx);
-                    });
-                }
+                input.ai_context_model.update(ctx, |context_model, ctx| {
+                    context_model.clear_pending_attachments(ctx);
+                });
                 ctx.emit(Event::SubmitCloudFollowup { prompt });
             },
         );

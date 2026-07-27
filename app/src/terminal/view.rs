@@ -5455,19 +5455,17 @@ impl TerminalView {
                 let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
                 match action {
                     Some(AutofireAction::Submit { query_id, text }) => {
-                        let started = self.input.update(ctx, |input, ctx| {
+                        self.input.update(ctx, |input, ctx| {
                             input.submit_queued_prompt_for_active_pane(
                                 text,
                                 conversation_id,
                                 query_id,
                                 ctx,
-                            )
+                            );
                         });
-                        if started {
-                            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                                model.remove_fired_row(conversation_id, query_id, ctx);
-                            });
-                        }
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.remove_fired_row(conversation_id, query_id, ctx);
+                        });
                     }
                     Some(AutofireAction::ExecuteCommand { query_id, command }) => {
                         let started = self.input.update(ctx, |input, ctx| {
@@ -5615,15 +5613,9 @@ impl TerminalView {
             .map(|row| (row.id(), row.text().to_owned()))
             .collect();
         for (query_id, text) in rows {
-            let started = self.input.update(ctx, |input, ctx| {
-                input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx)
+            self.input.update(ctx, |input, ctx| {
+                input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
             });
-            if !started {
-                // A failed head dispatch leaves the row queued; stop draining so later rows
-                // don't jump ahead of it and violate FIFO ordering. The next completion retry
-                // re-fires the head row.
-                break;
-            }
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.remove_fired_row(conversation_id, query_id, ctx);
             });
