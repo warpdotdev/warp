@@ -124,7 +124,28 @@ fn key_down(key: &str, chars: &str, ctrl: bool) -> TuiEvent {
         },
         chars: chars.to_owned(),
         details: KeyEventDetails::default(),
+        is_repeat: false,
         is_composing: false,
+    }
+}
+
+fn key_repeat(key: &str, chars: &str, ctrl: bool) -> TuiEvent {
+    let mut event = key_down(key, chars, ctrl);
+    let TuiEvent::KeyDown { is_repeat, .. } = &mut event else {
+        unreachable!();
+    };
+    *is_repeat = true;
+    event
+}
+
+fn key_up(key: &str, ctrl: bool) -> TuiEvent {
+    TuiEvent::KeyUp {
+        keystroke: Keystroke {
+            key: key.to_owned(),
+            ctrl,
+            ..Default::default()
+        },
+        details: KeyEventDetails::default(),
     }
 }
 
@@ -246,6 +267,32 @@ fn dispatch_reports_only_input_that_can_echo_as_typeahead() {
                     .typeahead(),
                 "é",
             );
+        });
+    });
+}
+
+#[test]
+fn repeats_are_forwarded_but_releases_are_not() {
+    let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    let repeat = key_repeat("a", "a", false);
+    assert_eq!(
+        forwarded_input(&repeat, &model).map(|input| input.bytes),
+        Some(b"a".to_vec())
+    );
+    assert!(forwarded_input(&key_up("a", false), &model).is_none());
+
+    App::test((), |app| async move {
+        app.read(|app| {
+            assert!(dispatch_pty_input(
+                &repeat,
+                Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+                app,
+            ));
+            assert!(!dispatch_pty_input(
+                &key_up("a", false),
+                Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+                app,
+            ));
         });
     });
 }

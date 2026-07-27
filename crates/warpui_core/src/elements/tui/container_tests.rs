@@ -140,6 +140,7 @@ fn dispatch_event_forwards_to_the_child_inside_the_inset() {
                 },
                 chars: "enter".to_owned(),
                 details: KeyEventDetails::default(),
+                is_repeat: false,
                 is_composing: false,
             };
             let handled = with_event_context(|event_ctx| {

@@ -4,7 +4,9 @@ use std::io::{self, Write};
 use std::rc::Rc;
 use std::time::Duration;
 
-use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
 
 use super::*;
 use crate::elements::MouseStateHandle;
@@ -245,6 +247,42 @@ fn keymap_binding_dispatches_typed_action_to_tui_view() {
             1,
             "the keymap pass should dispatch the bound action to the focused TUI view"
         );
+    });
+}
+
+#[test]
+fn repeats_dispatch_keymaps_while_releases_bypass_them() {
+    App::test((), |mut app| async move {
+        let (window_id, root) = app.update(|ctx| {
+            ctx.register_fixed_bindings([FixedBinding::new("ctrl-c", Bump, id!("BumpParentView"))]);
+            ctx.add_tui_window(window_options(), |view_ctx| {
+                let child = view_ctx.add_tui_view(|_| BumpChildView);
+                BumpParentView { child, bumps: 0 }
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        let release = screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Release,
+            )))
+            .expect("release event");
+        assert!(!app.update(|ctx| screen.dispatch_event(ctx, &release)));
+        assert_eq!(root.read(&app, |view, _| view.bumps), 0);
+
+        let repeat = screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Repeat,
+            )))
+            .expect("repeat event");
+        assert!(app.update(|ctx| screen.dispatch_event(ctx, &repeat)));
+        assert_eq!(root.read(&app, |view, _| view.bumps), 1);
     });
 }
 
@@ -511,10 +549,9 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 }
 
-/// Regression test for Shift+Enter not inserting a newline in terminals that
-/// require the Kitty keyboard protocol (e.g. Ghostty): entering the TUI must
-/// push the `DISAMBIGUATE_ESCAPE_CODES` enhancement flag (CSI `>1u`) so modified
-/// keys are reported distinctly, and leaving must pop it (CSI `<1u`).
+/// Enhancement-capable terminals report disambiguated keys, event types, and
+/// escape-coded plain keys (CSI `>11u`), then restore the previous protocol on
+/// exit.
 ///
 /// Crossterm hard-routes these commands to the unsupported legacy Windows
 /// console API, so the ANSI sequences are only emitted off Windows. The
@@ -533,9 +570,9 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
     {
         assert!(
             enter_output
-                .windows(b"\x1b[>1u".len())
-                .any(|window| window == b"\x1b[>1u"),
-            "entering the TUI should push the DISAMBIGUATE_ESCAPE_CODES keyboard enhancement flag"
+                .windows(b"\x1b[>11u".len())
+                .any(|window| window == b"\x1b[>11u"),
+            "entering the TUI should request the complete key lifecycle"
         );
         assert!(
             leave_output
@@ -552,8 +589,8 @@ fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
     enter_terminal_screen(&mut enter_output, false).unwrap();
     assert!(
         !enter_output
-            .windows(b"\x1b[>1u".len())
-            .any(|window| window == b"\x1b[>1u")
+            .windows(b"\x1b[>11u".len())
+            .any(|window| window == b"\x1b[>11u")
     );
 
     let mut leave_output = Vec::new();

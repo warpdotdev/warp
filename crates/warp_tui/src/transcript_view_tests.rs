@@ -469,6 +469,7 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
             },
             chars: String::new(),
             details: Default::default(),
+            is_repeat: false,
             is_composing: false,
         };
         assert!(!dispatch_event(&app, element.as_mut(), area, &page_up));

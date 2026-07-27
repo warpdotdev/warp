@@ -30,7 +30,12 @@ pub enum TuiEvent {
         keystroke: Keystroke,
         chars: String,
         details: KeyEventDetails,
+        is_repeat: bool,
         is_composing: bool,
+    },
+    KeyUp {
+        keystroke: Keystroke,
+        details: KeyEventDetails,
     },
     Paste {
         text: String,
@@ -83,7 +88,7 @@ impl TuiEvent {
             | Self::MiddleMouseDown { position, .. }
             | Self::RightMouseDown { position, .. }
             | Self::MouseMoved { position, .. } => Some(*position),
-            Self::KeyDown { .. } | Self::Paste { .. } => None,
+            Self::KeyDown { .. } | Self::KeyUp { .. } | Self::Paste { .. } => None,
         }
     }
 

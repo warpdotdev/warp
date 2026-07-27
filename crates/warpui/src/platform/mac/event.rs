@@ -71,6 +71,7 @@ pub unsafe fn from_native(
                 let details = KeyEventDetails {
                     left_alt: (native_modifiers.bits() & LEFT_ALT_MASK) != 0,
                     right_alt: (native_modifiers.bits() & RIGHT_ALT_MASK) != 0,
+                    physical_key: None,
                     key_without_modifiers,
                 };
                 let unmodified_chars = native_event.charactersIgnoringModifiers()?;

@@ -3,7 +3,9 @@ use std::rc::Rc;
 
 use super::TuiEventHandler;
 use crate::elements::tui::test_support::with_event_context;
-use crate::elements::tui::{TuiChildView, TuiElement, TuiEvent, TuiPresentationContext};
+use crate::elements::tui::{
+    TuiChildView, TuiDispatchEventResult, TuiElement, TuiEvent, TuiPresentationContext,
+};
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, EntityId, EntityIdMap};
@@ -16,7 +18,18 @@ fn key_event(key: &str) -> TuiEvent {
         },
         chars: key.to_owned(),
         details: KeyEventDetails::default(),
+        is_repeat: false,
         is_composing: false,
+    }
+}
+
+fn key_up(key: &str) -> TuiEvent {
+    TuiEvent::KeyUp {
+        keystroke: Keystroke {
+            key: key.to_owned(),
+            ..Default::default()
+        },
+        details: KeyEventDetails::default(),
     }
 }
 
@@ -65,6 +78,64 @@ fn child_consumes_the_event_before_the_wrapper() {
                 outer.dispatch_event(&key_event("enter"), event_ctx, app_ctx)
             });
 
+            assert!(handled);
+            assert_eq!(inner_hits.get(), 1);
+            assert_eq!(outer_hits.get(), 0);
+        });
+    });
+}
+
+#[test]
+fn key_lifecycle_callback_observes_down_and_up_with_explicit_propagation() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let hits = Rc::new(Cell::new(0u32));
+            let counter = hits.clone();
+            let mut handler = TuiEventHandler::new(().finish()).on_key_event(move |event, _, _| {
+                counter.set(counter.get() + 1);
+                match event {
+                    TuiEvent::KeyDown { .. } => TuiDispatchEventResult::PropagateToParent,
+                    TuiEvent::KeyUp { .. } => TuiDispatchEventResult::StopPropagation,
+                    TuiEvent::Paste { .. }
+                    | TuiEvent::ScrollWheel { .. }
+                    | TuiEvent::LeftMouseDown { .. }
+                    | TuiEvent::LeftMouseUp { .. }
+                    | TuiEvent::LeftMouseDragged { .. }
+                    | TuiEvent::MiddleMouseDown { .. }
+                    | TuiEvent::RightMouseDown { .. }
+                    | TuiEvent::MouseMoved { .. } => unreachable!(),
+                }
+            });
+
+            with_event_context(|event_ctx| {
+                assert!(!handler.dispatch_event(&key_event("a"), event_ctx, app_ctx));
+                assert!(handler.dispatch_event(&key_up("a"), event_ctx, app_ctx));
+            });
+            assert_eq!(hits.get(), 2);
+        });
+    });
+}
+
+#[test]
+fn child_consumes_key_up_before_lifecycle_wrapper() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let inner_hits = Rc::new(Cell::new(0u32));
+            let outer_hits = Rc::new(Cell::new(0u32));
+            let inner_counter = inner_hits.clone();
+            let outer_counter = outer_hits.clone();
+            let inner = TuiEventHandler::new(().finish()).on_key_event(move |_, _, _| {
+                inner_counter.set(inner_counter.get() + 1);
+                TuiDispatchEventResult::StopPropagation
+            });
+            let mut outer = TuiEventHandler::new(inner.finish()).on_key_event(move |_, _, _| {
+                outer_counter.set(outer_counter.get() + 1);
+                TuiDispatchEventResult::StopPropagation
+            });
+
+            let handled = with_event_context(|event_ctx| {
+                outer.dispatch_event(&key_up("a"), event_ctx, app_ctx)
+            });
             assert!(handled);
             assert_eq!(inner_hits.get(), 1);
             assert_eq!(outer_hits.get(), 0);

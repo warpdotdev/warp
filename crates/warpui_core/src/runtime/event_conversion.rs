@@ -5,13 +5,14 @@ use std::time::Duration;
 
 use instant::Instant;
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
+    MouseButton, MouseEvent, MouseEventKind,
 };
 
 use crate::elements::tui::{TuiEvent, TuiPoint, TuiPointExt, TuiScrollDelta};
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
+use crate::platform::keyboard::KeyCode as PhysicalKeyCode;
 
 /// Converts a raw crossterm event into the TUI event vocabulary, or
 /// `None` if the event has no TUI equivalent yet.
@@ -96,38 +97,78 @@ fn modifiers_state(modifiers: KeyModifiers) -> ModifiersState {
 }
 
 fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
-    // Only key presses map to a warp `KeyDown`; repeats/releases are ignored so
-    // dispatch matches the GUI's press-driven keystroke model.
-    if event.kind != KeyEventKind::Press {
-        return None;
-    }
-
-    let key = key_name(event.code, event.modifiers)?;
-    let chars = match event.code {
-        KeyCode::Char(char) => char.to_string(),
-        _ => String::new(),
+    let modifiers = key_modifiers(event.code, event.modifiers);
+    let keystroke = Keystroke {
+        ctrl: modifiers.contains(KeyModifiers::CONTROL),
+        alt: modifiers.contains(KeyModifiers::ALT),
+        shift: modifiers.contains(KeyModifiers::SHIFT),
+        cmd: modifiers.contains(KeyModifiers::SUPER),
+        meta: modifiers.contains(KeyModifiers::META),
+        key: key_name(event.code, modifiers)?,
+    };
+    let details = KeyEventDetails {
+        physical_key: physical_key(event.code),
+        key_without_modifiers: key_without_modifiers(event.code),
+        ..Default::default()
     };
 
-    Some(TuiEvent::KeyDown {
-        keystroke: Keystroke {
-            ctrl: event.modifiers.contains(KeyModifiers::CONTROL),
-            alt: event.modifiers.contains(KeyModifiers::ALT),
-            shift: event.modifiers.contains(KeyModifiers::SHIFT),
-            cmd: event.modifiers.contains(KeyModifiers::SUPER),
-            meta: event.modifiers.contains(KeyModifiers::META),
-            key,
-        },
-        chars,
-        details: KeyEventDetails {
-            key_without_modifiers: key_without_modifiers(event.code),
-            ..Default::default()
-        },
-        is_composing: false,
-    })
+    match event.kind {
+        KeyEventKind::Press | KeyEventKind::Repeat => Some(TuiEvent::KeyDown {
+            keystroke,
+            chars: match event.code {
+                KeyCode::Char(char) => char.to_string(),
+                _ => String::new(),
+            },
+            details,
+            is_repeat: event.kind == KeyEventKind::Repeat,
+            is_composing: false,
+        }),
+        KeyEventKind::Release => Some(TuiEvent::KeyUp { keystroke, details }),
+    }
+}
+
+fn key_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyModifiers {
+    let KeyCode::Modifier(code) = code else {
+        return modifiers;
+    };
+    let modifier = match code {
+        ModifierKeyCode::LeftControl | ModifierKeyCode::RightControl => KeyModifiers::CONTROL,
+        ModifierKeyCode::LeftAlt | ModifierKeyCode::RightAlt => KeyModifiers::ALT,
+        ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift => KeyModifiers::SHIFT,
+        ModifierKeyCode::LeftSuper | ModifierKeyCode::RightSuper => KeyModifiers::SUPER,
+        ModifierKeyCode::LeftMeta | ModifierKeyCode::RightMeta => KeyModifiers::META,
+        ModifierKeyCode::LeftHyper
+        | ModifierKeyCode::RightHyper
+        | ModifierKeyCode::IsoLevel3Shift
+        | ModifierKeyCode::IsoLevel5Shift => KeyModifiers::empty(),
+    };
+    modifiers | modifier
+}
+
+fn physical_key(code: KeyCode) -> Option<PhysicalKeyCode> {
+    let KeyCode::Modifier(code) = code else {
+        return None;
+    };
+    match code {
+        ModifierKeyCode::LeftAlt => Some(PhysicalKeyCode::AltLeft),
+        ModifierKeyCode::RightAlt => Some(PhysicalKeyCode::AltRight),
+        ModifierKeyCode::LeftControl => Some(PhysicalKeyCode::ControlLeft),
+        ModifierKeyCode::RightControl => Some(PhysicalKeyCode::ControlRight),
+        ModifierKeyCode::LeftShift => Some(PhysicalKeyCode::ShiftLeft),
+        ModifierKeyCode::RightShift => Some(PhysicalKeyCode::ShiftRight),
+        ModifierKeyCode::LeftSuper => Some(PhysicalKeyCode::SuperLeft),
+        ModifierKeyCode::RightSuper => Some(PhysicalKeyCode::SuperRight),
+        ModifierKeyCode::LeftHyper
+        | ModifierKeyCode::LeftMeta
+        | ModifierKeyCode::RightHyper
+        | ModifierKeyCode::RightMeta
+        | ModifierKeyCode::IsoLevel3Shift
+        | ModifierKeyCode::IsoLevel5Shift => None,
+    }
 }
 
 /// The TUI keystroke `key` name for a crossterm key code, or `None` for keys
-/// with no TUI equivalent (pure modifiers, lock keys, media keys, etc.).
+/// with no TUI equivalent (unsupported modifiers, lock keys, media keys, etc.).
 fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
     match code {
         KeyCode::Backspace => Some("backspace".to_owned()),
@@ -153,6 +194,18 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
             Some(char.to_uppercase().to_string())
         }
         KeyCode::Char(char) => Some(char.to_lowercase().to_string()),
+        KeyCode::Modifier(
+            ModifierKeyCode::LeftShift
+            | ModifierKeyCode::LeftControl
+            | ModifierKeyCode::LeftAlt
+            | ModifierKeyCode::LeftSuper
+            | ModifierKeyCode::LeftMeta
+            | ModifierKeyCode::RightShift
+            | ModifierKeyCode::RightControl
+            | ModifierKeyCode::RightAlt
+            | ModifierKeyCode::RightSuper
+            | ModifierKeyCode::RightMeta,
+        ) => Some(String::new()),
         KeyCode::Null
         | KeyCode::CapsLock
         | KeyCode::ScrollLock
@@ -162,7 +215,12 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
         | KeyCode::Menu
         | KeyCode::KeypadBegin
         | KeyCode::Media(_)
-        | KeyCode::Modifier(_)
+        | KeyCode::Modifier(
+            ModifierKeyCode::LeftHyper
+            | ModifierKeyCode::RightHyper
+            | ModifierKeyCode::IsoLevel3Shift
+            | ModifierKeyCode::IsoLevel5Shift,
+        )
         | KeyCode::F(_) => None,
     }
 }
