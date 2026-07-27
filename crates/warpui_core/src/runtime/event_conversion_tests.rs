@@ -80,12 +80,51 @@ fn ctrl_modifier_is_carried_into_keystroke() {
 }
 
 #[test]
-fn shifted_char_preserves_case() {
-    let keystroke = keystroke(KeyCode::Char('A'), KeyModifiers::SHIFT);
-    assert!(keystroke.shift);
-    assert_eq!(keystroke.key, "A");
+fn shifted_letters_preserve_case_and_base_key() {
+    let cases = [
+        // Synthetic/base-key form.
+        ('a', KeyModifiers::SHIFT, "A", "A", "a"),
+        // Crossterm's decoded Kitty alternate-key form.
+        ('A', KeyModifiers::empty(), "A", "A", "a"),
+    ];
+    for (char, modifiers, expected_key, expected_chars, expected_base_key) in cases {
+        let Some(TuiEvent::KeyDown {
+            keystroke,
+            chars,
+            details,
+            ..
+        }) = key(KeyCode::Char(char), modifiers)
+        else {
+            panic!("expected KeyDown");
+        };
+        assert!(keystroke.shift);
+        assert_eq!(keystroke.key, expected_key);
+        assert_eq!(chars, expected_chars);
+        assert_eq!(
+            details.key_without_modifiers.as_deref(),
+            Some(expected_base_key)
+        );
+    }
 }
 
+#[test]
+fn shifted_punctuation_uses_the_terminal_character_without_guessing_its_base_key() {
+    // With REPORT_ALTERNATE_KEYS, Crossterm returns Kitty's shifted codepoint
+    // as the character but does not expose its base codepoint.
+    let Some(TuiEvent::KeyDown {
+        keystroke,
+        chars,
+        details,
+        ..
+    }) = key(KeyCode::Char('!'), KeyModifiers::empty())
+    else {
+        panic!("expected KeyDown");
+    };
+    assert_eq!(keystroke.key, "!");
+    assert!(!keystroke.shift);
+    assert_eq!(chars, "!");
+    assert_eq!(details.key_without_modifiers.as_deref(), Some("!"));
+}
 #[test]
 fn repeated_keys_remain_key_down_events() {
     let event = KeyEvent::new_with_kind(

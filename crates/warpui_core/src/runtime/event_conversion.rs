@@ -117,10 +117,7 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
     match event.kind {
         KeyEventKind::Press | KeyEventKind::Repeat => Some(TuiEvent::KeyDown {
             keystroke,
-            chars: match event.code {
-                KeyCode::Char(char) => char.to_string(),
-                _ => String::new(),
-            },
+            chars: produced_chars(event.code, modifiers),
             details,
             physical_key,
             is_repeat: event.kind == KeyEventKind::Repeat,
@@ -135,6 +132,14 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
 }
 
 fn key_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyModifiers {
+    if let KeyCode::Char(char) = code
+        && char.is_uppercase()
+    {
+        // Crossterm replaces the base codepoint with Kitty's alternate
+        // uppercase codepoint and clears Shift. Restore it for Warp keymaps.
+        return modifiers | KeyModifiers::SHIFT;
+    }
+
     let KeyCode::Modifier(code) = code else {
         return modifiers;
     };
@@ -174,6 +179,16 @@ fn physical_key(code: KeyCode) -> Option<PhysicalKeyCode> {
     }
 }
 
+fn produced_chars(code: KeyCode, modifiers: KeyModifiers) -> String {
+    let KeyCode::Char(char) = code else {
+        return String::new();
+    };
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        return char.to_uppercase().collect();
+    }
+    char.to_string()
+}
+
 /// The TUI keystroke `key` name for a crossterm key code, or `None` for keys
 /// with no TUI equivalent (unsupported modifiers, lock keys, media keys, etc.).
 fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
@@ -198,7 +213,7 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
         // represented as the uppercase letter. Terminals differ on whether a
         // shifted letter is reported upper- or lowercase, so normalize here.
         KeyCode::Char(char) if modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(char.to_uppercase().to_string())
+            Some(char.to_uppercase().collect())
         }
         KeyCode::Char(char) => Some(char.to_lowercase().to_string()),
         KeyCode::Modifier(
@@ -234,7 +249,7 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
 
 fn key_without_modifiers(code: KeyCode) -> Option<String> {
     match code {
-        KeyCode::Char(char) => Some(char.to_lowercase().to_string()),
+        KeyCode::Char(char) => Some(char.to_lowercase().collect()),
         _ => None,
     }
 }

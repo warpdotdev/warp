@@ -549,9 +549,9 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 }
 
-/// Enhancement-capable terminals report disambiguated keys, event types, and
-/// escape-coded plain keys (CSI `>11u`), then restore the previous protocol on
-/// exit.
+/// Enhancement-capable terminals report disambiguated keys, event types,
+/// alternate shifted keys, and escape-coded plain keys (CSI `>15u`), then
+/// restore the previous protocol on exit.
 ///
 /// Crossterm hard-routes these commands to the unsupported legacy Windows
 /// console API, so the ANSI sequences are only emitted off Windows. The
@@ -570,8 +570,8 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
     {
         assert!(
             enter_output
-                .windows(b"\x1b[>11u".len())
-                .any(|window| window == b"\x1b[>11u"),
+                .windows(b"\x1b[>15u".len())
+                .any(|window| window == b"\x1b[>15u"),
             "entering the TUI should request the complete key lifecycle"
         );
         assert!(
@@ -589,8 +589,8 @@ fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
     enter_terminal_screen(&mut enter_output, false).unwrap();
     assert!(
         !enter_output
-            .windows(b"\x1b[>11u".len())
-            .any(|window| window == b"\x1b[>11u")
+            .windows(b"\x1b[>15u".len())
+            .any(|window| window == b"\x1b[>15u")
     );
 
     let mut leave_output = Vec::new();
