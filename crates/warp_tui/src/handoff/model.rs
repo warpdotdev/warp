@@ -50,7 +50,7 @@ pub(crate) enum TuiHandoffEditableState {
 pub(crate) enum TuiHandoffPhase {
     Editable {
         state: TuiHandoffEditableState,
-        pending: PendingHandoff,
+        pending: Box<PendingHandoff>,
     },
     Committed {
         operation_id: u64,
@@ -219,7 +219,7 @@ impl TuiHandoffModel {
                     state: TuiHandoffEditableState::Acceptance {
                         validation_error: None,
                     },
-                    pending,
+                    pending: Box::new(pending),
                 },
                 environments,
                 forked_existing_conversation,
@@ -383,7 +383,7 @@ impl TuiHandoffModel {
 
     fn pending(&self) -> Option<&PendingHandoff> {
         match &self.phase {
-            TuiHandoffPhase::Editable { pending, .. } => Some(pending),
+            TuiHandoffPhase::Editable { pending, .. } => Some(pending.as_ref()),
             TuiHandoffPhase::Committed { .. }
             | TuiHandoffPhase::Created { .. }
             | TuiHandoffPhase::Persisted { .. } => None,
@@ -392,7 +392,7 @@ impl TuiHandoffModel {
 
     fn pending_mut(&mut self) -> Option<&mut PendingHandoff> {
         match &mut self.phase {
-            TuiHandoffPhase::Editable { pending, .. } => Some(pending),
+            TuiHandoffPhase::Editable { pending, .. } => Some(pending.as_mut()),
             TuiHandoffPhase::Committed { .. }
             | TuiHandoffPhase::Created { .. }
             | TuiHandoffPhase::Persisted { .. } => None,
@@ -591,7 +591,7 @@ impl TuiHandoffModel {
         ctx.notify();
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let execution = execute_handoff(pending, ai_client, None, ctx);
+        let execution = execute_handoff(*pending, ai_client, None, ctx);
         ctx.spawn(execution, move |model, outcome, ctx| {
             if !matches!(
                 model.phase,
@@ -608,7 +608,7 @@ impl TuiHandoffModel {
                         state: TuiHandoffEditableState::Acceptance {
                             validation_error: Some(Self::validation_message(&error).to_owned()),
                         },
-                        pending: *pending,
+                        pending,
                     };
                     model.refresh_pending_environments(ctx);
                     ctx.emit(TuiHandoffModelEvent::Changed { focus_block: true });

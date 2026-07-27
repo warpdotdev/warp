@@ -531,9 +531,13 @@ impl TuiHandoffBlock {
                 ])
                 .finish(),
             )
-            .child(self.link.render(url.to_owned(), ctx, move |event_ctx, _| {
-                event_ctx.dispatch_typed_action(TuiHandoffBlockAction::OpenRun);
-            }))
+            .child(
+                TuiFlex::row()
+                    .child(self.link.render(url.to_owned(), ctx, move |event_ctx, _| {
+                        event_ctx.dispatch_typed_action(TuiHandoffBlockAction::OpenRun);
+                    }))
+                    .finish(),
+            )
             .finish();
         let banner = TuiContainer::new(content)
             .with_background(builder.orchestration_header_background())
