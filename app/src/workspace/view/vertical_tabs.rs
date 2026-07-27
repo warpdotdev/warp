@@ -1464,12 +1464,15 @@ fn render_detail_kind_badge_icon(
                 .selected_conversation_display_title(app)
                 .is_some()
             {
-                WarpIcon::Oz
+                // Local agent conversation: use Warp logo (white) to match
+                // the icon-with-status rendering for the tab row.
+                WarpIcon::Warp
             } else {
                 WarpIcon::Terminal
             };
             let color = match icon {
-                WarpIcon::Oz | WarpIcon::OzCloud => oz_icon_fill(theme),
+                WarpIcon::OzCloud => oz_icon_fill(theme),
+                WarpIcon::Warp => WarpThemeFill::Solid(ColorU::white()),
                 WarpIcon::Terminal => disabled_text,
                 _ => sub_text,
             };
@@ -4946,8 +4949,11 @@ pub(super) fn render_summary_pane_kind_icon_circle(
     let padding = total_size * SUMMARY_INLINE_PADDING_RATIO;
     let (icon_element, background): (Box<dyn Element>, ElementFill) = match kind {
         SummaryPaneKind::OzAgent { .. } => (
-            WarpIcon::Oz.to_warpui_icon(oz_icon_fill(theme)).finish(),
-            theme.background().into(),
+            // Non-ambient local agent: white Warp logo on black, matching the tab row.
+            WarpIcon::Warp
+                .to_warpui_icon(WarpThemeFill::Solid(ColorU::white()))
+                .finish(),
+            ThemeFill::Solid(ColorU::black()).into(),
         ),
         SummaryPaneKind::CLIAgent { agent, .. } => {
             let icon_color = agent.brand_icon_color();
@@ -5047,7 +5053,8 @@ fn summary_pane_kind_icon(
 
     match kind {
         SummaryPaneKind::Terminal => (WarpIcon::Terminal, main_text),
-        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Oz, main_text),
+        // Local agent: white Warp logo, consistent with the tab row and summary circle.
+        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Warp, WarpThemeFill::Solid(ColorU::white())),
         SummaryPaneKind::CLIAgent { agent, .. } => (
             agent.icon().unwrap_or(WarpIcon::Terminal),
             WarpThemeFill::Solid(agent.brand_icon_color()),

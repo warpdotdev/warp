@@ -21,6 +21,15 @@ const OZ_AMBIENT_BACKGROUND_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// Background color used for the Oz agent's circle when it is running locally (non-ambient).
+/// Pure black (#000000) to match the "white Warp logo on black" design for local conversations.
+const OZ_LOCAL_BACKGROUND_COLOR: ColorU = ColorU {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 255,
+};
+
 // Sub-component size ratios, expressed as fractions of `total_size`. The brand circle is
 // ~76% wide and the status badge is ~57% wide, with the badge's bottom-right anchored at
 // the box's bottom-right corner. With these ratios the badge center sits *inside* the
@@ -128,7 +137,8 @@ pub(crate) enum IconWithStatusVariant {
     },
     /// A pre-built icon element on an overlay background.
     NeutralElement { icon_element: Box<dyn Element> },
-    /// An Oz agent icon on the theme background.
+    /// A local Oz agent conversation: white Warp logo on a black background.
+    /// An ambient (cloud) Oz agent: Oz/cloud glyph on the brand-purple background.
     OzAgent {
         status: Option<ConversationStatus>,
         is_ambient: bool,
@@ -204,13 +214,12 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             let circle_background = if is_ambient {
                 ThemeFill::Solid(OZ_AMBIENT_BACKGROUND_COLOR)
             } else {
-                // Non-ambient Oz agent: white Warp logo on black circle background.
-                ThemeFill::Solid(ColorU::black())
+                ThemeFill::Solid(OZ_LOCAL_BACKGROUND_COLOR)
             };
             // In ambient/cloud mode use the combined `OzCloud` silhouette (Oz + cloud),
             // matching the treatment used in the agent view header. Non-ambient runs
             // use the Warp logo glyph (white on black) instead of the armadillo.
-            let oz_glyph = if is_ambient {
+            let agent_glyph = if is_ambient {
                 WarpIcon::OzCloud
             } else {
                 WarpIcon::Warp
@@ -224,7 +233,7 @@ pub(crate) fn render_icon_with_status_with_badge_style(
                 WarpThemeFill::Solid(ColorU::white())
             };
             let circle = render_circle(
-                oz_glyph.to_warpui_icon(glyph_color).finish(),
+                agent_glyph.to_warpui_icon(glyph_color).finish(),
                 circle_background,
                 total_size,
             );
