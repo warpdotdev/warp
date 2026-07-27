@@ -143,13 +143,12 @@ pub fn harness_save_key(harness_type: &str) -> &str {
     }
 }
 
-/// Resolves a default environment ID using the same logic as the
-/// `/cloud-agent` environment selector: first tries the user's
-/// last-selected environment from settings, then falls back to the
-/// most recently used environment.
+/// Resolves the orchestration GUI's default environment: first tries the
+/// user's last-selected environment, then preserves its existing
+/// most-recent-use and case-sensitive-name fallback.
 pub fn resolve_default_environment_id(ctx: &AppContext) -> Option<String> {
     CloudEnvironmentCatalog::as_ref(ctx)
-        .default_environment_id(ctx)
+        .orchestration_default_environment_id(ctx)
         .map(|id| id.uid())
 }
 

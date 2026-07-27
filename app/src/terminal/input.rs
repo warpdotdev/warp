@@ -184,7 +184,9 @@ use crate::ai::blocklist::{
     render_ai_agent_mode_icon, render_ai_follow_up_icon,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
-use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, sort_environments_by_recency};
+use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::cloud_environments::sort_environments_by_recency;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};

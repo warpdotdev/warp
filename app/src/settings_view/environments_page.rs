@@ -355,7 +355,8 @@ impl EnvironmentsPageView {
                 CloudModelEvent::ObjectUpdated { .. }
                 | CloudModelEvent::ObjectMoved { .. }
                 | CloudModelEvent::ObjectPermissionsUpdated { .. }
-                | CloudModelEvent::ObjectSynced { .. } => {}
+                | CloudModelEvent::ObjectSynced { .. }
+                | CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated => {}
                 // Events that never affect environments — skip entirely.
                 CloudModelEvent::NotebookEditorChangedFromServer { .. }
                 | CloudModelEvent::ObjectForceExpanded { .. } => return,

@@ -2,6 +2,7 @@ mod catalog;
 // Some of these re-exported types aren't used in the wasm build, so we suppress this
 // warning.
 pub use catalog::CloudEnvironmentCatalog;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) use catalog::sort_environments_by_recency;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use catalog::{CloudEnvironment, CloudEnvironmentCatalogEvent};

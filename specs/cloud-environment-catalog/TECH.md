@@ -18,8 +18,10 @@ The catalog:
 - Subscribes once to `CloudModel`.
 - Stores frontend-safe `CloudEnvironment` summaries containing only `SyncId` and display name.
 - Orders summaries by most-recent task use, then case-insensitive display name, matching the existing GUI selector.
+- Separately retains the orchestration GUI's existing most-recent, then case-sensitive-name fallback ID so sharing the catalog does not change either GUI consumer's default selection.
 - Emits `CloudEnvironmentCatalogEvent` only when the projected catalog changes.
 - Defers `ObjectCreated` refresh by one app task because `CloudModel` emits that event before inserting the object.
+- Refreshes when the separately fetched environment last-task timestamps are merged into `CloudModel`.
 - Resolves the saved environment only while it remains in the catalog, otherwise falling back to the first recency-ordered environment.
 - Persists only IDs that remain present in the catalog.
 - Exposes the existing out-of-band `UpdateManager` refresh operation for frontends that offer explicit refresh.
@@ -32,7 +34,7 @@ Menu rows, selected-row highlighting, default selection, labels, live updates, a
 
 Move the full-object recency sorting helper into the cloud-environment module so repository-overlap code can retain its pure full-object scoring without depending on a GUI view module.
 ### Shared provider migration
-Update orchestration environment default and persistence providers to use `CloudEnvironmentCatalog`. This keeps orchestration cards and frontend selectors on the same validity and fallback rules.
+Update orchestration environment default and persistence providers to use `CloudEnvironmentCatalog`. This keeps validity and recency state shared while preserving the orchestration GUI's existing case-sensitive name tie-break.
 ### TUI consumption
 Export the catalog summary, event, and model through `app/src/tui_export.rs` on the TUI handoff branch.
 
@@ -46,6 +48,7 @@ Export the catalog summary, event, and model through `app/src/tui_export.rs` on 
 Repository-overlap suggestion remains asynchronous and applies through `PendingHandoff::set_environment_id(..., false)`, preserving explicit-selection precedence.
 ## Testing and validation
 - Add catalog unit coverage proving an `ObjectCreated` event refreshes only after `CloudModel` inserts the new object.
+- Add catalog unit coverage for last-task timestamp reordering and both existing GUI name tie-break policies.
 - Run focused `CloudEnvironmentCatalog`, environment selector, orchestration provider, and handoff pipeline tests.
 - Run the complete `warp_tui` test suite after the TUI branch consumes the catalog.
 - Run `./script/format`.
