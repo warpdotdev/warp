@@ -24,6 +24,7 @@
 use std::cell::{Cell, RefCell};
 use std::io::{self, Stdout, Write, stdout};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -52,7 +53,8 @@ pub use event_conversion::crossterm_event_to_tui_event;
 use event_conversion::{ClickTracker, ShiftKeyTracker, ShiftRestoration};
 pub use renderer::TuiFrameRenderer;
 pub use terminal_probe::{
-    BackgroundLuminance, ProbedRgb, ProbedTerminalColors, probe_terminal_colors,
+    BackgroundLuminance, ProbedRgb, TuiProbe, background_luminance, probe_terminal_background,
+    read_terminal_background_reply, write_terminal_background_query,
 };
 use warp_errors::report_error;
 
@@ -80,6 +82,9 @@ struct TuiScreen<T, R: TuiTerminal> {
     presenter: TuiPresenter,
     renderer: TuiFrameRenderer,
     terminal: R,
+    /// Keeps each rendered frame and OSC query contiguous on stdout; otherwise
+    /// the reader thread could insert a query inside a frame's escape sequence.
+    stdout_write_lock: Arc<Mutex<()>>,
     /// Synthesizes multi-click counts for left mouse presses, which crossterm
     /// does not report.
     click_tracker: ClickTracker,
@@ -93,13 +98,19 @@ struct TuiScreen<T, R: TuiTerminal> {
 }
 
 impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
-    fn new(window_id: WindowId, root_view: ViewHandle<T>, terminal: R) -> Self {
+    fn new(
+        window_id: WindowId,
+        root_view: ViewHandle<T>,
+        terminal: R,
+        stdout_write_lock: Arc<Mutex<()>>,
+    ) -> Self {
         Self {
             window_id,
             root_view,
             presenter: TuiPresenter::new(),
             renderer: TuiFrameRenderer::new(),
             terminal,
+            stdout_write_lock,
             click_tracker: ClickTracker::default(),
             shift_key_tracker: ShiftKeyTracker::default(),
             last_mouse_position: None,
@@ -142,6 +153,13 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             self.replay_mouse_position(ctx);
         }
         let frame = frame.expect("loop always presents at least once");
+
+        // Hold the lock through the complete frame write so a reader-thread
+        // OSC query cannot split the renderer's escape sequence.
+        let _frame_write_guard = self
+            .stdout_write_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let mut writer = self.terminal.writer();
         self.renderer
@@ -299,7 +317,7 @@ where
         let dirty_for_callback = dirty.clone();
         app.on_window_invalidated(window_id, move |_, _| dirty_for_callback.set(true));
         Self {
-            screen: TuiScreen::new(window_id, root_view, terminal),
+            screen: TuiScreen::new(window_id, root_view, terminal, Arc::new(Mutex::new(()))),
             dirty,
             last_size: None,
             pending_repaint: None,
@@ -495,9 +513,9 @@ impl TuiTerminalGuard {
 ///   which in turn drops the channel receiver feeding it.
 /// - `_reader`: the blocking input-reader thread. Dropping a `JoinHandle`
 ///   detaches rather than joins, so this doesn't stop the thread directly; the
-///   thread exits on its own once the receiver above is gone (its next `send`
-///   fails) or when the process exits. The handle is held so the session owns
-///   the thread it spawned.
+///   thread exits at its next loop boundary or send when either downstream
+///   receiver is gone, or when the process exits. The handle is held so the
+///   session owns the thread it spawned.
 /// - `guard`: owns the terminal's raw mode + alternate screen and reconfigures
 ///   keyboard reporting while the session runs; restores both on drop.
 pub struct TuiDriverHandle {
@@ -552,8 +570,10 @@ pub fn spawn_tui_driver<T: TuiView>(
     window_id: WindowId,
     root_view: ViewHandle<T>,
     report_modifier_key_lifecycle: bool,
+    probe: Option<TuiProbe>,
 ) -> io::Result<TuiDriverHandle> {
     let guard = TuiTerminalGuard::enter(report_modifier_key_lifecycle)?;
+    let stdout_write_lock = Arc::new(Mutex::new(()));
 
     // The presenter + renderer + terminal live behind an `Rc<RefCell<_>>` owned
     // by the invalidation callback. The input path never borrows it, so painting
@@ -562,6 +582,7 @@ pub fn spawn_tui_driver<T: TuiView>(
         window_id,
         root_view,
         CrosstermTerminal::new(),
+        stdout_write_lock.clone(),
     )));
 
     // Repaint scheduling: at most one pending timer, held in this slot. Every
@@ -597,25 +618,12 @@ pub fn spawn_tui_driver<T: TuiView>(
     let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
 
     // Blocking terminal reads run off the main thread and are forwarded to the
-    // foreground executor through the channel, so the main thread's event loop is
-    // never blocked waiting for input.
+    // foreground executor through the channel. The reader also performs a probe
+    // when the terminal gains focus because it is the sole owner of stdin and
+    // can keep replies out of the normal crossterm event stream.
     let reader = thread::Builder::new()
         .name("warp-tui-input".to_owned())
-        .spawn(move || loop {
-            match event::read() {
-                Ok(event) => {
-                    // The reader runs on a dedicated thread, so blocking on the
-                    // send is fine; an error means the receiver was dropped.
-                    if block_on(sender.send(event)).is_err() {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    report_error!("failed to read a terminal event", extra: { "error" => %error });
-                    break;
-                }
-            }
-        })?;
+        .spawn(move || run_tui_input_reader(sender, probe, stdout_write_lock))?;
 
     let dispatch_screen = screen.clone();
     let task = ctx.foreground_executor().spawn(async move {
@@ -646,6 +654,81 @@ pub fn spawn_tui_driver<T: TuiView>(
         _reader: reader,
         guard,
     })
+}
+
+/// Owns blocking stdin access for a TUI session and runs an optional background
+/// probe when the terminal gains focus.
+///
+/// Probe policy remains with the probe provider; this loop owns terminal I/O
+/// because queries and replies must be coordinated with the sole stdin reader.
+fn run_tui_input_reader(
+    sender: async_channel::Sender<CrosstermEvent>,
+    probe: Option<TuiProbe>,
+    stdout_write_lock: Arc<Mutex<()>>,
+) {
+    let mut stdout = stdout();
+    loop {
+        // Stop before another read or query once either foreground consumer has
+        // been dropped during session teardown.
+        if sender.is_closed()
+            || probe
+                .as_ref()
+                .is_some_and(|probe| probe.results.is_closed())
+        {
+            break;
+        }
+
+        match event::read() {
+            Ok(event) => {
+                let probe_enabled = probe.as_ref().is_some_and(|probe| (probe.is_enabled)());
+                let should_probe = if matches!(event, CrosstermEvent::FocusGained) && probe_enabled
+                {
+                    should_probe_after_event(
+                        &event,
+                        probe_enabled,
+                        event::poll(Duration::ZERO).unwrap_or(true),
+                    )
+                } else {
+                    false
+                };
+                if should_probe && let Some(probe) = probe.as_ref() {
+                    // Recheck teardown immediately before writing. The shared
+                    // lock keeps the query contiguous with respect to rendered
+                    // frames, but is released before waiting for the reply.
+                    if sender.is_closed() || probe.results.is_closed() {
+                        break;
+                    }
+                    let query_result = {
+                        let _query_write_guard = stdout_write_lock
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        (probe.write_query)(&mut stdout)
+                    };
+                    let background = query_result.ok().and_then(|()| (probe.read_reply)());
+                    if block_on(probe.results.send(background)).is_err() {
+                        break;
+                    }
+                }
+                // Blocking here is safe on the dedicated thread; a send error
+                // means the foreground receiver was dropped.
+                if block_on(sender.send(event)).is_err() {
+                    break;
+                }
+            }
+            Err(error) => {
+                report_error!("failed to read a terminal event", extra: { "error" => %error });
+                break;
+            }
+        }
+    }
+}
+
+fn should_probe_after_event(
+    event: &CrosstermEvent,
+    probe_enabled: bool,
+    input_pending: bool,
+) -> bool {
+    matches!(event, CrosstermEvent::FocusGained) && probe_enabled && !input_pending
 }
 
 /// Draws a frame and schedules a timer for its element-requested repaint

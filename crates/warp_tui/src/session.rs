@@ -28,7 +28,7 @@ use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
-use crate::terminal_background::probe_and_select_theme;
+use crate::terminal_background::TuiHostTerminalBackground;
 use crate::terminal_session_view::{
     TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
 };
@@ -236,7 +236,7 @@ fn init(
     // Appearance theme at mount time, without changing normal GUI theme
     // selection or font settings.
     let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
-    let theme = probe_and_select_theme(selected_theme);
+    let (theme, probe) = TuiHostTerminalBackground::register(selected_theme, ctx);
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
         appearance.set_theme(theme, ctx);
     });
@@ -253,6 +253,7 @@ fn init(
         window_id,
         root.clone(),
         requires_modifier_key_reporting(ctx),
+        Some(probe),
     ) {
         Ok(driver) => {
             let sessions = ctx.add_singleton_model(|_| {

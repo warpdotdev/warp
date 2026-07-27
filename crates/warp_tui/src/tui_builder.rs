@@ -19,10 +19,11 @@ use warpui_core::elements::tui::{
     Color, Modifier, TuiElement, TuiEventContext, TuiStyle, tui_collapsible,
 };
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
+use warpui_core::runtime::ProbedRgb;
 
 use crate::orchestrated_agent_identity_styling::{AgentIdentity, agent_identity_palette};
 use crate::tab_bar::TuiTabBarStyles;
-use crate::terminal_background::probed_colors;
+use crate::terminal_background::TuiHostTerminalBackground;
 
 #[derive(Clone, Copy)]
 pub(crate) struct CloudRunMarkStyles {
@@ -40,13 +41,19 @@ pub(crate) struct CloudRunMarkStyles {
 #[derive(Clone, Debug)]
 pub(crate) struct TuiUiBuilder {
     warp_theme: WarpTheme,
+    terminal_background: Option<ProbedRgb>,
 }
 
 impl TuiUiBuilder {
     /// Creates a builder from the current [`Appearance`] theme.
     pub(crate) fn from_app(app: &AppContext) -> Self {
+        let terminal_background = app
+            .has_singleton_model::<TuiHostTerminalBackground>()
+            .then(|| TuiHostTerminalBackground::as_ref(app).terminal_background())
+            .flatten();
         Self {
             warp_theme: Appearance::as_ref(app).theme().clone(),
+            terminal_background,
         }
     }
 
@@ -282,10 +289,10 @@ impl TuiUiBuilder {
 
     /// The background the transcript actually renders over: default cells
     /// stay bg-unset, so it is the terminal's *own* background when the
-    /// startup probe captured it, else the theme background as the closest
+    /// terminal probe captured it, else the theme background as the closest
     /// approximation.
     fn base_background(&self) -> ThemeFill {
-        match probed_colors().bg {
+        match self.terminal_background {
             Some(bg) => ThemeFill::Solid(ColorU::new(bg.r, bg.g, bg.b, u8::MAX)),
             None => self.warp_theme.background(),
         }

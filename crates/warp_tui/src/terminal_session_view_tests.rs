@@ -21,12 +21,13 @@ use warp::tui_export::{
     LongRunningCommandControlState, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
     SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
     TuiMcpServerId, TuiUpArrowHistoryItemKind, UserTakeOverReason, export_conversation_markdown,
-    register_tui_session_view_test_singletons, slash_commands,
+    light_theme, register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::channel::Channel;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
+use warp_terminal::model::ansi::NamedColor;
 use warpui::platform::WindowStyle;
 use warpui::{
     AddWindowOptions, EntityIdMap, ModelHandle, ReadModel, SingletonEntity, UpdateModel, ViewHandle,
@@ -87,6 +88,7 @@ use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::statusline_config_view::TuiStatuslineConfigEvent;
+use crate::terminal_background::TuiHostTerminalBackground;
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
@@ -1051,6 +1053,29 @@ fn theme_slash_command_accepts_direct_selection_and_rejects_invalid_values() {
     });
 }
 
+#[test]
+fn appearance_theme_change_refreshes_terminal_model_colors() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let previous_foreground = view.read(&app, |view, _| {
+            view.terminal_model.lock().colors()[NamedColor::Foreground.into_color_index()]
+        });
+        let light_theme = light_theme();
+        let expected_foreground = light_theme.foreground().into_solid();
+
+        Appearance::handle(&app).update(&mut app, |appearance, ctx| {
+            appearance.set_theme(light_theme, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            let foreground =
+                view.terminal_model.lock().colors()[NamedColor::Foreground.into_color_index()];
+            assert_ne!(foreground, previous_foreground);
+            assert_eq!(foreground, expected_foreground);
+        });
+    });
+}
 #[test]
 fn zero_state_initial_load_failure_shows_an_error_footer_hint() {
     App::test((), |mut app| async move {
@@ -2074,6 +2099,10 @@ fn footer_model_label_is_a_bounded_click_target() {
 
 fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
     register_tui_session_view_test_singletons(app);
+    app.update(|ctx| {
+        let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
+        let _ = TuiHostTerminalBackground::register(selected_theme, ctx);
+    });
     add_test_semantic_selection(app);
     app.update(TuiAutoupdater::register);
     let (window_id, _) = app.update(|ctx| {
