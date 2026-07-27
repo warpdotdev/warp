@@ -26,6 +26,9 @@ use super::{
     MCPServerState, SpawnedServerInfo, TemplatableMCPServerInfo, TemplatableMCPServerManager,
     TemplatableMCPServerManagerEvent,
 };
+use warp_server_client::auth::AuthEvent;
+
+use crate::ai::mcp::builtin;
 use crate::ai::mcp::file_based_manager::FileBasedMCPManagerEvent;
 use crate::ai::mcp::parsing::resolve_json;
 use crate::ai::mcp::templatable::{CloudTemplatableMCPServer, GalleryData};
@@ -37,6 +40,7 @@ use crate::ai::mcp::{
     TemplatableMCPServer, TemplatableMCPServerInstallation, TransportType, logs,
 };
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{
     CloudObject, CloudObjectLocation, CloudObjectLookup as _, CloudObjectMetadataExt,
@@ -48,6 +52,7 @@ use crate::persistence::{
 };
 use crate::server::cloud_objects::update_manager::{InitiatedBy, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{
     MCPServerModel, MCPServerTelemetryTransportType, MCPTemplateCreationSource, TelemetryEvent,
 };
@@ -350,6 +355,38 @@ impl TemplatableMCPServerManager {
             _ => {}
         });
 
+        // Built-in Warp-hosted MCP servers follow the user's auth lifecycle:
+        // attach after login, re-attach with fresh credentials when the
+        // access token rotates, and detach on logout. Skipped in tests, which
+        // construct the manager without the auth singletons.
+        if !cfg!(test) {
+            let auth_manager = AuthManager::handle(ctx);
+            ctx.subscribe_to_model(&auth_manager, |me, _, event, ctx| match event {
+                // Fires on login and on user refresh; the credentials may
+                // have rotated either way, so respawn with the current token.
+                AuthManagerEvent::AuthComplete => me.sync_builtin_servers(true, ctx),
+                AuthManagerEvent::AuthFailed(_)
+                | AuthManagerEvent::NeedsReauth
+                | AuthManagerEvent::SkippedLogin => me.sync_builtin_servers(false, ctx),
+                AuthManagerEvent::CreateAnonymousUserFailed
+                | AuthManagerEvent::AttemptedLoginGatedFeature { .. }
+                | AuthManagerEvent::LoginOverrideDetected(_)
+                | AuthManagerEvent::MintCustomTokenFailed(_)
+                | AuthManagerEvent::ReceivedDeviceAuthorizationCode { .. } => {}
+            });
+
+            let server_api_provider = ServerApiProvider::handle(ctx);
+            ctx.subscribe_to_model(&server_api_provider, |me, _, event, ctx| match event {
+                // The transport captured the token it was spawned with, so a
+                // rotated token requires a respawn.
+                AuthEvent::AccessTokenRefreshed { .. } => me.sync_builtin_servers(true, ctx),
+                AuthEvent::StagingAccessBlocked
+                | AuthEvent::NeedsReauth
+                | AuthEvent::UserAccountDisabled
+                | AuthEvent::IapChallengeReceived => {}
+            });
+        }
+
         let database_connection =
             database_file_path_for_current_scope()
                 .to_str()
@@ -374,6 +411,7 @@ impl TemplatableMCPServerManager {
             pending_oauth_csrf: Default::default(),
             authorization_urls: Default::default(),
             cli_spawned_server_uuids: Default::default(),
+            builtin_server_uuids: Default::default(),
         };
 
         me.fetch_cloud_servers(ctx);
@@ -398,6 +436,12 @@ impl TemplatableMCPServerManager {
             for installation_uuid in running_server_uuids {
                 me.spawn_server(installation_uuid, ctx)
             }
+        }
+
+        // Attach built-in Warp-hosted servers for already-logged-in users
+        // (fresh logins are handled by the AuthManager subscription above).
+        if !cfg!(test) {
+            me.sync_builtin_servers(false, ctx);
         }
 
         // Migrate legacy MCPs to be templatables on app start. Uses UpdateManager
@@ -719,6 +763,56 @@ impl TemplatableMCPServerManager {
     ) {
         self.cli_spawned_server_uuids.insert(installation.uuid());
         self.spawn_ephemeral_server(installation, ctx);
+    }
+
+    /// Reconciles built-in Warp-hosted MCP servers (currently the Factory
+    /// MCP) with the feature-flag and auth state: spawns the server when it
+    /// should be running and isn't, and shuts it down when it shouldn't be.
+    /// Safe to call repeatedly.
+    ///
+    /// `force_respawn` restarts an already-running server so it picks up
+    /// rotated credentials: the transport keeps the `Authorization` header it
+    /// was spawned with.
+    pub fn sync_builtin_servers(&mut self, force_respawn: bool, ctx: &mut ModelContext<Self>) {
+        let installation_uuid = builtin::FACTORY_MCP_INSTALLATION_UUID;
+        let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+        // Built-ins attach only in interactive clients (GUI and TUI); CLI
+        // agent runs manage their MCP servers explicitly.
+        let eligible = FeatureFlag::FactoryMcp.is_enabled()
+            && AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers()
+            && !auth_state.is_anonymous_or_logged_out();
+        let is_active = self.is_server_active_or_pending(installation_uuid);
+
+        if !eligible {
+            if is_active {
+                log::info!("Shutting down the built-in Factory MCP server (no longer eligible)");
+                self.shutdown_server(installation_uuid, ctx);
+            }
+            self.builtin_server_uuids.remove(&installation_uuid);
+            return;
+        }
+
+        if is_active && !force_respawn {
+            return;
+        }
+
+        // A missing token here means the current one is about to expire; the
+        // AccessTokenRefreshed subscription calls back in with a fresh one
+        // once the app's request layer refreshes it.
+        let Some(token) = auth_state
+            .credentials()
+            .and_then(|credentials| builtin::builtin_bearer_token(&credentials))
+        else {
+            log::debug!("Built-in Factory MCP server: no usable bearer token yet; waiting");
+            return;
+        };
+
+        if is_active {
+            self.shutdown_server(installation_uuid, ctx);
+        }
+        log::info!("Spawning the built-in Factory MCP server");
+        self.builtin_server_uuids.insert(installation_uuid);
+        self.spawn_ephemeral_server(builtin::factory_mcp_installation(&token), ctx);
     }
 
     /// Spawns a new MCP server from a given installation UUID.

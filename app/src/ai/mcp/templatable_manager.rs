@@ -87,6 +87,10 @@ pub struct TemplatableMCPServerManager {
     /// UUIDs of MCP servers started via the Oz CLI. We track these so they can be distinguished from
     /// file-based ephemeral MCP servers, which are directory-scoped.
     cli_spawned_server_uuids: HashSet<Uuid>,
+    /// UUIDs of built-in Warp-hosted servers (e.g. the Factory MCP), which are
+    /// spawned automatically from in-code definitions and authenticated with
+    /// the logged-in user's session credentials.
+    builtin_server_uuids: HashSet<Uuid>,
 }
 
 /// Information about a spawned server task.
@@ -301,6 +305,15 @@ impl TemplatableMCPServerManager {
     /// Returns CLI-spawned ephemeral servers (started via `oz agent run --mcp`) that are currently active.
     pub fn get_active_cli_spawned_servers(&self) -> HashMap<Uuid, &TemplatableMCPServerInfo> {
         self.cli_spawned_server_uuids
+            .iter()
+            .filter_map(|uuid| self.active_servers.get(uuid).map(|info| (*uuid, info)))
+            .collect()
+    }
+
+    /// Returns built-in Warp-hosted servers (e.g. the Factory MCP) that are
+    /// currently active.
+    pub fn get_active_builtin_servers(&self) -> HashMap<Uuid, &TemplatableMCPServerInfo> {
+        self.builtin_server_uuids
             .iter()
             .filter_map(|uuid| self.active_servers.get(uuid).map(|info| (*uuid, info)))
             .collect()
