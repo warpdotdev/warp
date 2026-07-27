@@ -28482,12 +28482,9 @@ impl Workspace {
         }
     }
 
-    /// Performs the source-workspace cleanup indicated by `DropResult`.
-    /// Cross-workspace mutations (preview/target updates, focus) happen inside
-    /// `CrossWindowTabDrag::on_drop`; this method only touches `self`.
     /// Index of the tab whose pane group has `pane_group_id`, if it is still
     /// in this window's tab list.
-    pub(crate) fn tab_index_for_pane_group_id(&self, pane_group_id: EntityId) -> Option<usize> {
+    fn tab_index_for_pane_group_id(&self, pane_group_id: EntityId) -> Option<usize> {
         self.tabs
             .iter()
             .position(|tab| tab.pane_group.id() == pane_group_id)
@@ -28526,6 +28523,9 @@ impl Workspace {
         self.remove_tab_without_undo(index, ctx);
     }
 
+    /// Performs the source-workspace cleanup indicated by `DropResult`.
+    /// Cross-workspace mutations (preview/target updates, focus) happen inside
+    /// `CrossWindowTabDrag::on_drop`; this method only touches `self`.
     pub(crate) fn handle_drop_result(&mut self, result: DropResult, ctx: &mut ViewContext<Self>) {
         match result {
             DropResult::NoOp => {}
@@ -28536,8 +28536,8 @@ impl Workspace {
                 self.focus_active_tab(ctx);
             }
             DropResult::CloseSourceWindow { pane_group_id } => {
-                if let Some(tab) = self.tab_index_for_pane_group_id(pane_group_id) {
-                    ctx.unsubscribe_to_view(&self.tabs[tab].pane_group);
+                if let Some(index) = self.tab_index_for_pane_group_id(pane_group_id) {
+                    ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
                 }
                 self.close_window_for_content_transfer(ctx);
             }
