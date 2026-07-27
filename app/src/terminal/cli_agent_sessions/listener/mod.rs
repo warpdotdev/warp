@@ -65,7 +65,8 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Auggie
         | CLIAgent::Droid
         | CLIAgent::Pi
-        | CLIAgent::OhMyPi => Some(Box::new(DefaultSessionListener)),
+        | CLIAgent::OhMyPi
+        | CLIAgent::Devin => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
         CLIAgent::Hermes
         | CLIAgent::Amp
