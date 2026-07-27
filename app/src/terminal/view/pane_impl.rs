@@ -52,6 +52,8 @@ use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::{blended_colors, icons};
 use crate::util::bindings::keybinding_name_to_display_string;
+#[cfg(target_family = "wasm")]
+use crate::workspace::WorkspaceAction;
 use crate::workspace::tab_settings::TabSettings;
 
 /// Total size of the agent icon-with-status component rendered in the pane header.
@@ -416,7 +418,7 @@ impl TerminalView {
             }
             #[cfg(target_arch = "wasm32")]
             {
-                None
+                Some(self.render_wasm_conversation_details_toggle_button(app))
             }
         } else {
             None
@@ -771,7 +773,8 @@ impl TerminalView {
     }
 
     /// Render the info button for toggling the conversation details panel.
-    /// Only available on non-WASM platforms (WASM uses a per-window button instead).
+    /// Only available on non-WASM platforms; on WASM the workspace-level transcript panel is used,
+    /// toggled via `render_wasm_conversation_details_toggle_button`.
     #[cfg(not(target_arch = "wasm32"))]
     fn render_conversation_details_toggle_button(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
@@ -820,6 +823,50 @@ impl TerminalView {
                 );
             })
             .finish()
+    }
+
+    /// Render the info button for toggling the workspace-level conversation details panel on WASM.
+    /// Mirrors the desktop `(i) Show details` button in the pane header. On WASM the panel is
+    /// rendered at the workspace level (controlled by `is_transcript_details_panel_open`); the
+    /// `is_wasm_transcript_details_panel_open` field on this view tracks that state so the button
+    /// can show the correct active/inactive appearance without coupling TerminalView to Workspace.
+    #[cfg(target_arch = "wasm32")]
+    fn render_wasm_conversation_details_toggle_button(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let is_open = self.is_wasm_transcript_details_panel_open;
+        let ui_builder = appearance.ui_builder().clone();
+
+        // Use main text color when panel is open (hover-like appearance), sub color when closed
+        let icon_color = if is_open {
+            blended_colors::text_main(theme, theme.background()).into()
+        } else {
+            blended_colors::text_sub(theme, theme.background()).into()
+        };
+
+        icon_button_with_color(
+            appearance,
+            icons::Icon::Info,
+            is_open, // show active background when panel is open
+            self.conversation_details_panel_toggle_mouse_state.clone(),
+            icon_color,
+        )
+        .with_tooltip(move || {
+            let tooltip_text = if is_open {
+                "Hide details"
+            } else {
+                "Show details"
+            };
+            ui_builder
+                .tool_tip(tooltip_text.to_string())
+                .build()
+                .finish()
+        })
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::ToggleConversationTranscriptDetailsPanel);
+        })
+        .finish()
     }
 
     /// Render the indicator for terminal mode (no conversation selected).

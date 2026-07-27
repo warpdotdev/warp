@@ -93,6 +93,7 @@ impl Workspace {
                 me.transcript_info_button.update(ctx, |button, ctx| {
                     button.set_active(false, ctx);
                 });
+                me.sync_transcript_panel_open_to_focused_terminal_view(false, ctx);
                 ctx.notify();
             }
             ConversationDetailsPanelEvent::OpenPlanNotebook { notebook_uid } => {
@@ -106,6 +107,26 @@ impl Workspace {
         });
 
         panel
+    }
+
+    /// Sync the workspace transcript-panel open state to the focused terminal view so the
+    /// pane-header `(i)` button reflects the correct active/inactive appearance without needing
+    /// direct coupling between TerminalView and Workspace.
+    pub(super) fn sync_transcript_panel_open_to_focused_terminal_view(
+        &mut self,
+        is_open: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(tv) = self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .focused_session_view(ctx)
+        {
+            tv.update(ctx, |view, ctx| {
+                view.is_wasm_transcript_details_panel_open = is_open;
+                ctx.notify();
+            });
+        }
     }
 
     /// Check if we should show the conversation details panel, given the focused terminal view.

@@ -4473,6 +4473,9 @@ impl Workspace {
                         me.transcript_info_button.update(ctx, |button, ctx| {
                             button.set_active(true, ctx);
                         });
+                        // Sync to focused terminal view so the pane-header (i) button
+                        // reflects the correct open state.
+                        me.sync_transcript_panel_open_to_focused_terminal_view(true, ctx);
                     }
                     me.update_transcript_details_panel_data(ctx);
                 }
@@ -4592,6 +4595,9 @@ impl Workspace {
                                 me.transcript_info_button.update(ctx, |button, ctx| {
                                     button.set_active(true, ctx);
                                 });
+                                // Sync to focused terminal view so the pane-header (i) button
+                                // reflects the correct open state.
+                                me.sync_transcript_panel_open_to_focused_terminal_view(true, ctx);
                             }
                             me.update_transcript_details_panel_data(ctx);
                         }
@@ -26180,6 +26186,10 @@ impl TypedActionView for Workspace {
                 self.transcript_info_button.update(ctx, |button, ctx| {
                     button.set_active(is_open, ctx);
                 });
+
+                // Sync state to the focused terminal view so the pane-header (i) button
+                // reflects the correct active/inactive appearance.
+                self.sync_transcript_panel_open_to_focused_terminal_view(is_open, ctx);
 
                 if is_open {
                     self.update_transcript_details_panel_data(ctx);

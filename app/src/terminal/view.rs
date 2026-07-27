@@ -2856,9 +2856,15 @@ pub struct TerminalView {
     /// consumed without opening.
     conversation_details_panel_auto_open_policy: ConversationDetailsPanelAutoOpenPolicy,
     /// Mouse state handle for the conversation details panel toggle button in the pane header.
-    /// Only available on non-WASM platforms (WASM uses a per-window button instead).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// On WASM this is used by the workspace-level transcript panel toggle; on desktop, it is used
+    /// by the pane-level details panel toggle.
     conversation_details_panel_toggle_mouse_state: warpui::elements::MouseStateHandle,
+    /// Mouse state handle for the WASM pane-header conversation details toggle button.
+    /// On WASM, the panel is rendered at the workspace level; this mirrors the workspace
+    /// `is_transcript_details_panel_open` state so the pane-header button shows the correct
+    /// active/inactive appearance without coupling TerminalView to Workspace.
+    #[cfg(target_family = "wasm")]
+    pub(crate) is_wasm_transcript_details_panel_open: bool,
     /// Mouse state handle for the ambient agent cancel button in the pane header.
     ambient_agent_cancel_mouse_state: warpui::elements::MouseStateHandle,
 
@@ -4402,8 +4408,9 @@ impl TerminalView {
             has_auto_opened_conversation_details_panel: false,
             conversation_details_panel_auto_open_policy: Default::default(),
             pending_cloud_followup_task_id: None,
-            #[cfg(not(target_arch = "wasm32"))]
             conversation_details_panel_toggle_mouse_state: Default::default(),
+            #[cfg(target_family = "wasm")]
+            is_wasm_transcript_details_panel_open: false,
             ambient_agent_cancel_mouse_state: Default::default(),
             active_init_project_model: None,
             is_pending_aws_login: false,
