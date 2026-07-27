@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use chrono::{Duration, Utc};
@@ -33,8 +34,15 @@ fn environment_creation_refreshes_after_cloud_model_inserts_the_object() {
         let catalog = app.add_singleton_model(CloudEnvironmentCatalog::new);
         let sync_id = SyncId::ClientId(ClientId::new());
         let object = environment(sync_id, "Created environment");
+        let (refresh_tx, refresh_rx) = futures::channel::oneshot::channel();
+        let refresh_tx = RefCell::new(Some(refresh_tx));
 
         app.update(|ctx| {
+            ctx.subscribe_to_model(&catalog, move |_, _, _| {
+                if let Some(tx) = refresh_tx.borrow_mut().take() {
+                    let _ = tx.send(());
+                }
+            });
             CloudModel::handle(ctx).update(ctx, |model, ctx| {
                 model.create_object(sync_id, object, ctx);
             });
@@ -44,12 +52,9 @@ fn environment_creation_refreshes_after_cloud_model_inserts_the_object() {
             );
         });
 
-        for _ in 0..10 {
-            if catalog.read(&app, |catalog, _| !catalog.environments().is_empty()) {
-                break;
-            }
-            futures_lite::future::yield_now().await;
-        }
+        refresh_rx
+            .await
+            .expect("environment creation should refresh the catalog");
         assert_eq!(
             catalog.read(&app, |catalog, _| catalog.environments().to_vec()),
             vec![CloudEnvironment {
