@@ -99,7 +99,7 @@ impl CloudEnvironmentCatalog {
     }
 
     /// Requests an out-of-band refresh of cloud objects from the server.
-    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn refresh_from_server(&self, ctx: &mut ModelContext<Self>) {
         UpdateManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.refresh_updated_objects(ctx);
