@@ -8,7 +8,10 @@ use warp::tui_export::{BlocklistAIInputModel, CLISubagentController, TerminalMod
 use warpui_core::keymap::Context;
 use warpui_core::{AppContext, Entity, ModelHandle, ViewHandle, WeakModelHandle, WeakViewHandle};
 
-use super::{AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource};
+use super::{
+    AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource,
+    DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME,
+};
 use crate::input_mode_policy;
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{PLAN_TOGGLE_BINDING_NAME, binding_hint};
@@ -154,12 +157,21 @@ impl TuiTerminalSessionStateModel {
                 let orchestration_tab_bar = orchestration_tab_bar
                     .upgrade(ctx)
                     .ok_or(TuiTerminalSessionStateResolveError::OrchestrationTabBar)?;
-                let (alt_screen_active, input_target, user_owns_running_command) = {
+                let (
+                    alt_screen_active,
+                    input_target,
+                    user_owns_running_command,
+                    can_attach_agent_to_running_command,
+                    agent_is_tagged_in,
+                ) = {
                     let terminal_model = terminal_model.lock();
+                    let active_block = terminal_model.block_list().active_block();
                     (
                         terminal_model.is_alt_screen_active(),
                         tui_input_target(&terminal_model),
                         inline_process_owns_input(&terminal_model),
+                        active_block.is_eligible_to_tag_in_agent(),
+                        active_block.is_agent_tagged_in(),
                     )
                 };
                 let terminal_use_control = cli_subagent_controller
@@ -208,6 +220,8 @@ impl TuiTerminalSessionStateModel {
                     transcript_is_empty: transcript.as_ref(ctx).is_empty(),
                     orchestration_available: orchestration_tab_bar.as_ref(ctx).has_tabs(),
                     plan_available: transcript.as_ref(ctx).has_toggleable_plan(ctx),
+                    can_attach_agent_to_running_command,
+                    agent_is_tagged_in,
                 };
                 Ok(if alt_screen_active {
                     TuiTerminalSessionState::AltScreen {
@@ -264,6 +278,8 @@ pub(crate) struct TuiBlockSessionState {
     pub(super) transcript_is_empty: bool,
     pub(super) orchestration_available: bool,
     pub(super) plan_available: bool,
+    pub(super) can_attach_agent_to_running_command: bool,
+    pub(super) agent_is_tagged_in: bool,
 }
 
 /// The single interaction that currently owns the block UI's input area.
@@ -370,6 +386,8 @@ impl TuiTerminalSessionState {
             transcript_is_empty,
             orchestration_available,
             plan_available: false,
+            can_attach_agent_to_running_command: false,
+            agent_is_tagged_in: false,
         })
     }
 
@@ -413,6 +431,13 @@ impl TuiTerminalSessionState {
             self.interaction(),
             TuiInteractionState::Pty(TuiPtyState::UserControlledTerminalUse)
         )
+    }
+    pub(crate) fn can_attach_agent_to_running_command(&self) -> bool {
+        self.state().can_attach_agent_to_running_command
+    }
+
+    pub(crate) fn agent_is_tagged_in(&self) -> bool {
+        self.state().agent_is_tagged_in
     }
 
     pub(crate) fn composer_owns_input(&self) -> bool {
@@ -545,6 +570,17 @@ impl TuiTerminalSessionState {
                 shortcuts: vec![TuiShortcut {
                     key: TAKE_CONTROL_KEY_BINDING.to_owned(),
                     description: "take control",
+                }],
+            });
+        } else if state.agent_is_tagged_in
+            && let Some(key) =
+                binding_hint(DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, context, ctx)
+        {
+            sections.push(TuiShortcutSection {
+                title: "Terminal use",
+                shortcuts: vec![TuiShortcut {
+                    key,
+                    description: "return control to command",
                 }],
             });
         }
