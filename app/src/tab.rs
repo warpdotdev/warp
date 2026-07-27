@@ -1501,7 +1501,7 @@ impl<'a> TabComponent<'a> {
                     }
                 } else {
                     let icon_color = self.appearance.theme().nonactive_ui_text_color();
-                    Some(Icon::Oz.to_warpui_icon(icon_color).finish())
+                    Some(Icon::Warp.to_warpui_icon(icon_color).finish())
                 }
             }
             Indicator::AmbientAgent => {

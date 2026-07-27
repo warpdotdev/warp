@@ -419,7 +419,7 @@ impl View for AgentViewZeroStateBlock {
             HeaderProps {
                 title: "New Oz agent conversation".into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
-                icon: Icon::Oz,
+                icon: Icon::Warp,
             }
         };
 

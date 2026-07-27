@@ -344,7 +344,7 @@ impl AgentTypeSelector {
 
         let local_agent_option = self.render_option(
             1,
-            Icon::Oz,
+            Icon::Warp,
             "Local agent",
             "Runs on your machine and requires supervision. Best for quick, interactive tasks.",
             false,
