@@ -26,7 +26,8 @@ use warpui_core::{
 };
 
 use super::model::{
-    TuiHandoffModel, TuiHandoffModelEvent, TuiHandoffPhase, TuiHandoffSelectorKind,
+    TuiHandoffEditableState, TuiHandoffModel, TuiHandoffModelEvent, TuiHandoffPhase,
+    TuiHandoffSelectorKind,
 };
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::link::TuiLink;
@@ -213,7 +214,11 @@ impl TuiHandoffBlock {
     }
 
     fn navigate_page(&mut self, direction: PageNavigationDirection, ctx: &mut ViewContext<Self>) {
-        let TuiHandoffPhase::Configuring { page } = self.model.as_ref(ctx).phase() else {
+        let TuiHandoffPhase::Editable {
+            state: TuiHandoffEditableState::Configuring { page },
+            ..
+        } = self.model.as_ref(ctx).phase()
+        else {
             return;
         };
         let page = *page;
@@ -233,8 +238,13 @@ impl TuiHandoffBlock {
     }
 
     fn handle_configure(&mut self, ctx: &mut ViewContext<Self>) {
-        if matches!(self.model.as_ref(ctx).phase(), TuiHandoffPhase::Acceptance)
-            && !self.model.as_ref(ctx).no_environments(ctx)
+        if matches!(
+            self.model.as_ref(ctx).phase(),
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Acceptance { .. },
+                ..
+            }
+        ) && !self.model.as_ref(ctx).no_environments(ctx)
         {
             self.open_page(TuiHandoffSelectorKind::Environment, ctx);
         }
@@ -298,7 +308,11 @@ impl TuiHandoffBlock {
     }
 
     fn refresh_selector(&mut self, ctx: &mut ViewContext<Self>) {
-        let TuiHandoffPhase::Configuring { page } = self.model.as_ref(ctx).phase() else {
+        let TuiHandoffPhase::Editable {
+            state: TuiHandoffEditableState::Configuring { page },
+            ..
+        } = self.model.as_ref(ctx).phase()
+        else {
             return;
         };
         let snapshot = self.model.as_ref(ctx).selector_snapshot(*page, ctx);
@@ -314,7 +328,11 @@ impl TuiHandoffBlock {
     ) {
         match event {
             TuiOptionSelectorEvent::Confirmed { id } => {
-                let TuiHandoffPhase::Configuring { page } = self.model.as_ref(ctx).phase() else {
+                let TuiHandoffPhase::Editable {
+                    state: TuiHandoffEditableState::Configuring { page },
+                    ..
+                } = self.model.as_ref(ctx).phase()
+                else {
                     return;
                 };
                 let page = *page;
@@ -412,8 +430,14 @@ impl TuiHandoffBlock {
 
     fn render_body(&self, ctx: &AppContext, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
         match self.model.as_ref(ctx).phase() {
-            TuiHandoffPhase::Acceptance => self.render_configuration(ctx, builder),
-            TuiHandoffPhase::Configuring { .. } => TuiChildView::new(&self.selector).finish(),
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Acceptance { .. },
+                ..
+            } => self.render_configuration(ctx, builder),
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Configuring { .. },
+                ..
+            } => TuiChildView::new(&self.selector).finish(),
             TuiHandoffPhase::Committed { .. } => TuiText::new("Creating cloud run…")
                 .with_style(builder.primary_text_style())
                 .finish(),
@@ -434,7 +458,10 @@ impl TuiHandoffBlock {
     fn render_footer(&self, ctx: &AppContext, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
         let model = self.model.as_ref(ctx);
         let spans = match model.phase() {
-            TuiHandoffPhase::Acceptance if model.no_environments(ctx) => vec![
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Acceptance { .. },
+                ..
+            } if model.no_environments(ctx) => vec![
                 ("Enter ".to_owned(), builder.primary_text_style()),
                 ("open environments  ".to_owned(), builder.muted_text_style()),
                 ("R ".to_owned(), builder.primary_text_style()),
@@ -442,7 +469,10 @@ impl TuiHandoffBlock {
                 ("Ctrl + C".to_owned(), builder.primary_text_style()),
                 (" to cancel".to_owned(), builder.muted_text_style()),
             ],
-            TuiHandoffPhase::Acceptance => vec![
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Acceptance { .. },
+                ..
+            } => vec![
                 ("Enter ".to_owned(), builder.primary_text_style()),
                 ("to hand off  ".to_owned(), builder.muted_text_style()),
                 ("Ctrl + E".to_owned(), builder.primary_text_style()),
@@ -450,7 +480,10 @@ impl TuiHandoffBlock {
                 ("Ctrl + C".to_owned(), builder.primary_text_style()),
                 (" to cancel".to_owned(), builder.muted_text_style()),
             ],
-            TuiHandoffPhase::Configuring { .. } => vec![
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Configuring { .. },
+                ..
+            } => vec![
                 ("Enter ".to_owned(), builder.primary_text_style()),
                 ("to accept  ".to_owned(), builder.muted_text_style()),
                 ("Tab or ← →".to_owned(), builder.primary_text_style()),
@@ -555,7 +588,10 @@ impl TuiView for TuiHandoffBlock {
         if focus_ctx.is_self_focused()
             && matches!(
                 self.model.as_ref(ctx).phase(),
-                TuiHandoffPhase::Configuring { .. }
+                TuiHandoffPhase::Editable {
+                    state: TuiHandoffEditableState::Configuring { .. },
+                    ..
+                }
             )
         {
             ctx.focus(&self.selector);
@@ -567,13 +603,22 @@ impl TuiView for TuiHandoffBlock {
         context.set.insert(Self::ui_name());
         let model = self.model.as_ref(ctx);
         match model.phase() {
-            TuiHandoffPhase::Acceptance if model.no_environments(ctx) => {
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Acceptance { .. },
+                ..
+            } if model.no_environments(ctx) => {
                 context.set.insert(NO_ENVIRONMENT_CONTEXT_FLAG);
             }
-            TuiHandoffPhase::Acceptance => {
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Acceptance { .. },
+                ..
+            } => {
                 context.set.insert(ACCEPTANCE_CONTEXT_FLAG);
             }
-            TuiHandoffPhase::Configuring { .. } => {
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Configuring { .. },
+                ..
+            } => {
                 context.set.insert(CONFIGURING_CONTEXT_FLAG);
             }
             TuiHandoffPhase::Committed { .. } => {

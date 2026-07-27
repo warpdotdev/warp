@@ -39,14 +39,28 @@ impl TuiHandoffSelectorKind {
     }
 }
 
-/// Model-owned lifecycle state for one handoff.
-#[derive(Debug)]
-pub(crate) enum TuiHandoffPhase {
-    Acceptance,
+/// Editable presentation state for a prepared handoff.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TuiHandoffEditableState {
+    Acceptance { validation_error: Option<String> },
     Configuring { page: TuiHandoffSelectorKind },
-    Committed { operation_id: u64 },
-    Created { url: String },
-    Persisted { url: String },
+}
+
+/// Model-owned lifecycle state for one handoff.
+pub(crate) enum TuiHandoffPhase {
+    Editable {
+        state: TuiHandoffEditableState,
+        pending: PendingHandoff,
+    },
+    Committed {
+        operation_id: u64,
+    },
+    Created {
+        url: String,
+    },
+    Persisted {
+        url: String,
+    },
 }
 
 /// Outcomes that require the owning terminal session to change surfaces.
@@ -80,11 +94,9 @@ impl TuiHandoffPreparationFailure {
 /// Model backing one TUI handoff card.
 pub(crate) struct TuiHandoffModel {
     source_conversation_id: Option<AIConversationId>,
-    pending: Option<PendingHandoff>,
     phase: TuiHandoffPhase,
     environments: ModelHandle<CloudEnvironmentCatalog>,
     forked_existing_conversation: bool,
-    validation_error: Option<String>,
     next_operation_id: u64,
     dismissed: bool,
 }
@@ -203,11 +215,14 @@ impl TuiHandoffModel {
                 pending.presentation_snapshot().forked_existing_conversation;
             let mut model = Self {
                 source_conversation_id,
-                pending: Some(pending),
-                phase: TuiHandoffPhase::Acceptance,
+                phase: TuiHandoffPhase::Editable {
+                    state: TuiHandoffEditableState::Acceptance {
+                        validation_error: None,
+                    },
+                    pending,
+                },
                 environments,
                 forked_existing_conversation,
-                validation_error: None,
                 next_operation_id: 0,
                 dismissed: false,
             };
@@ -220,7 +235,7 @@ impl TuiHandoffModel {
                         return;
                     }
                     if let Some(environment_id) = environment_id
-                        && let Some(pending) = model.pending.as_mut()
+                        && let Some(pending) = model.pending_mut()
                     {
                         pending.set_environment_id(Some(environment_id), false);
                         ctx.emit(TuiHandoffModelEvent::Changed { focus_block: false });
@@ -332,10 +347,7 @@ impl TuiHandoffModel {
     }
 
     pub(crate) fn is_editable(&self) -> bool {
-        matches!(
-            self.phase,
-            TuiHandoffPhase::Acceptance | TuiHandoffPhase::Configuring { .. }
-        )
+        matches!(self.phase, TuiHandoffPhase::Editable { .. })
     }
 
     pub(crate) fn no_environments(&self, ctx: &AppContext) -> bool {
@@ -347,15 +359,43 @@ impl TuiHandoffModel {
     }
 
     pub(crate) fn validation_error(&self) -> Option<&str> {
-        self.validation_error.as_deref()
+        match &self.phase {
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Acceptance { validation_error },
+                ..
+            } => validation_error.as_deref(),
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Configuring { .. },
+                ..
+            }
+            | TuiHandoffPhase::Committed { .. }
+            | TuiHandoffPhase::Created { .. }
+            | TuiHandoffPhase::Persisted { .. } => None,
+        }
     }
 
     pub(crate) fn url(&self) -> Option<&str> {
         match &self.phase {
             TuiHandoffPhase::Created { url } | TuiHandoffPhase::Persisted { url } => Some(url),
-            TuiHandoffPhase::Acceptance
-            | TuiHandoffPhase::Configuring { .. }
-            | TuiHandoffPhase::Committed { .. } => None,
+            TuiHandoffPhase::Editable { .. } | TuiHandoffPhase::Committed { .. } => None,
+        }
+    }
+
+    fn pending(&self) -> Option<&PendingHandoff> {
+        match &self.phase {
+            TuiHandoffPhase::Editable { pending, .. } => Some(pending),
+            TuiHandoffPhase::Committed { .. }
+            | TuiHandoffPhase::Created { .. }
+            | TuiHandoffPhase::Persisted { .. } => None,
+        }
+    }
+
+    fn pending_mut(&mut self) -> Option<&mut PendingHandoff> {
+        match &mut self.phase {
+            TuiHandoffPhase::Editable { pending, .. } => Some(pending),
+            TuiHandoffPhase::Committed { .. }
+            | TuiHandoffPhase::Created { .. }
+            | TuiHandoffPhase::Persisted { .. } => None,
         }
     }
 
@@ -372,8 +412,7 @@ impl TuiHandoffModel {
 
     fn environment_snapshot(&self, ctx: &AppContext) -> OptionSnapshot {
         let selected_id = self
-            .pending
-            .as_ref()
+            .pending()
             .and_then(|pending| pending.presentation_snapshot().environment_id)
             .map(|id| id.to_string());
         let rows = self
@@ -407,8 +446,7 @@ impl TuiHandoffModel {
 
     fn model_snapshot(&self, ctx: &AppContext) -> OptionSnapshot {
         let selected_model_id = self
-            .pending
-            .as_ref()
+            .pending()
             .expect("editable handoff has pending state")
             .presentation_snapshot()
             .model_id;
@@ -417,8 +455,7 @@ impl TuiHandoffModel {
 
     pub(crate) fn environment_label(&self, ctx: &AppContext) -> String {
         let selected = self
-            .pending
-            .as_ref()
+            .pending()
             .and_then(|pending| pending.presentation_snapshot().environment_id);
         selected
             .and_then(|selected| {
@@ -433,7 +470,7 @@ impl TuiHandoffModel {
     }
 
     pub(crate) fn model_label(&self, ctx: &AppContext) -> String {
-        let Some(pending) = self.pending.as_ref() else {
+        let Some(pending) = self.pending() else {
             return String::new();
         };
         let presentation = pending.presentation_snapshot();
@@ -463,14 +500,21 @@ impl TuiHandoffModel {
         {
             return false;
         }
-        self.phase = TuiHandoffPhase::Configuring { page };
-        self.validation_error = None;
+        let TuiHandoffPhase::Editable { state, .. } = &mut self.phase else {
+            return false;
+        };
+        *state = TuiHandoffEditableState::Configuring { page };
         ctx.notify();
         true
     }
 
     pub(crate) fn return_to_acceptance(&mut self, ctx: &mut ModelContext<Self>) {
-        self.phase = TuiHandoffPhase::Acceptance;
+        let TuiHandoffPhase::Editable { state, .. } = &mut self.phase else {
+            return;
+        };
+        *state = TuiHandoffEditableState::Acceptance {
+            validation_error: None,
+        };
         ctx.notify();
     }
 
@@ -480,9 +524,6 @@ impl TuiHandoffModel {
         id: &str,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        let Some(pending) = self.pending.as_mut() else {
-            return false;
-        };
         match page {
             TuiHandoffSelectorKind::Environment => {
                 let environment_id = self
@@ -495,12 +536,18 @@ impl TuiHandoffModel {
                 let Some(environment_id) = environment_id else {
                     return false;
                 };
+                let Some(pending) = self.pending_mut() else {
+                    return false;
+                };
                 pending.set_environment_id(Some(environment_id), true);
                 self.environments.update(ctx, |catalog, ctx| {
                     catalog.persist_selection(environment_id, ctx);
                 });
             }
             TuiHandoffSelectorKind::Model => {
+                let Some(pending) = self.pending_mut() else {
+                    return false;
+                };
                 pending.set_model_id(id.to_owned(), true, ctx);
             }
         }
@@ -509,29 +556,38 @@ impl TuiHandoffModel {
     }
 
     pub(crate) fn confirm(&mut self, ctx: &mut ModelContext<Self>) {
-        if !matches!(self.phase, TuiHandoffPhase::Acceptance) || self.no_environments(ctx) {
+        if !matches!(
+            self.phase,
+            TuiHandoffPhase::Editable {
+                state: TuiHandoffEditableState::Acceptance { .. },
+                ..
+            }
+        ) || self.no_environments(ctx)
+        {
             return;
         }
         let validation = self
-            .pending
-            .as_ref()
-            .expect("configuring handoff has pending state")
+            .pending()
+            .expect("editable handoff has pending state")
             .validate();
         if let Err(error) = validation {
-            self.validation_error = Some(Self::validation_message(&error).to_owned());
+            let TuiHandoffPhase::Editable { state, .. } = &mut self.phase else {
+                unreachable!("validated handoff is editable");
+            };
+            *state = TuiHandoffEditableState::Acceptance {
+                validation_error: Some(Self::validation_message(&error).to_owned()),
+            };
             ctx.emit(TuiHandoffModelEvent::Changed { focus_block: false });
             ctx.notify();
             return;
         }
-
-        let pending = self
-            .pending
-            .take()
-            .expect("configuring handoff has pending state");
         self.next_operation_id = self.next_operation_id.wrapping_add(1);
         let operation_id = self.next_operation_id;
-        self.phase = TuiHandoffPhase::Committed { operation_id };
-        self.validation_error = None;
+        let editable =
+            std::mem::replace(&mut self.phase, TuiHandoffPhase::Committed { operation_id });
+        let TuiHandoffPhase::Editable { pending, .. } = editable else {
+            unreachable!("confirmed handoff is editable");
+        };
         ctx.notify();
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -548,9 +604,12 @@ impl TuiHandoffModel {
             }
             match outcome {
                 HandoffCommitOutcome::Rejected { pending, error } => {
-                    model.pending = Some(*pending);
-                    model.phase = TuiHandoffPhase::Acceptance;
-                    model.validation_error = Some(Self::validation_message(&error).to_owned());
+                    model.phase = TuiHandoffPhase::Editable {
+                        state: TuiHandoffEditableState::Acceptance {
+                            validation_error: Some(Self::validation_message(&error).to_owned()),
+                        },
+                        pending: *pending,
+                    };
                     model.refresh_pending_environments(ctx);
                     ctx.emit(TuiHandoffModelEvent::Changed { focus_block: true });
                     ctx.notify();
@@ -584,8 +643,7 @@ impl TuiHandoffModel {
             return;
         }
         let restoration = self
-            .pending
-            .as_mut()
+            .pending_mut()
             .and_then(PendingHandoff::take_restoration);
         self.dismissed = true;
         ctx.emit(TuiHandoffModelEvent::Cancelled(restoration));
@@ -627,12 +685,13 @@ impl TuiHandoffModel {
             .iter()
             .map(|environment| environment.id)
             .collect::<HashSet<_>>();
-        let Some(pending) = self.pending.as_mut() else {
+        let default_environment_id = self.environments.as_ref(ctx).default_environment_id(ctx);
+        let Some(pending) = self.pending_mut() else {
             return;
         };
         pending.set_valid_environment_ids(valid_ids);
         if pending.presentation_snapshot().environment_id.is_none()
-            && let Some(environment_id) = self.environments.as_ref(ctx).default_environment_id(ctx)
+            && let Some(environment_id) = default_environment_id
         {
             pending.set_environment_id(Some(environment_id), false);
         }
