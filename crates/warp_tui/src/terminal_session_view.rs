@@ -139,6 +139,7 @@ const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const AUTO_APPROVE_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
+const STATUSLINE_DATETIME_REPAINT_INTERVAL: Duration = Duration::from_secs(60);
 const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
@@ -356,6 +357,18 @@ fn format_statusline_time_12_hour(now: NaiveDateTime) -> String {
 fn format_statusline_time_24_hour(now: NaiveDateTime) -> String {
     now.format("%H:%M").to_string()
 }
+fn render_statusline_datetime(
+    formatter: fn(NaiveDateTime) -> String,
+    style: TuiStyle,
+) -> Box<dyn TuiElement> {
+    TuiAnimated::new(STATUSLINE_DATETIME_REPAINT_INTERVAL, move || {
+        TuiText::new(formatter(Local::now().naive_local()))
+            .with_style(style)
+            .truncate()
+            .finish()
+    })
+    .finish()
+}
 fn format_todo_progress(completed: usize, total: usize, finished: bool) -> String {
     let marker = if finished { "✓" } else { "❒" };
     format!("{marker} {completed}/{total}")
@@ -409,8 +422,9 @@ enum FooterSegment {
     ContextWindowUsage(String),
     GitDiff { additions: usize, deletions: usize },
     GitBranchStatus(String),
-    DateTime(String),
+    DateTime(Box<dyn TuiElement>),
     AgentTodoList(String),
+    VoiceInput(Box<dyn TuiElement>),
 }
 
 impl FooterSegment {
@@ -418,10 +432,7 @@ impl FooterSegment {
         match (self, next) {
             (Self::ShellMode | Self::Model(_), Self::WorkingDirectory(_)) => " ",
             (Self::WorkingDirectory(_), Self::GitBranch(_)) => " ↬ ",
-            (
-                Self::ActiveIndicator(_),
-                Self::ActiveIndicator(_),
-            ) => " • ",
+            (Self::ActiveIndicator(_), Self::ActiveIndicator(_)) => " • ",
             (
                 Self::WorkingDirectory(_) | Self::GitBranch(_),
                 Self::WorkingDirectory(_) | Self::GitBranch(_),
@@ -439,7 +450,8 @@ impl FooterSegment {
                 | Self::GitDiff { .. }
                 | Self::GitBranchStatus(_)
                 | Self::DateTime(_)
-                | Self::AgentTodoList(_),
+                | Self::AgentTodoList(_)
+                | Self::VoiceInput(_),
                 Self::ActiveIndicator(_)
                 | Self::Model(_)
                 | Self::WorkingDirectory(_)
@@ -449,7 +461,8 @@ impl FooterSegment {
                 | Self::GitDiff { .. }
                 | Self::GitBranchStatus(_)
                 | Self::DateTime(_)
-                | Self::AgentTodoList(_),
+                | Self::AgentTodoList(_)
+                | Self::VoiceInput(_),
             ) => " | ",
         }
     }
@@ -459,12 +472,11 @@ impl FooterSegment {
 struct FooterSegments {
     ordered: Vec<FooterSegment>,
 }
-
 /// Builds the status row from resolved segments. Working directory follows a
-/// leading shell-mode label with a plain space; an immediately following
-/// branch uses the existing ` ↬ ` relationship marker. Items in different
-/// Figma groups use ` | `; other adjacent pairs use ` • `. The first item never
-/// receives a separator.
+/// leading shell-mode or model label with a plain space; an immediately
+/// following branch uses the existing ` ↬ ` relationship marker. Items in
+/// different Figma groups use ` | `; other adjacent pairs use ` • `. The first
+/// item never receives a separator.
 fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) -> TuiFlex {
     let muted = builder.muted_text_style();
     let mut row = TuiFlex::row();
@@ -488,8 +500,11 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
                         .finish(),
                 );
             }
-            FooterSegment::Model(model) | FooterSegment::CreditUsage(model) => {
-                row = row.child(model);
+            FooterSegment::Model(element)
+            | FooterSegment::CreditUsage(element)
+            | FooterSegment::DateTime(element)
+            | FooterSegment::VoiceInput(element) => {
+                row = row.child(element);
             }
             FooterSegment::WorkingDirectory(cwd) | FooterSegment::GitBranch(cwd) => {
                 row = row.child(TuiText::new(cwd).with_style(muted).truncate().finish());
@@ -497,9 +512,7 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
             FooterSegment::ContextWindowUsage(usage) => {
                 row = row.child(TuiText::new(usage).with_style(muted).truncate().finish());
             }
-            FooterSegment::GitBranchStatus(value)
-            | FooterSegment::DateTime(value)
-            | FooterSegment::AgentTodoList(value) => {
+            FooterSegment::GitBranchStatus(value) | FooterSegment::AgentTodoList(value) => {
                 row = row.child(TuiText::new(value).with_style(muted).truncate().finish());
             }
             FooterSegment::GitDiff {
@@ -631,6 +644,8 @@ pub(crate) enum TuiTerminalSessionAction {
     PasteFromClipboard,
     /// Start recording voice input from the session composer.
     StartVoiceInput,
+    /// Start or stop voice input from the configured statusline control.
+    ToggleVoiceInput,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -676,6 +691,8 @@ pub(crate) struct TuiTerminalSessionView {
     /// (not created inline during render) so it survives element-tree rebuilds
     /// — the same `MouseStateHandle` pattern as [`UsageToggle`].
     model_label_hover: MouseStateHandle,
+    /// Hover and click state for the configured Voice statusline control.
+    voice_input_mouse: MouseStateHandle,
     keyboard_enhancement_supported: bool,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
@@ -1717,6 +1734,7 @@ impl TuiTerminalSessionView {
                 event,
                 AISettingsChangedEvent::TuiUsageDisplayMode { .. }
                     | AISettingsChangedEvent::TuiStatusline { .. }
+                    | AISettingsChangedEvent::VoiceInputEnabled { .. }
             ) {
                 ctx.notify();
             }
@@ -1841,6 +1859,7 @@ impl TuiTerminalSessionView {
             usage_toggle: UsageToggle::default(),
             hidden_response_summary_exchange_ids: HashSet::new(),
             model_label_hover: MouseStateHandle::default(),
+            voice_input_mouse: MouseStateHandle::default(),
             keyboard_enhancement_supported,
             ai_context_model: context_model,
             ai_input_model,
@@ -2730,7 +2749,11 @@ impl TuiTerminalSessionView {
 
     /// Selects the single message that replaces the normal footer, preserving
     /// the priority order between competing session states.
-    fn footer_hint(&self, ctx: &AppContext) -> Option<FooterHint<'_>> {
+    fn footer_hint(
+        &self,
+        voice_statusline_visible: bool,
+        ctx: &AppContext,
+    ) -> Option<FooterHint<'_>> {
         if self.exit_confirmation.is_armed() {
             return Some(FooterHint::muted(CTRL_C_EXIT_HINT));
         }
@@ -2750,6 +2773,9 @@ impl TuiTerminalSessionView {
                 TransientHintTone::Error => FooterHintStyle::Error,
             };
             return Some(FooterHint { text, style });
+        }
+        if voice_statusline_visible {
+            return None;
         }
         match self.input_view.as_ref(ctx).voice_state(ctx) {
             TuiVoiceInputState::Listening => {
@@ -2773,13 +2799,14 @@ impl TuiTerminalSessionView {
     /// the whole row instead. An empty resolved configuration consumes no row.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
-        if let Some(hint) = self.footer_hint(ctx) {
-            return hint.render(&builder);
-        }
         let shell_mode = self.is_shell_mode(ctx);
         let config = AISettings::as_ref(ctx).tui_statusline.normalized();
+        let voice_statusline_visible = config.is_enabled(TuiStatuslineItem::VoiceInput)
+            && self.voice_statusline_is_available(shell_mode, ctx);
+        if let Some(hint) = self.footer_hint(voice_statusline_visible, ctx) {
+            return hint.render(&builder);
+        }
         let git_metadata = self.git_status_metadata(ctx);
-        let local_now = Local::now().naive_local();
         let mut ordered = Vec::new();
         if shell_mode {
             ordered.push(FooterSegment::ShellMode);
@@ -2832,8 +2859,11 @@ impl TuiTerminalSessionView {
                     .map(|cwd| FooterSegment::WorkingDirectory(compact_footer_path(&cwd))),
                 TuiStatuslineItem::GitBranch => git_metadata
                     .map(|metadata| FooterSegment::GitBranch(metadata.current_branch_name.clone())),
-                TuiStatuslineItem::GitBranchStatus => git_metadata.map(|metadata| {
-                    FooterSegment::GitBranchStatus(metadata.branch_tracking_status.display_text())
+                TuiStatuslineItem::GitBranchStatus => git_metadata.and_then(|metadata| {
+                    metadata
+                        .branch_tracking_status
+                        .status_text()
+                        .map(FooterSegment::GitBranchStatus)
                 }),
                 TuiStatuslineItem::GitDiffStatus => git_metadata.and_then(|metadata| {
                     let stats = metadata.stats_against_head;
@@ -2872,15 +2902,21 @@ impl TuiTerminalSessionView {
                             conversation.context_window_usage(),
                         ))
                     }),
-                TuiStatuslineItem::Date => {
-                    Some(FooterSegment::DateTime(format_statusline_date(local_now)))
+                TuiStatuslineItem::Date => Some(FooterSegment::DateTime(
+                    render_statusline_datetime(format_statusline_date, builder.muted_text_style()),
+                )),
+                TuiStatuslineItem::Time12Hour => {
+                    Some(FooterSegment::DateTime(render_statusline_datetime(
+                        format_statusline_time_12_hour,
+                        builder.muted_text_style(),
+                    )))
                 }
-                TuiStatuslineItem::Time12Hour => Some(FooterSegment::DateTime(
-                    format_statusline_time_12_hour(local_now),
-                )),
-                TuiStatuslineItem::Time24Hour => Some(FooterSegment::DateTime(
-                    format_statusline_time_24_hour(local_now),
-                )),
+                TuiStatuslineItem::Time24Hour => {
+                    Some(FooterSegment::DateTime(render_statusline_datetime(
+                        format_statusline_time_24_hour,
+                        builder.muted_text_style(),
+                    )))
+                }
                 TuiStatuslineItem::AgentTodoList => (!shell_mode)
                     .then(|| {
                         self.conversation_selection
@@ -2897,12 +2933,56 @@ impl TuiTerminalSessionView {
                             todo_list.is_finished(),
                         ))
                     }),
+                TuiStatuslineItem::VoiceInput => voice_statusline_visible.then(|| {
+                    FooterSegment::VoiceInput(self.render_voice_statusline(&builder, ctx))
+                }),
             };
             if let Some(segment) = segment {
                 ordered.push(segment);
             }
         }
         render_status_footer_row(FooterSegments { ordered }, &builder)
+    }
+
+    fn voice_statusline_is_available(&self, shell_mode: bool, ctx: &AppContext) -> bool {
+        !shell_mode && AISettings::as_ref(ctx).is_voice_input_enabled(ctx)
+    }
+
+    fn render_voice_statusline(
+        &self,
+        builder: &TuiUiBuilder,
+        ctx: &AppContext,
+    ) -> Box<dyn TuiElement> {
+        let state = self.input_view.as_ref(ctx).voice_state(ctx);
+        let hovered = self
+            .voice_input_mouse
+            .lock()
+            .is_ok_and(|state| state.is_hovered());
+        let (label, style) = match state {
+            TuiVoiceInputState::Idle => (
+                "Voice",
+                if hovered {
+                    builder.primary_text_style()
+                } else {
+                    builder.muted_text_style()
+                },
+            ),
+            TuiVoiceInputState::Listening => ("■ Listening", builder.error_text_style()),
+            TuiVoiceInputState::Transcribing => {
+                return TuiText::new("… Transcribing")
+                    .with_style(builder.voice_input_status_style())
+                    .truncate()
+                    .finish();
+            }
+        };
+        TuiHoverable::new(
+            self.voice_input_mouse.clone(),
+            TuiText::new(label).with_style(style).truncate().finish(),
+        )
+        .on_click(|event_ctx, _| {
+            event_ctx.dispatch_typed_action(TuiTerminalSessionAction::ToggleVoiceInput);
+        })
+        .finish()
     }
 
     fn is_auto_queue_enabled(&self, ctx: &AppContext) -> bool {
@@ -3204,6 +3284,18 @@ impl TuiTerminalSessionView {
         });
         if started && matches!(source, VoiceInputStartSource::SlashCommand) {
             record_static_slash_command_accepted("/voice", true, ctx);
+        }
+    }
+    fn toggle_voice_input(&mut self, ctx: &mut ViewContext<Self>) {
+        match self.input_view.as_ref(ctx).voice_state(ctx) {
+            TuiVoiceInputState::Idle => {
+                self.start_voice_input(VoiceInputStartSource::Button, ctx);
+            }
+            TuiVoiceInputState::Listening => {
+                self.input_view
+                    .update(ctx, |input, ctx| input.stop_voice_input(ctx));
+            }
+            TuiVoiceInputState::Transcribing => {}
         }
     }
 
@@ -4354,6 +4446,7 @@ impl TypedActionView for TuiTerminalSessionView {
             TuiTerminalSessionAction::StartVoiceInput => {
                 self.start_voice_input(VoiceInputStartSource::Keybinding, ctx);
             }
+            TuiTerminalSessionAction::ToggleVoiceInput => self.toggle_voice_input(ctx),
         }
     }
 }

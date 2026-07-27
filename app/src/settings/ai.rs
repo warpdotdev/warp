@@ -695,13 +695,16 @@ pub enum TuiStatuslineItem {
     CreditUsage,
     ContextWindowUsage,
     Date,
+    #[schemars(rename = "time_12_hour")]
     Time12Hour,
+    #[schemars(rename = "time_24_hour")]
     Time24Hour,
     AgentTodoList,
+    VoiceInput,
 }
 
 impl TuiStatuslineItem {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::AutoApprove,
         Self::AutoQueue,
         Self::Model,
@@ -715,6 +718,7 @@ impl TuiStatuslineItem {
         Self::Time12Hour,
         Self::Time24Hour,
         Self::AgentTodoList,
+        Self::VoiceInput,
     ];
 
     pub fn label(self) -> &'static str {
@@ -732,6 +736,7 @@ impl TuiStatuslineItem {
             Self::Time12Hour => "Time (12 hour format)",
             Self::Time24Hour => "Time (24 hour format)",
             Self::AgentTodoList => "Agent to-do list",
+            Self::VoiceInput => "Voice input",
         }
     }
 }

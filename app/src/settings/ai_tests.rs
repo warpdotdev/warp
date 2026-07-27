@@ -83,6 +83,7 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::Time12Hour,
             TuiStatuslineItem::Time24Hour,
             TuiStatuslineItem::AgentTodoList,
+            TuiStatuslineItem::VoiceInput,
         ]
     );
     assert_eq!(

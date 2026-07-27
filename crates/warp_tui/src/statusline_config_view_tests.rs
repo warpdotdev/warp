@@ -89,6 +89,7 @@ fn toggle_and_reorder_are_reflected_in_saved_config() {
                 TuiStatuslineItem::Time12Hour,
                 TuiStatuslineItem::Time24Hour,
                 TuiStatuslineItem::AgentTodoList,
+                TuiStatuslineItem::VoiceInput,
             ]
         );
         assert_eq!(

@@ -363,6 +363,11 @@ impl TuiInputView {
         })
     }
 
+    pub(crate) fn stop_voice_input(&mut self, ctx: &mut ViewContext<Self>) {
+        self.voice_input
+            .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+    }
+
     /// Returns a handle to the backing [`CodeEditorModel`].
     pub fn model(&self) -> &ModelHandle<CodeEditorModel> {
         &self.model

@@ -16,8 +16,8 @@ use warp::tui_export::{
     AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel, ConversationStatus,
     ConversationUsageTotals, Harness, LLMPreferences, LongRunningCommandControlState, PtyIntent,
     PtyIntentEvent, QueuedQueryModel, SizeInfo, SizeUpdate, TaskId, TranscriptScope,
-    UserTakeOverReason, export_conversation_markdown,
-    register_tui_session_view_test_singletons, slash_commands,
+    UserTakeOverReason, export_conversation_markdown, register_tui_session_view_test_singletons,
+    slash_commands,
 };
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
@@ -42,15 +42,15 @@ use super::{
     AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION, AUTO_APPROVE_TOGGLE_BINDING_NAME,
     BlockingInputSource, COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
     COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegment,
-    FooterSegments, INLINE_MENU_TOP_PADDING_ROWS,
-    LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
-    SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
-    SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
-    TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
-    attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
-    format_context_window_usage, format_statusline_date, format_statusline_time_12_hour,
-    format_statusline_time_24_hour, format_todo_progress, log_bundle_success_message,
-    raw_prompt_if_not_blank, render_status_footer_row, voice_argument_is_empty,
+    FooterSegments, INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT,
+    LOG_BUNDLE_FAILED_HINT, SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
+    SESSION_COMPOSER_OWNS_INPUT_FLAG, SHELL_MODE_HINT, TuiConversationRestoreOrigin,
+    TuiTerminalSessionAction, TuiTerminalSessionEvent, TuiTerminalSessionView,
+    VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT, attachment_focus_available,
+    cost_command_unavailable_hint, export_file_success_message, format_context_window_usage,
+    format_statusline_date, format_statusline_time_12_hour, format_statusline_time_24_hour,
+    format_todo_progress, log_bundle_success_message, raw_prompt_if_not_blank,
+    render_status_footer_row, render_statusline_datetime, voice_argument_is_empty,
     voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
@@ -97,6 +97,22 @@ fn figma_statusline_metadata_formats_are_stable() {
     assert_eq!(format_todo_progress(1, 10, false), "❒ 1/10");
     assert_eq!(format_todo_progress(10, 10, true), "✓ 10/10");
 }
+
+#[test]
+fn statusline_datetime_requests_a_periodic_repaint() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let datetime =
+                render_statusline_datetime(format_statusline_time_24_hour, TuiStyle::default());
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(datetime, TuiRect::new(0, 0, 5, 1), ctx);
+            assert!(
+                frame.repaint_at.is_some(),
+                "visible date/time items must repaint so their value cannot freeze"
+            );
+        });
+    });
+}
 #[test]
 fn footer_supports_arbitrary_order_and_figma_group_dividers() {
     App::test((), |mut app| async move {
@@ -110,7 +126,7 @@ fn footer_supports_arbitrary_order_and_figma_group_dividers() {
                         FooterSegment::GitBranch("feature/statusline".to_owned()),
                         FooterSegment::ActiveIndicator("Auto-queue"),
                         FooterSegment::WorkingDirectory("/tmp/warp".to_owned()),
-                        FooterSegment::DateTime("July 20, 2026".to_owned()),
+                        FooterSegment::DateTime(TuiText::new("July 20, 2026").finish()),
                     ],
                 },
                 &builder,
@@ -160,9 +176,10 @@ fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators(
                         },
                         FooterSegment::CreditUsage(TuiText::new("40 credits").finish()),
                         FooterSegment::ContextWindowUsage("43% context used".to_owned()),
-                        FooterSegment::DateTime("July 20, 2026".to_owned()),
-                        FooterSegment::DateTime("1:08pm".to_owned()),
+                        FooterSegment::DateTime(TuiText::new("July 20, 2026").finish()),
+                        FooterSegment::DateTime(TuiText::new("1:08pm").finish()),
                         FooterSegment::AgentTodoList("❒ 1/10".to_owned()),
+                        FooterSegment::VoiceInput(TuiText::new("Voice").finish()),
                     ],
                 },
                 &builder,
@@ -171,7 +188,7 @@ fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators(
             assert_eq!(
                 render_element(row, ctx, 160).to_lines(),
                 vec![
-                    "Auto-approve • Auto-queue | model | /tmp/warp ↬ main | ↑1 ↓2 | +31 -12 | 40 credits | 43% context used | July 20, 2026 • 1:08pm | ❒ 1/10"
+                    "Auto-approve • Auto-queue | model /tmp/warp ↬ main | ↑1 ↓2 | +31 -12 | 40 credits | 43% context used | July 20, 2026 • 1:08pm | ❒ 1/10 | Voice"
                         .to_owned()
                 ],
             );
@@ -674,20 +691,20 @@ fn dispatch_session_event(
     })
 }
 
-/// Locates the footer's active-model label in the rendered buffer, returning
-/// the (column, row) of its first cell. Counts chars (not bytes) so multi-byte
-/// glyphs earlier in the footer row don't shift the column.
-fn model_label_position(buffer: &TuiBuffer, model_name: &str) -> (u16, u16) {
+/// Locates a label in the rendered footer, returning the (column, row) of its
+/// first cell. Counts chars (not bytes) so multi-byte glyphs earlier in the
+/// footer row don't shift the column.
+fn footer_label_position(buffer: &TuiBuffer, label: &str) -> (u16, u16) {
     let lines = buffer.to_lines();
     for (row, line) in lines.iter().enumerate() {
-        if let Some(byte_offset) = line.find(model_name) {
+        if let Some(byte_offset) = line.find(label) {
             let col = line[..byte_offset].chars().count() as u16;
             return (col, row as u16);
         }
     }
     panic!(
-        "model label {:?} not found in rendered footer:\n{}",
-        model_name,
+        "label {:?} not found in rendered footer:\n{}",
+        label,
         lines.join("\n")
     );
 }
@@ -1139,7 +1156,7 @@ fn footer_model_label_is_a_bounded_click_target() {
                 .clone()
         });
         let (mut element, scene, buffer) = render_retained_session(&app, &view, 80, 40);
-        let (label_col, label_row) = model_label_position(&buffer, &model_name);
+        let (label_col, label_row) = footer_label_position(&buffer, &model_name);
         let inside = (label_col + 1, label_row);
         let outside = (0, label_row);
 
@@ -2005,9 +2022,26 @@ fn render_footer(
         render_element(footer, ctx, width)
     })
 }
+fn set_enabled_statusline_items(app: &mut App, items: Vec<TuiStatuslineItem>) {
+    app.update(|ctx| {
+        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings
+                .tui_statusline
+                .set_value(
+                    TuiStatuslineConfig {
+                        order: items.clone(),
+                        enabled: items,
+                    }
+                    .normalized(),
+                    ctx,
+                )
+                .expect("statusline setting should persist");
+        });
+    });
+}
 
 #[test]
-fn footer_renders_voice_listening_and_transcribing_states() {
+fn footer_falls_back_to_replacing_voice_hints_when_voice_item_is_disabled() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -2046,6 +2080,164 @@ fn footer_renders_voice_listening_and_transcribing_states() {
     });
 }
 
+#[test]
+fn configured_voice_item_renders_idle_listening_and_transcribing_states() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::VoiceInput]);
+        assert!(view.read(&app, |view, ctx| {
+            view.voice_statusline_is_available(false, ctx)
+                && !view.voice_statusline_is_available(true, ctx)
+        }));
+
+        let idle_footer = render_footer(&mut app, &view, 80);
+        assert_eq!(idle_footer.to_lines(), vec!["Voice"]);
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+        });
+        let listening_footer = render_footer(&mut app, &view, 80);
+        assert_eq!(listening_footer.to_lines(), vec!["■ Listening"]);
+        assert_eq!(
+            listening_footer[(0, 0)].fg,
+            app.read(|ctx| {
+                TuiUiBuilder::from_app(ctx)
+                    .error_text_style()
+                    .fg
+                    .expect("error text style should have a foreground")
+            })
+        );
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Transcribing, ctx);
+            });
+        });
+        let transcribing_footer = render_footer(&mut app, &view, 80);
+        assert_eq!(transcribing_footer.to_lines(), vec!["… Transcribing"]);
+        assert_eq!(
+            transcribing_footer[(0, 0)].fg,
+            app.read(|ctx| {
+                TuiUiBuilder::from_app(ctx)
+                    .voice_input_status_style()
+                    .fg
+                    .expect("voice input status should have a foreground")
+            })
+        );
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Idle, ctx);
+            });
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .voice_input_enabled_internal
+                    .set_value(false, ctx)
+                    .expect("voice setting should persist");
+            });
+        });
+        assert!(render_footer(&mut app, &view, 80).to_lines().is_empty());
+    });
+}
+
+#[test]
+fn voice_click_is_interactive_only_within_the_segment_bounds() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::VoiceInput]);
+        let (mut element, scene, buffer) = render_retained_session(&app, &view, 20, 20);
+        let (voice_col, voice_row) = footer_label_position(&buffer, "Voice");
+        let inside = (voice_col + 1, voice_row);
+        let outside = (voice_col + 5, voice_row);
+
+        dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &mouse_moved(inside.0, inside.1),
+        );
+        assert!(view.read(&app, |view, _| {
+            view.voice_input_mouse.lock().unwrap().is_hovered()
+        }));
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_down(inside.0, inside.1),
+        ));
+        assert!(view.read(&app, |view, _| {
+            view.voice_input_mouse.lock().unwrap().is_clicked()
+        }));
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_up(inside.0, inside.1),
+        ));
+        assert!(!view.read(&app, |view, _| {
+            view.voice_input_mouse.lock().unwrap().is_clicked()
+        }));
+
+        dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &mouse_moved(outside.0, outside.1),
+        );
+        assert!(!view.read(&app, |view, _| {
+            view.voice_input_mouse.lock().unwrap().is_hovered()
+        }));
+        assert!(!dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene,
+            &left_mouse_down(outside.0, outside.1),
+        ));
+    });
+}
+
+#[test]
+fn voice_toggle_stops_listening_and_ignores_transcribing() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+            view.handle_action(&TuiTerminalSessionAction::ToggleVoiceInput, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.input_view.as_ref(ctx).voice_state(ctx),
+                TuiVoiceInputState::Transcribing
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::ToggleVoiceInput, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.input_view.as_ref(ctx).voice_state(ctx),
+                TuiVoiceInputState::Transcribing
+            );
+        });
+    });
+}
 /// A replacing hint occupies the whole status row, so no section separators,
 /// branch arrows, or usage text should appear alongside it.
 fn assert_footer_segments_absent(lines: &[String]) {
@@ -2189,7 +2381,7 @@ fn footer_renders_agent_sections_left_aligned() {
 
             assert_eq!(
                 lines,
-                vec!["TestModel | /home/user/warp ↬ main | 2.5 credits | +3 -1"],
+                vec!["TestModel /home/user/warp ↬ main | 2.5 credits | +3 -1"],
                 "agent footer is left-aligned in order model → cwd/branch → usage → diff"
             );
             assert!(
