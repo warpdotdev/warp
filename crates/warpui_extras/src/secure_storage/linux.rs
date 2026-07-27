@@ -90,31 +90,53 @@ impl SecureStorage {
     /// or instead only store the collection on a successful connection and
     /// return the error on an initialization failure.
     fn collection(&self) -> Result<&secret_service::blocking::Collection<'_>, Error> {
-        self.collection
-            .get_or_init(|| {
-                // Probing the bus first keeps a missing or broken Secret
-                // Service provider from blocking on D-Bus activation, which
-                // can take up to `service_start_timeout` (120s by default) to
-                // fail. See https://github.com/warpdotdev/warp/issues/13978.
-                let timeout = SECRET_SERVICE_ACTIVATION_TIMEOUT;
-                if !secret_service_is_available(timeout) {
+        // If we already have a definitive answer (a collection, or a
+        // confirmed absence of a provider), use it. Otherwise fall through
+        // to probe again: a prior attempt may have merely timed out, which
+        // is deliberately *not* cached below so a slow-to-activate provider
+        // gets retried instead of being written off for the rest of the
+        // process.
+        if self.collection.get().is_none() {
+            // Probing the bus first keeps a missing or broken Secret
+            // Service provider from blocking on D-Bus activation, which
+            // can take up to `service_start_timeout` (120s by default) to
+            // fail. See https://github.com/warpdotdev/warp/issues/13978.
+            let timeout = SECRET_SERVICE_ACTIVATION_TIMEOUT;
+            match secret_service_availability(timeout) {
+                ServiceAvailability::TimedOut => {
+                    log::info!(
+                        "Secret Service activation did not complete within {timeout:?}; \
+                         falling back to encrypted file storage for now"
+                    );
+                    return Err(Error::Unknown(anyhow!(
+                        "Secret Service activation timed out"
+                    )));
+                }
+                ServiceAvailability::Unavailable => {
                     log::info!(
                         "No Secret Service provider available after {timeout:?}; \
                          falling back to encrypted file storage"
                     );
-                    return None;
+                    let _ = self.collection.set(None);
                 }
+                ServiceAvailability::Available => {
+                    let collection = match Collection::open_default_collection()
+                        .context("Failed to acquire default Secret Service collection")
+                    {
+                        Ok(collection) => Some(collection),
+                        Err(err) => {
+                            report_error!(err);
+                            None
+                        }
+                    };
+                    let _ = self.collection.set(collection);
+                }
+            }
+        }
 
-                match Collection::open_default_collection()
-                    .context("Failed to acquire default Secret Service collection")
-                {
-                    Ok(collection) => Some(collection),
-                    Err(err) => {
-                        report_error!(err);
-                        None
-                    }
-                }
-            })
+        self.collection
+            .get()
+            .expect("collection was just initialized above")
             .as_ref()
             .ok_or_else(|| {
                 Error::Unknown(anyhow!("Failed to initialize Secret Service connection"))
@@ -399,8 +421,26 @@ impl From<ring::error::Unspecified> for Error {
 /// (120 seconds by default). Bounding the wait here keeps startup fast on
 /// systems without a working keyring, at the cost of falling back to encrypted
 /// file storage for the rest of the session.
-fn secret_service_is_available(timeout: Duration) -> bool {
-    run_with_timeout("secret-service-probe", timeout, probe_secret_service).unwrap_or(false)
+enum ServiceAvailability {
+    /// A Secret Service provider is running (or was just activated) and
+    /// ready to be connected to.
+    Available,
+    /// There is no Secret Service provider installed, and none can be
+    /// activated. This is a stable answer that is safe to cache.
+    Unavailable,
+    /// The probe did not finish within the allotted timeout. This is
+    /// deliberately distinct from [`Self::Unavailable`]: the provider may
+    /// simply be slow to activate, so callers should not treat this as a
+    /// permanent answer.
+    TimedOut,
+}
+
+fn secret_service_availability(timeout: Duration) -> ServiceAvailability {
+    match run_with_timeout("secret-service-probe", timeout, probe_secret_service) {
+        Some(true) => ServiceAvailability::Available,
+        Some(false) => ServiceAvailability::Unavailable,
+        None => ServiceAvailability::TimedOut,
+    }
 }
 
 /// Asks the session bus for a running Secret Service provider, requesting
