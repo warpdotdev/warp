@@ -22,10 +22,12 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context as _;
+use futures::channel::oneshot;
+use futures::future::{Either, select};
 use warp_core::send_telemetry_from_ctx;
+use warp_errors::report_error;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
 
@@ -235,22 +237,6 @@ pub struct HandoffRestoration {
     pub environment_id: Option<SyncId>,
 }
 
-/// Cloneable cancellation signal shared by a frontend and handoff execution.
-#[derive(Clone, Default)]
-pub struct HandoffCancellation {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl HandoffCancellation {
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-}
-
 /// Data supplied after the server conversation-fork decision is complete.
 ///
 /// The frontend uses this to create its destination pane or card and, for an
@@ -261,8 +247,8 @@ pub struct HandoffTargetMaterialization {
     pub title: Option<String>,
     /// Pre-snapshot request used to present the queued prompt immediately.
     pub request: SpawnAgentRequest,
-    /// Signal the frontend triggers when the user cancels the handoff.
-    pub cancellation: HandoffCancellation,
+    /// One-shot signal the frontend consumes when the user cancels the handoff.
+    pub cancel: oneshot::Sender<()>,
 }
 
 /// One-shot frontend callback that materializes the destination handoff UI.
@@ -303,7 +289,6 @@ pub struct PendingHandoff {
     snapshot_target: SnapshotUploadTarget,
     snapshot_disabled: bool,
     orchestration_handoff: Option<bool>,
-    cancellation: HandoffCancellation,
 }
 
 impl PendingHandoff {
@@ -604,7 +589,6 @@ pub fn prepare_handoff(
         snapshot_target,
         snapshot_disabled,
         orchestration_handoff,
-        cancellation: HandoffCancellation::default(),
     })
 }
 
@@ -716,10 +700,9 @@ async fn execute_validated_handoff(
         Ok(forked) => forked,
         Err(failure) => return HandoffCommitOutcome::Failed(failure),
     };
-    if forked.pending.cancellation.is_cancelled() {
-        return HandoffCommitOutcome::Cancelled;
-    }
+    let mut cancellation = None;
     if let Some(materialize_handoff_target) = materialize_handoff_target {
+        let (cancel, receiver) = oneshot::channel();
         let materialization = HandoffTargetMaterialization {
             source_conversation: forked.pending.source_conversation.clone(),
             forked_conversation_id: forked.forked_conversation_id.clone(),
@@ -737,7 +720,7 @@ async fn execute_validated_handoff(
                 forked.forked_conversation_id.clone(),
                 None,
             ),
-            cancellation: forked.pending.cancellation.clone(),
+            cancel,
         };
         if let Err(error) = materialize_handoff_target(materialization)
             .await
@@ -751,16 +734,28 @@ async fn execute_validated_handoff(
                 snapshot_failed: false,
             });
         }
+        cancellation = Some(receiver);
     }
 
-    if forked.pending.cancellation.is_cancelled() {
-        return HandoffCommitOutcome::Cancelled;
-    }
-    let cancellation = forked.pending.cancellation.clone();
+    let (mut settled, mut cancellation) = match cancellation {
+        Some(receiver) => {
+            let snapshot = Box::pin(prepare_snapshot_for_spawn(forked));
+            let cancellation = Box::pin(receiver);
+            match select(snapshot, cancellation).await {
+                Either::Left((settled, cancellation)) => {
+                    (settled, Some(*Pin::into_inner(cancellation)))
+                }
+                Either::Right((Ok(()), _)) => return HandoffCommitOutcome::Cancelled,
+                Either::Right((Err(_), snapshot)) => (snapshot.await, None),
+            }
+        }
+        None => (prepare_snapshot_for_spawn(forked).await, None),
+    };
 
-    let mut settled = prepare_snapshot_for_spawn(forked).await;
-
-    if cancellation.is_cancelled() {
+    if cancellation
+        .as_mut()
+        .is_some_and(handoff_cancellation_requested)
+    {
         return HandoffCommitOutcome::Cancelled;
     }
 
@@ -769,7 +764,23 @@ async fn execute_validated_handoff(
         settled.forked_conversation_id,
         settled.initial_snapshot_token,
     );
-    let response = match ai_client.spawn_agent(request.clone()).await {
+    let response = ai_client.spawn_agent(request.clone()).await;
+    if cancellation
+        .as_mut()
+        .is_some_and(handoff_cancellation_requested)
+    {
+        if let Ok(response) = &response {
+            let task_id = response.task_id;
+            if let Err(error) = ai_client.cancel_ambient_agent_task(&task_id).await {
+                report_error!(
+                    error.context("Failed to cancel ambient agent task"),
+                    extra: { "task_id" => %task_id }
+                );
+            }
+        }
+        return HandoffCommitOutcome::Cancelled;
+    }
+    let response = match response {
         Ok(response) => response,
         Err(error) => {
             return HandoffCommitOutcome::Failed(HandoffCommitFailure {
@@ -791,6 +802,13 @@ async fn execute_validated_handoff(
         derived_workspace_had_content: settled.derived_workspace_had_content,
         snapshot_failed: settled.snapshot_failed,
     })
+}
+
+fn handoff_cancellation_requested(cancellation: &mut oneshot::Receiver<()>) -> bool {
+    match cancellation.try_recv() {
+        Ok(Some(())) => true,
+        Ok(None) | Err(_) => false,
+    }
 }
 
 /// Forks an existing server conversation or records that this is a fresh launch.
@@ -850,7 +868,6 @@ async fn prepare_snapshot_for_spawn(forked: ForkedHandoff) -> SnapshotSettledHan
         snapshot_target,
         snapshot_disabled,
         orchestration_handoff,
-        cancellation: _,
     } = forked.pending;
     let (workspace, snapshot_result) = upload_handoff_snapshot(source_paths, snapshot_target).await;
     let derived_workspace_had_content =

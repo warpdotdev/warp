@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use chrono::Utc;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use futures::channel::oneshot;
 use pathfinder_geometry::vector::vec2f;
 use persistence::model::ConversationUsageMetadata;
 use session_sharing_protocol::sharer::SessionSourceType;
@@ -23,8 +25,6 @@ use crate::ai::ambient_agents::task::{TaskPrincipalInfo, TaskStatusErrorCode, Ta
 use crate::ai::ambient_agents::{
     AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
 };
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::HandoffCancellation;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
@@ -996,11 +996,8 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                 .expect("cloud mode terminal should have an ambient agent view model")
                 .clone();
             ambient_agent_view_model.update(ctx, |model, ctx| {
-                model.begin_local_to_cloud_handoff(
-                    handoff_request_for_test(),
-                    HandoffCancellation::default(),
-                    ctx,
-                );
+                let (cancel, _) = oneshot::channel();
+                model.begin_local_to_cloud_handoff(handoff_request_for_test(), cancel, ctx);
             });
 
             view.on_session_share_joined(

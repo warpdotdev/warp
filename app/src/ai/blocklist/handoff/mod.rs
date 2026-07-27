@@ -33,8 +33,8 @@ pub(crate) mod touched_repos;
 #[cfg(feature = "local_fs")]
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use pipeline::{
-    HandoffCancellation, HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated,
-    HandoffPrepareError, HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
+    HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated, HandoffPrepareError,
+    HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
     HandoffTargetMaterialization, MaterializeHandoffTarget, PendingHandoff, execute_handoff,
     prepare_handoff,
 };

@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Local;
+use futures::channel::oneshot;
 use tempfile::NamedTempFile;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
@@ -278,7 +279,6 @@ fn pending(
         },
         snapshot_disabled: true,
         orchestration_handoff: Some(true),
-        cancellation: HandoffCancellation::default(),
     }
 }
 
@@ -900,9 +900,57 @@ async fn cancellation_after_materialization_stops_before_spawn() {
     let client: Arc<dyn AIClient> = Arc::new(mock);
     let materialize: MaterializeHandoffTarget = Box::new(move |input| {
         Box::pin(async move {
-            input.cancellation.cancel();
+            input
+                .cancel
+                .send(())
+                .expect("handoff cancellation receiver");
             Ok(())
         })
+    });
+
+    let outcome = execute_validated_handoff(
+        pending(client.clone(), None, false, "new task"),
+        client,
+        Some(materialize),
+    )
+    .await;
+
+    assert!(matches!(outcome, HandoffCommitOutcome::Cancelled));
+}
+
+#[tokio::test]
+async fn cancellation_during_spawn_cancels_the_created_task() {
+    let cancel = Arc::new(Mutex::new(None::<oneshot::Sender<()>>));
+    let mut mock = MockAIClient::new();
+    mock.expect_fork_conversation().times(0);
+    mock.expect_spawn_agent().times(1).returning({
+        let cancel = cancel.clone();
+        move |_| {
+            cancel
+                .lock()
+                .expect("cancel sender lock")
+                .take()
+                .expect("cancel sender")
+                .send(())
+                .expect("handoff cancellation receiver");
+            Ok(SpawnAgentResponse {
+                task_id: task_id(),
+                run_id: "cancelled-run".to_owned(),
+                at_capacity: false,
+            })
+        }
+    });
+    mock.expect_cancel_ambient_agent_task()
+        .times(1)
+        .withf(|cancelled_task_id| *cancelled_task_id == task_id())
+        .returning(|_| Ok(()));
+    let client: Arc<dyn AIClient> = Arc::new(mock);
+    let materialize: MaterializeHandoffTarget = Box::new({
+        let cancel = cancel.clone();
+        move |input| {
+            *cancel.lock().expect("cancel sender lock") = Some(input.cancel);
+            Box::pin(async { Ok(()) })
+        }
     });
 
     let outcome = execute_validated_handoff(

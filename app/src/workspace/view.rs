@@ -15632,7 +15632,7 @@ impl Workspace {
             forked_conversation_id,
             title,
             request,
-            cancellation,
+            cancel,
         } = materialization;
         let local_fork = source_conversation
             .as_ref()
@@ -15698,7 +15698,7 @@ impl Workspace {
         }
         model_handle.update(ctx, |model, ctx| {
             model.set_environment_id(presentation.environment_id, ctx);
-            model.begin_local_to_cloud_handoff(request, cancellation, ctx);
+            model.begin_local_to_cloud_handoff(request, cancel, ctx);
         });
 
         if let Ok(mut slot) = model_slot.lock() {

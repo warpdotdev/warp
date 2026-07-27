@@ -164,11 +164,8 @@ fn duplicate_handoff_completion_is_ignored() {
         let model = add_model(&mut app);
 
         model.update(&mut app, |model, ctx| {
-            model.begin_local_to_cloud_handoff(
-                retry_request("initial request"),
-                HandoffCancellation::default(),
-                ctx,
-            );
+            let (cancel, _) = oneshot::channel();
+            model.begin_local_to_cloud_handoff(retry_request("initial request"), cancel, ctx);
             model.handle_handoff_commit_failure(
                 HandoffCommitFailure {
                     issue: CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
@@ -212,14 +209,10 @@ fn handoff_cancellation_is_signalled_and_late_failure_is_ignored() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let model = add_model(&mut app);
-        let cancellation = HandoffCancellation::default();
+        let (cancel, mut cancellation) = oneshot::channel();
 
         model.update(&mut app, |model, ctx| {
-            model.begin_local_to_cloud_handoff(
-                retry_request("queued prompt"),
-                cancellation.clone(),
-                ctx,
-            );
+            model.begin_local_to_cloud_handoff(retry_request("queued prompt"), cancel, ctx);
             assert_eq!(
                 model
                     .request()
@@ -241,8 +234,10 @@ fn handoff_cancellation_is_signalled_and_late_failure_is_ignored() {
                 ctx,
             );
         });
-
-        assert!(cancellation.is_cancelled());
+        assert_eq!(
+            cancellation.try_recv().expect("cancellation sender"),
+            Some(())
+        );
         model.read(&app, |model, _| {
             assert!(matches!(model.status(), Status::Cancelled { .. }));
             assert_eq!(

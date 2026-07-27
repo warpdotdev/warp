@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use futures::channel::oneshot;
 use instant::Instant;
 use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
@@ -23,7 +25,7 @@ use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::{HandoffCancellation, HandoffCommitFailure, HandoffCreated};
+use crate::ai::blocklist::handoff::{HandoffCommitFailure, HandoffCreated};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::{
     CloudAgentComputerUseState, resolve_cloud_agent_computer_use_state,
@@ -114,6 +116,13 @@ pub enum Status {
     /// The agent was cancelled.
     Cancelled { progress: AgentProgress },
 }
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+enum LocalToCloudHandoffState {
+    Preparing { cancel: oneshot::Sender<()> },
+    Monitoring,
+    Cancelled,
+    Finished,
+}
 
 /// Model to track the state of an ambient agent run.
 pub struct AmbientAgentViewModel {
@@ -180,11 +189,7 @@ pub struct AmbientAgentViewModel {
     pending_followup_prompt: Option<String>,
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    is_local_to_cloud_handoff: bool,
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    handoff_completion_received: bool,
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    handoff_cancellation: Option<HandoffCancellation>,
+    local_to_cloud_handoff_state: Option<LocalToCloudHandoffState>,
 }
 
 impl AmbientAgentViewModel {
@@ -252,11 +257,7 @@ impl AmbientAgentViewModel {
             last_ended_execution_session_id: None,
             pending_followup_prompt: None,
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-            is_local_to_cloud_handoff: false,
-            #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-            handoff_completion_received: false,
-            #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-            handoff_cancellation: None,
+            local_to_cloud_handoff_state: None,
         }
     }
 
@@ -418,10 +419,6 @@ impl AmbientAgentViewModel {
         if self.harness == harness {
             return;
         }
-        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-        {
-            self.handoff_completion_received = true;
-        }
         self.harness = harness;
         self.harness_model_id = None;
         self.harness_reasoning_level = None;
@@ -492,7 +489,7 @@ impl AmbientAgentViewModel {
     pub(crate) fn is_local_to_cloud_handoff(&self) -> bool {
         #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
         {
-            self.is_local_to_cloud_handoff
+            self.local_to_cloud_handoff_state.is_some()
         }
         #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
         {
@@ -504,13 +501,11 @@ impl AmbientAgentViewModel {
     pub(crate) fn begin_local_to_cloud_handoff(
         &mut self,
         request: SpawnAgentRequest,
-        cancellation: HandoffCancellation,
+        cancel: oneshot::Sender<()>,
         ctx: &mut ModelContext<Self>,
     ) {
         let previous_harness = self.selected_harness();
-        self.is_local_to_cloud_handoff = true;
-        self.handoff_completion_received = false;
-        self.handoff_cancellation = Some(cancellation);
+        self.local_to_cloud_handoff_state = Some(LocalToCloudHandoffState::Preparing { cancel });
         self.request = Some(request);
         self.source = None;
         self.status = Status::WaitingForSession {
@@ -531,10 +526,20 @@ impl AmbientAgentViewModel {
         created: HandoffCreated,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !self.is_local_to_cloud_handoff || self.handoff_completion_received {
-            return;
+        match self.local_to_cloud_handoff_state.take() {
+            Some(LocalToCloudHandoffState::Preparing { .. }) => {
+                self.local_to_cloud_handoff_state = Some(LocalToCloudHandoffState::Monitoring);
+            }
+            Some(LocalToCloudHandoffState::Cancelled) => {
+                self.local_to_cloud_handoff_state = Some(LocalToCloudHandoffState::Finished);
+                Self::cancel_spawned_task(created.task_id, ctx);
+                return;
+            }
+            state => {
+                self.local_to_cloud_handoff_state = state;
+                return;
+            }
         }
-        self.handoff_completion_received = true;
         send_telemetry_from_ctx!(
             CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
                 derived_workspace_had_content: created.derived_workspace_had_content,
@@ -570,13 +575,17 @@ impl AmbientAgentViewModel {
         failure: HandoffCommitFailure,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !self.is_local_to_cloud_handoff
-            || self.handoff_completion_received
-            || matches!(self.status, Status::Cancelled { .. })
-        {
-            return;
+        match self.local_to_cloud_handoff_state.take() {
+            Some(LocalToCloudHandoffState::Preparing { .. })
+                if !matches!(self.status, Status::Cancelled { .. }) =>
+            {
+                self.local_to_cloud_handoff_state = Some(LocalToCloudHandoffState::Finished);
+            }
+            state => {
+                self.local_to_cloud_handoff_state = state;
+                return;
+            }
         }
-        self.handoff_completion_received = true;
         let error = match &failure.issue {
             CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
                 message,
@@ -987,9 +996,7 @@ impl AmbientAgentViewModel {
         self.request = None;
         #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
         {
-            self.is_local_to_cloud_handoff = false;
-            self.handoff_completion_received = false;
-            self.handoff_cancellation = None;
+            self.local_to_cloud_handoff_state = None;
         }
         self.setup_commands_state = Default::default();
         self.stop_progress_timer();
@@ -1183,18 +1190,7 @@ impl AmbientAgentViewModel {
                         "Received task_id after cancellation, sending server cancellation for task {}",
                         task_id
                     );
-                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-                    ctx.spawn(
-                        async move {
-                            if let Err(e) = ai_client.cancel_ambient_agent_task(&task_id).await {
-                                report_error!(
-                                    e.context("Failed to cancel ambient agent task"),
-                                    extra: { "task_id" => %task_id }
-                                );
-                            }
-                        },
-                        |_, _, _| {},
-                    );
+                    Self::cancel_spawned_task(task_id, ctx);
                     return;
                 }
 
@@ -1488,12 +1484,34 @@ impl AmbientAgentViewModel {
         self.pending_followup_prompt = None;
         #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
         {
-            if let Some(cancellation) = &self.handoff_cancellation {
-                cancellation.cancel();
-            }
+            self.local_to_cloud_handoff_state = match self.local_to_cloud_handoff_state.take() {
+                Some(LocalToCloudHandoffState::Preparing { cancel }) => {
+                    let _ = cancel.send(());
+                    Some(LocalToCloudHandoffState::Cancelled)
+                }
+                Some(LocalToCloudHandoffState::Monitoring) => {
+                    Some(LocalToCloudHandoffState::Finished)
+                }
+                state => state,
+            };
         }
 
         ctx.emit(AmbientAgentViewModelEvent::Cancelled);
+    }
+
+    fn cancel_spawned_task(task_id: AmbientAgentTaskId, ctx: &mut ModelContext<Self>) {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move {
+                if let Err(error) = ai_client.cancel_ambient_agent_task(&task_id).await {
+                    report_error!(
+                        error.context("Failed to cancel ambient agent task"),
+                        extra: { "task_id" => %task_id }
+                    );
+                }
+            },
+            |_, _, _| {},
+        );
     }
 
     /// Cancels the ambient agent task if one is currently running.
@@ -1506,15 +1524,7 @@ impl AmbientAgentViewModel {
 
         // If we have a task_id, send cancellation request to the server
         if let Some(task_id) = self.task_id {
-            let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-            ctx.spawn(
-                async move { ai_client.cancel_ambient_agent_task(&task_id).await },
-                |_me, result, _ctx| {
-                    if let Err(err) = result {
-                        report_error!(err.context("Failed to cancel ambient agent task"));
-                    }
-                },
-            );
+            Self::cancel_spawned_task(task_id, ctx);
         } else {
             // No task_id yet, but we can still cancel locally.
             // The spawn stream will handle the cancellation when it receives the TaskSpawned event
