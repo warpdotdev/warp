@@ -2070,12 +2070,16 @@ pub fn init(app: &mut AppContext) {
         app.register_fixed_bindings([FixedBinding::new(
             "shift-?",
             InputAction::ToggleAgentViewShortcuts,
+            // Exclude the queued-prompt inline editor: it is a descendant of Input in the
+            // responder chain, so without this negation `shift-?` steals `?` while editing a
+            // queued prompt even though the host buffer is empty.
             id!("Input")
                 & !id!("IMEOpen")
                 & id!(flags::EMPTY_INPUT_BUFFER)
                 & id!(flags::ACTIVE_AGENT_VIEW)
                 & !id!("LongRunningCommand")
-                & !(id!(flags::TERMINAL_MODE_INPUT) & id!(flags::LOCKED_INPUT)),
+                & !(id!(flags::TERMINAL_MODE_INPUT) & id!(flags::LOCKED_INPUT))
+                & !id!(QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT),
         )]);
     }
 }

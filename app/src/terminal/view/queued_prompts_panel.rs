@@ -703,6 +703,11 @@ impl QueuedPromptsPanelView {
             editor.set_buffer_text(text, ctx);
         });
     }
+
+    /// Test accessor for the reusable inline edit editor.
+    pub(crate) fn edit_editor_for_test(&self) -> &ViewHandle<EditorView> {
+        &self.edit_editor
+    }
 }
 
 impl TypedActionView for QueuedPromptsPanelView {
