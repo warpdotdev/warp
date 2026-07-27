@@ -487,8 +487,8 @@ fn mouse_selection_action_focuses_the_editor() {
 }
 
 #[test]
-fn copy_on_highlight_returns_clipboard_copy_on_selection_end() {
-    // Regression test: when `with_copy_on_highlight` is enabled, completing a
+fn copy_on_mouse_highlight_returns_clipboard_copy_on_selection_end() {
+    // Regression test: when `with_copy_on_mouse_highlight` is enabled, completing a
     // selection via SelectionEnd should return a Clipboard(Copy) outcome and
     // the selected text must be readable for the subsequent clipboard write.
     App::test((), |mut app| async move {
@@ -513,17 +513,17 @@ fn copy_on_highlight_returns_clipboard_copy_on_selection_end() {
                 );
             }
 
-            // With copy_on_highlight enabled, SelectionEnd should trigger a copy.
+            // With copy_on_mouse_highlight enabled, SelectionEnd should trigger a copy.
             let outcome = apply_editor_action(
                 &editor.model,
                 &TuiEditorAction::SelectionEnd,
-                TuiEditorBehavior::single_line().with_copy_on_highlight(),
+                TuiEditorBehavior::single_line().with_copy_on_mouse_highlight(),
                 ctx,
             );
             assert_eq!(
                 outcome,
                 TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Copy),
-                "copy_on_highlight must produce a Clipboard(Copy) outcome"
+                "copy_on_mouse_highlight must produce a Clipboard(Copy) outcome"
             );
 
             // Confirm the selected text is still available for the clipboard write.
@@ -553,8 +553,8 @@ fn copy_on_highlight_returns_clipboard_copy_on_selection_end() {
 }
 
 #[test]
-fn selection_end_without_copy_on_highlight_is_not_copied() {
-    // Regression test: without the `with_copy_on_highlight` opt-in, SelectionEnd
+fn selection_end_without_copy_on_mouse_highlight_is_not_copied() {
+    // Regression test: without the `with_copy_on_mouse_highlight` opt-in, SelectionEnd
     // must not trigger an auto-copy (backward-compatibility guarantee).
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -577,11 +577,11 @@ fn selection_end_without_copy_on_highlight_is_not_copied() {
                 );
             }
 
-            // Without copy_on_highlight, SelectionEnd must return FollowCursor.
+            // Without copy_on_mouse_highlight, SelectionEnd must return FollowCursor.
             let outcome = apply_editor_action(
                 &editor.model,
                 &TuiEditorAction::SelectionEnd,
-                TuiEditorBehavior::single_line(), // default: copy_on_highlight disabled
+                TuiEditorBehavior::single_line(), // default: copy_on_mouse_highlight disabled
                 ctx,
             );
             assert_eq!(

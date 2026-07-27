@@ -3218,12 +3218,12 @@ fn preview_and_restore_do_not_leave_undoable_states() {
     });
 }
 
-/// Regression: `TuiInputView` opts in to `copy_on_highlight`. Completing a
+/// Regression: `TuiInputView` opts in to `copy_on_mouse_highlight`. Completing a
 /// mouse drag-selection (left-up → `SelectionEnd`) must emit
 /// `ClipboardCopySucceeded` — pinning the one-liner at `input/view.rs` that
 /// enables the feature. If that line is reverted the event is never emitted.
 #[test]
-fn copy_on_highlight_emits_clipboard_copy_succeeded_for_input_view() {
+fn copy_on_mouse_highlight_emits_clipboard_copy_succeeded_for_input_view() {
     App::test((), |mut app| async move {
         let (view, copy_succeeded_count) = app.update(|ctx| {
             let view = build_view(ctx);
@@ -3250,24 +3250,24 @@ fn copy_on_highlight_emits_clipboard_copy_succeeded_for_input_view() {
         );
 
         app.update(|ctx| {
-            // left_up maps to SelectionEnd; with copy_on_highlight enabled on
+            // left_up maps to SelectionEnd; with copy_on_mouse_highlight enabled on
             // TuiInputView's behavior, this must emit ClipboardCopySucceeded.
             mouse(&view, ctx, &left_up(5, 0));
         });
         assert_eq!(
             copy_succeeded_count.get(),
             1,
-            "copy_on_highlight must emit ClipboardCopySucceeded on mouse-up"
+            "copy_on_mouse_highlight must emit ClipboardCopySucceeded on mouse-up"
         );
     });
 }
 
 /// Regression: a plain click (no drag) in the input produces a collapsed
-/// selection. Even though `SelectionEnd` fires with `copy_on_highlight` enabled,
+/// selection. Even though `SelectionEnd` fires with `copy_on_mouse_highlight` enabled,
 /// the empty-selection guard in `apply_editor_clipboard_action` must prevent a
 /// clipboard write and suppress `ClipboardCopySucceeded`/`ClipboardCopyFailed`.
 #[test]
-fn copy_on_highlight_does_not_copy_empty_selection() {
+fn copy_on_mouse_highlight_does_not_copy_empty_selection() {
     App::test((), |mut app| async move {
         let (view, clipboard_event_count) = app.update(|ctx| {
             let view = build_view(ctx);
