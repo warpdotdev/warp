@@ -145,11 +145,11 @@ fn extend_to_nearest_boundary_moves_outer_boundary() {
     selection.extend_to_nearest_boundary(Point::new(5, 1), Side::Left);
     assert_eq!(
         selection.region.start,
-        Anchor::new(Point::new(5, 1), Side::Left)
+        Anchor::new(Point::new(25, 4), Side::Right)
     );
     assert_eq!(
         selection.region.end,
-        Anchor::new(Point::new(25, 4), Side::Right)
+        Anchor::new(Point::new(5, 1), Side::Left)
     );
 }
 
@@ -161,11 +161,11 @@ fn extend_to_nearest_boundary_shrinks_inside_selection() {
     selection.extend_to_nearest_boundary(Point::new(12, 4), Side::Left);
     assert_eq!(
         selection.region.start,
-        Anchor::new(Point::new(12, 4), Side::Left)
+        Anchor::new(Point::new(20, 2), Side::Right)
     );
     assert_eq!(
         selection.region.end,
-        Anchor::new(Point::new(20, 2), Side::Right)
+        Anchor::new(Point::new(12, 4), Side::Left)
     );
 
     selection.extend_to_nearest_boundary(Point::new(18, 4), Side::Right);
@@ -187,11 +187,11 @@ fn extend_to_nearest_boundary_shrinks_same_row_by_column() {
     selection.extend_to_nearest_boundary(Point::new(10, 4), Side::Left);
     assert_eq!(
         selection.region.start,
-        Anchor::new(Point::new(10, 4), Side::Left)
+        Anchor::new(Point::new(10, 20), Side::Right)
     );
     assert_eq!(
         selection.region.end,
-        Anchor::new(Point::new(10, 20), Side::Right)
+        Anchor::new(Point::new(10, 4), Side::Left)
     );
 
     selection.extend_to_nearest_boundary(Point::new(10, 18), Side::Right);
@@ -223,11 +223,11 @@ fn extend_to_nearest_boundary_handles_reversed_selection() {
     selection.extend_to_nearest_boundary(Point::new(25, 4), Side::Right);
     assert_eq!(
         selection.region.start,
-        Anchor::new(Point::new(25, 4), Side::Right)
+        Anchor::new(Point::new(5, 4), Side::Left)
     );
     assert_eq!(
         selection.region.end,
-        Anchor::new(Point::new(5, 4), Side::Left)
+        Anchor::new(Point::new(25, 4), Side::Right)
     );
 }
 

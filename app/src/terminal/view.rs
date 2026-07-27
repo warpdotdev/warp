@@ -18685,16 +18685,14 @@ impl TerminalView {
         self.model
             .lock()
             .block_list_mut()
-            .extend_selection_to_nearest_boundary(point, side);
+            .update_selection(point, side);
 
         ctx.notify();
     }
 
-    /// Extends the existing block-text selection to `point`, keeping the
-    /// original anchor (head) fixed and moving only the tail. This backs
-    /// iTerm-style shift+left-click selection extension. If there is no existing
-    /// selection to extend, falls back to starting a new simple selection at
-    /// `point` so the gesture always does something sensible.
+    /// Extends the existing block-text selection to `point` by moving whichever
+    /// boundary is nearest to the point. The moved boundary becomes the active
+    /// drag endpoint so Shift+Click+drag can keep fine-tuning the same side.
     fn extend_block_text_selection(
         &mut self,
         point: BlockListPoint,
@@ -18722,7 +18720,7 @@ impl TerminalView {
         self.model
             .lock()
             .block_list_mut()
-            .update_selection(point, side);
+            .extend_selection_to_nearest_boundary(point, side);
 
         ctx.notify();
     }

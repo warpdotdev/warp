@@ -379,6 +379,8 @@ impl Selection {
     }
 
     /// Extend the selection by moving whichever boundary is closest to `point`.
+    /// The moved boundary is stored as the update endpoint so a following drag
+    /// can continue fine-tuning the same side.
     pub fn extend_to_nearest_boundary(&mut self, point: Point, side: Side) {
         let target = Anchor::new(point, side);
         let region_start_is_selection_start =
@@ -395,13 +397,13 @@ impl Selection {
             SelectionPoint::from_grid_point(selection_end.point),
         );
 
-        match (
-            should_update_selection_start,
-            region_start_is_selection_start,
-        ) {
-            (true, true) | (false, false) => self.region.start = target,
-            (true, false) | (false, true) => self.region.end = target,
-        }
+        let fixed_boundary = if should_update_selection_start {
+            selection_end
+        } else {
+            selection_start
+        };
+        self.region.start = fixed_boundary;
+        self.region.end = target;
     }
 
     pub fn is_tail_before_head(&self) -> bool {

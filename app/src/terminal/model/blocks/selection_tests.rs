@@ -122,10 +122,10 @@ pub fn test_extend_selection_to_nearest_boundary() {
 
     block_list.extend_selection_to_nearest_boundary(BlockListPoint::new(5.0, 1), Side::Left);
     let selection = block_list.selection().expect("selection should exist");
-    assert_lines_approx_eq!(selection.head.point.row, 5.0);
-    assert_eq!(selection.head.point.column, 1);
-    assert_lines_approx_eq!(selection.tail.point.row, 25.0);
-    assert_eq!(selection.tail.point.column, 4);
+    assert_lines_approx_eq!(selection.head.point.row, 25.0);
+    assert_eq!(selection.head.point.column, 4);
+    assert_lines_approx_eq!(selection.tail.point.row, 5.0);
+    assert_eq!(selection.tail.point.column, 1);
 }
 
 #[test]
@@ -142,10 +142,10 @@ pub fn test_extend_selection_to_nearest_boundary_shrinks_inside_selection() {
 
     block_list.extend_selection_to_nearest_boundary(BlockListPoint::new(12.0, 4), Side::Left);
     let selection = block_list.selection().expect("selection should exist");
-    assert_lines_approx_eq!(selection.head.point.row, 12.0);
-    assert_eq!(selection.head.point.column, 4);
-    assert_lines_approx_eq!(selection.tail.point.row, 20.0);
-    assert_eq!(selection.tail.point.column, 2);
+    assert_lines_approx_eq!(selection.head.point.row, 20.0);
+    assert_eq!(selection.head.point.column, 2);
+    assert_lines_approx_eq!(selection.tail.point.row, 12.0);
+    assert_eq!(selection.tail.point.column, 4);
 
     block_list.extend_selection_to_nearest_boundary(BlockListPoint::new(18.0, 4), Side::Right);
     let selection = block_list.selection().expect("selection should exist");
@@ -170,9 +170,9 @@ pub fn test_extend_selection_to_nearest_boundary_shrinks_same_row_by_column() {
     block_list.extend_selection_to_nearest_boundary(BlockListPoint::new(10.0, 4), Side::Left);
     let selection = block_list.selection().expect("selection should exist");
     assert_lines_approx_eq!(selection.head.point.row, 10.0);
-    assert_eq!(selection.head.point.column, 4);
+    assert_eq!(selection.head.point.column, 20);
     assert_lines_approx_eq!(selection.tail.point.row, 10.0);
-    assert_eq!(selection.tail.point.column, 20);
+    assert_eq!(selection.tail.point.column, 4);
 
     block_list.extend_selection_to_nearest_boundary(BlockListPoint::new(10.0, 18), Side::Right);
     let selection = block_list.selection().expect("selection should exist");
@@ -203,9 +203,9 @@ pub fn test_extend_selection_to_nearest_boundary_handles_reversed_selection() {
 
     block_list.extend_selection_to_nearest_boundary(BlockListPoint::new(25.0, 4), Side::Right);
     let selection = block_list.selection().expect("selection should exist");
-    assert_lines_approx_eq!(selection.head.point.row, 25.0);
+    assert_lines_approx_eq!(selection.head.point.row, 5.0);
     assert_eq!(selection.head.point.column, 4);
-    assert_lines_approx_eq!(selection.tail.point.row, 5.0);
+    assert_lines_approx_eq!(selection.tail.point.row, 25.0);
     assert_eq!(selection.tail.point.column, 4);
 }
 

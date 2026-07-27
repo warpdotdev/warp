@@ -118,6 +118,8 @@ impl BlockListSelection {
     }
 
     /// Extend the selection by moving whichever boundary is closest to `point`.
+    /// The moved boundary is stored as the tail so a following drag can
+    /// continue fine-tuning the same side.
     pub fn extend_to_nearest_boundary(&mut self, point: BlockListPoint, side: Side) {
         let target = BlockAnchor::new(point, side);
         let head_is_selection_start = !Self::points_need_swap(self.head.point, self.tail.point);
@@ -133,10 +135,13 @@ impl BlockListSelection {
             Self::selection_point(selection_end.point),
         );
 
-        match (should_update_selection_start, head_is_selection_start) {
-            (true, true) | (false, false) => self.head = target,
-            (true, false) | (false, true) => self.tail = target,
-        }
+        let fixed_boundary = if should_update_selection_start {
+            selection_end
+        } else {
+            selection_start
+        };
+        self.head = fixed_boundary;
+        self.tail = target;
     }
 
     /// Given a block list position (offset from the top-left corner of the
