@@ -204,22 +204,24 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             let circle_background = if is_ambient {
                 ThemeFill::Solid(OZ_AMBIENT_BACKGROUND_COLOR)
             } else {
-                theme.background()
+                // Non-ambient Oz agent: white Warp logo on black circle background.
+                ThemeFill::Solid(ColorU::black())
             };
             // In ambient/cloud mode use the combined `OzCloud` silhouette (Oz + cloud),
             // matching the treatment used in the agent view header. Non-ambient runs
-            // continue to use the plain `Oz` glyph.
+            // use the Warp logo glyph (white on black) instead of the armadillo.
             let oz_glyph = if is_ambient {
                 WarpIcon::OzCloud
             } else {
-                WarpIcon::Oz
+                WarpIcon::Warp
             };
             // Cloud (ambient) runs use a black glyph on the light-purple background
-            // for consistency with the web app; local runs keep the theme text color.
+            // for consistency with the web app; local runs use a white Warp glyph on
+            // the black background.
             let glyph_color = if is_ambient {
                 WarpThemeFill::Solid(ColorU::black())
             } else {
-                theme.main_text_color(theme.background())
+                WarpThemeFill::Solid(ColorU::white())
             };
             let circle = render_circle(
                 oz_glyph.to_warpui_icon(glyph_color).finish(),
