@@ -146,6 +146,9 @@ fn init(
             let root_for_login = root.clone();
             let login_model = TuiLoginModel::handle(ctx);
             ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
+                TuiLoginEvent::PhaseChanged => {
+                    root_for_login.update(ctx, |_, ctx| ctx.notify());
+                }
                 TuiLoginEvent::LoggedIn => {
                     create_terminal_session_after_login(&sessions_for_login, &root_for_login, ctx)
                 }

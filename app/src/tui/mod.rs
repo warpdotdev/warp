@@ -37,6 +37,8 @@ pub enum TuiLoginPhase {
 
 /// Events emitted by [`TuiLoginModel`].
 pub enum TuiLoginEvent {
+    /// The login phase changed and the root view must repaint.
+    PhaseChanged,
     /// Authentication completed and the TUI can create its terminal session.
     LoggedIn,
     /// The current user logged out and the TUI should return to authentication.
@@ -84,7 +86,22 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
 
     // Keep the auth subscription alive for the full process lifetime so a
     // logged-in TUI can complete device authorization again after logout.
-    ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| match event {
+    ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
+        handle_auth_manager_event(event, ctx);
+    });
+    // Mount the TUI now so it renders immediately; the root view shows the
+    // login placeholder until the model flips to `LoggedIn`.
+    mount(ctx);
+
+    if logged_in {
+        activate_global_mcp_servers(ctx);
+    } else {
+        authorize_device(ctx);
+    }
+}
+
+fn handle_auth_manager_event(event: &AuthManagerEvent, ctx: &mut AppContext) {
+    match event {
         AuthManagerEvent::ReceivedDeviceAuthorizationCode {
             verification_url,
             verification_url_complete,
@@ -95,14 +112,16 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
                 .as_deref()
                 .unwrap_or(verification_url.as_str());
             let url_to_open = tui_verification_url(url_to_open);
-            ctx.open_url(&url_to_open);
             set_login_phase(
                 ctx,
                 TuiLoginPhase::AwaitingLogin {
-                    verification_uri: Some(url_to_open),
+                    verification_uri: Some(url_to_open.clone()),
                     user_code: Some(user_code.clone()),
                 },
             );
+            if !ctx.try_open_url(&url_to_open) {
+                log::warn!("Unable to open the device authorization URL in the default browser");
+            }
         }
         AuthManagerEvent::AuthComplete => {
             set_login_phase(ctx, TuiLoginPhase::LoggedIn);
@@ -115,15 +134,6 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
             },
         ),
         _ => {}
-    });
-    // Mount the TUI now so it renders immediately; the root view shows the
-    // login placeholder until the model flips to `LoggedIn`.
-    mount(ctx);
-
-    if logged_in {
-        activate_global_mcp_servers(ctx);
-    } else {
-        authorize_device(ctx);
     }
 }
 
@@ -161,6 +171,7 @@ fn set_logged_out_phase(ctx: &mut AppContext) {
             user_code: None,
         };
         ctx.notify();
+        ctx.emit(TuiLoginEvent::PhaseChanged);
         ctx.emit(TuiLoginEvent::LoggedOut);
     });
 }
@@ -173,6 +184,7 @@ fn set_login_phase(ctx: &mut AppContext, phase: TuiLoginPhase) {
         let logged_in = matches!(phase, TuiLoginPhase::LoggedIn);
         model.phase = phase;
         ctx.notify();
+        ctx.emit(TuiLoginEvent::PhaseChanged);
         if logged_in {
             ctx.emit(TuiLoginEvent::LoggedIn);
         }
