@@ -703,6 +703,11 @@ impl QueuedPromptsPanelView {
             editor.set_buffer_text(text, ctx);
         });
     }
+
+    /// Test accessor: the inline editor used in responder-chain keymap tests.
+    pub(in crate::terminal) fn edit_editor_for_test(&self) -> ViewHandle<EditorView> {
+        self.edit_editor.clone()
+    }
 }
 
 impl TypedActionView for QueuedPromptsPanelView {

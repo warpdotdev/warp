@@ -8246,6 +8246,89 @@ fn test_custom_terminal_page_scroll_binding_applies_when_prompt_is_focused() {
     });
 }
 
+#[test]
+fn question_mark_edits_queued_prompt_instead_of_opening_agent_help() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let (window_id, terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let (input, agent_view_controller) = terminal.read(&app, |terminal, _| {
+            (
+                terminal.input().clone(),
+                terminal.agent_view_controller().clone(),
+            )
+        });
+        let conversation_id = agent_view_controller.update(&mut app, |controller, ctx| {
+            controller
+                .try_enter_agent_view(
+                    None,
+                    AgentViewEntryOrigin::Input {
+                        was_prompt_autodetected: false,
+                    },
+                    ctx,
+                )
+                .expect("agent view should open")
+        });
+        let panel = input
+            .read(&app, |input, _| input.queued_prompts_panel.clone())
+            .expect("queue flag should create a queued prompts panel");
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new("edit me".to_owned(), QueuedQueryOrigin::QueueSlashCommand),
+                ctx,
+            )
+        });
+
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(
+                &crate::terminal::view::queued_prompts_panel::QueuedPromptsPanelAction::StartEditingRow(
+                    row_id,
+                ),
+                ctx,
+            );
+        });
+        let edit_editor = panel.read(&app, |panel, _| panel.edit_editor_for_test());
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+            assert!(!input
+                .agent_shortcut_view_model
+                .as_ref(ctx)
+                .is_shortcut_view_open());
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.is_inline_edit_editor_focused(ctx));
+        });
+
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[terminal.id(), input.id(), panel.id(), edit_editor.id()],
+                &Keystroke::parse("shift-?").expect("valid question-mark keystroke"),
+                false,
+            )
+            .expect("dispatch should succeed");
+
+        assert!(
+            !handled,
+            "the Agent View help binding must not consume '?' while editing a queued prompt"
+        );
+        input.read(&app, |input, ctx| {
+            assert!(!input
+                .agent_shortcut_view_model
+                .as_ref(ctx)
+                .is_shortcut_view_open());
+        });
+
+        edit_editor.update(&mut app, |editor, ctx| editor.user_insert("?", ctx));
+        edit_editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.buffer_text(ctx), "edit me?");
+        });
+    });
+}
 // Helper: open the CLI-agent rich input for the terminal view under test.
 fn open_rich_input_for_terminal(terminal: &ViewHandle<TerminalView>, app: &mut App) {
     terminal.update(app, |view, ctx| {
