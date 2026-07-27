@@ -5622,6 +5622,11 @@ impl TerminalView {
                 QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                     model.remove_fired_row(conversation_id, query_id, ctx);
                 });
+            } else {
+                // A failed head dispatch leaves the row queued; stop draining so later rows
+                // don't jump ahead of it and violate FIFO ordering. The next completion retry
+                // re-fires the head row.
+                break;
             }
         }
     }

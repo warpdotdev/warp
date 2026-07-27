@@ -4131,6 +4131,7 @@ impl Input {
                             prompt,
                             pending_attachments,
                             None,
+                            true,
                             ctx,
                         );
                     }
@@ -13973,12 +13974,22 @@ impl Input {
                     .ambient_agent_view_model()
                     .and_then(|ambient_agent_model| ambient_agent_model.as_ref(ctx).task_id());
                 if let Some(task_id) = task_id {
-                    self.freeze_input_in_loading_state_with_text(&prompt, ctx);
+                    // Mirror the shared-session viewer path: only borrow the loading-state UI when
+                    // the editor is empty. A queued row can auto-fire while the user is typing a
+                    // different prompt, and freezing would clobber that in-progress draft. When the
+                    // editor is empty we show the "<prompt> ◌" affordance and restore it on upload
+                    // failure; when the user has a draft we upload + submit without touching the
+                    // editor buffer.
+                    let editor_is_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
+                    if editor_is_empty {
+                        self.freeze_input_in_loading_state_with_text(&prompt, ctx);
+                    }
                     self.upload_files_then_submit_cloud_followup(
                         task_id,
                         prompt,
                         pending_attachments,
                         queued_query_retry,
+                        editor_is_empty,
                         ctx,
                     );
                 } else {
@@ -14520,6 +14531,7 @@ impl Input {
         prompt: String,
         pending_attachments: Vec<PendingAttachment>,
         queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
+        froze_input: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -14609,7 +14621,13 @@ impl Input {
                             model.restore_fired_row(conversation_id, insert_index, query, ctx);
                         });
                     }
-                    input.restore_cloud_followup_input_after_upload_failure(&prompt, ctx);
+                    // Only restore the editor when we froze it. When the user had a draft we
+                    // skipped the freeze, so restoring the queued prompt into the buffer would
+                    // clobber their in-progress text; the fired row is already back in the queue
+                    // for retry and the toast explains the failure.
+                    if froze_input {
+                        input.restore_cloud_followup_input_after_upload_failure(&prompt, ctx);
+                    }
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
