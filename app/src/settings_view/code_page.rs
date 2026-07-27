@@ -158,7 +158,7 @@ struct IndexingStatusPresentation {
     color: ColorU,
     icon: Option<Icon>,
     refresh_action: Option<IndexingRefreshAction>,
-    show_delete: bool,
+    delete_action: Option<IndexingDeleteAction>,
 }
 
 #[derive(Clone)]
@@ -169,6 +169,31 @@ enum IndexingRefreshAction {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     RequestRemote,
     Resync,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexingDeleteAction {
+    Index,
+    LspOnlyWorkspace,
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    RemoteIndex,
+}
+
+fn local_indexing_delete_action(
+    has_index: bool,
+    has_persisted_lsp_servers: bool,
+) -> Option<IndexingDeleteAction> {
+    if has_index {
+        Some(IndexingDeleteAction::Index)
+    } else if has_persisted_lsp_servers {
+        Some(IndexingDeleteAction::LspOnlyWorkspace)
+    } else {
+        None
+    }
+}
+
+fn should_render_initialized_folder(has_index: bool, has_persisted_lsp_servers: bool) -> bool {
+    has_index || has_persisted_lsp_servers
 }
 pub struct CodeSettingsPageView {
     page: PageType<Self>,
@@ -197,28 +222,13 @@ pub struct CodeSettingsPageView {
 impl CodeSettingsPageView {
     pub fn new(ctx: &mut ViewContext<CodeSettingsPageView>) -> Self {
         let index_manager = CodebaseIndexManager::handle(ctx);
-        let codebase_count = index_manager
-            .as_ref(ctx)
-            .get_codebase_index_statuses(ctx)
-            .count();
 
-        ctx.subscribe_to_model(&index_manager, |me, index, event, ctx| {
+        ctx.subscribe_to_model(&index_manager, |me, _, event, ctx| {
             if matches!(
                 event,
                 CodebaseIndexManagerEvent::SyncStateUpdated { .. }
                     | CodebaseIndexManagerEvent::NewIndexCreated { .. }
             ) {
-                let codebase_count = index.as_ref(ctx).get_codebase_index_statuses(ctx).count();
-
-                // Only update mouse states if the number of codebases changed
-                if me.codebase_manual_resync_mouse_states.len() != codebase_count {
-                    // Resize the vector to match the new codebase count, but preserve the existing mouse states
-                    me.codebase_manual_resync_mouse_states
-                        .resize_with(codebase_count, Default::default);
-                    me.codebase_delete_mouse_states
-                        .resize_with(codebase_count, Default::default);
-                }
-
                 me.resize_workspace_mouse_states(ctx);
 
                 ctx.notify();
@@ -314,8 +324,11 @@ impl CodeSettingsPageView {
                 ctx.notify();
             }
             PersistedWorkspaceEvent::InstallationSucceeded
-            | PersistedWorkspaceEvent::InstallationFailed
-            | PersistedWorkspaceEvent::WorkspaceAdded { .. } => {
+            | PersistedWorkspaceEvent::InstallationFailed => {
+                ctx.notify();
+            }
+            PersistedWorkspaceEvent::WorkspaceAdded { .. } => {
+                me.resize_workspace_mouse_states(ctx);
                 ctx.notify();
             }
         });
@@ -393,10 +406,12 @@ impl CodeSettingsPageView {
         Self {
             page,
             active_subpage: None,
-            codebase_manual_resync_mouse_states: (0..codebase_count)
+            codebase_manual_resync_mouse_states: (0..workspace_count)
                 .map(|_| Default::default())
                 .collect(),
-            codebase_delete_mouse_states: (0..codebase_count).map(|_| Default::default()).collect(),
+            codebase_delete_mouse_states: (0..workspace_count)
+                .map(|_| Default::default())
+                .collect(),
             #[cfg(not(target_family = "wasm"))]
             remote_codebase_manual_resync_mouse_states: (0..remote_codebase_count)
                 .map(|_| Default::default())
@@ -536,9 +551,17 @@ impl CodeSettingsPageView {
         }
     }
 
-    /// Resize `open_project_rules_mouse_states` to match the current workspace count.
+    /// Resize local workspace row mouse states to match the current persisted workspace count.
     fn resize_workspace_mouse_states(&mut self, ctx: &AppContext) {
         let workspace_count = PersistedWorkspace::as_ref(ctx).workspaces().count();
+        if self.codebase_manual_resync_mouse_states.len() != workspace_count
+            || self.codebase_delete_mouse_states.len() != workspace_count
+        {
+            self.codebase_manual_resync_mouse_states
+                .resize_with(workspace_count, Default::default);
+            self.codebase_delete_mouse_states
+                .resize_with(workspace_count, Default::default);
+        }
         if self.open_project_rules_mouse_states.len() != workspace_count {
             self.open_project_rules_mouse_states
                 .resize_with(workspace_count, Default::default);
@@ -603,6 +626,7 @@ pub enum CodeSettingsPageAction {
     ToggleAutoIndexing,
     ManualResync(PathBuf),
     DeleteIndex(PathBuf),
+    DeleteLspOnlyWorkspace(PathBuf),
     #[cfg(not(target_family = "wasm"))]
     RequestRemoteIndex(RemotePath),
     #[cfg(not(target_family = "wasm"))]
@@ -709,6 +733,43 @@ impl TypedActionView for CodeSettingsPageView {
                 CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.drop_index(repo_path.clone(), ctx);
                 });
+            }
+            CodeSettingsPageAction::DeleteLspOnlyWorkspace(workspace_path) => {
+                let persisted_server_types: Vec<LSPServerType> = PersistedWorkspace::as_ref(ctx)
+                    .all_lsp_servers(workspace_path, false)
+                    .into_iter()
+                    .flatten()
+                    .map(|(server_type, _)| server_type)
+                    .collect();
+                for server_type in persisted_server_types {
+                    send_telemetry_from_ctx!(
+                        LspTelemetryEvent::ServerRemoved {
+                            server_type: server_type.binary_name().to_string(),
+                            source: LspEnablementSource::Settings,
+                        },
+                        ctx
+                    );
+                }
+
+                let server_types: Vec<LSPServerType> = LspManagerModel::as_ref(ctx)
+                    .servers_for_workspace(workspace_path)
+                    .into_iter()
+                    .flatten()
+                    .map(|server| server.as_ref(ctx).server_type())
+                    .collect();
+
+                PersistedWorkspace::handle(ctx).update(ctx, |workspace, _| {
+                    workspace.remove_workspace_language_servers(workspace_path);
+                });
+                let lsp_server_count = PersistedWorkspace::as_ref(ctx).total_lsp_server_count(true);
+                self.lsp_row_mouse_states
+                    .resize_with(lsp_server_count, Default::default);
+                LspManagerModel::handle(ctx).update(ctx, |manager, ctx| {
+                    for server_type in server_types {
+                        manager.remove_server(workspace_path, server_type, ctx);
+                    }
+                });
+                ctx.notify();
             }
             #[cfg(not(target_family = "wasm"))]
             CodeSettingsPageAction::RequestRemoteIndex(remote_path) => {
@@ -1405,6 +1466,9 @@ impl CodePageWidget {
                 .all_lsp_servers(workspace_path, true)
                 .map(|iter| iter.collect())
                 .unwrap_or_default();
+            let has_persisted_lsp_servers = all_servers
+                .iter()
+                .any(|(_, state)| *state != EnablementState::Suggested);
 
             // Get mouse states for this workspace
             let resync_mouse = codebase_manual_resync_mouse_states
@@ -1416,8 +1480,11 @@ impl CodePageWidget {
                 .cloned()
                 .unwrap_or_default();
 
-            // Skip workspaces that have neither an index nor any LSP servers
-            if index_status.is_none() && all_servers.is_empty() {
+            // Suggestion-only workspaces are not initialized. Consume their flattened LSP mouse
+            // states before skipping so later visible workspaces keep the correct row handles.
+            if !should_render_initialized_folder(index_status.is_some(), has_persisted_lsp_servers)
+            {
+                lsp_mouse_index += all_servers.len();
                 continue;
             }
 
@@ -1447,6 +1514,7 @@ impl CodePageWidget {
                 workspace_path,
                 index_status.as_ref(),
                 &all_servers,
+                has_persisted_lsp_servers,
                 lsp_manager,
                 resync_mouse,
                 delete_mouse,
@@ -1501,6 +1569,7 @@ impl CodePageWidget {
         workspace_path: &Path,
         index_status: Option<&CodebaseIndexStatus>,
         all_servers: &[(LSPServerType, EnablementState)],
+        has_persisted_lsp_servers: bool,
         lsp_manager: &LspManagerModel,
         resync_mouse: MouseStateHandle,
         delete_mouse: MouseStateHandle,
@@ -1583,6 +1652,7 @@ impl CodePageWidget {
         workspace_content.add_child(self.render_indexing_subsection(
             workspace_path,
             index_status,
+            has_persisted_lsp_servers,
             resync_mouse,
             delete_mouse,
             appearance,
@@ -1686,12 +1756,17 @@ impl CodePageWidget {
         &self,
         workspace_path: &Path,
         index_status: Option<&CodebaseIndexStatus>,
+        has_persisted_lsp_servers: bool,
         resync_mouse: MouseStateHandle,
         delete_mouse: MouseStateHandle,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         self.render_indexing_subsection_for_target(
-            self.local_indexing_status_presentation(index_status, appearance),
+            self.local_indexing_status_presentation(
+                index_status,
+                has_persisted_lsp_servers,
+                appearance,
+            ),
             Some(LocalOrRemotePath::Local(workspace_path.to_path_buf())),
             resync_mouse,
             delete_mouse,
@@ -1747,16 +1822,19 @@ impl CodePageWidget {
     fn local_indexing_status_presentation(
         &self,
         index_state: Option<&CodebaseIndexStatus>,
+        has_persisted_lsp_servers: bool,
         appearance: &Appearance,
     ) -> IndexingStatusPresentation {
         let theme = appearance.theme();
+        let delete_action =
+            local_indexing_delete_action(index_state.is_some(), has_persisted_lsp_servers);
         let Some(index_state) = index_state else {
             return IndexingStatusPresentation {
                 text: Cow::from("No index created"),
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: Some(Icon::SlashCircle),
                 refresh_action: None,
-                show_delete: false,
+                delete_action,
             };
         };
 
@@ -1777,7 +1855,7 @@ impl CodePageWidget {
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: None,
                 refresh_action: None,
-                show_delete: true,
+                delete_action,
             };
         }
 
@@ -1809,7 +1887,7 @@ impl CodePageWidget {
                 color,
                 icon: Some(icon),
                 refresh_action: Some(IndexingRefreshAction::Resync),
-                show_delete: true,
+                delete_action,
             };
         }
 
@@ -1819,7 +1897,7 @@ impl CodePageWidget {
             color: theme.nonactive_ui_text_color().into_solid(),
             icon: None,
             refresh_action: None,
-            show_delete: true,
+            delete_action,
         }
     }
 
@@ -1837,7 +1915,7 @@ impl CodePageWidget {
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: Some(Icon::SlashCircle),
                 refresh_action: Some(IndexingRefreshAction::RequestRemote),
-                show_delete: true,
+                delete_action: Some(IndexingDeleteAction::RemoteIndex),
             },
             RemoteCodebaseIndexState::Unavailable => {
                 let limit_reached = remote_codebase_index_limit_reached(status);
@@ -1858,7 +1936,7 @@ impl CodePageWidget {
                         Icon::SlashCircle
                     }),
                     refresh_action: Some(IndexingRefreshAction::RequestRemote),
-                    show_delete: true,
+                    delete_action: Some(IndexingDeleteAction::RemoteIndex),
                 }
             }
             RemoteCodebaseIndexState::Disabled => IndexingStatusPresentation {
@@ -1866,14 +1944,14 @@ impl CodePageWidget {
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: Some(Icon::SlashCircle),
                 refresh_action: Some(IndexingRefreshAction::RequestRemote),
-                show_delete: true,
+                delete_action: Some(IndexingDeleteAction::RemoteIndex),
             },
             RemoteCodebaseIndexState::Queued => IndexingStatusPresentation {
                 text: Cow::from("Queued"),
                 color: theme.disabled_ui_text_color().into_solid(),
                 icon: None,
                 refresh_action: None,
-                show_delete: true,
+                delete_action: Some(IndexingDeleteAction::RemoteIndex),
             },
             RemoteCodebaseIndexState::Indexing => {
                 let text = match (status.progress_completed, status.progress_total) {
@@ -1890,7 +1968,7 @@ impl CodePageWidget {
                     color: theme.disabled_ui_text_color().into_solid(),
                     icon: None,
                     refresh_action: None,
-                    show_delete: true,
+                    delete_action: Some(IndexingDeleteAction::RemoteIndex),
                 }
             }
             RemoteCodebaseIndexState::Ready => IndexingStatusPresentation {
@@ -1898,21 +1976,21 @@ impl CodePageWidget {
                 color: theme.ansi_fg_green(),
                 icon: Some(Icon::Check),
                 refresh_action: Some(IndexingRefreshAction::Resync),
-                show_delete: true,
+                delete_action: Some(IndexingDeleteAction::RemoteIndex),
             },
             RemoteCodebaseIndexState::Stale => IndexingStatusPresentation {
                 text: Cow::from("Stale"),
                 color: theme.nonactive_ui_detail().into_solid(),
                 icon: Some(Icon::ClockRefresh),
                 refresh_action: Some(IndexingRefreshAction::Resync),
-                show_delete: true,
+                delete_action: Some(IndexingDeleteAction::RemoteIndex),
             },
             RemoteCodebaseIndexState::Failed => IndexingStatusPresentation {
                 text: Cow::from("Failed"),
                 color: theme.ui_error_color(),
                 icon: Some(Icon::AlertTriangle),
                 refresh_action: Some(IndexingRefreshAction::Resync),
-                show_delete: true,
+                delete_action: Some(IndexingDeleteAction::RemoteIndex),
             },
         }
     }
@@ -2007,7 +2085,7 @@ impl CodePageWidget {
             );
         }
 
-        if presentation.show_delete
+        if let Some(delete_action) = presentation.delete_action
             && let Some(action_target) = action_target
         {
             buttons_row.add_child(
@@ -2017,20 +2095,39 @@ impl CodePageWidget {
                         ..Default::default()
                     })
                     .build()
-                    .on_click(move |ctx, _, _| match &action_target {
-                        LocalOrRemotePath::Local(codebase_path) => {
+                    .on_click(move |ctx, _, _| match (&action_target, &delete_action) {
+                        (LocalOrRemotePath::Local(codebase_path), IndexingDeleteAction::Index) => {
                             ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteIndex(
                                 codebase_path.clone(),
                             ));
                         }
+                        (
+                            LocalOrRemotePath::Local(workspace_path),
+                            IndexingDeleteAction::LspOnlyWorkspace,
+                        ) => {
+                            ctx.dispatch_typed_action(
+                                CodeSettingsPageAction::DeleteLspOnlyWorkspace(
+                                    workspace_path.clone(),
+                                ),
+                            );
+                        }
+                        (LocalOrRemotePath::Local(_), IndexingDeleteAction::RemoteIndex) => {}
                         #[cfg(not(target_family = "wasm"))]
-                        LocalOrRemotePath::Remote(remote_path) => {
+                        (
+                            LocalOrRemotePath::Remote(remote_path),
+                            IndexingDeleteAction::RemoteIndex,
+                        ) => {
                             ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteRemoteIndex(
                                 remote_path.clone(),
                             ));
                         }
+                        #[cfg(not(target_family = "wasm"))]
+                        (
+                            LocalOrRemotePath::Remote(_),
+                            IndexingDeleteAction::Index | IndexingDeleteAction::LspOnlyWorkspace,
+                        ) => {}
                         #[cfg(target_family = "wasm")]
-                        LocalOrRemotePath::Remote(_) => {}
+                        (LocalOrRemotePath::Remote(_), _) => {}
                     })
                     .finish(),
             );
