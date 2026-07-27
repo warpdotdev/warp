@@ -487,9 +487,9 @@ fn mouse_selection_action_focuses_the_editor() {
 }
 
 #[test]
-fn copy_on_highlight_copies_selected_text_on_drag_selection_end() {
+fn copy_on_highlight_returns_clipboard_copy_on_selection_end() {
     // Regression test: when `with_copy_on_highlight` is enabled, completing a
-    // drag selection (SelectionEnd) should return a Clipboard(Copy) outcome and
+    // selection via SelectionEnd should return a Clipboard(Copy) outcome and
     // the selected text must be readable for the subsequent clipboard write.
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());

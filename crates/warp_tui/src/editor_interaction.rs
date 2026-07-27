@@ -55,9 +55,13 @@ pub(crate) enum TuiEditorLineMode {
 pub(crate) struct TuiEditorBehavior {
     line_mode: TuiEditorLineMode,
     viewport_rows: u32,
-    /// When `true`, completing a mouse drag-selection automatically copies the
-    /// selected text to the clipboard (matching the transcript view's behavior).
-    /// Disabled by default; opt in with [`Self::with_copy_on_highlight`].
+    /// When `true`, completing a mouse drag-selection (i.e. `SelectionEnd`
+    /// from a mouse-up event) automatically copies the selected text to the
+    /// clipboard, matching the transcript view's highlight-to-copy behavior.
+    /// Keyboard selection commands (`SelectLeft`, `SelectWordRight`, etc.) do
+    /// **not** trigger an auto-copy: they go through `apply_command` and never
+    /// reach the `SelectionEnd` path. Disabled by default; opt in with
+    /// [`Self::with_copy_on_highlight`].
     copy_on_highlight: bool,
 }
 
@@ -80,9 +84,12 @@ impl TuiEditorBehavior {
         }
     }
 
-    /// Enables automatic clipboard copy when the user completes a drag
-    /// selection (mouse up), mirroring the transcript view's highlight-to-copy
-    /// behavior. Any editor that opts in will auto-copy on highlight.
+    /// Enables automatic clipboard copy when the user completes a mouse
+    /// drag-selection (mouse-up → `SelectionEnd`), mirroring the transcript
+    /// view's highlight-to-copy behavior. Keyboard-driven selection commands
+    /// (`SelectLeft`, `SelectWordRight`, etc.) are intentionally excluded:
+    /// they go through `apply_command` and never reach the `SelectionEnd`
+    /// arm. Any editor that opts in will auto-copy on mouse-drag-release.
     pub(crate) fn with_copy_on_highlight(mut self) -> Self {
         self.copy_on_highlight = true;
         self
