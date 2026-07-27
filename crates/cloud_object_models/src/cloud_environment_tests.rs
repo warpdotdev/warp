@@ -28,9 +28,84 @@ fn deserialize_legacy_environment_without_providers() {
     );
     assert_eq!(
         env.base_image,
-        BaseImage::DockerImage("ubuntu:latest".into())
+        Some(BaseImage::DockerImage("ubuntu:latest".into()))
     );
+    assert_eq!(env.docker_image(), Some("ubuntu:latest"));
     assert_eq!(env.setup_commands, vec!["echo hello"]);
+}
+
+#[test]
+fn deserialize_environment_without_docker_image() {
+    let json = serde_json::json!({
+        "name": "no-image-env",
+        "github_repos": [{"owner": "warpdotdev", "repo": "warp"}],
+        "setup_commands": ["echo hello"]
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    assert_eq!(env.name, "no-image-env");
+    assert_eq!(env.base_image, None);
+    assert_eq!(env.docker_image(), None);
+    assert_eq!(env.setup_commands, vec!["echo hello"]);
+}
+
+#[test]
+fn deserialize_environment_with_null_docker_image() {
+    let json = serde_json::json!({
+        "name": "null-image-env",
+        "github_repos": [],
+        "docker_image": null
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    assert_eq!(env.base_image, None);
+}
+
+#[test]
+fn serialize_with_docker_image_preserves_legacy_wire_format() {
+    let env = AmbientAgentEnvironment::new(
+        "legacy-wire-env".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+
+    let json = serde_json::to_value(&env).unwrap();
+    // The image must serialize as a top-level string field, exactly as the
+    // pre-optional (flattened enum) representation did.
+    assert_eq!(
+        json.get("docker_image"),
+        Some(&serde_json::json!("ubuntu:latest"))
+    );
+    assert!(!json.as_object().unwrap().contains_key("base_image"));
+}
+
+#[test]
+fn serialize_without_docker_image_omits_field() {
+    let mut env =
+        AmbientAgentEnvironment::new("no-image-env".into(), None, vec![], String::new(), vec![]);
+    env.base_image = None;
+
+    let json = serde_json::to_value(&env).unwrap();
+    assert!(!json.as_object().unwrap().contains_key("docker_image"));
+    assert!(!json.as_object().unwrap().contains_key("base_image"));
+}
+
+#[test]
+fn roundtrip_serde_without_docker_image() {
+    let mut env = AmbientAgentEnvironment::new(
+        "no-image-rt".into(),
+        Some("desc".into()),
+        vec![GithubRepo::new("owner".into(), "repo".into())],
+        String::new(),
+        vec!["make build".into()],
+    );
+    env.base_image = None;
+
+    let serialized = serde_json::to_string(&env).unwrap();
+    let deserialized: AmbientAgentEnvironment = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(env, deserialized);
 }
 
 #[test]

@@ -122,6 +122,37 @@ impl fmt::Display for BaseImage {
     }
 }
 
+/// (De)serializes `Option<BaseImage>` as the legacy top-level `docker_image`
+/// string field.
+///
+/// The previous representation flattened the externally tagged `BaseImage`
+/// enum into `AmbientAgentEnvironment`, which produced the same
+/// `"docker_image": "<image>"` wire format but failed to deserialize
+/// environments where the key was absent. This module keeps that exact wire
+/// format while mapping a missing (or explicitly `null`) `docker_image` to
+/// `None`.
+mod optional_docker_image {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::BaseImage;
+
+    pub fn serialize<S: Serializer>(
+        base_image: &Option<BaseImage>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match base_image {
+            Some(BaseImage::DockerImage(image)) => image.serialize(serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<BaseImage>, D::Error> {
+        Ok(Option::<String>::deserialize(deserializer)?.map(BaseImage::DockerImage))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GcpProviderConfig {
     pub project_number: String,
@@ -181,9 +212,17 @@ pub struct AmbientAgentEnvironment {
     /// `github_repos`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_repos: Option<Vec<SourceRepo>>,
-    /// Base image specification
-    #[serde(flatten)]
-    pub base_image: BaseImage,
+    /// Base image specification.
+    ///
+    /// `None` means the environment has no pinned base image; the
+    /// `docker_image` key is omitted from the serialized form in that case.
+    #[serde(
+        default,
+        rename = "docker_image",
+        skip_serializing_if = "Option::is_none",
+        with = "optional_docker_image"
+    )]
+    pub base_image: Option<BaseImage>,
     /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
@@ -212,7 +251,7 @@ impl AmbientAgentEnvironment {
             code_forge: None,
             github_repos,
             source_repos: None,
-            base_image: BaseImage::DockerImage(docker_image),
+            base_image: Some(BaseImage::DockerImage(docker_image)),
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
@@ -223,6 +262,14 @@ impl AmbientAgentEnvironment {
     /// for legacy environments.
     pub fn effective_code_forge(&self) -> CodeForge {
         self.code_forge.unwrap_or_default()
+    }
+
+    /// Returns the environment's pinned docker image, if any.
+    pub fn docker_image(&self) -> Option<&str> {
+        match &self.base_image {
+            Some(BaseImage::DockerImage(image)) => Some(image.as_str()),
+            None => None,
+        }
     }
 
     /// Returns the authoritative provider-neutral repository list.
