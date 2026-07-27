@@ -91,6 +91,8 @@ pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentCom
     }
 }
 
+// Eval builds always use the hard-coded eval profile, so every caller of these helpers is
+// compiled out there (see `AIExecutionProfilesModel::new` and `migrate_settings_profiles`).
 #[cfg(not(feature = "agent_mode_evals"))]
 pub fn create_default_from_legacy_settings(app: &AppContext) -> AIExecutionProfile {
     create_default_from_legacy_settings_with_profile(AIExecutionProfile::default(), app)

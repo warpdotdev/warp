@@ -1164,6 +1164,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         )
     };
 
+    if matches!(launch_mode, LaunchMode::Tui { .. }) {
+        app_builder.enable_headless_microphone_access_query();
+    }
+
     #[cfg(target_os = "macos")]
     {
         use warpui::AssetProvider as _;

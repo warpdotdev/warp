@@ -176,6 +176,27 @@ fn active_card_matches_question_panel_structure() {
 }
 
 #[test]
+fn focusing_an_active_question_delegates_to_the_selector() {
+    App::test((), |mut app| async move {
+        let (_, view) = add_view(
+            &mut app,
+            vec![question(
+                "single",
+                "Which shell?",
+                false,
+                false,
+                &["zsh", "fish"],
+            )],
+        );
+        queue_question_action(&mut app, &view);
+        let selector = app.read(|ctx| view.as_ref(ctx).selector.clone());
+
+        view.update(&mut app, |_, ctx| ctx.focus_self());
+
+        assert!(app.read(|ctx| selector.is_focused(ctx)));
+    });
+}
+#[test]
 fn enter_selects_options_and_other_before_shift_enter_advances_multiselect() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);

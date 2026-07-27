@@ -892,6 +892,81 @@ fn agent_update_rejects_conflicting_remove_flags() {
 }
 
 #[test]
+fn agent_update_rejects_prompt_and_remove_prompt() {
+    let result = Args::try_parse_from([
+        "warp",
+        "agent",
+        "update",
+        "agent_123",
+        "--prompt",
+        "new prompt",
+        "--remove-prompt",
+    ]);
+
+    assert!(result.is_err());
+}
+
+fn parse_agent_update(args: &[&str]) -> crate::agent::AgentUpdateArgs {
+    let full: Vec<&str> = std::iter::once("warp")
+        .chain(std::iter::once("agent"))
+        .chain(std::iter::once("update"))
+        .chain(args.iter().copied())
+        .collect();
+    let parsed = Args::try_parse_from(full).expect("agent update args should parse");
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    match *boxed {
+        CliCommand::Agent(AgentCommand::Update(args)) => args,
+        _ => panic!("Expected `agent update` command"),
+    }
+}
+
+#[test]
+fn agent_update_accepts_prompt_replacement() {
+    let args = parse_agent_update(&["agent_123", "--prompt", "new prompt"]);
+    assert_eq!(args.prompt.as_deref(), Some("new prompt"));
+    assert!(!args.remove_prompt);
+}
+
+#[test]
+fn agent_update_accepts_remove_prompt() {
+    let args = parse_agent_update(&["agent_123", "--remove-prompt"]);
+    assert!(args.prompt.is_none());
+    assert!(args.remove_prompt);
+}
+
+#[test]
+fn agent_update_leaves_prompt_unset_when_neither_flag_passed() {
+    let args = parse_agent_update(&["agent_123", "--name", "renamed"]);
+    assert!(args.prompt.is_none());
+    assert!(!args.remove_prompt);
+}
+
+#[test]
+fn agent_create_accepts_prompt() {
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "create",
+        "--name",
+        "agent",
+        "--prompt",
+        "base prompt",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Create(args)) = boxed.as_ref() else {
+        panic!("Expected `agent create` command");
+    };
+
+    assert_eq!(args.name, "agent");
+    assert_eq!(args.prompt.as_deref(), Some("base prompt"));
+}
+
+#[test]
 fn agent_update_rejects_remove_all_secret_deltas() {
     let result = Args::try_parse_from([
         "warp",

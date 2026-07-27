@@ -47,6 +47,21 @@ fn auto_approve_is_an_exact_no_argument_command() {
 }
 
 #[test]
+fn theme_command_inserts_input_for_its_required_argument() {
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
+
+    assert_eq!(
+        slash_command_selection_behavior(&commands::THEME),
+        SlashCommandSelectionBehavior::InsertCommandText("/theme ".to_owned())
+    );
+    let argument = commands::THEME
+        .argument
+        .as_ref()
+        .expect("theme should require an argument");
+    assert!(!argument.is_optional);
+    assert_eq!(argument.hint_text, Some("<auto|light|dark>"));
+}
+#[test]
 fn tui_commands_have_typed_identities_and_explicit_surface_support() {
     for (command, expected) in [
         (&*commands::AGENT, SlashCommandKind::Agent),
@@ -70,6 +85,8 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
         (&commands::LOGOUT, SlashCommandKind::Logout),
         (&commands::VERSION, SlashCommandKind::Version),
         (&commands::VIEW_LOGS, SlashCommandKind::ViewLogs),
+        (&commands::VOICE, SlashCommandKind::Voice),
+        (&commands::THEME, SlashCommandKind::Theme),
     ] {
         assert_eq!(
             command.kind, expected,

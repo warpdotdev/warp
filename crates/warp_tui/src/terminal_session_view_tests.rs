@@ -1,15 +1,19 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
 use instant::Instant;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
-use warp::settings::{AISettings, TuiUsageDisplayMode, TuiZeroStateObject};
-use warp::terminal::model::ansi::{Handler, InputBufferValue};
+use warp::settings::{
+    AISettings, TuiTheme, TuiThemeSettings, TuiUsageDisplayMode, TuiZeroStateObject,
+};
+use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
-    AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin,
-    BlockPadding, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals, Harness,
-    LLMPreferences, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, TranscriptScope,
+    AIAgentActionId, AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId,
+    AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel, ConversationStatus,
+    ConversationUsageTotals, Harness, LLMPreferences, LongRunningCommandControlState, PtyIntent,
+    PtyIntentEvent, SizeInfo, SizeUpdate, TaskId, TranscriptScope, UserTakeOverReason,
     export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::settings::Setting as _;
@@ -31,17 +35,22 @@ use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
 
 use super::{
-    AUTO_APPROVE_FEEDBACK_DURATION, AUTO_APPROVE_TOGGLE_BINDING_NAME,
-    COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
+    ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, AUTO_APPROVE_DISABLED_HINT,
+    AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION, AUTO_APPROVE_TOGGLE_BINDING_NAME,
+    BlockingInputSource, COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
     COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegments,
     INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
+    SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
     SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
-    TuiTerminalSessionEvent, TuiTerminalSessionView, attachment_focus_available,
-    cost_command_unavailable_hint, export_file_success_message, log_bundle_success_message,
-    raw_prompt_if_not_blank, render_status_footer_row,
+    TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
+    attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
+    log_bundle_success_message, raw_prompt_if_not_blank, render_status_footer_row,
+    voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
+use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
+use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::keybindings::{
     CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME, KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG,
     PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME, TUI_BINDING_GROUP,
@@ -59,6 +68,7 @@ use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_sessio
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
+use crate::voice_input::TuiVoiceInputState;
 use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
 };
@@ -73,6 +83,93 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
     assert!(attachment_focus_available(false, true));
     assert!(!attachment_focus_available(true, true));
     assert!(!attachment_focus_available(false, false));
+}
+
+#[test]
+fn nld_reset_only_unlocks_after_agent_control_and_not_on_user_edit() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .ai_autodetection_enabled_internal
+                    .set_value(true, ctx)
+                    .expect("test setting should update");
+            });
+            view.input_view.update(ctx, |input, ctx| {
+                input.exit_shell_mode(ctx);
+                input.set_text("git status", ctx);
+            });
+            assert_eq!(
+                view.ai_input_model.as_ref(ctx).input_config(),
+                AI_LOCKED_CONFIG,
+                "an explicit Agent lock should be retained while the user edits"
+            );
+
+            // User edits must not reinterpret an explicit Agent lock as stale
+            // agent-control state.
+            view.handle_input_content_changed(true, ctx);
+            assert_eq!(
+                view.ai_input_model.as_ref(ctx).input_config(),
+                AI_LOCKED_CONFIG,
+                "user edits must not unlock an explicit Agent lock"
+            );
+
+            // A lock installed for agent terminal control is reset when that
+            // control completes, which restores the first post-agent prompt to
+            // the setting-derived NLD state.
+            view.input_view.update(ctx, |input, ctx| {
+                input.lock_for_agent_control(ctx);
+            });
+            view.input_view.update(ctx, |input, ctx| {
+                input.reset_after_agent_control(ctx);
+            });
+            assert_eq!(
+                view.ai_input_model.as_ref(ctx).input_config(),
+                AI_UNLOCKED_CONFIG,
+                "agent-control completion should resume NLD"
+            );
+        });
+    });
+}
+
+#[test]
+fn voice_accepts_exact_and_whitespace_only_arguments() {
+    assert_eq!(voice_command_argument("/voice"), Some(""));
+    assert_eq!(voice_command_argument("/voice   "), Some("   "));
+    assert_eq!(voice_command_argument("/voice text"), Some(" text"));
+    assert_eq!(voice_command_argument("/voice-command text"), None);
+    assert!(voice_argument_is_empty(None));
+    assert!(voice_argument_is_empty(Some(&String::new())));
+    assert!(voice_argument_is_empty(Some(&"   ".to_owned())));
+    assert!(!voice_argument_is_empty(Some(&"text".to_owned())));
+}
+
+#[test]
+fn voice_slash_command_rejects_arguments_before_prompt_fallback() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/voice transcribe this", ctx);
+            });
+            view.handle_submitted_input("/voice transcribe this", ctx);
+        });
+
+        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "");
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(VOICE_USAGE_HINT.to_owned())
+        );
+    });
 }
 
 #[test]
@@ -165,6 +262,77 @@ fn zero_state_reload_failure_renders_as_an_error_footer_hint() {
 }
 
 #[test]
+fn theme_slash_command_accepts_direct_selection_and_rejects_invalid_values() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let light = "light".to_owned();
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, Some(&light), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Light
+            );
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Light
+            );
+        });
+        let dark = "dark".to_owned();
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, Some(&dark), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Dark
+            );
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Dark
+            );
+        });
+
+        let auto = "auto".to_owned();
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, Some(&auto), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Dark
+            );
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Auto
+            );
+        });
+
+        let invalid = "sepia".to_owned();
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, Some(&invalid), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Auto
+            );
+        });
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(super::THEME_INVALID_ARGUMENT_HINT.to_owned())
+        );
+    });
+}
+
+#[test]
 fn zero_state_initial_load_failure_shows_an_error_footer_hint() {
     App::test((), |mut app| async move {
         let temp_dir = TempDir::new().unwrap();
@@ -190,6 +358,58 @@ fn zero_state_initial_load_failure_shows_an_error_footer_hint() {
                 super::ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT.to_owned(),
                 super::TransientHintTone::Error
             ))
+        );
+    });
+}
+
+#[test]
+fn listening_voice_input_animates_the_input_border() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.terminal_model
+                .lock()
+                .simulate_block("echo ready", "ready\r\n");
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+        });
+
+        let mut presenter = TuiPresenter::new();
+        let listening_frame = app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            invalidation
+                .updated
+                .extend(view.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, fixture.window_id);
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 100, 40))
+        });
+        assert!(
+            listening_frame.repaint_at.is_some(),
+            "the listening border should schedule its next animation frame"
+        );
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Transcribing, ctx);
+            });
+        });
+        let transcribing_frame = app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(view.id());
+            invalidation
+                .updated
+                .extend(view.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, fixture.window_id);
+            presenter.present(ctx, &view, TuiRect::new(0, 0, 100, 40))
+        });
+        assert!(
+            transcribing_frame.repaint_at.is_none(),
+            "the border should stop animating after recording stops"
         );
     });
 }
@@ -252,6 +472,13 @@ fn render_retained_session(
         let scene = Rc::new(paint_ctx.scene.clone());
         (element, scene, buffer)
     })
+}
+fn render_footer_lines(
+    app: &mut App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    width: u16,
+) -> Vec<String> {
+    render_footer(app, view, width).to_lines()
 }
 
 /// Dispatches `event` into the retained session element tree with the session
@@ -359,6 +586,13 @@ fn auto_approve_slash_command_toggles_selected_conversation_off_on_off() {
                     .as_ref(ctx)
                     .selected_conversation_id(ctx)
             );
+            assert_eq!(
+                view.transient_hint.current(),
+                Some((
+                    AUTO_APPROVE_ENABLED_HINT,
+                    crate::transient_hint::TransientHintTone::Success
+                ))
+            );
         });
 
         // Invoking `/auto-approve` again toggles it back off.
@@ -378,7 +612,55 @@ fn auto_approve_slash_command_toggles_selected_conversation_off_on_off() {
                     .as_ref(ctx)
                     .selected_conversation_id(ctx)
             );
+            assert_eq!(
+                view.transient_hint.current(),
+                Some((
+                    AUTO_APPROVE_DISABLED_HINT,
+                    crate::transient_hint::TransientHintTone::Success
+                ))
+            );
         });
+    });
+}
+
+#[test]
+fn theme_slash_command_rejects_a_missing_argument() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        app.read(|ctx| {
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Dark
+            );
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Auto
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::THEME, None, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                TuiTheme::from(Appearance::as_ref(ctx).theme()),
+                TuiTheme::Dark
+            );
+            assert_eq!(
+                TuiThemeSettings::as_ref(ctx).selected_theme(),
+                TuiTheme::Auto
+            );
+        });
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(super::THEME_INVALID_ARGUMENT_HINT.to_owned())
+        );
     });
 }
 
@@ -522,7 +804,7 @@ fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
 }
 
 #[test]
-fn auto_approve_actions_control_transient_color_feedback() {
+fn auto_approve_actions_control_visible_feedback() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -547,6 +829,13 @@ fn auto_approve_actions_control_transient_color_feedback() {
                 view.conversation_selection
                     .as_ref(ctx)
                     .selected_conversation_id(ctx)
+            );
+            assert_eq!(
+                view.transient_hint.current(),
+                Some((
+                    AUTO_APPROVE_ENABLED_HINT,
+                    crate::transient_hint::TransientHintTone::Success
+                ))
             );
         });
 
@@ -750,6 +1039,44 @@ fn render_session(
     })
 }
 
+#[test]
+fn shortcuts_surface_renders_above_the_input() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
+        });
+
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(rendered.contains("Shortcuts"), "{rendered}");
+        assert!(rendered.contains("? shortcuts"), "{rendered}");
+        assert!(rendered.contains("/ commands"), "{rendered}");
+        assert!(rendered.contains("! shell mode"), "{rendered}");
+        assert!(rendered.contains("← conversations"), "{rendered}");
+        assert!(rendered.contains("↑ input history"), "{rendered}");
+        assert!(rendered.contains("toggle auto-approve"), "{rendered}");
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TuiTerminalSessionAction::ToggleAutoApprove {
+                    show_feedback: true,
+                },
+                ctx,
+            );
+        });
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(rendered.contains("toggle auto-approve"), "{rendered}");
+        assert!(rendered.contains(AUTO_APPROVE_ENABLED_HINT), "{rendered}");
+
+        let narrow = render_session(&mut app, &view, 40, 24).join("\n");
+        assert!(narrow.contains("Shortcuts"), "{narrow}");
+        assert!(narrow.contains("? shortcuts"), "{narrow}");
+    });
+}
 fn input_text(view: &ViewHandle<super::TuiTerminalSessionView>, ctx: &AppContext) -> String {
     view.as_ref(ctx)
         .input_view
@@ -1035,10 +1362,16 @@ fn long_running_command_keeps_input_hidden() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        view.update(&mut app, |view, _| {
+        view.update(&mut app, |view, ctx| {
             view.terminal_model
                 .lock()
                 .simulate_long_running_block("cat", "");
+            assert!(matches!(
+                view.session_state(ctx)
+                    .expect("session state resolves")
+                    .blocking_input_source(),
+                Some(&BlockingInputSource::LongRunningCommand)
+            ));
         });
 
         let lines = render_session(&mut app, &view, 80, 40);
@@ -1068,6 +1401,165 @@ fn long_running_command_keeps_input_hidden() {
     });
 }
 
+#[test]
+fn agent_controlled_alt_screen_keeps_output_and_composer_visible() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, _| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.simulate_long_running_block("vim", "");
+            let conversation_id = AIConversationId::new();
+            let task_id = TaskId::new("alt-screen-terminal-use".to_owned());
+            let block = terminal_model.block_list_mut().active_block_mut();
+            block.set_agent_interaction_mode_for_requested_command(
+                AIAgentActionId::from("alt-screen-command".to_owned()),
+                Some(task_id.clone()),
+                conversation_id,
+            );
+            block
+                .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+                .expect("command should become agent monitored");
+            terminal_model.set_mode(Mode::SwapScreen {
+                save_cursor_and_clear_screen: true,
+            });
+            for character in "ALT SCREEN".chars() {
+                terminal_model.alt_screen_mut().input(character);
+            }
+        });
+
+        assert!(view.read(&app, |view, _| {
+            view.input_target().agent_editor_owns_input()
+        }));
+        let lines = render_session(&mut app, &view, 80, 12);
+        let compact_output = lines
+            .iter()
+            .flat_map(|line| line.chars())
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(
+            compact_output.contains("ALTSCREEN"),
+            "alternate-screen output should remain visible:\n{}",
+            lines.join("\n")
+        );
+        let alt_screen_row = lines
+            .iter()
+            .position(|line| line.contains("ALT"))
+            .expect("alternate-screen output should start in the output area");
+        let input_row = lines
+            .iter()
+            .position(|line| line.contains('┌'))
+            .expect("agent-controlled alternate screen should render the composer");
+        assert!(
+            alt_screen_row < input_row,
+            "alternate-screen output should render above the composer:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("auto (cost-efficient)")),
+            "the normal agent footer should remain visible:\n{}",
+            lines.join("\n")
+        );
+    });
+}
+
+#[test]
+fn user_controlled_alt_screen_keeps_full_session_input_on_the_pty() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, _| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.simulate_long_running_block("vim", "");
+            terminal_model.set_mode(Mode::SwapScreen {
+                save_cursor_and_clear_screen: true,
+            });
+            for character in "USER ALT SCREEN".chars() {
+                terminal_model.alt_screen_mut().input(character);
+            }
+        });
+
+        assert!(view.read(&app, |view, _| view.input_target().pty_owns_input()));
+        let lines = render_session(&mut app, &view, 80, 12);
+        let compact_output = lines
+            .iter()
+            .flat_map(|line| line.chars())
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(
+            compact_output.contains("USERALTSCREEN"),
+            "alternate-screen output should render:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains('┌') || line.contains("auto (cost-efficient)")),
+            "user-controlled alternate screen should not reserve rows for agent input:\n{}",
+            lines.join("\n")
+        );
+    });
+}
+
+#[test]
+fn stale_user_pty_bytes_are_dropped_after_agent_takes_control_or_is_tagged_in() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let writes_for_events = writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiTerminalSessionEvent::WriteUserInput(bytes) = event {
+                    writes_for_events.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TuiTerminalSessionAction::ForwardUserPtyBytes(b"user".to_vec()),
+                ctx,
+            );
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.simulate_long_running_block("vim", "");
+            terminal_model
+                .block_list_mut()
+                .active_block_mut()
+                .set_is_agent_tagged_in(true);
+            drop(terminal_model);
+            view.handle_action(
+                &TuiTerminalSessionAction::ForwardUserPtyBytes(b"tagged".to_vec()),
+                ctx,
+            );
+            let mut terminal_model = view.terminal_model.lock();
+            let conversation_id = AIConversationId::new();
+            let task_id = TaskId::new("stale-pty-write".to_owned());
+            terminal_model
+                .block_list_mut()
+                .active_block_mut()
+                .set_agent_interaction_mode_for_requested_command(
+                    AIAgentActionId::from("stale-pty-command".to_owned()),
+                    Some(task_id.clone()),
+                    conversation_id,
+                );
+            terminal_model
+                .block_list_mut()
+                .active_block_mut()
+                .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+                .expect("command should become agent monitored");
+            drop(terminal_model);
+            view.handle_action(
+                &TuiTerminalSessionAction::ForwardUserPtyBytes(b"agent".to_vec()),
+                ctx,
+            );
+        });
+
+        assert_eq!(*writes.borrow(), vec![b"user".to_vec()]);
+    });
+}
 /// Visible startup-script execution also routes input to the PTY, but it is
 /// not a user-controlled command: the interrupt hint row must not appear.
 #[test]
@@ -1241,15 +1733,55 @@ fn zero_state_transitions_through_bootstrap_lifecycle() {
     });
 }
 
-fn render_footer_lines(
+fn render_footer(
     app: &mut App,
     view: &ViewHandle<super::TuiTerminalSessionView>,
     width: u16,
-) -> Vec<String> {
+) -> TuiBuffer {
     app.update(|ctx| {
         let footer = view.as_ref(ctx).render_footer(ctx).finish();
-        render_element(footer, ctx, width).to_lines()
+        render_element(footer, ctx, width)
     })
+}
+
+#[test]
+fn footer_renders_voice_listening_and_transcribing_states() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let expected_color = app.read(|ctx| {
+            TuiUiBuilder::from_app(ctx)
+                .voice_input_status_style()
+                .fg
+                .expect("voice input status should have a foreground color")
+        });
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
+            });
+        });
+        let listening_footer = render_footer(&mut app, &view, 80);
+        assert_eq!(
+            listening_footer.to_lines(),
+            vec!["listening to voice input... · esc or enter to stop"]
+        );
+        assert_eq!(listening_footer[(0, 0)].fg, expected_color);
+
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, ctx| {
+                voice.set_state_for_test(TuiVoiceInputState::Transcribing, ctx);
+            });
+        });
+        let transcribing_footer = render_footer(&mut app, &view, 80);
+        assert_eq!(
+            transcribing_footer.to_lines(),
+            vec!["Transcribing... · esc to cancel"]
+        );
+        assert_eq!(transcribing_footer[(0, 0)].fg, expected_color);
+    });
 }
 
 /// A replacing hint occupies the whole status row, so no section separators,
@@ -1569,6 +2101,56 @@ fn interrupt_event_projects_to_high_level_pty_intent() {
 }
 
 #[test]
+fn terminal_use_interrupt_closes_shortcuts_before_taking_control() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            let terminal_surface_id = ctx.view_id();
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(terminal_surface_id, false, false, false, ctx)
+                });
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("sleep 20", "running");
+            view.terminal_model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_agent_interaction_mode_for_agent_monitored_command(
+                    &TaskId::new("test-cli-subagent".to_owned()),
+                    conversation_id,
+                )
+                .expect("command should become agent monitored");
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
+
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+            let target = view
+                .cli_subagent_controller
+                .as_ref(ctx)
+                .active_target()
+                .expect("terminal use target should remain active");
+            assert!(matches!(
+                target.control_state,
+                LongRunningCommandControlState::User {
+                    reason: UserTakeOverReason::Stop {
+                        should_auto_resume: true
+                    }
+                }
+            ));
+        });
+    });
+}
+
+#[test]
 fn user_input_event_projects_to_raw_user_bytes() {
     let event = TuiTerminalSessionEvent::WriteUserInput(b"hello\r".to_vec().into());
     let Some(PtyIntent::WriteBytes(bytes)) = event.pty_intent() else {
@@ -1637,6 +2219,66 @@ fn auto_approve_uses_ctrl_shift_i() {
             session_context
                 .set
                 .insert(TuiTerminalSessionView::ui_name());
+            assert!(binding.in_context(&session_context));
+        });
+    });
+}
+
+#[test]
+fn blocked_terminal_use_action_acceptance_uses_ctrl_enter_without_rebinding_submit() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let accept = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME)
+                .expect("blocked terminal-use action acceptance binding");
+            assert_eq!(
+                *accept.trigger,
+                Trigger::Keystrokes(vec![Keystroke::parse("ctrl-enter").unwrap()])
+            );
+
+            let mut input_context = Context::default();
+            input_context.set.insert("TuiInputView");
+            assert!(!accept.in_context(&input_context));
+            input_context
+                .set
+                .insert(SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG);
+            assert!(accept.in_context(&input_context));
+
+            let submit = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == "tui:input:submit")
+                .expect("input submit binding");
+            assert_eq!(
+                *submit.trigger,
+                Trigger::Keystrokes(vec![Keystroke::parse("enter").unwrap()])
+            );
+            assert!(submit.in_context(&input_context));
+        });
+    });
+}
+#[test]
+fn voice_input_uses_ctrl_s_only_when_the_composer_owns_input() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let binding = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == VOICE_INPUT_BINDING_NAME)
+                .expect("voice-input binding");
+            assert_eq!(
+                *binding.trigger,
+                Trigger::Keystrokes(vec![Keystroke::parse("ctrl-s").unwrap()])
+            );
+
+            let mut session_context = Context::default();
+            session_context
+                .set
+                .insert(TuiTerminalSessionView::ui_name());
+            assert!(!binding.in_context(&session_context));
+
+            session_context.set.insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
             assert!(binding.in_context(&session_context));
         });
     });

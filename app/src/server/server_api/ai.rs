@@ -950,6 +950,9 @@ pub struct CreateAgentRequest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional base prompt for this agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretRef>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -961,12 +964,21 @@ pub struct CreateAgentRequest {
 }
 
 /// JSON payload sent to `PUT /agent/identities/{uid}`.
+///
+/// Each field uses the public API's PATCH semantics: `None` omits the field
+/// (leave unchanged), while `Some(String::new())` sends an empty value to clear
+/// it. See `CreateAgentRequest`/`UpdateAgentRequest` in
+/// `warp-server/public_api/openapi.yaml`.
 #[derive(Clone, Default, serde::Serialize, Debug, PartialEq, Eq)]
 pub struct UpdateAgentRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Replacement prompt. `None` leaves it unchanged; `Some(String::new())`
+    /// clears it via the public API's PATCH clear-via-empty semantics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<SecretRef>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -983,6 +995,9 @@ pub struct AgentResponse {
     pub uid: String,
     pub name: String,
     pub description: Option<String>,
+    /// Optional base prompt for this agent.
+    #[serde(default)]
+    pub prompt: Option<String>,
     pub available: bool,
     pub created_at: DateTime<Utc>,
     pub secrets: Vec<SecretRef>,

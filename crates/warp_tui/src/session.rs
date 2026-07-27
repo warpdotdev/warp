@@ -7,8 +7,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use clap::error::ErrorKind;
+use warp::settings::TuiThemeSettings;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
+use warp_core::channel::ChannelState;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -22,7 +24,9 @@ use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
-use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiConversationRestoreTarget};
+use crate::terminal_session_view::{
+    TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
+};
 
 /// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
 /// local cargo builds fall back to a numeric placeholder.
@@ -86,7 +90,8 @@ pub fn run() -> Result<()> {
     {
         let token = token.as_str();
         println!("To continue this conversation, run:");
-        println!("warp --resume {token}");
+        let command = tui_resume_shell_command(ChannelState::channel(), token);
+        println!("{command}");
     }
     result
 }
@@ -108,10 +113,12 @@ fn init(
     crate::autoupdate::TuiAutoupdater::register(ctx);
     crate::zero_state_animation::ZeroStateAnimationConfig::register(ctx);
 
-    // Theme the transcript to match the host terminal. Keep this scoped to
-    // the TUI process by overriding the already-initialized Appearance theme at
-    // mount time, without changing normal GUI theme selection or font settings.
-    let theme = probe_and_select_theme();
+    // Honor an explicit TUI theme or match the host terminal automatically.
+    // Keep this scoped to the TUI process by overriding the already-initialized
+    // Appearance theme at mount time, without changing normal GUI theme
+    // selection or font settings.
+    let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
+    let theme = probe_and_select_theme(selected_theme);
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
         appearance.set_theme(theme, ctx);
     });

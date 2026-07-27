@@ -467,7 +467,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-tui = ["warpui_core/tui"]
+tui = ["warpui_core/tui", "voice_input"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []

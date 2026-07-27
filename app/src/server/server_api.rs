@@ -347,7 +347,10 @@ impl AIApiError {
 impl ErrorExt for AIApiError {
     fn is_actionable(&self) -> bool {
         match self {
-            AIApiError::Deserialization(_) => true,
+            AIApiError::Deserialization(error) => match error {
+                DeserializationError::Json(_) => true,
+                DeserializationError::Transport(error) => error.is_actionable(),
+            },
             AIApiError::Transport(error) => error.is_actionable(),
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),

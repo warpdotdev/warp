@@ -66,6 +66,22 @@ fn command_registry_filters_explicit_surface_metadata() {
         }
     ));
 }
+
+#[test]
+fn voice_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command == &VOICE)
+    );
+    assert!(
+        !all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .any(|command| command == &VOICE)
+    );
+    assert!(VOICE.argument.is_none());
+    assert_eq!(VOICE.description, "Start voice input (Ctrl-S)");
+}
 #[test]
 fn view_logs_command_is_registered_only_for_tui_mode() {
     assert!(
@@ -307,4 +323,28 @@ fn natural_language_detection_command_is_ai_enabled_and_executes_immediately() {
     assert_eq!(command.availability, Availability::AI_ENABLED);
     assert!(!command.auto_enter_ai_mode);
     assert!(command.argument.is_none());
+}
+
+#[test]
+fn theme_command_is_registered_only_for_tui_mode() {
+    let tui_commands = all_commands(settings::SettingsMode::Tui);
+    let command = tui_commands
+        .iter()
+        .find(|command| command.kind == SlashCommandKind::Theme)
+        .expect("expected /theme to be registered in TUI mode");
+
+    assert_eq!(command, &THEME);
+    assert_eq!(command.availability, Availability::ALWAYS);
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /theme to require an argument");
+    assert!(!argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(argument.hint_text, Some("<auto|light|dark>"));
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Theme)
+    );
 }

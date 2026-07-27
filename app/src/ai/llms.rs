@@ -171,6 +171,7 @@ pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
 /// but was migrated to store a full [`ModelsByFeature`].
 pub const MODELS_BY_FEATURE_CACHE_KEY: &str = "AvailableLLMs";
 const CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL: &str = "Custom endpoint";
+const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LLMUsageMetadata {
@@ -1098,6 +1099,16 @@ impl LLMPreferences {
     pub fn is_cloud_runnable_oz_model_id(&self, id: &LLMId) -> bool {
         !(self.custom_llm_info_for_id(id).is_some()
             || custom_model_routers::is_local_custom_router_id(id.as_str()))
+    }
+
+    /// Returns a cloud-runnable Oz model id, falling back to server-side
+    /// automatic model selection when the requested model is local-only.
+    pub(crate) fn cloud_runnable_oz_model_id_or_fallback(&self, id: &LLMId) -> String {
+        if self.is_cloud_runnable_oz_model_id(id) {
+            id.to_string()
+        } else {
+            CLOUD_FALLBACK_OZ_MODEL_ID.to_owned()
+        }
     }
 
     /// True when the pane's active Agent Mode model can run in a Warp cloud

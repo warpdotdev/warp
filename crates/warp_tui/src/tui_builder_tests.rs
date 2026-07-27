@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use pathfinder_color::ColorU;
 use warp::tui_export::light_theme;
 use warp_core::ui::color::blend::Blend;
@@ -56,6 +58,10 @@ fn text_styles_follow_light_theme_foreground() {
             .blend(&shell_command_fill.with_opacity(10)),
     )
     .into();
+    let shortcut_accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
+    let shortcuts_background: Color =
+        CoreFill::from(theme.background().blend(&shortcut_accent.with_opacity(10))).into();
+    assert_eq!(builder.shortcuts_background(), shortcuts_background);
     assert_eq!(builder.shell_command_background(), shell_command_background);
     let shell_command_prefix_style = builder.shell_command_prefix_style();
     assert_eq!(
@@ -100,5 +106,33 @@ fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
             ColorU::new(180, 250, 114, u8::MAX),
         ),
         ColorU::new(93, 128, 60, u8::MAX)
+    );
+}
+
+#[test]
+fn voice_input_border_pulses_between_cyan_overlay_2_and_lilac_600() {
+    let theme = light_theme();
+    let builder = TuiUiBuilder {
+        warp_theme: theme.clone(),
+    };
+    let cyan_fill = ThemeFill::from(theme.terminal_colors().normal.cyan);
+    let cyan: Color = CoreFill::from(cyan_fill).into();
+    let lilac_600: Color =
+        CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.magenta)).into();
+    let cyan_overlay_2: Color =
+        CoreFill::from(theme.background().blend(&cyan_fill.with_opacity(50))).into();
+
+    assert_eq!(builder.voice_input_status_style().fg, Some(cyan));
+    assert_eq!(
+        builder.voice_input_border_style(Duration::ZERO).fg,
+        Some(cyan_overlay_2)
+    );
+    assert_eq!(
+        builder.voice_input_border_style(Duration::from_secs(1)).fg,
+        Some(lilac_600)
+    );
+    assert_eq!(
+        builder.voice_input_border_style(Duration::from_secs(2)).fg,
+        Some(cyan_overlay_2)
     );
 }

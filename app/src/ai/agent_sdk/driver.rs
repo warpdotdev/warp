@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
@@ -32,7 +32,7 @@ use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::r#async::{FutureExt, TimeoutError};
+use warpui::r#async::{FutureExt, TimeoutError, Timer};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -299,6 +299,9 @@ pub struct AgentDriverOptions {
     pub cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
     /// Resolved environment configuration, if any.
     pub environment: Option<AmbientAgentEnvironment>,
+    /// Additional per-task repositories supplied by the server, such as a webhook's
+    /// originating repository. Empty for local runs.
+    pub additional_source_repos: Vec<SourceRepo>,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
@@ -366,6 +369,8 @@ pub struct AgentDriver {
 
     /// Resolved environment configuration.
     environment: Option<AmbientAgentEnvironment>,
+    /// Additional per-task repositories supplied by the server.
+    additional_source_repos: Vec<SourceRepo>,
 
     // End-of-run snapshot upload controls.
     snapshot_disabled: bool,
@@ -531,6 +536,8 @@ pub enum AgentDriverError {
     PromptResolutionFailed(#[source] anyhow::Error),
     #[error("Failed to fetch task secrets")]
     SecretsFetchFailed(#[source] anyhow::Error),
+    #[error("Failed to fetch task metadata")]
+    TaskMetadataFetchFailed(#[source] anyhow::Error),
     #[error("Failed to load conversation: {0}")]
     ConversationLoadFailed(String),
     #[error("Failed to initialize AWS Bedrock credentials: {0}")]
@@ -637,6 +644,7 @@ impl AgentDriver {
             resume,
             cloud_providers,
             environment,
+            additional_source_repos,
             selected_harness,
             third_party_harness_model_config,
             snapshot_disabled,
@@ -763,6 +771,7 @@ impl AgentDriver {
             resume_payload,
             cloud_providers,
             environment,
+            additional_source_repos,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
@@ -807,6 +816,7 @@ impl AgentDriver {
             resume_payload: None,
             cloud_providers: Vec::new(),
             environment: None,
+            additional_source_repos: Vec::new(),
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
@@ -879,9 +889,9 @@ impl AgentDriver {
                         )
                         .await
                         .context("Failed to update agent task state to InProgress")
-                    {
-                        report_error!(e);
-                    }
+                {
+                    report_error!(e);
+                }
                 // Primary: WARP_SANDBOX_DEADLINE client-side timer.
                 //
                 // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
@@ -905,9 +915,6 @@ impl AgentDriver {
                 // When WARP_SANDBOX_DEADLINE is absent and no SIGTERM arrives, run_internal
                 // runs to completion as before (local and self-hosted runs are unaffected).
                 let result = {
-                    use std::time::SystemTime;
-                    use warpui::r#async::Timer;
-
                     /// How far before the sandbox deadline to start the teardown sequence.
                     const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
 
@@ -1017,7 +1024,7 @@ impl AgentDriver {
                         me.run_conversation_id.and_then(|conversation_id| {
                             finalize_recording_for_conversation(
                                 conversation_id,
-                                FinalizeReason::AgentFinished,
+                                FinalizeReason::RunEnded,
                                 true,
                                 ctx,
                             )
@@ -1025,9 +1032,10 @@ impl AgentDriver {
                     })
                     .await
                 {
-                    let finalization_result = finalization.resolve().await;
+                    let (finalization_result, actual_reason) = finalization.resolve().await;
                     log::info!(
-                        "Recording finalization completed before agent driver exit: {finalization_result:?}"
+                        "Recording finalization completed before agent driver exit \
+                         (reason={actual_reason:?}): {finalization_result:?}"
                     );
                 }
                 Self::run_snapshot_upload(&foreground).await;
@@ -2265,11 +2273,24 @@ impl AgentDriver {
         let mut environment_skill_repos = Vec::new();
 
         let environment_opt = foreground.spawn(|me, _| me.environment.clone()).await?;
+        let additional_source_repos = foreground
+            .spawn(|me, _| me.additional_source_repos.clone())
+            .await?;
+        let setup_commands = environment_opt
+            .as_ref()
+            .map(|environment| environment.setup_commands.clone())
+            .unwrap_or_default();
+        let source_repos = environment::merge_repos_deduped(
+            environment_opt
+                .as_ref()
+                .map(AmbientAgentEnvironment::effective_repos)
+                .unwrap_or_default(),
+            additional_source_repos,
+        )?;
 
-        if let Some(environment) = environment_opt {
+        if environment_opt.is_some() || !source_repos.is_empty() {
             log::info!("Loading environment...");
-            let environment_source_repos = environment.effective_repos();
-            environment_skill_repos = environment_source_repos.clone();
+            environment_skill_repos = source_repos.clone();
 
             // Subscribe to file-based MCP discovery BEFORE prepare_environment triggers the
             // pipeline so no CloudEnvMcpScanComplete events are missed.
@@ -2278,7 +2299,7 @@ impl AgentDriver {
             // TODO(REMOTE-1345): handle MCP setup for third-party harnesses.
             let file_based_discovery_rx = match &task.harness {
                 HarnessKind::Oz => {
-                    let source_repos = environment_source_repos.clone();
+                    let source_repos = source_repos.clone();
                     Some(
                         foreground
                             .spawn(move |me, ctx| {
@@ -2296,12 +2317,14 @@ impl AgentDriver {
 
             let harness = task.harness.harness();
             let setup_events_for_environment = setup_events.clone();
+            let source_repos_for_prepare = source_repos;
             foreground
                 .spawn(move |me, ctx| {
                     let working_dir = me.working_dir.clone();
                     me.terminal_driver.update(ctx, |_, ctx| {
                         environment::prepare_environment(
-                            environment,
+                            source_repos_for_prepare,
+                            setup_commands,
                             working_dir,
                             false, /* is_sandbox */
                             harness,
