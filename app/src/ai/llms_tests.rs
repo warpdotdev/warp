@@ -4,7 +4,6 @@ use std::rc::Rc;
 use warpui::App;
 
 use super::*;
-use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
@@ -18,6 +17,7 @@ use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{LaunchMode, TuiEntryPoint};
 
 // -- DisableReason::should_clear_preference tests --
 
@@ -932,8 +932,10 @@ fn updating_active_profile_base_model_persists_and_updates_resolution() {
         let profiles = app.add_singleton_model(|ctx| {
             AIExecutionProfilesModel::new(
                 &LaunchMode::Tui {
-                    mount: Box::new(|_| {}),
-                    api_key: None,
+                    entrypoint: TuiEntryPoint::Interactive {
+                        mount: Box::new(|_| {}),
+                        api_key: None,
+                    },
                 },
                 ctx,
             )

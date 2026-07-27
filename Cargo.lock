@@ -16014,6 +16014,7 @@ dependencies = [
  "futures",
  "futures-lite 1.13.0",
  "http_client",
+ "inquire",
  "instant",
  "itertools 0.14.0",
  "log",

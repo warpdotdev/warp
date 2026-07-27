@@ -54,6 +54,8 @@ pub enum SlashCommandKind {
     Agent,
     CloudAgent,
     AddMcp,
+    AddApiKey,
+    ClearApiKey,
     AutoApprove,
     Statusline,
     Mcp,

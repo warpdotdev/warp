@@ -27,6 +27,7 @@ fn model(ctx: &mut AppContext, text: &str) -> ModelHandle<CodeEditorModel> {
         model
     })
 }
+
 #[test]
 fn selection_span_uses_grapheme_width() {
     App::test((), |mut app| async move {

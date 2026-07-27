@@ -968,8 +968,8 @@ impl TuiInputView {
 
     // ── Submit ────────────────────────────────────────────────────────────────
 
-    /// Emits [`TuiInputViewEvent::Submitted`] without clearing the buffer; the
-    /// owner decides whether the submission is accepted and calls [`Self::clear`].
+    /// Emits the submission event without clearing the buffer; the owner
+    /// decides whether the submission is accepted.
     fn submit(&mut self, ctx: &mut ViewContext<Self>) {
         let text = self.plain_text(ctx);
         ctx.emit(TuiInputViewEvent::Submitted(text));
@@ -1057,9 +1057,7 @@ impl TuiInputView {
         true
     }
 
-    /// Handles the input's contextual Escape behavior in explicit priority
-    /// order. New input modes should be added after the inline-menu branch so
-    /// one Escape always closes the most local surface first.
+    /// Handles the input's contextual Escape behavior in explicit priority order.
     fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         if self.close_shortcuts(ctx) {
             return true;

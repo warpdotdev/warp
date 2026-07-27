@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use ai::LLMProvider;
 use chrono::NaiveDate;
 use instant::Instant;
 use tempfile::TempDir;
@@ -19,6 +20,7 @@ use warp::tui_export::{
     UserTakeOverReason, export_conversation_markdown, register_tui_session_view_test_singletons,
     slash_commands,
 };
+use warp_core::channel::Channel;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -371,6 +373,62 @@ fn log_bundle_success_message_includes_the_absolute_path() {
     assert_eq!(
         log_bundle_success_message(path),
         "Log bundle saved to /tmp/warp-20260718-132640.zip"
+    );
+}
+
+#[test]
+fn tui_cli_shell_command_uses_channel_entry_points() {
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Local, "--version"),
+        "./script/run-tui -- --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Stable, "--version"),
+        "warp --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Dev, "--version"),
+        "warp-dev --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Preview, "--version"),
+        "warp-preview --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Oss, "--version"),
+        "warp-oss --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Integration, "--version"),
+        "warp-integration --version"
+    );
+}
+
+#[test]
+fn provider_api_key_shell_command_uses_shared_tui_launcher() {
+    assert_eq!(
+        super::provider_api_key_shell_command(
+            Channel::Local,
+            LLMProvider::Anthropic,
+            super::ProviderApiKeyOperation::Set,
+        ),
+        Some("./script/run-tui -- --set-provider-api-key anthropic".to_owned())
+    );
+    assert_eq!(
+        super::provider_api_key_shell_command(
+            Channel::Local,
+            LLMProvider::Anthropic,
+            super::ProviderApiKeyOperation::Clear,
+        ),
+        Some("./script/run-tui -- --clear-provider-api-key anthropic".to_owned())
+    );
+    assert_eq!(
+        super::provider_api_key_shell_command(
+            Channel::Stable,
+            LLMProvider::Unknown,
+            super::ProviderApiKeyOperation::Set,
+        ),
+        None
     );
 }
 
@@ -3200,9 +3258,7 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
 }
 
 #[test]
-fn version_shell_command_uses_channel_cli_names() {
-    use warp_core::channel::Channel;
-
+fn version_and_resume_shell_commands_use_shared_tui_launcher() {
     assert_eq!(
         super::version_shell_command(Channel::Stable),
         "warp --version"
@@ -3213,7 +3269,7 @@ fn version_shell_command_uses_channel_cli_names() {
     );
     assert_eq!(
         super::version_shell_command(Channel::Local),
-        "warp-dev --version"
+        "./script/run-tui -- --version"
     );
     assert_eq!(
         super::version_shell_command(Channel::Preview),
@@ -3226,5 +3282,13 @@ fn version_shell_command_uses_channel_cli_names() {
     assert_eq!(
         super::version_shell_command(Channel::Integration),
         "warp-integration --version"
+    );
+    assert_eq!(
+        super::tui_resume_shell_command(Channel::Local, "conversation-token"),
+        "./script/run-tui -- --resume conversation-token"
+    );
+    assert_eq!(
+        super::tui_resume_shell_command(Channel::Preview, "conversation-token"),
+        "warp-preview --resume conversation-token"
     );
 }

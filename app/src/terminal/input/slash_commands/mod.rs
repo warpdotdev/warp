@@ -1256,6 +1256,8 @@ impl Input {
             }
             SlashCommandKind::AutoApprove
             | SlashCommandKind::Statusline
+            | SlashCommandKind::AddApiKey
+            | SlashCommandKind::ClearApiKey
             | SlashCommandKind::ViewLogs
             | SlashCommandKind::Voice
             | SlashCommandKind::NaturalLanguageDetection

@@ -97,6 +97,57 @@ fn view_logs_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
+fn add_api_key_command_is_tui_only_and_requires_a_provider() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::AddApiKey)
+        .expect("expected /add-api-key to be registered in TUI mode");
+    assert_eq!(command, ADD_API_KEY);
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(command.availability, Availability::AI_ENABLED);
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /add-api-key to require a provider");
+    assert!(!argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(
+        argument.hint_text,
+        Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME)
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::AddApiKey)
+    );
+}
+
+#[test]
+fn clear_api_key_command_is_tui_only_and_requires_a_provider() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::ClearApiKey)
+        .expect("expected /clear-provider-api-key to be registered in TUI mode");
+    assert_eq!(command, CLEAR_API_KEY);
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(command.availability, Availability::AI_ENABLED);
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /clear-provider-api-key to require a provider");
+    assert!(!argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(
+        argument.hint_text,
+        Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME)
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::ClearApiKey)
+    );
+}
+#[test]
 fn auto_approve_command_is_local_agent_action_without_arguments() {
     let tui_commands = all_commands(settings::SettingsMode::Tui);
     let command = tui_commands

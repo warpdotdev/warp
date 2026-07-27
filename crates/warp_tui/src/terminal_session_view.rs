@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::LLMProvider;
 use async_channel::Sender;
 use chrono::{Local, NaiveDateTime};
 use instant::Instant;
@@ -316,30 +317,53 @@ fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
 }
 
-/// User-facing CLI binary name for the current channel.
+/// Shell command that invokes the TUI for the current build channel.
 ///
-/// Installed builds expose `warp`, `warp-dev`, `warp-preview`, etc. Local cargo
-/// builds don't ship a versioned `warp` binary on PATH, so they intentionally
-/// target `warp-dev` (the dogfood channel name).
-pub(crate) fn tui_cli_binary_name(channel: Channel) -> &'static str {
-    match channel {
+/// Local builds run through the repository script so they select and build the
+/// local TUI binary; installed builds invoke their channel-specific executable.
+fn tui_cli_shell_command(channel: Channel, arguments: &str) -> String {
+    let launcher = match channel {
+        Channel::Local => "./script/run-tui --",
         Channel::Stable => "warp",
-        Channel::Dev | Channel::Local => "warp-dev",
+        Channel::Dev => "warp-dev",
         Channel::Preview => "warp-preview",
         Channel::Oss => "warp-oss",
         Channel::Integration => "warp-integration",
-    }
+    };
+    format!("{launcher} {arguments}")
 }
 
 /// Shell command used by the exit hint to resume a server conversation.
 pub(crate) fn tui_resume_shell_command(channel: Channel, token: &str) -> String {
-    format!("{} --resume {token}", tui_cli_binary_name(channel))
+    tui_cli_shell_command(channel, &format!("--resume {token}"))
 }
 
 /// Shell command used by `/version` to print the binary version as a normal
 /// transcript block.
 fn version_shell_command(channel: Channel) -> String {
-    format!("{} --version", tui_cli_binary_name(channel))
+    tui_cli_shell_command(channel, "--version")
+}
+
+#[derive(Clone, Copy)]
+enum ProviderApiKeyOperation {
+    Set,
+    Clear,
+}
+
+fn provider_api_key_shell_command(
+    channel: Channel,
+    provider: LLMProvider,
+    operation: ProviderApiKeyOperation,
+) -> Option<String> {
+    let provider = provider.api_key_slug()?;
+    let flag = match operation {
+        ProviderApiKeyOperation::Set => "--set-provider-api-key",
+        ProviderApiKeyOperation::Clear => "--clear-provider-api-key",
+    };
+    Some(tui_cli_shell_command(
+        channel,
+        &format!("{flag} {provider}"),
+    ))
 }
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
@@ -3146,6 +3170,45 @@ impl TuiTerminalSessionView {
         input_mode_policy::is_shell_mode(self.ai_input_model.as_ref(ctx))
     }
 
+    fn execute_provider_api_key_command(
+        &mut self,
+        command: &StaticCommand,
+        argument: Option<&String>,
+        operation: ProviderApiKeyOperation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let provider = argument
+            .map(String::as_str)
+            .ok_or_else(|| "provider is required".to_owned())
+            .and_then(LLMProvider::from_api_key_slug);
+        let Ok(provider) = provider else {
+            self.show_error_hint(
+                format!(
+                    "Usage: {} <{}>",
+                    command.name,
+                    LLMProvider::API_KEY_PROVIDER_VALUE_NAME
+                ),
+                ctx,
+            );
+            return;
+        };
+        let Some(command_text) =
+            provider_api_key_shell_command(ChannelState::channel(), provider, operation)
+        else {
+            self.show_error_hint(
+                format!(
+                    "Usage: {} <{}>",
+                    command.name,
+                    LLMProvider::API_KEY_PROVIDER_VALUE_NAME
+                ),
+                ctx,
+            );
+            return;
+        };
+        self.execute_user_command(&command_text, ctx);
+        record_static_slash_command_accepted(command.name, true, ctx);
+    }
+
     /// Routes a submission to shell execution or the agent conversation based
     /// on the input mode.
     fn handle_submitted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
@@ -3599,6 +3662,22 @@ impl TuiTerminalSessionView {
             }
             SlashCommandKind::Statusline => {
                 self.open_statusline_config(command.name, ctx);
+            }
+            SlashCommandKind::AddApiKey => {
+                self.execute_provider_api_key_command(
+                    command,
+                    argument,
+                    ProviderApiKeyOperation::Set,
+                    ctx,
+                );
+            }
+            SlashCommandKind::ClearApiKey => {
+                self.execute_provider_api_key_command(
+                    command,
+                    argument,
+                    ProviderApiKeyOperation::Clear,
+                    ctx,
+                );
             }
             SlashCommandKind::Cost => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));

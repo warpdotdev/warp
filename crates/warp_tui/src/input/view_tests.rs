@@ -506,6 +506,7 @@ fn agent_mode_placeholder_hint_renders_only_while_empty() {
         });
     });
 }
+
 #[test]
 fn orchestration_hint_is_ghosted_only_while_tabs_are_available_and_input_is_empty() {
     App::test((), |mut app| async move {
