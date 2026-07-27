@@ -520,7 +520,9 @@ impl MCPProvider {
             MCPProvider::Warp => Icon::Warp,
             MCPProvider::Claude => Icon::ClaudeLogo,
             MCPProvider::Codex => Icon::OpenAILogo,
-            MCPProvider::Agents => Icon::Warp,
+            // MCPProvider::Agents represents other (non-Warp, non-CLI-agent) agent
+            // MCP integrations; use the dedicated agent-brand variant.
+            MCPProvider::Agents => Icon::Agent,
         }
     }
 

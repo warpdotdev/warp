@@ -289,9 +289,13 @@ pub enum Icon {
     NLD,
     Oz,
     OzCloud,
-    /// Warp agent brand glyph (white "W" logo on black circle for local runs).
-    /// Distinct from `Warp` (which is the generic Warp mark also used for Drive)
-    /// so that agent surfaces and non-agent Warp surfaces share no enum variant.
+    /// The Warp "W" glyph used as the agent brand mark (sourced from
+    /// `bundled/svg/warp-drive.svg`). The background and tint color are
+    /// the **call site's responsibility** — this variant carries the shape
+    /// only. Some surfaces render it as a white glyph on a black circle
+    /// (`OZ_LOCAL_BACKGROUND_COLOR`); others tint it with the surrounding
+    /// theme color. Kept distinct from `Warp` so agent surfaces and
+    /// non-agent Warp UI (e.g. `QueryFilter::Drive`) can evolve independently.
     Agent,
     Conversation,
     Prompt,
