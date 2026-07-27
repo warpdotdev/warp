@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Local;
+use pathfinder_color::ColorU;
 use smol_str::SmolStr;
 use warp_editor::render::model::LineCount;
 use warp_util::path::EscapeChar;
@@ -20,6 +21,7 @@ use crate::code_review::comments::{
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::ui_components::icons::Icon;
 use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
@@ -640,8 +642,9 @@ fn test_warp_tui_variant_properties() {
         ]
     );
     assert_eq!(CLIAgent::WarpTui.display_name(), "Warp TUI");
-    assert_eq!(CLIAgent::WarpTui.brand_color(), None);
-    assert_eq!(CLIAgent::WarpTui.icon(), None);
+    assert_eq!(CLIAgent::WarpTui.brand_color(), Some(ColorU::black()));
+    assert_eq!(CLIAgent::WarpTui.icon(), Some(Icon::Warp));
+    assert_eq!(CLIAgent::WarpTui.brand_icon_color(), ColorU::white());
     assert!(CLIAgent::WarpTui.supported_skill_providers().is_empty());
     assert!(!CLIAgent::WarpTui.supports_bash_mode());
     assert!(!CLIAgent::WarpTui.supports_cli_agent_footer());

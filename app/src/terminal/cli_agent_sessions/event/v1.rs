@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use warp_core::cli_agent_protocol::CLIAgentNotification;
 
 use super::{CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType};
 use crate::terminal::CLIAgent;
@@ -10,7 +10,7 @@ fn resolve_agent(agent: &str) -> Option<CLIAgent> {
 }
 
 pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
-    let raw: RawEvent = serde_json::from_str(body).ok()?;
+    let raw: CLIAgentNotification = serde_json::from_str(body).ok()?;
 
     let event = match raw.event.as_str() {
         "session_start" => CLIAgentEventType::SessionStart,
@@ -57,22 +57,4 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
         },
         source: CLIAgentEventSource::RichPlugin,
     })
-}
-
-#[derive(Deserialize)]
-struct RawEvent {
-    v: Option<u32>,
-    agent: Option<String>,
-    event: String,
-    session_id: Option<String>,
-    cwd: Option<String>,
-    project: Option<String>,
-    query: Option<String>,
-    response: Option<String>,
-    transcript_path: Option<String>,
-    summary: Option<String>,
-    tool_name: Option<String>,
-    tool_input: Option<serde_json::Value>,
-    plugin_version: Option<String>,
-    error_type: Option<String>,
 }

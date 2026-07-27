@@ -68,6 +68,7 @@ use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
     TuiAttachmentPasteDisposition,
 };
+use crate::cli_agent_osc_event_publisher::TuiCliAgentOscEventPublisher;
 use crate::clipboard::copy_to_clipboard;
 use crate::completion_menu::TuiCompletionMenuModel;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
@@ -770,6 +771,7 @@ pub(crate) struct TuiTerminalSessionView {
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
+    cli_agent_osc_event_publisher: ModelHandle<TuiCliAgentOscEventPublisher>,
     ai_controller: ModelHandle<BlocklistAIController>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     cli_subagent_views: HashMap<BlockId, ViewHandle<TuiCLISubagentView>>,
@@ -1488,6 +1490,16 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
+
+        let cli_agent_osc_event_publisher = ctx.add_model(|ctx| {
+            TuiCliAgentOscEventPublisher::new(
+                terminal_surface_id,
+                active_session.clone(),
+                conversation_selection.clone(),
+                &action_model,
+                ctx,
+            )
+        });
         let start_agent_executor = action_model.as_ref(ctx).start_agent_executor(ctx);
         ctx.subscribe_to_model(&start_agent_executor, |view, _, event, ctx| match event {
             StartAgentExecutorEvent::CreateAgent(request) => {
@@ -1539,15 +1551,29 @@ impl TuiTerminalSessionView {
         });
         // Only action lifecycle transitions can change the blocking input
         // owner. Presentation updates stay within the focused blocker.
-        ctx.subscribe_to_model(&action_model, |view, _, event, ctx| match event {
-            BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
-            | BlocklistAIActionEvent::ExecutingAction(_)
-            | BlocklistAIActionEvent::FinishedAction { .. } => view.refresh_input_focus(ctx),
-            BlocklistAIActionEvent::QueuedAction(_)
-            | BlocklistAIActionEvent::InitProject(_)
-            | BlocklistAIActionEvent::ToggleCodeReview(_)
-            | BlocklistAIActionEvent::InsertCodeReviewComments { .. } => {}
-        });
+        ctx.subscribe_to_model(
+            &action_model,
+            |view, action_model, event, ctx| match event {
+                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                | BlocklistAIActionEvent::ExecutingAction(_) => view.refresh_input_focus(ctx),
+                BlocklistAIActionEvent::FinishedAction { action_id, .. } => {
+                    view.refresh_input_focus(ctx);
+                    let finished_asking_question = action_model
+                        .as_ref(ctx)
+                        .get_action_result(action_id)
+                        .is_some_and(|result| {
+                            matches!(&result.result, AIAgentActionResultType::AskUserQuestion(_))
+                        });
+                    if finished_asking_question {
+                        ctx.focus(&view.input_view);
+                    }
+                }
+                BlocklistAIActionEvent::QueuedAction(_)
+                | BlocklistAIActionEvent::InitProject(_)
+                | BlocklistAIActionEvent::ToggleCodeReview(_)
+                | BlocklistAIActionEvent::InsertCodeReviewComments { .. } => {}
+            },
+        );
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
@@ -1815,20 +1841,6 @@ impl TuiTerminalSessionView {
                 view.focus_orchestration_tabs(ctx);
             }
         });
-        ctx.subscribe_to_model(&action_model, |view, action_model, event, ctx| {
-            let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event else {
-                return;
-            };
-            let finished_asking_question = action_model
-                .as_ref(ctx)
-                .get_action_result(action_id)
-                .is_some_and(|result| {
-                    matches!(&result.result, AIAgentActionResultType::AskUserQuestion(_))
-                });
-            if finished_asking_question {
-                ctx.focus(&view.input_view);
-            }
-        });
         ctx.subscribe_to_view(&orchestration_tab_bar, |view, _, event, ctx| match event {
             TuiTabBarEvent::SelectTab(conversation_id) => {
                 view.switch_to_orchestration_tab(
@@ -2043,6 +2055,9 @@ impl TuiTerminalSessionView {
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
         let zero_state_view =
             ctx.add_tui_view(|ctx| TuiZeroStateView::new(active_session.clone(), ctx));
+        cli_agent_osc_event_publisher
+            .as_ref(ctx)
+            .publish_session_start(ctx);
         let mut view = Self {
             transcript,
             input_view,
@@ -2059,6 +2074,7 @@ impl TuiTerminalSessionView {
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
+            cli_agent_osc_event_publisher,
             ai_controller,
             cli_subagent_controller,
             cli_subagent_views: HashMap::new(),
@@ -3740,6 +3756,11 @@ impl TuiTerminalSessionView {
         let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
             controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
         });
+        if dispatched {
+            self.cli_agent_osc_event_publisher
+                .as_ref(ctx)
+                .publish_prompt_submit(prompt.clone(), ctx);
+        }
         if dispatched && let Some(block_id) = active_long_running_block_id {
             self.cli_subagent_controller.update(ctx, |controller, ctx| {
                 controller.set_latest_instruction(block_id, prompt, ctx);

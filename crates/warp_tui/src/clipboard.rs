@@ -15,9 +15,7 @@ use std::io::{self, Write};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-
-const ESC: char = '\x1b';
-const BEL: char = '\x07';
+use warp_terminal::model::escape_sequences::{C0, C1, tmux_passthrough};
 
 /// Copies `text` to the clipboard, selecting the transport from the environment.
 ///
@@ -104,7 +102,9 @@ fn osc52_sequences(text: &str, in_tmux: bool) -> String {
     ["c", "p"]
         .into_iter()
         .map(|target| {
-            let sequence = format!("{ESC}]52;{target};{payload}{BEL}");
+            let osc = C1::to_utf8(C1::OSC);
+            let bell = char::from(C0::BEL);
+            let sequence = format!("{osc}52;{target};{payload}{bell}");
             if in_tmux {
                 tmux_passthrough(&sequence)
             } else {
@@ -112,12 +112,6 @@ fn osc52_sequences(text: &str, in_tmux: bool) -> String {
             }
         })
         .collect()
-}
-
-/// Wraps an escape sequence in tmux DCS passthrough, doubling inner escapes.
-fn tmux_passthrough(sequence: &str) -> String {
-    let escaped = sequence.replace(ESC, "\x1b\x1b");
-    format!("{ESC}Ptmux;{escaped}{ESC}\\")
 }
 
 #[cfg(test)]
