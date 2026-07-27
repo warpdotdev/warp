@@ -703,6 +703,11 @@ impl QueuedPromptsPanelView {
             editor.set_buffer_text(text, ctx);
         });
     }
+
+    /// Test accessor for building a responder chain down to the queued-prompt editor.
+    pub(crate) fn edit_editor_for_test(&self) -> &ViewHandle<EditorView> {
+        &self.edit_editor
+    }
 }
 
 impl TypedActionView for QueuedPromptsPanelView {

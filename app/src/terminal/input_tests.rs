@@ -8246,6 +8246,149 @@ fn test_custom_terminal_page_scroll_binding_applies_when_prompt_is_focused() {
     });
 }
 
+/// While editing a queued prompt, `shift-?` must fall through the ancestor Input keymap so the
+/// focused queued editor receives the literal character instead of opening Agent View help.
+#[test]
+fn question_mark_edits_queued_prompt_instead_of_opening_agent_help() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let (window_id, terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        let conversation_id = input.update(&mut app, |input, ctx| {
+            input.agent_view_controller.update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("agent view should enter cleanly")
+            })
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(
+                input.buffer_text(ctx).is_empty(),
+                "the regular input buffer must be empty for this scenario"
+            );
+        });
+
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new("edit me".to_owned(), QueuedQueryOrigin::QueueSlashCommand),
+                ctx,
+            )
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, row_id, ctx);
+        });
+
+        let panel = input
+            .read(&app, |input, _| input.queued_prompts_panel().cloned())
+            .expect("queue flag should create a queued prompts panel");
+        panel.read(&app, |panel, ctx| {
+            assert!(
+                panel.is_inline_edit_editor_focused(ctx),
+                "entering edit mode should focus the inline edit editor"
+            );
+        });
+        let edit_editor = panel.read(&app, |panel, _| panel.edit_editor_for_test().clone());
+        let focus_path = [terminal.id(), input.id(), panel.id(), edit_editor.id()];
+
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &focus_path,
+                &Keystroke::parse("shift-?").expect("valid keystroke"),
+                false,
+            )
+            .expect("keystroke dispatch should succeed");
+        assert!(
+            !handled,
+            "shift-? should fall through to the queued-prompt editor"
+        );
+        input.read(&app, |input, ctx| {
+            assert!(
+                !input
+                    .agent_shortcut_view_model
+                    .as_ref(ctx)
+                    .is_shortcut_view_open(),
+                "agent view help must not open while editing a queued prompt"
+            );
+        });
+
+        app.dispatch_typed_action(
+            window_id,
+            &focus_path,
+            &EditorAction::UserInsert(UserInput::new("?".to_owned())),
+        );
+        edit_editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.buffer_text(ctx), "edit me?");
+        });
+    });
+}
+
+/// The queued-editor exclusion must not disable Agent View help in its normal empty-input state.
+#[test]
+fn question_mark_still_opens_agent_help_without_a_queued_prompt_edit() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let (window_id, terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.agent_view_controller.update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("agent view should enter cleanly")
+            });
+        });
+
+        let editor = input.read(&app, |input, _| input.editor().clone());
+        let focus_path = [terminal.id(), input.id(), editor.id()];
+
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &focus_path,
+                &Keystroke::parse("shift-?").expect("valid keystroke"),
+                false,
+            )
+            .expect("keystroke dispatch should succeed");
+        assert!(
+            handled,
+            "shift-? should open Agent View help when no queued prompt is being edited"
+        );
+        input.read(&app, |input, ctx| {
+            assert!(
+                input
+                    .agent_shortcut_view_model
+                    .as_ref(ctx)
+                    .is_shortcut_view_open(),
+                "agent view help should be open"
+            );
+        });
+    });
+}
+
 // Helper: open the CLI-agent rich input for the terminal view under test.
 fn open_rich_input_for_terminal(terminal: &ViewHandle<TerminalView>, app: &mut App) {
     terminal.update(app, |view, ctx| {
