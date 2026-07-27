@@ -51,7 +51,7 @@ use crate::util::time_format::format_approx_duration_from_now_utc;
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
 const OZ_UPDATES_SECTION_HEADER: &str = "Latest updates";
 
-// The maximum number of Warp Agent updates from the changelog rendered in-line in the 'What's new in Warp Agent' section.
+// The maximum number of Warp Agent updates from the changelog rendered in-line in the 'Latest updates' section.
 const MAX_OZ_UPDATE_COUNT: usize = 4;
 
 const MAX_RECENT_CONVERSATION_COUNT: usize = 3;

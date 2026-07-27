@@ -144,9 +144,6 @@ impl HarnessAvailabilityModel {
     }
 
     pub fn display_name_for(&self, harness: Harness) -> &str {
-        if harness == Harness::Oz {
-            return harness_display::display_name(harness);
-        }
         self.harnesses
             .iter()
             .find(|h| h.harness == harness)

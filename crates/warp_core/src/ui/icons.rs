@@ -627,7 +627,7 @@ impl From<Icon> for &'static str {
             Icon::AntigravityLogo => "bundled/svg/antigravity_cli.svg",
             Icon::NLD => "bundled/svg/nld.svg",
             Icon::Oz => "bundled/svg/warp-3.svg",
-            Icon::OzCloud => "bundled/svg/warp-3.svg",
+            Icon::OzCloud => "bundled/svg/oz-cloud.svg",
             Icon::Conversation => "bundled/svg/conversation.svg",
             Icon::Prompt => "bundled/svg/prompt.svg",
             Icon::Grid => "bundled/svg/grid.svg",
