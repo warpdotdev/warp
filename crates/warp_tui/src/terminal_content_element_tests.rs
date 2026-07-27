@@ -124,6 +124,7 @@ fn key_down(key: &str, chars: &str, ctrl: bool) -> TuiEvent {
         },
         chars: chars.to_owned(),
         details: KeyEventDetails::default(),
+        physical_key: None,
         is_repeat: false,
         is_composing: false,
     }
@@ -146,6 +147,7 @@ fn key_up(key: &str, ctrl: bool) -> TuiEvent {
             ..Default::default()
         },
         details: KeyEventDetails::default(),
+        physical_key: None,
     }
 }
 

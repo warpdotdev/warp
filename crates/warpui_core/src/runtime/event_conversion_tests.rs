@@ -114,14 +114,17 @@ fn released_keys_map_to_key_up_events() {
         KeyModifiers::empty(),
         KeyEventKind::Release,
     );
-    let Some(TuiEvent::KeyUp { keystroke, details }) =
-        crossterm_event_to_tui_event(CrosstermEvent::Key(event))
+    let Some(TuiEvent::KeyUp {
+        keystroke,
+        details,
+        physical_key,
+    }) = crossterm_event_to_tui_event(CrosstermEvent::Key(event))
     else {
         panic!("expected KeyUp");
     };
     assert_eq!(keystroke.key, "a");
     assert_eq!(details.key_without_modifiers.as_deref(), Some("a"));
-    assert_eq!(details.physical_key, None);
+    assert_eq!(physical_key, None);
 }
 #[test]
 fn paste_preserves_the_complete_payload() {
@@ -179,7 +182,7 @@ fn modifier_keys_preserve_flags_and_physical_identity_across_the_lifecycle() {
         ),
     ];
 
-    for (modifier, physical_key, expected_modifier) in cases {
+    for (modifier, expected_physical_key, expected_modifier) in cases {
         for kind in [
             KeyEventKind::Press,
             KeyEventKind::Repeat,
@@ -189,18 +192,22 @@ fn modifier_keys_preserve_flags_and_physical_identity_across_the_lifecycle() {
                 KeyEvent::new_with_kind(KeyCode::Modifier(modifier), KeyModifiers::empty(), kind);
             let event = crossterm_event_to_tui_event(CrosstermEvent::Key(event))
                 .expect("supported modifier event");
-            let (keystroke, details, is_repeat) = match event {
+            let (keystroke, physical_key, is_repeat) = match event {
                 TuiEvent::KeyDown {
                     keystroke,
-                    details,
+                    physical_key,
                     is_repeat,
                     ..
-                } => (keystroke, details, is_repeat),
-                TuiEvent::KeyUp { keystroke, details } => (keystroke, details, false),
+                } => (keystroke, physical_key, is_repeat),
+                TuiEvent::KeyUp {
+                    keystroke,
+                    physical_key,
+                    ..
+                } => (keystroke, physical_key, false),
                 other => panic!("expected key lifecycle event, got {other:?}"),
             };
             assert_eq!(keystroke.key, "");
-            assert_eq!(details.physical_key, Some(physical_key));
+            assert_eq!(physical_key, Some(expected_physical_key));
             assert_eq!(keystroke.ctrl, expected_modifier == KeyModifiers::CONTROL);
             assert_eq!(keystroke.alt, expected_modifier == KeyModifiers::ALT);
             assert_eq!(keystroke.shift, expected_modifier == KeyModifiers::SHIFT);

@@ -18,6 +18,7 @@ use super::{
 };
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
+use crate::platform::keyboard::KeyCode;
 use crate::{Action, EntityId, EntityIdMap};
 
 /// A terminal scroll delta `(columns, rows)`.
@@ -30,12 +31,14 @@ pub enum TuiEvent {
         keystroke: Keystroke,
         chars: String,
         details: KeyEventDetails,
+        physical_key: Option<KeyCode>,
         is_repeat: bool,
         is_composing: bool,
     },
     KeyUp {
         keystroke: Keystroke,
         details: KeyEventDetails,
+        physical_key: Option<KeyCode>,
     },
     Paste {
         text: String,

@@ -361,6 +361,7 @@ fn key_event(key: &str) -> TuiEvent {
         },
         chars: key.to_owned(),
         details: KeyEventDetails::default(),
+        physical_key: None,
         is_repeat: false,
         is_composing: false,
     }

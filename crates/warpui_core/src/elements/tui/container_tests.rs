@@ -140,6 +140,7 @@ fn dispatch_event_forwards_to_the_child_inside_the_inset() {
                 },
                 chars: "enter".to_owned(),
                 details: KeyEventDetails::default(),
+                physical_key: None,
                 is_repeat: false,
                 is_composing: false,
             };

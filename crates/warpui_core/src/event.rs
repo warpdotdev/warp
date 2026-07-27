@@ -65,8 +65,6 @@ pub struct KeyEventDetails {
     // allows distinguishing between left and right alt
     pub left_alt: bool,
     pub right_alt: bool,
-    /// The platform-neutral physical key when the input backend reports one.
-    pub physical_key: Option<KeyCode>,
     /// The key that would have been produced without any modifiers (including Shift).
     pub key_without_modifiers: Option<String>,
 }

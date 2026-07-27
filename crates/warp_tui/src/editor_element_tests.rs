@@ -218,6 +218,7 @@ fn editable_editor_ignores_text_when_another_view_is_focused() {
                 },
                 chars: "a".to_owned(),
                 details: KeyEventDetails::default(),
+                physical_key: None,
                 is_repeat: false,
                 is_composing: false,
             };
@@ -253,6 +254,7 @@ fn editable_editor_inserts_repeats_and_ignores_releases() {
                 },
                 chars: "a".to_owned(),
                 details: KeyEventDetails::default(),
+                physical_key: None,
                 is_repeat: true,
                 is_composing: false,
             };
@@ -273,6 +275,7 @@ fn editable_editor_inserts_repeats_and_ignores_releases() {
                     ..Default::default()
                 },
                 details: KeyEventDetails::default(),
+                physical_key: None,
             };
             let release_model = model(ctx, "");
             let release_element = TuiEditorElement::new(&release_model, ctx)

@@ -98,6 +98,8 @@ fn modifiers_state(modifiers: KeyModifiers) -> ModifiersState {
 
 fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
     let modifiers = key_modifiers(event.code, event.modifiers);
+    // Warp calls the platform's Super modifier `cmd` across surfaces, while
+    // crossterm's distinct Meta modifier remains `meta`.
     let keystroke = Keystroke {
         ctrl: modifiers.contains(KeyModifiers::CONTROL),
         alt: modifiers.contains(KeyModifiers::ALT),
@@ -107,10 +109,10 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
         key: key_name(event.code, modifiers)?,
     };
     let details = KeyEventDetails {
-        physical_key: physical_key(event.code),
         key_without_modifiers: key_without_modifiers(event.code),
         ..Default::default()
     };
+    let physical_key = physical_key(event.code);
 
     match event.kind {
         KeyEventKind::Press | KeyEventKind::Repeat => Some(TuiEvent::KeyDown {
@@ -120,10 +122,15 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
                 _ => String::new(),
             },
             details,
+            physical_key,
             is_repeat: event.kind == KeyEventKind::Repeat,
             is_composing: false,
         }),
-        KeyEventKind::Release => Some(TuiEvent::KeyUp { keystroke, details }),
+        KeyEventKind::Release => Some(TuiEvent::KeyUp {
+            keystroke,
+            details,
+            physical_key,
+        }),
     }
 }
 

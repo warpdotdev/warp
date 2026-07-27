@@ -182,7 +182,10 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         }
 
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
-        // responder chain first, exactly like the GUI window event path.
+        // responder chain first, exactly like the GUI window event path. Key
+        // releases bypass this pass just as GUI `ModifierKeyChanged` events do:
+        // keymaps represent press-driven keystrokes, while lifecycle events
+        // continue to element dispatch.
         if let Some((keystroke, is_composing)) = event.key_down() {
             let responder_chain = ctx.get_responder_chain(self.window_id);
             match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, is_composing)

@@ -18,6 +18,7 @@ fn key_event(key: &str) -> TuiEvent {
         },
         chars: key.to_owned(),
         details: KeyEventDetails::default(),
+        physical_key: None,
         is_repeat: false,
         is_composing: false,
     }
@@ -30,6 +31,7 @@ fn key_up(key: &str) -> TuiEvent {
             ..Default::default()
         },
         details: KeyEventDetails::default(),
+        physical_key: None,
     }
 }
 

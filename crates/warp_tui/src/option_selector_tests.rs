@@ -1336,6 +1336,7 @@ fn key_down(key: &str) -> TuiEvent {
         },
         chars: String::new(),
         details: Default::default(),
+        physical_key: None,
         is_repeat: false,
         is_composing: false,
     }
