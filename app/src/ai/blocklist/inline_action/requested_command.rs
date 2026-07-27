@@ -185,8 +185,6 @@ pub fn init(app: &mut AppContext) {
 }
 
 /// Structured representation of an MCP tool call request for JSON tree rendering.
-///
-/// The tool name is derivable from `command_text` and is not duplicated here.
 pub struct McpRequest {
     pub args: serde_json::Value,
 }
@@ -372,6 +370,9 @@ pub struct RequestedCommandView {
     // the action leaves the pending queue and is no longer retrievable. `None`
     // for legacy/flat MCP calls with no server id.
     mcp_server_id: Option<Uuid>,
+    // The MCP tool name is kept separately from the formatted command text so
+    // headers never need to parse a presentation label to recover identity.
+    mcp_tool_name: Option<String>,
 }
 
 impl RequestedCommandView {
@@ -627,6 +628,7 @@ impl RequestedCommandView {
             mcp_context_menu_open: false,
             mcp_context_menu_anchor_id: None,
             mcp_server_id: None,
+            mcp_tool_name: None,
         }
     }
 
@@ -1139,26 +1141,15 @@ impl RequestedCommandView {
     pub(crate) fn update_mcp_server_id(&mut self, server_id: Option<Uuid>) {
         self.mcp_server_id = server_id;
     }
-
-    /// Extracts the tool name from MCP tool command text, removing parameters.
-    /// For example, "tool_name(param1, param2)" becomes "tool_name".
-    fn extract_mcp_tool_name(&self, command_text: &str) -> String {
-        if let Some(paren_pos) = command_text.find('(') {
-            command_text[..paren_pos].trim().to_string()
-        } else {
-            command_text.trim().to_string()
-        }
+    /// Stores the MCP tool name independently of the formatted command text.
+    pub(crate) fn update_mcp_tool_name(&mut self, tool_name: &str) {
+        self.mcp_tool_name = Some(tool_name.to_owned());
     }
 
-    /// Returns the clean MCP tool name (without the "MCP Tool: " label or
-    /// argument list) for use in sentence-form titles like the blocked
+    /// Returns the MCP tool name for sentence-form titles like the blocked
     /// confirmation card and the expanded detail header.
     fn mcp_clean_tool_name(&self) -> String {
-        let parsed = self.extract_mcp_tool_name(self.command_text());
-        parsed
-            .strip_prefix("MCP Tool: ")
-            .map(str::to_owned)
-            .unwrap_or(parsed)
+        self.mcp_tool_name.clone().unwrap_or_default()
     }
 
     /// Resolves the user-facing name of the MCP tool's originating server.
@@ -1483,7 +1474,7 @@ impl RequestedCommandView {
         match &self.action_type {
             RequestedActionViewType::Command => format_command_text(self.command_text()),
             RequestedActionViewType::McpTool => {
-                let tool = self.extract_mcp_tool_name(self.command_text());
+                let tool = self.mcp_clean_tool_name();
                 match self.mcp_server_name(app) {
                     Some(server) if !tool.is_empty() => format!("{tool} on {server}"),
                     _ => tool,
@@ -1901,7 +1892,7 @@ impl View for RequestedCommandView {
                 } else if self.is_header_expanded {
                     command_text.to_string()
                 } else {
-                    self.extract_mcp_tool_name(command_text)
+                    self.mcp_clean_tool_name()
                 };
                 let text_element = Text::new(
                     content_text,
