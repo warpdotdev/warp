@@ -1696,6 +1696,9 @@ pub(crate) fn convert_tool_call_result_to_input(
                 Some(api::stop_recording_result::Result::Error(error)) => {
                     StopRecordingResult::Error(error.message.clone())
                 }
+                Some(api::stop_recording_result::Result::Discarded(_)) => {
+                    StopRecordingResult::Discarded
+                }
                 None => StopRecordingResult::Cancelled,
             };
             Some(AIAgentInput::ActionResult {

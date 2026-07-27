@@ -1829,7 +1829,7 @@ impl AIConversation {
                             buffered_action_ids.push(action.id.clone());
                         }
                     }
-                    AIAgentActionType::StopRecording { recording_id } => {
+                    AIAgentActionType::StopRecording { recording_id, .. } => {
                         let Some(span) = active_span.as_ref() else {
                             continue;
                         };
@@ -1852,7 +1852,9 @@ impl AIConversation {
                                 active_span = None;
                             }
                             Some(AIAgentActionResultType::StopRecording(
-                                StopRecordingResult::Error(_) | StopRecordingResult::Cancelled,
+                                StopRecordingResult::Error(_)
+                                | StopRecordingResult::Cancelled
+                                | StopRecordingResult::Discarded,
                             )) => {
                                 // The stop saved no recording, so the buffered
                                 // rows must not be labeled as captured.

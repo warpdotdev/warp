@@ -79,30 +79,54 @@ pub const VIEW_LOGS: StaticCommand = StaticCommand {
     argument: None,
 };
 
-pub const ENABLE_NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
-    name: "/enable-natural-language-detection",
-    description: "Turn on natural language detection in the input",
-    kind: SlashCommandKind::EnableNaturalLanguageDetection,
+/// Starts the headless TUI voice-input session.
+pub const VOICE: StaticCommand = StaticCommand {
+    name: "/voice",
+    description: "Start voice input (Ctrl-S)",
+    kind: SlashCommandKind::Voice,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
+    name: "/natural-language-detection",
+    description: "Toggle natural language detection",
+    kind: SlashCommandKind::NaturalLanguageDetection,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
 };
-
-pub const DISABLE_NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
-    name: "/disable-natural-language-detection",
-    description: "Turn off natural language detection in the input",
-    kind: SlashCommandKind::DisableNaturalLanguageDetection,
+pub const THEME: StaticCommand = StaticCommand {
+    name: "/theme",
+    description: "Set color theme",
+    kind: SlashCommandKind::Theme,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
-    availability: Availability::AI_ENABLED,
+    availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
-    argument: None,
+    argument: Some(Argument {
+        hint_text: Some("<auto|light|dark>"),
+        is_optional: false,
+        should_execute_on_selection: false,
+    }),
 };
 
 pub const EXIT: StaticCommand = StaticCommand {
     name: "/exit",
     description: "Exit Warp",
     kind: SlashCommandKind::Exit,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const VERSION: StaticCommand = StaticCommand {
+    name: "/version",
+    description: "Show the Warp version",
+    kind: SlashCommandKind::Version,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
@@ -837,8 +861,6 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         ADD_RULE,
         AUTO_APPROVE,
         COST,
-        DISABLE_NATURAL_LANGUAGE_DETECTION,
-        ENABLE_NATURAL_LANGUAGE_DETECTION,
         EXIT,
         FEEDBACK.clone(),
         INDEX,
@@ -854,11 +876,15 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
+        NATURAL_LANGUAGE_DETECTION,
+        THEME,
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
         MODEL.clone(),
+        VERSION,
         VIEW_LOGS,
+        VOICE,
     ];
 
     if FeatureFlag::LocalDockerSandbox.is_enabled() {

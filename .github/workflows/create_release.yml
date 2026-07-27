@@ -631,12 +631,8 @@ jobs:
     name: Build Release (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
-    # Keep Linux TUI artifacts workflow-local until the server's download
-    # endpoint and installer accept Linux payloads.
     if: ${{ inputs.build_linux != false && (inputs.channel == 'dev' || inputs.channel == 'preview') }}
     timeout-minutes: 180
-    # Experimental TUI failures must not block dev release cuts.
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -711,22 +707,34 @@ jobs:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
+      - name: Add TUI to GitHub release assets
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
+          files: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        with:
+          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+
+      - name: Upload TUI to Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        with:
+          path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
+          destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/linux/${{ matrix.arch }}
+          headers: |-
+            cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
+
       - name: Upload TUI as workflow artifact
+        if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
-
-      - name: Report Linux TUI build failure
-        if: ${{ failure() }}
-        run: |
-          echo "::warning::The experimental Linux TUI ${{ matrix.arch }} release artifact failed to build. This failure will not block the dev release."
-          {
-            echo "## Linux TUI ${{ matrix.arch }} release artifact failed"
-            echo
-            echo "This experimental build failure will not block the dev release. Review the failed step above for details."
-          } >> "$GITHUB_STEP_SUMMARY"
-        shell: bash
 
   release_linux_x86:
     name: Build Release (Linux x86_64)

@@ -46,11 +46,9 @@ pub(crate) const KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG: &str = "TuiKeyboardEnhance
 pub(crate) const PLAN_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_plan";
 pub(crate) const CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME: &str =
     "tui:session:toggle_plan_when_available";
-pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
-    let mut context = Context::default();
-    context.set.insert(TuiTerminalSessionView::ui_name());
+pub(crate) fn binding_hint(name: &str, context: &Context, ctx: &AppContext) -> Option<String> {
     ctx.editable_bindings()
-        .find(|binding| binding.name == PLAN_TOGGLE_BINDING_NAME && binding.in_context(&context))
+        .find(|binding| binding.name == name && binding.in_context(context))
         .and_then(|binding| match binding.trigger {
             Trigger::Keystrokes(keystrokes) if !keystrokes.is_empty() => Some(
                 keystrokes
@@ -63,6 +61,11 @@ pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
                 None
             }
         })
+}
+pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
+    let mut context = Context::default();
+    context.set.insert(TuiTerminalSessionView::ui_name());
+    binding_hint(PLAN_TOGGLE_BINDING_NAME, &context, ctx)
 }
 
 /// Registers all TUI view keybindings and the cross-surface binding

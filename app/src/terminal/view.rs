@@ -11977,6 +11977,10 @@ impl TerminalView {
                                             {
                                                 let remote_host =
                                                     me.active_session_remote_host(ctx);
+                                                let should_auto_toggle_input = agent
+                                                    .supports_cli_agent_footer()
+                                                    && *AISettings::as_ref(ctx)
+                                                        .auto_open_rich_input_on_cli_agent_start;
                                                 sessions_model.set_session(
                                                     view_id,
                                                     CLIAgentSession {
@@ -11985,15 +11989,13 @@ impl TerminalView {
                                                         session_context:
                                                             CLIAgentSessionContext::default(),
                                                         input_state: CLIAgentInputState::Closed,
-                                                        should_auto_toggle_input: *AISettings::as_ref(
-                                                            ctx,
-                                                        )
-                                                        .auto_open_rich_input_on_cli_agent_start,
+                                                        should_auto_toggle_input,
                                                         listener: None,
                                                         plugin_version: None,
                                                         remote_host,
                                                         draft_text: None,
-                                                        custom_command_prefix: custom_command_prefix.clone(),
+                                                        custom_command_prefix:
+                                                            custom_command_prefix.clone(),
                                                         received_rich_notification: false,
                                                     },
                                                     ctx,
@@ -22861,7 +22863,6 @@ impl TerminalView {
         if !FeatureFlag::HoaCodeReview.is_enabled() {
             return None;
         }
-
         CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
             .map(|s| s.agent)
@@ -28045,12 +28046,11 @@ impl View for TerminalView {
             context.set.insert(init::KEYBOARD_PROTOCOL_ENABLED_KEY);
         }
 
-        if CLIAgentSessionsModel::as_ref(app)
-            .session(self.view_id)
-            .is_some()
-        {
+        if let Some(session) = CLIAgentSessionsModel::as_ref(app).session(self.view_id) {
             context.set.insert(init::CLI_AGENT_SESSION_ACTIVE_KEY);
-            if *AISettings::as_ref(app).should_render_cli_agent_footer {
+            if session.agent.supports_cli_agent_footer()
+                && *AISettings::as_ref(app).should_render_cli_agent_footer
+            {
                 context.set.insert(flags::CLI_AGENT_FOOTER_ENABLED);
 
                 if is_rich_input_chip_in_cli_toolbar(app) {

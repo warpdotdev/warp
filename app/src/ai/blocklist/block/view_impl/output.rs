@@ -3047,6 +3047,10 @@ fn stop_recording_card_text(result: Option<&StopRecordingResult>) -> RecordingCa
                 subtext: None,
             }
         }
+        Some(StopRecordingResult::Discarded) => RecordingCardText {
+            primary: "Recording discarded".to_string(),
+            subtext: None,
+        },
         None => RecordingCardText {
             primary: "Saving recording".to_string(),
             subtext: None,

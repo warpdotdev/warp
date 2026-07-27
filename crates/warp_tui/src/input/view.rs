@@ -23,7 +23,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use string_offset::CharOffset;
+use string_offset::{ByteOffset, CharOffset};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
@@ -31,28 +31,31 @@ use warp::tui_export::{
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding};
+use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
-    ViewContext, ViewHandle,
+    ViewContext,
 };
 
+use crate::completion_menu::TuiCompletionAcceptance;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::editor_interaction::{
     TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
     apply_editor_action, apply_editor_clipboard_action, follow_editor_cursor,
 };
 use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, active_inline_menu};
-use crate::input_hints;
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP,
 };
-use crate::transcript_view::TuiTranscriptView;
+use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
+use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
 
 /// Keymap-context flag set while the input has contextual Escape behavior.
 ///
@@ -61,6 +64,7 @@ use crate::tui_builder::TuiUiBuilder;
 /// order. Inline menus take priority; later input modes should be handled only
 /// after the menu branch.
 const INPUT_HANDLES_ESCAPE_FLAG: &str = "TuiInputHandlesEscape";
+const SHELL_COMPLETION_AVAILABLE_FLAG: &str = "TuiShellCompletionAvailable";
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,6 +100,14 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("TuiInputView") & id!(INPUT_HANDLES_ESCAPE_FLAG))
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("escape"),
+        EditableBinding::new(
+            "tui:input:complete_shell_command",
+            "Complete the shell command",
+            TuiInputAction::Complete,
+        )
+        .with_context_predicate(id!("TuiInputView") & id!(SHELL_COMPLETION_AVAILABLE_FLAG))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("tab"),
     ]);
 }
 
@@ -110,7 +122,8 @@ pub enum TuiInputViewEvent {
     Submitted(String),
     /// The terminal delivered one complete bracketed-paste payload.
     Pasted(String),
-    /// Backspace was pressed with an empty normal input.
+    /// Backspace was pressed at the start of an empty agent input. Empty shell
+    /// input consumes Backspace to exit shell mode instead.
     BackspaceAtEmptyInput,
     /// The user selected a slash command menu item.
     AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
@@ -125,6 +138,8 @@ pub enum TuiInputViewEvent {
     /// The user accepted a prompt from the up-arrow prompt-history menu. Carries
     /// the prompt text to fill into the input and submit.
     AcceptedPromptHistory(String),
+    /// Tab requested shell completion for the current input snapshot.
+    RequestShellCompletion,
     /// Selected prompt text was copied to the host clipboard.
     ClipboardCopySucceeded,
     /// Selected prompt text could not be copied to the host clipboard.
@@ -146,11 +161,19 @@ pub enum TuiInputAction {
     Submit,
     /// Handle contextual input Escape behavior, prioritizing an open inline menu.
     HandleEscape,
+    /// Request or advance shell-command completion.
+    Complete,
     /// Apply an editing command shared with generic TUI editors.
     EditorCommand(TuiEditorCommand),
     /// Place the cursor at `offset` without starting a drag selection
-    /// (the `!` gutter click).
+    /// (the prompt gutter click).
     SetCursor { offset: CharOffset },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TuiCompletionInputSnapshot {
+    pub(crate) buffer_text: String,
+    pub(crate) cursor_byte_offset: usize,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,21 +196,20 @@ pub struct TuiInputView {
     editor_state: TuiEditorState,
     /// Multiline insertion and six-row viewport policy.
     editor_behavior: TuiEditorBehavior,
-    /// Mouse state for the shell-mode `!` gutter; created once here (not inline
+    /// Mouse state for the input prompt gutter; created once here (not inline
     /// during render) so mouse tracking survives per-frame element rebuilds.
     prefix_mouse_state: MouseStateHandle,
     /// Whether this view is focused, tracked via `on_focus`/`on_blur` like
     /// the GUI's `EditorView::focused`. Snapshotted into the editor element
     /// so it only consumes typed text while the input is focused.
     focused: bool,
-    /// Source of truth for whether a rendered plan can be toggled. Production
-    /// construction always provides this; isolated input tests omit it.
-    transcript: Option<ViewHandle<TuiTranscriptView>>,
+    /// Session-owned source for hints and additive capabilities.
+    session_state: ModelHandle<TuiTerminalSessionStateModel>,
     keyboard_enhancement_supported: bool,
-    /// Consults the owner live for whether orchestration tabs are available.
-    orchestration_tabs_available: Rc<dyn Fn(&AppContext) -> bool>,
     /// Consults the owner live before an inline-menu Enter can accept an item.
     can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
+    /// TUI voice state used for Escape routing and shell-gutter suppression.
+    voice_input: ModelHandle<TuiVoiceInputModel>,
 }
 
 impl Entity for TuiInputView {
@@ -213,8 +235,7 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
-        transcript: ViewHandle<TuiTranscriptView>,
-        orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
+        session_state: ModelHandle<TuiTerminalSessionStateModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         Self::new_internal(
@@ -222,8 +243,7 @@ impl TuiInputView {
             input_mode,
             suggestions_mode,
             inline_menus,
-            Some(transcript),
-            orchestration_tabs_available,
+            session_state,
             ctx,
         )
     }
@@ -237,13 +257,19 @@ impl TuiInputView {
         orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        let session_state = ctx.add_model(|_| {
+            TuiTerminalSessionStateModel::new_for_input(
+                &input_mode,
+                &suggestions_mode,
+                orchestration_tabs_available,
+            )
+        });
         Self::new_internal(
             model,
             input_mode,
             suggestions_mode,
             inline_menus,
-            None,
-            orchestration_tabs_available,
+            session_state,
             ctx,
         )
     }
@@ -253,10 +279,10 @@ impl TuiInputView {
         input_mode: ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         inline_menus: Vec<TuiInlineMenu>,
-        transcript: Option<ViewHandle<TuiTranscriptView>>,
-        orchestration_tabs_available: impl Fn(&AppContext) -> bool + 'static,
+        session_state: ModelHandle<TuiTerminalSessionStateModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        let voice_input = ctx.add_model(TuiVoiceInputModel::new);
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 ctx.notify();
@@ -266,6 +292,7 @@ impl TuiInputView {
         // on the config (shell-mode gutter/border), so every event re-renders.
         ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&voice_input, |_, _, _, ctx| ctx.notify());
         Self {
             model,
             input_mode,
@@ -275,10 +302,10 @@ impl TuiInputView {
             editor_behavior: TuiEditorBehavior::multiline(6),
             prefix_mouse_state: MouseStateHandle::default(),
             focused: false,
-            transcript,
+            session_state,
             keyboard_enhancement_supported: false,
-            orchestration_tabs_available: Rc::new(orchestration_tabs_available),
             can_accept_inline_menu: Rc::new(|_| true),
+            voice_input,
         }
     }
 
@@ -299,13 +326,41 @@ impl TuiInputView {
     }
 
     fn plan_toggle_available(&self, ctx: &AppContext) -> bool {
-        self.transcript
-            .as_ref()
-            .is_some_and(|transcript| transcript.as_ref(ctx).has_toggleable_plan(ctx))
+        self.session_state
+            .as_ref(ctx)
+            .resolve(ctx)
+            .is_ok_and(|state| state.plan_available())
     }
     /// Whether the input is in detected or explicitly locked shell mode.
     pub(crate) fn is_shell_mode(&self, ctx: &AppContext) -> bool {
         input_mode_policy::is_shell_mode(self.input_mode.as_ref(ctx))
+    }
+
+    pub(crate) fn voice_is_active(&self, ctx: &AppContext) -> bool {
+        self.voice_input.as_ref(ctx).is_active()
+    }
+
+    pub(crate) fn voice_input_model(&self) -> &ModelHandle<TuiVoiceInputModel> {
+        &self.voice_input
+    }
+
+    pub(crate) fn voice_state(&self, ctx: &AppContext) -> TuiVoiceInputState {
+        self.voice_input.as_ref(ctx).state()
+    }
+
+    pub(crate) fn voice_animation_clock(&self, ctx: &AppContext) -> AnimationClock {
+        self.voice_input.as_ref(ctx).animation_clock()
+    }
+
+    pub(crate) fn start_voice_input(
+        &mut self,
+        available: bool,
+        source: VoiceInputStartSource,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.voice_input.update(ctx, |voice_input, ctx| {
+            voice_input.start(available, source, ctx)
+        })
     }
 
     /// Returns a handle to the backing [`CodeEditorModel`].
@@ -329,10 +384,20 @@ impl TuiInputView {
         ctx.notify();
     }
 
+    /// Inserts normalized text at the current cursor without submitting it.
+    pub(crate) fn insert_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        let text = self.editor_behavior.normalize_text(text);
+        if !text.is_empty() {
+            self.model.update(ctx, |m, ctx| m.user_insert(text, ctx));
+            self.follow_cursor(ctx);
+            ctx.notify();
+        }
+    }
+
     /// Builds this frame's core editor element: editable, scroll-windowed, and
     /// dispatching [`TuiEditorAction`]s back as [`TuiInputAction`]s. `render`
-    /// boxes it (behind the shell-mode `!` gutter when active); tests construct
-    /// it directly to exercise mouse dispatch.
+    /// boxes it (behind the mode-specific prompt gutter when active); tests
+    /// construct it directly to exercise mouse dispatch.
     fn render_element(&self, ctx: &AppContext) -> TuiEditorElement {
         let builder = TuiUiBuilder::from_app(ctx);
         let mut styles = TuiEditorStyles::default();
@@ -366,24 +431,14 @@ impl TuiInputView {
         // provider on every layout pass instead of being snapshotted here.
         // Shell mode teaches how to exit; agent mode adapts to the transcript
         // state.
-        let input_mode = self.input_mode.clone();
-        let transcript = self.transcript.clone();
-        let orchestration_tabs_available = self.orchestration_tabs_available.clone();
+        let session_state = self.session_state.clone();
         element.with_placeholder_ghost_text(move |app| {
-            let hint = if input_mode_policy::is_shell_mode(input_mode.as_ref(app)) {
-                input_hints::SHELL_HINT.to_owned()
-            } else {
-                // Inputs constructed without a transcript (isolated tests)
-                // count as zero-state.
-                let transcript_is_empty = transcript
-                    .as_ref()
-                    .is_none_or(|transcript| transcript.as_ref(app).is_empty());
-                input_hints::agent_input_hint(
-                    transcript_is_empty,
-                    orchestration_tabs_available(app),
-                )
-            };
-            Some((hint, TuiUiBuilder::from_app(app).muted_text_style()))
+            session_state
+                .as_ref(app)
+                .resolve(app)
+                .ok()
+                .and_then(|state| state.hint_text())
+                .map(|hint| (hint, TuiUiBuilder::from_app(app).muted_text_style()))
         })
     }
     /// Collapses the current text selection to its head without changing text.
@@ -442,16 +497,26 @@ impl TuiInputView {
         self.follow_cursor(ctx);
         ctx.notify();
     }
+}
 
-    /// Composes the shell-mode input row: the accent-styled `!` affordance in a
-    /// two-column gutter (glyph plus one column of right padding), then the
-    /// editor filling the remaining width. The gutter is outside the editable
-    /// area; clicking it places the cursor at the start of the buffer.
-    fn shell_element(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let prefix_style = TuiUiBuilder::from_app(ctx).shell_mode_accent_style();
+impl TuiView for TuiInputView {
+    fn ui_name() -> &'static str {
+        "TuiInputView"
+    }
+
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(ctx);
+        if self.voice_is_active(ctx) {
+            return self.render_input(ctx);
+        }
+        let (prefix, prefix_style) = if self.is_shell_mode(ctx) {
+            ("!", builder.shell_command_accent_style())
+        } else {
+            (">", builder.accent_text_style())
+        };
         let prefix = TuiHoverable::new(
             self.prefix_mouse_state.clone(),
-            TuiContainer::new(TuiText::new("!").with_style(prefix_style).finish())
+            TuiContainer::new(TuiText::new(prefix).with_style(prefix_style).finish())
                 .with_padding_right(1)
                 .finish(),
         )
@@ -465,27 +530,18 @@ impl TuiInputView {
             .flex_child(self.render_input(ctx))
             .finish()
     }
-}
-
-impl TuiView for TuiInputView {
-    fn ui_name() -> &'static str {
-        "TuiInputView"
-    }
-
-    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        if self.is_shell_mode(ctx) {
-            self.shell_element(ctx)
-        } else {
-            self.render_input(ctx)
-        }
-    }
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
-        input_keymap_context(
-            self.active_inline_menu(ctx).is_some() || self.is_shell_mode(ctx),
-            self.plan_toggle_available(ctx),
-            self.keyboard_enhancement_supported,
-        )
+        let suggestions_mode = self.suggestions_mode.as_ref(ctx).mode();
+        input_keymap_context(InputKeymapContextConfig {
+            input_handles_escape: self.active_inline_menu(ctx).is_some()
+                || matches!(suggestions_mode, TuiInputSuggestionsMode::Shortcuts)
+                || self.is_shell_mode(ctx)
+                || self.voice_is_active(ctx),
+            plan_toggle_available: self.plan_toggle_available(ctx),
+            keyboard_enhancement_supported: self.keyboard_enhancement_supported,
+            shell_completion_available: self.is_shell_mode(ctx),
+        })
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
@@ -503,21 +559,28 @@ impl TuiView for TuiInputView {
     }
 }
 
-fn input_keymap_context(
+#[derive(Clone, Copy, Debug, Default)]
+struct InputKeymapContextConfig {
     input_handles_escape: bool,
     plan_toggle_available: bool,
     keyboard_enhancement_supported: bool,
-) -> keymap::Context {
+    shell_completion_available: bool,
+}
+
+fn input_keymap_context(config: InputKeymapContextConfig) -> keymap::Context {
     let mut context = keymap::Context::default();
     context.set.insert(TuiInputView::ui_name());
-    if input_handles_escape {
+    if config.input_handles_escape {
         context.set.insert(INPUT_HANDLES_ESCAPE_FLAG);
     }
-    if plan_toggle_available {
+    if config.plan_toggle_available {
         context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
     }
-    if keyboard_enhancement_supported {
+    if config.keyboard_enhancement_supported {
         context.set.insert(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG);
+    }
+    if config.shell_completion_available {
+        context.set.insert(SHELL_COMPLETION_AVAILABLE_FLAG);
     }
     context
 }
@@ -531,7 +594,25 @@ impl TypedActionView for TuiInputView {
         let outcome = match action {
             TuiInputAction::Editor(editor_action) => {
                 if let TuiEditorAction::PasteText(text) = editor_action {
+                    self.close_shortcuts(ctx);
                     ctx.emit(TuiInputViewEvent::Pasted(text.clone()));
+                    return;
+                }
+                if self.close_shortcuts(ctx) {
+                    if matches!(editor_action, TuiEditorAction::InsertChar('?')) {
+                        return;
+                    }
+                } else if matches!(editor_action, TuiEditorAction::InsertChar('?'))
+                    && self.plain_text(ctx).is_empty()
+                    && self.is_cursor_at_start(ctx)
+                    && matches!(
+                        self.suggestions_mode.as_ref(ctx).mode(),
+                        TuiInputSuggestionsMode::Closed
+                    )
+                {
+                    self.suggestions_mode.update(ctx, |mode, ctx| {
+                        mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                    });
                     return;
                 }
                 // A `!` typed at the very start of the input enters shell mode
@@ -551,14 +632,24 @@ impl TypedActionView for TuiInputView {
                 }
             }
             TuiInputAction::Submit => {
-                self.submit(ctx);
+                self.close_shortcuts(ctx);
+                if !self.handle_voice_submit(ctx) {
+                    self.submit(ctx);
+                }
                 TuiEditorInteractionOutcome::FollowCursor
             }
             TuiInputAction::HandleEscape => {
                 self.handle_escape(ctx);
                 TuiEditorInteractionOutcome::FollowCursor
             }
+            TuiInputAction::Complete => {
+                if self.is_shell_mode(ctx) {
+                    ctx.emit(TuiInputViewEvent::RequestShellCompletion);
+                }
+                TuiEditorInteractionOutcome::PreserveViewport
+            }
             TuiInputAction::EditorCommand(command) => {
+                self.close_shortcuts(ctx);
                 if matches!(*command, TuiEditorCommand::SelectUp) && self.can_focus_above(ctx) {
                     ctx.emit(TuiInputViewEvent::MoveFocusUp);
                     return;
@@ -604,6 +695,7 @@ impl TypedActionView for TuiInputView {
                 }
             }
             TuiInputAction::SetCursor { offset } => {
+                self.close_shortcuts(ctx);
                 self.model.update(ctx, |m, ctx| {
                     m.select_at(*offset, false, ctx);
                     m.end_selection(ctx);
@@ -653,6 +745,67 @@ impl TuiInputView {
         buffer.text().into_string()
     }
 
+    pub(crate) fn completion_snapshot(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<TuiCompletionInputSnapshot> {
+        if !self.is_shell_mode(ctx) || !self.model.as_ref(ctx).selection_is_single_cursor(ctx) {
+            return None;
+        }
+        let buffer_text = self.plain_text(ctx);
+        let cursor_char_offset = self
+            .model
+            .as_ref(ctx)
+            .buffer_selection_model()
+            .as_ref(ctx)
+            .first_selection_head()
+            .as_usize()
+            .saturating_sub(1);
+        let cursor_byte_offset =
+            byte_offset_for_char_offset(&buffer_text, CharOffset::from(cursor_char_offset))?
+                .as_usize();
+        Some(TuiCompletionInputSnapshot {
+            buffer_text,
+            cursor_byte_offset,
+        })
+    }
+
+    pub(crate) fn apply_shell_completion(
+        &mut self,
+        acceptance: TuiCompletionAcceptance,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let buffer_text = self.plain_text(ctx);
+        let replacement_range = acceptance.replacement_range;
+        if replacement_range.start > replacement_range.end {
+            return false;
+        }
+        let Some(replacement_start) =
+            count_chars_up_to_byte(&buffer_text, ByteOffset::from(replacement_range.start))
+        else {
+            return false;
+        };
+        let Some(replacement_end) =
+            count_chars_up_to_byte(&buffer_text, ByteOffset::from(replacement_range.end))
+        else {
+            return false;
+        };
+        let selection_range = replacement_start + 1..replacement_end + 1;
+        let mut replacement = acceptance.replacement;
+        if acceptance.append_space {
+            replacement.push(' ');
+        }
+        self.model.update(ctx, |model, ctx| {
+            model.select_at(selection_range.start, false, ctx);
+            model.set_last_selection_head(selection_range.end, ctx);
+            model.end_selection(ctx);
+            model.user_insert(&replacement, ctx);
+        });
+        self.follow_cursor(ctx);
+        ctx.notify();
+        true
+    }
+
     fn cursor_offset(&self, ctx: &AppContext) -> CharOffset {
         self.model
             .as_ref(ctx)
@@ -689,7 +842,11 @@ impl TuiInputView {
 
     /// Whether Shift+Up should leave the input instead of extending selection.
     fn can_focus_above(&self, ctx: &AppContext) -> bool {
-        (self.orchestration_tabs_available)(ctx) && self.single_cursor_on_first_row(ctx)
+        self.session_state
+            .as_ref(ctx)
+            .resolve(ctx)
+            .is_ok_and(|state| state.orchestration_available())
+            && self.single_cursor_on_first_row(ctx)
     }
 
     /// Whether the single caret sits on the first visual row of the input with
@@ -749,11 +906,34 @@ impl TuiInputView {
     pub(crate) fn exit_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
         self.input_mode.clone().update(ctx, |input_mode, ctx| {
-            input_mode.set_input_config(AI_LOCKED_CONFIG, is_input_buffer_empty, None, ctx);
+            input_mode.set_input_config(
+                AI_LOCKED_CONFIG,
+                is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::ManualToggle),
+                ctx,
+            );
         });
     }
 
-    fn reset_to_default_agent_mode(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Locks the input to Agent while a CLI subagent owns terminal control. The
+    /// `AgentTerminalControl` autodetection source marks the lock as
+    /// agent-installed so the post-agent reset can distinguish it from a
+    /// user-forced `ManualToggle` lock.
+    pub(crate) fn lock_for_agent_control(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_input_buffer_empty = self.plain_text(ctx).is_empty();
+        self.input_mode.clone().update(ctx, |input_mode, ctx| {
+            input_mode.set_input_config(
+                AI_LOCKED_CONFIG,
+                is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::AgentTerminalControl),
+                ctx,
+            );
+        });
+    }
+
+    /// Restores the setting-derived agent-first mode while preserving the
+    /// current input buffer.
+    pub(crate) fn reset_to_default_agent_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_autodetection_enabled = self
             .input_mode
             .as_ref(ctx)
@@ -767,6 +947,20 @@ impl TuiInputView {
         });
     }
 
+    /// Restores the setting-derived mode only when the current AI lock was
+    /// installed for agent terminal control. Reuses the shared model's
+    /// `last_ai_autodetection_source` rather than a parallel bool: an explicit
+    /// user lock carries a `ManualToggle` (or `ShellPrefix`) source, so it is
+    /// left untouched.
+    pub(crate) fn reset_after_agent_control(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_agent_controlled = self.input_mode.as_ref(ctx).last_ai_autodetection_source()
+            == Some(InputTypeAutoDetectionSource::AgentTerminalControl);
+        if !is_agent_controlled {
+            return;
+        }
+        self.reset_to_default_agent_mode(ctx);
+    }
+
     // ── Submit ────────────────────────────────────────────────────────────────
 
     /// Emits [`TuiInputViewEvent::Submitted`] without clearing the buffer; the
@@ -774,6 +968,18 @@ impl TuiInputView {
     fn submit(&mut self, ctx: &mut ViewContext<Self>) {
         let text = self.plain_text(ctx);
         ctx.emit(TuiInputViewEvent::Submitted(text));
+    }
+
+    fn handle_voice_submit(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        match self.voice_input.as_ref(ctx).state() {
+            TuiVoiceInputState::Listening => {
+                self.voice_input
+                    .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+                true
+            }
+            TuiVoiceInputState::Transcribing => true,
+            TuiVoiceInputState::Idle => false,
+        }
     }
 
     fn handle_inline_menu_action(
@@ -786,6 +992,7 @@ impl TuiInputView {
             TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp | TuiEditorCommand::MoveDown)
                 | TuiInputAction::Submit
                 | TuiInputAction::HandleEscape
+                | TuiInputAction::Complete
         ) {
             return false;
         }
@@ -797,6 +1004,13 @@ impl TuiInputView {
             // bootstrapping. Consume Enter without accepting a hidden menu item;
             // otherwise the accepted-menu event bypasses the session's normal
             // submission guard and can execute or clear the draft.
+            return true;
+        }
+        if matches!(action, TuiInputAction::Complete) {
+            if inline_menu.mode() == TuiInputSuggestionsMode::CompletionSuggestions {
+                inline_menu.select_next(ctx);
+                ctx.notify();
+            }
             return true;
         }
 
@@ -825,6 +1039,9 @@ impl TuiInputView {
                         TuiInlineMenuAccepted::PromptHistory(text) => {
                             ctx.emit(TuiInputViewEvent::AcceptedPromptHistory(text));
                         }
+                        TuiInlineMenuAccepted::Completion(acceptance) => {
+                            self.apply_shell_completion(acceptance, ctx);
+                        }
                     }
                 }
             }
@@ -839,10 +1056,27 @@ impl TuiInputView {
     /// order. New input modes should be added after the inline-menu branch so
     /// one Escape always closes the most local surface first.
     fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if self.close_shortcuts(ctx) {
+            return true;
+        }
         if let Some(inline_menu) = self.active_inline_menu(ctx) {
             inline_menu.dismiss(ctx);
             ctx.notify();
             return true;
+        }
+
+        match self.voice_input.as_ref(ctx).state() {
+            TuiVoiceInputState::Listening => {
+                self.voice_input
+                    .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+                return true;
+            }
+            TuiVoiceInputState::Transcribing => {
+                self.voice_input
+                    .update(ctx, |voice_input, ctx| voice_input.cancel(ctx));
+                return true;
+            }
+            TuiVoiceInputState::Idle => {}
         }
 
         if self.is_shell_mode(ctx) {
@@ -852,6 +1086,18 @@ impl TuiInputView {
         false
     }
 
+    fn close_shortcuts(&self, ctx: &mut ViewContext<Self>) -> bool {
+        let is_open = matches!(
+            self.suggestions_mode.as_ref(ctx).mode(),
+            TuiInputSuggestionsMode::Shortcuts
+        );
+        if is_open {
+            self.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
+        }
+        is_open
+    }
     fn active_inline_menu(&self, ctx: &AppContext) -> Option<TuiInlineMenu> {
         active_inline_menu(
             &self.inline_menus,

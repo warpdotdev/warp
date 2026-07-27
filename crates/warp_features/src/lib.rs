@@ -920,6 +920,10 @@ pub enum FeatureFlag {
     /// orchestration (`run_agents`) confirmation card and plan-card config
     /// block for choosing a runner when starting remote child agents.
     CloudAgentRunners,
+
+    /// Gates the account-first onboarding flow, including the reordered
+    /// pre-auth slides and post-auth account offer.
+    AccountFirstOnboarding,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1008,6 +1012,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Autoupdate,
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
+    FeatureFlag::VideoRecording,
     // Marked text is currently only supported on MacOS.
     #[cfg(target_os = "macos")]
     FeatureFlag::ImeMarkedText,

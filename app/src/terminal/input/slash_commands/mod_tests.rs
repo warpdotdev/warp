@@ -47,6 +47,21 @@ fn auto_approve_is_an_exact_no_argument_command() {
 }
 
 #[test]
+fn theme_command_inserts_input_for_its_required_argument() {
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
+
+    assert_eq!(
+        slash_command_selection_behavior(&commands::THEME),
+        SlashCommandSelectionBehavior::InsertCommandText("/theme ".to_owned())
+    );
+    let argument = commands::THEME
+        .argument
+        .as_ref()
+        .expect("theme should require an argument");
+    assert!(!argument.is_optional);
+    assert_eq!(argument.hint_text, Some("<auto|light|dark>"));
+}
+#[test]
 fn tui_commands_have_typed_identities_and_explicit_surface_support() {
     for (command, expected) in [
         (&*commands::AGENT, SlashCommandKind::Agent),
@@ -68,7 +83,10 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
         (&commands::MCP, SlashCommandKind::Mcp),
         (&commands::EXIT, SlashCommandKind::Exit),
         (&commands::LOGOUT, SlashCommandKind::Logout),
+        (&commands::VERSION, SlashCommandKind::Version),
         (&commands::VIEW_LOGS, SlashCommandKind::ViewLogs),
+        (&commands::VOICE, SlashCommandKind::Voice),
+        (&commands::THEME, SlashCommandKind::Theme),
     ] {
         assert_eq!(
             command.kind, expected,
@@ -119,6 +137,21 @@ fn logout_command_executes_immediately_and_takes_no_argument() {
 }
 
 #[test]
+fn version_command_executes_immediately_and_takes_no_argument() {
+    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
+
+    assert_eq!(commands::VERSION.kind, SlashCommandKind::Version);
+    assert!(commands::VERSION.argument.is_none());
+    assert!(!slash_command_is_submitted_as_prompt(&commands::VERSION));
+    assert_eq!(
+        slash_command_selection_behavior(&commands::VERSION),
+        SlashCommandSelectionBehavior::Execute
+    );
+    assert_eq!(commands::VERSION.availability, Availability::ALWAYS);
+    assert!(commands::VERSION.supports_surface(settings::SettingsMode::Tui));
+}
+
+#[test]
 fn not_cloud_agent_commands_are_only_active_outside_cloud_mode() {
     let local_context = BASELINE_AVAILABILITY | Availability::NOT_CLOUD_AGENT;
     assert!(commands::AGENT.is_active(local_context));
@@ -147,26 +180,13 @@ fn cloud_mode_v2_commands_are_active_only_in_cloud_mode_v2_context() {
 }
 
 #[test]
-fn natural_language_detection_commands_are_supported_in_tui() {
-    for (command, expected) in [
-        (
-            &commands::ENABLE_NATURAL_LANGUAGE_DETECTION,
-            SlashCommandKind::EnableNaturalLanguageDetection,
-        ),
-        (
-            &commands::DISABLE_NATURAL_LANGUAGE_DETECTION,
-            SlashCommandKind::DisableNaturalLanguageDetection,
-        ),
-    ] {
-        assert_eq!(
-            command.kind, expected,
-            "{} should have its typed command identity",
-            command.name
-        );
-        assert!(command.supports_surface(settings::SettingsMode::Tui));
-        assert!(command.argument.is_none());
-        assert!(!slash_command_is_submitted_as_prompt(command));
-    }
+fn natural_language_detection_command_is_supported_in_tui() {
+    let command = &commands::NATURAL_LANGUAGE_DETECTION;
+    assert_eq!(command.kind, SlashCommandKind::NaturalLanguageDetection);
+    assert!(command.supports_surface(settings::SettingsMode::Tui));
+    // The toggle command runs immediately and is never reiterated as a prompt.
+    assert!(command.argument.is_none());
+    assert!(!slash_command_is_submitted_as_prompt(command));
 }
 
 #[cfg(all(feature = "local_fs", windows))]

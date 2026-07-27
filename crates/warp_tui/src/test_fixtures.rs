@@ -18,6 +18,7 @@ use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewHandle, Wind
 use crate::conversation_selection::TuiConversationSelection;
 use crate::resume::TuiExitSummaryHandle;
 use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::zero_state_animation::ZeroStateAnimationConfig;
 
 struct TestTerminalManager(Arc<FairMutex<TerminalModel>>);
 
@@ -100,7 +101,9 @@ pub(crate) fn add_test_action_model_and_events(
     }
     add_test_semantic_selection(app);
     // Read as a singleton by the action model's executors.
-    app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+    if !app.read(|ctx| ctx.has_singleton_model::<BlocklistAIHistoryModel>()) {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+    }
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     let sessions = app.add_model(|_| Sessions::new_for_test());
     let (_tx, model_events_rx) = async_channel::unbounded();
@@ -134,6 +137,9 @@ pub(crate) fn add_test_terminal_session(
     ModelHandle<Box<dyn TerminalManagerTrait>>,
 ) {
     app.update(|ctx| {
+        if !ctx.has_singleton_model::<ZeroStateAnimationConfig>() {
+            ctx.add_singleton_model(|_| ZeroStateAnimationConfig::default());
+        }
         let surface_init = TerminalSurfaceInit::new_for_test(ctx);
         let terminal_model = surface_init.model.clone();
         let view = ctx.add_typed_action_tui_view(window_id, |ctx| {

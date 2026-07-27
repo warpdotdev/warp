@@ -1563,6 +1563,7 @@ impl SettingsView {
                     {
                         self.ai_page_handle.update(ctx, |view, ctx| {
                             view.set_active_subpage(Some(subpage), ctx);
+                            view.update_filter(&search_query, ctx);
                         });
                     }
                     if current.is_code_subpage()
@@ -1570,6 +1571,7 @@ impl SettingsView {
                     {
                         self.code_page_handle.update(ctx, |view, ctx| {
                             view.set_active_subpage(Some(subpage), ctx);
+                            view.update_filter(&search_query, ctx);
                         });
                     }
                 }
@@ -1651,6 +1653,11 @@ impl SettingsView {
                             false, /* allow_steal_focus */
                             ctx,
                         );
+                        // The navigation above rebuilt the newly-selected
+                        // subpage's PageType via set_active_subpage, resetting
+                        // its widget filter to default. Reapply the active
+                        // search query so only matching widgets render.
+                        self.reapply_search_filter_to_active_subpage(&search_query, ctx);
                     }
                 }
                 ctx.notify();
@@ -2243,8 +2250,31 @@ impl SettingsView {
         }
     }
 
+    /// Reapply the active search query to the currently-selected AI/Code subpage.
+    fn reapply_search_filter_to_active_subpage(
+        &mut self,
+        query: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let current = self.current_settings_page;
+        if current.is_ai_subpage()
+            && current != SettingsSection::AgentMCPServers
+            && AISubpage::from_section(current).is_some()
+        {
+            self.ai_page_handle.update(ctx, |view, ctx| {
+                view.update_filter(query, ctx);
+            });
+        }
+        if current.is_code_subpage() && CodeSubpage::from_section(current).is_some() {
+            self.code_page_handle.update(ctx, |view, ctx| {
+                view.update_filter(query, ctx);
+            });
+        }
+    }
+
     fn cycle_pages(&mut self, direction: CycleDirection, ctx: &mut ViewContext<Self>) {
-        let is_search_active = !self.search_editor.as_ref(ctx).buffer_text(ctx).is_empty();
+        let search_query = self.search_editor.as_ref(ctx).buffer_text(ctx);
+        let is_search_active = !search_query.is_empty();
 
         // Build nav stops from the current sidebar state. A collapsed umbrella
         // is represented as a single stop (rather than being skipped) so that
@@ -2285,6 +2315,9 @@ impl SettingsView {
         };
 
         self.set_and_refresh_current_page_internal(target_section, false, false, ctx);
+        if is_search_active {
+            self.reapply_search_filter_to_active_subpage(&search_query, ctx);
+        }
     }
 
     fn input_tab(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2690,7 +2723,14 @@ impl TypedActionView for SettingsView {
     fn handle_action(&mut self, action: &SettingsAction, ctx: &mut ViewContext<Self>) {
         match action {
             SettingsAction::SelectAndRefresh(section) => {
+                let search_query = self.search_editor.as_ref(ctx).buffer_text(ctx);
+                let is_search_active = !search_query.is_empty();
+
                 self.set_and_refresh_current_page_internal(*section, false, true, ctx);
+
+                if is_search_active {
+                    self.reapply_search_filter_to_active_subpage(&search_query, ctx);
+                }
 
                 if *section == SettingsSection::MCPServers {
                     send_telemetry_from_ctx!(

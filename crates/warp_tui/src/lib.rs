@@ -24,6 +24,7 @@ mod tui_ask_question_view;
 mod tui_builder;
 mod ui;
 
+mod completion_menu;
 mod conversation_menu;
 mod conversation_selection;
 mod editor_element;
@@ -72,6 +73,7 @@ mod tui_permission_prompt;
 mod tui_plan_view;
 mod tui_shell_command_view;
 mod usage;
+mod voice_input;
 mod warping_indicator;
 mod zero_state;
 mod zero_state_animation;

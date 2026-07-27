@@ -7,8 +7,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use clap::error::ErrorKind;
+use warp::settings::TuiThemeSettings;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
+use warp_core::channel::ChannelState;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -22,10 +24,19 @@ use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
-use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiConversationRestoreTarget};
+use crate::terminal_session_view::{
+    TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
+};
 
-#[derive(Parser)]
-#[command(name = "warp")]
+/// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
+/// local cargo builds fall back to a numeric placeholder.
+const CLI_VERSION: &str = match option_env!("GIT_RELEASE_TAG") {
+    Some(version) => version,
+    None => "v0.0.0.0.0.0",
+};
+
+#[derive(Debug, Parser)]
+#[command(name = "warp", version = CLI_VERSION)]
 struct TuiArgs {
     /// Resume an Oz/Warp conversation by server token.
     #[arg(long)]
@@ -56,12 +67,12 @@ pub fn run() -> Result<()> {
     }
     let args = match TuiArgs::try_parse() {
         Ok(args) => args,
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            ) =>
-        {
+        // Match the zero-state version line: bare tag/version, no binary name prefix.
+        Err(error) if error.kind() == ErrorKind::DisplayVersion => {
+            println!("{CLI_VERSION}");
+            return Ok(());
+        }
+        Err(error) if error.kind() == ErrorKind::DisplayHelp => {
             error.print()?;
             return Ok(());
         }
@@ -79,7 +90,8 @@ pub fn run() -> Result<()> {
     {
         let token = token.as_str();
         println!("To continue this conversation, run:");
-        println!("warp --resume {token}");
+        let command = tui_resume_shell_command(ChannelState::channel(), token);
+        println!("{command}");
     }
     result
 }
@@ -99,11 +111,14 @@ fn init(
     // release builds installed via the managed versioned layout; see the
     // `autoupdate` module docs).
     crate::autoupdate::TuiAutoupdater::register(ctx);
+    crate::zero_state_animation::ZeroStateAnimationConfig::register(ctx);
 
-    // Theme the transcript to match the host terminal. Keep this scoped to
-    // the TUI process by overriding the already-initialized Appearance theme at
-    // mount time, without changing normal GUI theme selection or font settings.
-    let theme = probe_and_select_theme();
+    // Honor an explicit TUI theme or match the host terminal automatically.
+    // Keep this scoped to the TUI process by overriding the already-initialized
+    // Appearance theme at mount time, without changing normal GUI theme
+    // selection or font settings.
+    let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
+    let theme = probe_and_select_theme(selected_theme);
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
         appearance.set_theme(theme, ctx);
     });

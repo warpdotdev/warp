@@ -136,6 +136,24 @@ fn permission_prompt_defaults_to_yes_and_renders_other() {
 }
 
 #[test]
+fn focusing_an_active_prompt_delegates_to_the_selector() {
+    App::test((), |mut app| async move {
+        let prompt = add_prompt(&mut app, false);
+        let (action_model, action) = app.read(|ctx| {
+            let prompt = prompt.as_ref(ctx);
+            (prompt.action_model.clone(), pending_action(prompt))
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
+        });
+        let selector = app.read(|ctx| prompt.as_ref(ctx).selector.clone());
+
+        prompt.update(&mut app, |_, ctx| ctx.focus_self());
+
+        assert!(app.read(|ctx| selector.is_focused(ctx)));
+    });
+}
+#[test]
 fn leading_editor_participates_in_selector_focus_cycle() {
     App::test((), |mut app| async move {
         app.update(crate::option_selector::init);

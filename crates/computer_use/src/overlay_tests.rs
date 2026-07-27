@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use super::{
-    ActionLogEntry, KeepSegment, PointerEvent, PointerEventKind, build_keep_segments,
-    build_overlay_ass, is_meaningful_action_group, overlay_labels_for, remap_source_interval,
+    ActionLogEntry, CLICK_RING_MAX_RADIUS, DRAG_ANCHOR_RADIUS, HELD_INDICATOR_RADIUS, KeepSegment,
+    PointerEvent, PointerEventKind, ass_circle_path, build_keep_segments, build_overlay_ass,
+    is_meaningful_action_group, overlay_labels_for, remap_source_interval,
 };
 use crate::{Action, Key, MouseButton, ScrollDirection, ScrollDistance, TargetedAction, Vector2I};
 
@@ -489,7 +490,7 @@ fn single_click_emits_one_expanding_ring() {
         ring.contains("Dialogue: 1,0:00:00.25,0:00:01.15,Cursor,"),
         "{ass}"
     );
-    assert!(ring.contains("\\an5\\pos(100,200)"), "{ass}");
+    assert!(ring.contains("\\an7\\pos(100,200)"), "{ass}");
     assert!(ring.contains("\\3c&H2850FF&"), "{ass}");
     assert!(ring.contains("\\fscx50\\fscy50"), "{ass}");
     assert!(
@@ -541,12 +542,12 @@ fn drag_emits_trail_anchor_held_and_no_ring() {
     );
     assert!(trail.contains("\\an7\\pos(0,0)"), "{ass}");
     assert!(trail.contains("\\t(400,1000,\\1a&HFF&)"), "{ass}");
-    // Anchor at the press point, alpha 87.
+    // Anchor at the press point, alpha 87, centered on it via `\an7`.
     let anchor = cursor
         .iter()
         .find(|line| line.contains("\\1a&H87&"))
         .expect("anchor dialogue");
-    assert!(anchor.contains("\\an5\\pos(100,100)"), "{ass}");
+    assert!(anchor.contains("\\an7\\pos(100,100)"), "{ass}");
     // Held dot moves press -> release over the hold [1000, 1400] -> [250, 650].
     let held = cursor
         .iter()
@@ -633,8 +634,8 @@ fn out_of_bounds_point_is_clamped_into_frame() {
     let ass = build_overlay_ass(&[click], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
     let ring = ring_dialogues(&ass);
     assert_eq!(ring.len(), 1, "{ass}");
-    // x clamps to width-1 (1279), y clamps to 0.
-    assert!(ring[0].contains("\\an5\\pos(1279,0)"), "{ass}");
+    // x clamps to width-1 (1279), y clamps to 0; the ring is centered there.
+    assert!(ring[0].contains("\\an7\\pos(1279,0)"), "{ass}");
 }
 
 #[test]
@@ -668,4 +669,300 @@ fn click_animation_fits_within_retained_post_action_margin() {
         "{ass}"
     );
     assert!(rings[0].contains("\\t(0,900,"), "{ass}");
+}
+
+// --- Centering (QUALITY-1169 follow-up) --------------------------------------
+
+#[test]
+fn circle_path_is_origin_centered() {
+    // `ass_circle_path(r)` draws a circle centered at the drawing origin (0, 0):
+    // its coordinate extrema are ±r on both axes, so the drawing origin is the
+    // circle's geometric center. This is what makes `\an7` center the circle on
+    // `\pos` (the origin maps to `\pos`).
+    for radius in [
+        CLICK_RING_MAX_RADIUS,
+        DRAG_ANCHOR_RADIUS,
+        HELD_INDICATOR_RADIUS,
+    ] {
+        let path = ass_circle_path(radius);
+        let r = radius.round() as i32;
+        assert!(path.contains(&format!("m {r} 0")), "{path}");
+        assert!(path.contains(&format!("-{r} 0")), "{path}");
+        assert!(path.contains(&format!("0 -{r}")), "{path}");
+        assert!(path.contains(&format!("0 {r}")), "{path}");
+    }
+}
+
+#[test]
+fn click_ring_and_drag_circles_center_via_an7() {
+    // A click and a drag in one recording exercise every circle dialogue: the
+    // click ring, the drag anchor, and the held indicator. Centering is proven
+    // here at the ASS-string level — each circle dialogue carries `\an7`, and
+    // `circle_path_is_origin_centered` proves the path is centered on the
+    // drawing origin, so `\pos` lands the circle's center on the cursor. The
+    // libass pixel-level confirmation is the synthetic-frame proof in the PR
+    // body, not a model assertion here.
+    let entries = vec![
+        pointer_entry(
+            1000,
+            2000,
+            &[],
+            vec![down(1000, 100, 200), up(1000, 100, 200)],
+        ),
+        pointer_entry(
+            3000,
+            4000,
+            &[],
+            vec![down(3000, 50, 60), mv(3200, 70, 80), up(3400, 70, 80)],
+        ),
+    ];
+    let ass = build_overlay_ass(&entries, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let cursor = cursor_dialogues(&ass);
+
+    // The trail polyline keeps its absolute-coordinate `\an7\pos(0,0)`.
+    let trail = cursor
+        .iter()
+        .find(|line| line.contains("\\1a&H73&"))
+        .expect("trail dialogue");
+    assert!(trail.contains("\\an7\\pos(0,0)"), "{trail}");
+
+    // The click ring centers on (100, 200) via `\an7`.
+    let rings = ring_dialogues(&ass);
+    let ring = rings
+        .iter()
+        .find(|line| line.contains("\\pos(100,200)"))
+        .expect("ring dialogue");
+    assert!(ring.contains("\\an7\\pos(100,200)"), "{ring}");
+
+    // The drag anchor and held indicator center on their points via `\an7`.
+    let anchor = cursor
+        .iter()
+        .find(|line| line.contains("\\1a&H87&"))
+        .expect("anchor dialogue");
+    assert!(anchor.contains("\\an7\\pos(50,60)"), "{anchor}");
+    let held = cursor
+        .iter()
+        .find(|line| line.contains("\\1a&H4B&"))
+        .expect("held dialogue");
+    assert!(held.contains("\\an7\\move(50,60,70,80,"), "{held}");
+    // Clipping is retained on every pointer dialogue.
+    for line in &cursor {
+        assert!(line.contains("\\clip(0,0,1280,720)"), "{line}");
+    }
+}
+
+// --- Split-call drag reconstruction (QUALITY-1169 follow-up) -----------------
+
+#[test]
+fn split_call_drag_renders_one_trail_like_a_canonical_drag() {
+    // The same Down -> Move -> Up sequence, but split across three
+    // `ActionLogEntry` boundaries (three separate `UseComputer` calls) instead
+    // of one. The release in the third call reuses the last resolved point from
+    // the recording-scoped pointer session, and the flattened recording-level
+    // classifier stitches the three entries into a single drag.
+    let split = vec![
+        pointer_entry(1000, 1100, &[], vec![down(1000, 100, 100)]),
+        pointer_entry(1200, 1300, &[], vec![mv(1200, 300, 400)]),
+        pointer_entry(1400, 1500, &[], vec![up(1400, 300, 400)]),
+    ];
+    // The canonical same-call drag carries the identical events in one entry.
+    let canonical = vec![pointer_entry(
+        1000,
+        2000,
+        &[],
+        vec![down(1000, 100, 100), mv(1200, 300, 400), up(1400, 300, 400)],
+    )];
+    let split_ass = build_overlay_ass(&split, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let canonical_ass = build_overlay_ass(&canonical, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    // A drag never emits a click ring, in either form.
+    assert!(ring_dialogues(&split_ass).is_empty(), "{split_ass}");
+    assert!(ring_dialogues(&canonical_ass).is_empty(), "{canonical_ass}");
+    // The split and canonical forms produce identical pointer dialogues: one
+    // trail, one anchor, one held indicator with a release fade — the same single
+    // gesture, timing, and path.
+    assert_eq!(
+        cursor_dialogues(&split_ass),
+        cursor_dialogues(&canonical_ass),
+        "split:\n{split_ass}\ncanonical:\n{canonical_ass}"
+    );
+    // Sanity: that is one trail, one anchor, one held indicator.
+    let cursor = cursor_dialogues(&split_ass);
+    assert_eq!(cursor.len(), 3, "{split_ass}");
+    assert!(
+        cursor.iter().any(|l| l.contains("\\1a&H73&")),
+        "{split_ass}"
+    );
+    assert!(
+        cursor.iter().any(|l| l.contains("\\1a&H87&")),
+        "{split_ass}"
+    );
+    assert!(
+        cursor.iter().any(|l| l.contains("\\1a&H4B&")),
+        "{split_ass}"
+    );
+}
+
+#[test]
+fn split_call_drag_with_moves_across_two_entries_renders_one_trail() {
+    // Down in call A, Moves in calls B and C, Up in call D — the full
+    // four-call split described in the spec. The trail path contains every
+    // non-zero move segment and the release fades.
+    let split = vec![
+        pointer_entry(1000, 1100, &[], vec![down(1000, 0, 0)]),
+        pointer_entry(1200, 1300, &[], vec![mv(1200, 100, 0)]),
+        pointer_entry(1400, 1500, &[], vec![mv(1400, 100, 100)]),
+        pointer_entry(1600, 1700, &[], vec![up(1600, 100, 100)]),
+    ];
+    let ass = build_overlay_ass(&split, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    assert!(ring_dialogues(&ass).is_empty(), "{ass}");
+    let trail = cursor_dialogues(&ass)
+        .into_iter()
+        .find(|line| line.contains("\\1a&H73&"))
+        .expect("trail dialogue");
+    // Two non-zero segments: (0,0)->(100,0) and (100,0)->(100,100); the final
+    // move-to-release segment is zero-length and dropped, leaving two quads.
+    assert_eq!(trail.matches("m ").count(), 2, "{trail}");
+    // The release fade is present (a drag with a release).
+    assert!(trail.contains("\\t("), "release fade missing: {trail}");
+    assert!(trail.contains("\\1a&HFF&"), "release fade missing: {trail}");
+}
+
+// --- Button identity and boundary cases (QUALITY-1169 follow-up) -------------
+
+fn down_with(offset_ms: u64, x: i32, y: i32, button: MouseButton) -> PointerEvent {
+    PointerEvent {
+        offset: Duration::from_millis(offset_ms),
+        kind: PointerEventKind::Down,
+        button: Some(button),
+        point: Vector2I::new(x, y),
+    }
+}
+
+fn up_with(offset_ms: u64, x: i32, y: i32, button: MouseButton) -> PointerEvent {
+    PointerEvent {
+        offset: Duration::from_millis(offset_ms),
+        kind: PointerEventKind::Up,
+        button: Some(button),
+        point: Vector2I::new(x, y),
+    }
+}
+
+#[test]
+fn right_and_middle_clicks_render_rings() {
+    // A right press + release and a middle press + release are each their own
+    // click ring; button identity does not merge them into a drag.
+    let right = pointer_entry(
+        1000,
+        2000,
+        &[],
+        vec![
+            down_with(1000, 10, 10, MouseButton::Right),
+            up_with(1000, 10, 10, MouseButton::Right),
+        ],
+    );
+    let middle = pointer_entry(
+        2100,
+        2200,
+        &[],
+        vec![
+            down_with(2100, 20, 20, MouseButton::Middle),
+            up_with(2100, 20, 20, MouseButton::Middle),
+        ],
+    );
+    let ass = build_overlay_ass(
+        &[right, middle],
+        (1280, 720),
+        SOURCE_TEN_SECS,
+        FRAME_RATE_15,
+    );
+    assert_eq!(ring_dialogues(&ass).len(), 2, "{ass}");
+}
+
+#[test]
+fn unmatched_release_and_stray_move_render_nothing() {
+    // A release whose button was never pressed, and a move with no owning press,
+    // carry no drawable gesture.
+    let stray_release = pointer_entry(
+        1000,
+        1100,
+        &[],
+        vec![up_with(1000, 30, 30, MouseButton::Left)],
+    );
+    let ass = build_overlay_ass(
+        &[stray_release],
+        (1280, 720),
+        SOURCE_TEN_SECS,
+        FRAME_RATE_15,
+    );
+    assert!(cursor_dialogues(&ass).is_empty(), "{ass}");
+
+    let stray_move = pointer_entry(2000, 2100, &[], vec![mv(2000, 40, 50)]);
+    let ass = build_overlay_ass(&[stray_move], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    assert!(cursor_dialogues(&ass).is_empty(), "{ass}");
+}
+
+#[test]
+fn unmatched_release_for_a_different_button_does_not_close_a_drag() {
+    // A Left press + move is a drag in progress; a Right release (a different
+    // button) does not close it. A following Left release closes it, so one drag
+    // (no ring) renders.
+    let events = vec![
+        down_with(1000, 100, 100, MouseButton::Left),
+        mv(1200, 200, 200),
+        up_with(1300, 200, 200, MouseButton::Right),
+        up_with(1400, 200, 200, MouseButton::Left),
+    ];
+    let entry = pointer_entry(1000, 1500, &[], events);
+    let ass = build_overlay_ass(&[entry], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    assert!(ring_dialogues(&ass).is_empty(), "{ass}");
+    let cursor = cursor_dialogues(&ass);
+    // One drag: a single trail, anchor, and held indicator.
+    assert_eq!(
+        cursor.iter().filter(|l| l.contains("\\1a&H73&")).count(),
+        1,
+        "{ass}"
+    );
+    assert_eq!(
+        cursor.iter().filter(|l| l.contains("\\1a&H87&")).count(),
+        1,
+        "{ass}"
+    );
+    assert_eq!(
+        cursor.iter().filter(|l| l.contains("\\1a&H4B&")).count(),
+        1,
+        "{ass}"
+    );
+    // The held dot ends at the Left release point (200, 200).
+    let held = cursor
+        .iter()
+        .find(|l| l.contains("\\1a&H4B&"))
+        .expect("held dialogue");
+    assert!(held.contains("\\move(100,100,200,200,"), "{held}");
+}
+
+#[test]
+fn second_press_while_held_closes_prior_gesture_deterministically() {
+    // A second Down with no intervening release closes the first press as a
+    // held drag (no release); classification restarts at the new press, which
+    // then completes as a drag with a release.
+    let events = vec![
+        down(1000, 100, 100),
+        mv(1200, 200, 200),
+        down(1300, 300, 300),
+        mv(1400, 400, 400),
+        up(1500, 400, 400),
+    ];
+    let entry = pointer_entry(1000, 1600, &[], events);
+    let ass = build_overlay_ass(&[entry], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    // Two drags: the first (held, no release) and the second (with release),
+    // each emitting its own anchor. No click ring.
+    assert_eq!(
+        cursor_dialogues(&ass)
+            .iter()
+            .filter(|l| l.contains("\\1a&H87&"))
+            .count(),
+        2,
+        "{ass}"
+    );
+    assert!(ring_dialogues(&ass).is_empty(), "{ass}");
 }

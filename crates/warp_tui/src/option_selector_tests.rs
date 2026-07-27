@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use string_offset::CharOffset;
@@ -17,6 +18,7 @@ use warpui_core::{App, AppContext, TuiView as _, TypedActionView as _, ViewHandl
 use super::{
     OptionSelectorHeader, OptionSelectorPage, SELECTOR_NAVIGATION_ACTIVE, SelectorFocusZone,
     SelectorItem, TuiOptionSelector, TuiOptionSelectorAction, TuiOptionSelectorEvent,
+    TuiOptionSelectorMoveDirection,
 };
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::TuiEditorCommand;
@@ -33,6 +35,60 @@ fn row(id: &str) -> OptionRow {
         badge: None,
         disabled_reason: None,
     }
+}
+
+#[test]
+fn reordering_an_explicit_filtered_row_updates_the_full_catalog_and_preserves_selection() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        set_searchable_page(
+            &mut app,
+            &selector,
+            snapshot(&["alpha", "hidden", "alpine"], Some("alpha")),
+        );
+        selector.update(&mut app, |selector, ctx| {
+            selector.interaction.search_query = "al".to_owned();
+            selector.sync_after_items_changed();
+            ctx.focus_self();
+            assert!(selector.move_row("alpine", TuiOptionSelectorMoveDirection::Backward, ctx));
+        });
+
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.ordered_row_ids()),
+            ["alpine", "alpha", "hidden"]
+        );
+        assert!(selected_line(&app, &selector).contains("alpha"));
+        assert_eq!(
+            primary_events(&events),
+            [TuiOptionSelectorEvent::RowsReordered {
+                ordered_ids: vec!["alpine".to_owned(), "alpha".to_owned(), "hidden".to_owned(),],
+            }]
+        );
+    });
+}
+
+#[test]
+fn moving_a_hidden_or_boundary_row_is_a_noop() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        set_searchable_page(
+            &mut app,
+            &selector,
+            snapshot(&["alpha", "hidden", "alpine"], Some("alpha")),
+        );
+        selector.update(&mut app, |selector, ctx| {
+            selector.interaction.search_query = "al".to_owned();
+            selector.sync_after_items_changed();
+            assert!(!selector.move_row("hidden", TuiOptionSelectorMoveDirection::Forward, ctx));
+            assert!(!selector.move_row("alpha", TuiOptionSelectorMoveDirection::Backward, ctx));
+        });
+
+        assert_eq!(
+            selector.read(&app, |selector, _| selector.ordered_row_ids()),
+            ["alpha", "hidden", "alpine"]
+        );
+        assert!(primary_events(&events).is_empty());
+    });
 }
 
 #[test]
@@ -711,6 +767,45 @@ fn normal_selector_selected_row_does_not_depend_on_question_selected_ids() {
             assert_eq!(cell.fg, selected_fg);
             assert!(cell.modifier.contains(Modifier::BOLD));
         }
+    });
+}
+
+#[test]
+fn selected_custom_answer_number_is_not_highlighted_after_the_cursor_moves_away() {
+    App::test((), |mut app| async move {
+        let (selector, _) = add_selector(&mut app);
+        let mut with_selected_other = snapshot(&["a", "b"], Some("Canary"));
+        with_selected_other.footer = Some(OptionFooter::CustomText {
+            label: "Other".to_string(),
+        });
+        set_page(&mut app, &selector, with_selected_other);
+        selector.update(&mut app, |selector, ctx| {
+            selector.set_question_state(HashSet::new(), true, ctx);
+            selector.select_item_without_confirm(0, ctx);
+        });
+
+        let buffer = render_buffer(&app, &selector, 60);
+        let builder = app.read(TuiUiBuilder::from_app);
+        let number = &buffer[(0, 5)];
+        let label = &buffer[(8, 5)];
+        assert_eq!(number.symbol(), "(");
+        assert_eq!(label.symbol(), "C");
+        assert_eq!(
+            number.fg,
+            builder
+                .muted_text_style()
+                .fg
+                .expect("muted text has a foreground")
+        );
+        assert_eq!(
+            label.fg,
+            builder
+                .question_option_selected_style()
+                .fg
+                .expect("selected question options have a foreground")
+        );
+        assert!(!number.modifier.contains(Modifier::BOLD));
+        assert!(label.modifier.contains(Modifier::BOLD));
     });
 }
 

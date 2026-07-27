@@ -10,7 +10,6 @@ use ai::agent::action_result::{RunAgentsAgentOutcomeKind, RunAgentsResult};
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::skills::SkillReference;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warp_graphql::queries::get_runners::RunnerSortBy;
@@ -61,6 +60,7 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -438,6 +438,18 @@ impl RunAgentsCardView {
                 ctx.notify();
             }
             _ => {}
+        });
+
+        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, _, event, ctx| {
+            let ServerExperimentsEvent::ExperimentsUpdated = event;
+            if !oc::runner_controls_enabled(ctx) {
+                me.handles.pickers.runner_picker = None;
+                me.runners.clear();
+                me.runners_loading = false;
+            } else {
+                me.ensure_runner_picker(ctx);
+            }
+            ctx.notify();
         });
 
         // Repopulate the model picker when available Warp LLMs change.
@@ -1021,13 +1033,14 @@ impl RunAgentsCardView {
     }
 
     /// Builds the Runner picker and kicks off the `getRunners` fetch, but
-    /// only when the `CloudAgentRunners` feature is enabled and the card is
+    /// only when the `CloudAgentRunners` feature is enabled and the macOS
+    /// runner experiment is active, and the card is
     /// in remote mode — otherwise the Runner control is not rendered, so
     /// there is no reason to create the picker or hit `getRunners`.
     /// Idempotent, and re-invoked on the Local→Cloud toggle so the picker
     /// appears (and loads) the first time the card enters remote mode.
     fn ensure_runner_picker(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::CloudAgentRunners.is_enabled() {
+        if !oc::runner_controls_enabled(ctx) {
             return;
         }
         if !self
@@ -1838,6 +1851,7 @@ fn render_editor(
         orchestration_config_state,
         &handles.pickers,
         appearance,
+        oc::runner_controls_enabled(app),
     ));
 
     if let Some(reason) = oc::accept_disabled_reason_with_auth(orchestration_config_state, app) {

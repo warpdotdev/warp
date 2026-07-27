@@ -426,6 +426,7 @@ fn build_merged_config_and_task(
             .or(file_merged.computer_use_enabled),
         harness: harness_override,
         harness_auth_secrets: None,
+        additional_source_repos: None,
     };
 
     let runtime_mcp_specs = match merged_config.mcp_servers.as_ref() {
@@ -522,6 +523,7 @@ fn build_server_side_task(
         computer_use_enabled: args.computer_use.computer_use_override(),
         harness: harness_override,
         harness_auth_secrets: None,
+        additional_source_repos: None,
     };
 
     let skill = resolved_skill.as_ref().map(|s| s.parsed_skill.clone());
@@ -1045,6 +1047,7 @@ impl AgentDriverRunner {
                     resume: None,
                     cloud_providers: Vec::new(),
                     environment: None,
+                    additional_source_repos: Vec::new(),
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
@@ -1288,32 +1291,37 @@ impl AgentDriverRunner {
                 }
             }
         };
-        let (parent_run_id, task_conversation_id, task_harness, task_harness_model_config) =
-            match task_metadata_result {
-                Ok(Some(task_metadata)) => {
-                    // The task's harness is stored on the snapshot; if absent, it's the default Oz.
-                    let task_harness_config = task_metadata
-                        .agent_config_snapshot
-                        .as_ref()
-                        .and_then(|c| c.harness.as_ref());
-                    let task_harness = task_harness_config
-                        .map(|h| h.harness_type)
-                        .unwrap_or(Harness::Oz);
-                    let task_harness_model_config =
-                        task_harness_config.and_then(|h| h.model_config());
-                    (
-                        task_metadata.parent_run_id,
-                        task_metadata.conversation_id,
-                        Some(task_harness),
-                        task_harness_model_config,
-                    )
-                }
-                Ok(None) => (None, None, None, None),
-                Err(err) => {
-                    log::warn!("Failed to fetch task metadata: {err:#}");
-                    (None, None, None, None)
-                }
-            };
+        let (
+            parent_run_id,
+            task_conversation_id,
+            task_harness,
+            task_harness_model_config,
+            additional_source_repos,
+        ) = match task_metadata_result {
+            Ok(Some(task_metadata)) => {
+                // The task's harness is stored on the snapshot; if absent, it's the default Oz.
+                let agent_config_snapshot = task_metadata.agent_config_snapshot;
+                let task_harness_config = agent_config_snapshot
+                    .as_ref()
+                    .and_then(|c| c.harness.as_ref());
+                let task_harness = task_harness_config
+                    .map(|h| h.harness_type)
+                    .unwrap_or(Harness::Oz);
+                let task_harness_model_config = task_harness_config.and_then(|h| h.model_config());
+                let additional_source_repos = agent_config_snapshot
+                    .and_then(|config| config.additional_source_repos)
+                    .unwrap_or_default();
+                (
+                    task_metadata.parent_run_id,
+                    task_metadata.conversation_id,
+                    Some(task_harness),
+                    task_harness_model_config,
+                    additional_source_repos,
+                )
+            }
+            Ok(None) => (None, None, None, None, Vec::new()),
+            Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
+        };
 
         // Validate the requested `--harness` against the task's harness setting. This avoids the
         // extra conversation-metadata roundtrip that would otherwise be needed downstream when the
@@ -1329,6 +1337,7 @@ impl AgentDriverRunner {
 
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;
+        driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
         // CLI flags continue to take precedence so users can still override per-invocation.
         if driver_options.third_party_harness_model_config.is_none() {

@@ -45,6 +45,7 @@ use crate::agent_block_sections::{
 };
 use crate::agent_message::render_agent_message;
 use crate::orchestration_block::{TuiOrchestrationBlock, TuiOrchestrationBlockEvent};
+use crate::terminal_session_view::BlockingInputSource;
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::TuiCLISubagentView;
@@ -52,7 +53,6 @@ use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeB
 use crate::tui_markdown::{
     TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_table, render_formatted_text,
 };
-use crate::tui_permission_prompt::TuiPermissionPrompt;
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
 const PLANS_URL: &str = "https://www.warp.dev/pricing";
 const BYOK_DOCS_URL: &str =
@@ -65,27 +65,6 @@ const FAILURE_WARNING_PREFIX: &str = "⚠ ";
 struct TuiCodeBlockKey {
     message_id: MessageId,
     section_index: usize,
-}
-
-/// The focused child view for the front-of-queue blocking interaction.
-pub(super) enum TuiBlockingChild {
-    /// An ask-user-question questionnaire.
-    AskQuestion(ViewHandle<TuiAskQuestionView>),
-    /// A standard Yes/No/Other permission request.
-    Permission(ViewHandle<TuiPermissionPrompt>),
-    /// The specialized orchestration configuration request.
-    Orchestration(ViewHandle<TuiOrchestrationBlock>),
-}
-
-impl TuiBlockingChild {
-    /// Returns the view identity used to detect blocker focus transitions.
-    pub(super) fn id(&self) -> EntityId {
-        match self {
-            Self::AskQuestion(view) => view.id(),
-            Self::Permission(view) => view.id(),
-            Self::Orchestration(view) => view.id(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -119,7 +98,6 @@ enum TuiAIBlockSection {
     },
     Summarization {
         message_id: MessageId,
-        finished: bool,
         body: Vec<TuiRichTextSection>,
     },
     /// The agent's task list (todo list), rendered as a collapsible block.
@@ -462,7 +440,14 @@ impl TuiAIBlock {
                     ) {
                         me.sync_action_views(&action_model, ctx);
                     }
-                    ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+                    if matches!(
+                        event,
+                        BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                            | BlocklistAIActionEvent::ExecutingAction(_)
+                            | BlocklistAIActionEvent::FinishedAction { .. }
+                    ) {
+                        ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+                    }
                     me.invalidate_action(event.action_id(), ctx);
                 }
             },
@@ -513,7 +498,7 @@ impl TuiAIBlock {
         let status = self.block_model.status(ctx);
         let output_streaming = status.is_streaming();
         let mut ask_question_actions = Vec::new();
-        let mut file_edit_action_ids = Vec::new();
+        let mut file_edit_actions = Vec::new();
         let mut generic_actions = Vec::new();
         let mut plan_actions = Vec::new();
         let mut shell_command_actions = Vec::new();
@@ -530,8 +515,10 @@ impl TuiAIBlock {
                 self.action_ids.insert(action.id.clone());
                 if let AIAgentActionType::AskUserQuestion { questions } = &action.action {
                     ask_question_actions.push((action.id.clone(), questions.clone()));
-                } else if matches!(&action.action, AIAgentActionType::RequestFileEdits { .. }) {
-                    file_edit_action_ids.push(action.id.clone());
+                } else if let AIAgentActionType::RequestFileEdits { file_edits, .. } =
+                    &action.action
+                {
+                    file_edit_actions.push((action.id.clone(), file_edits.clone()));
                 } else if matches!(
                     &action.action,
                     AIAgentActionType::CreateDocuments(_) | AIAgentActionType::EditDocuments(_)
@@ -629,14 +616,21 @@ impl TuiAIBlock {
                 .insert(action_id, TuiToolCallView::Generic(view));
             ctx.notify();
         }
-        for action_id in file_edit_action_ids {
+        for (action_id, file_edits) in file_edit_actions {
             if self.action_views.contains_key(&action_id) {
                 continue;
             }
             let view_action_id = action_id.clone();
             let conversation_id = self.conversation_id;
+            let file_edits = file_edits.clone();
             let view = ctx.add_typed_action_tui_view(move |ctx| {
-                TuiFileEditsView::new(view_action_id, conversation_id, action_model, ctx)
+                TuiFileEditsView::new(
+                    view_action_id,
+                    conversation_id,
+                    file_edits,
+                    action_model,
+                    ctx,
+                )
             });
             ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
                 TuiFileEditsViewEvent::BlockingStateChanged => {
@@ -800,7 +794,10 @@ impl TuiAIBlock {
     /// by one of this block's child views, and that view is still awaiting
     /// confirmation. Deriving from the action queue (not transcript order)
     /// keeps semantics identical to the GUI's `focus_subview_if_necessary`.
-    pub(super) fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
+    pub(super) fn active_blocking_input_source(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<BlockingInputSource> {
         let action_model = self.action_model.as_ref(ctx);
         let pending = action_model.get_pending_action(ctx)?;
         let action_id = pending.id.clone();
@@ -817,23 +814,23 @@ impl TuiAIBlock {
             TuiToolCallView::AskQuestion(view) => view
                 .as_ref(ctx)
                 .is_awaiting_answers(ctx)
-                .then(|| TuiBlockingChild::AskQuestion(view.clone())),
+                .then(|| BlockingInputSource::AskQuestion(view.clone())),
             TuiToolCallView::OrchestrationBlock(view) => view
                 .as_ref(ctx)
                 .is_awaiting_confirmation(ctx)
-                .then(|| TuiBlockingChild::Orchestration(view.clone())),
+                .then(|| BlockingInputSource::Orchestration(view.clone())),
             TuiToolCallView::Generic(view) => view
                 .as_ref(ctx)
                 .active_permission_prompt(ctx)
-                .map(TuiBlockingChild::Permission),
+                .map(BlockingInputSource::Permission),
             TuiToolCallView::FileEdits(view) => view
                 .as_ref(ctx)
                 .active_permission_prompt(ctx)
-                .map(TuiBlockingChild::Permission),
+                .map(BlockingInputSource::Permission),
             TuiToolCallView::ShellCommand(view) => view
                 .as_ref(ctx)
                 .active_permission_prompt(ctx)
-                .map(TuiBlockingChild::Permission),
+                .map(BlockingInputSource::Permission),
             // Plan tool views render inline and never replace the input.
             TuiToolCallView::Plan(_) => None,
         }
@@ -1212,15 +1209,10 @@ impl TuiAIBlock {
                 self.render_rich_text_sections(body, true, app),
                 app,
             ),
-            TuiAIBlockSection::Summarization {
-                message_id,
-                finished,
-                body,
-            } => render_summarization_section(
+            TuiAIBlockSection::Summarization { message_id, body } => render_summarization_section(
                 &self.collapsible_states,
                 message_id,
-                *finished,
-                self.render_rich_text_sections(body, false, app),
+                self.render_rich_text_sections(body, true, app),
                 app,
             ),
             TuiAIBlockSection::TodoList { message_id, todos } => {
@@ -1335,7 +1327,6 @@ impl TuiAIBlock {
                     }
                     AIAgentOutputMessageType::Summarization {
                         text,
-                        finished_duration,
                         summarization_type: SummarizationType::ConversationSummary,
                         ..
                     } => {
@@ -1343,7 +1334,6 @@ impl TuiAIBlock {
                         if !body.is_empty() {
                             sections.push(TuiAIBlockSection::Summarization {
                                 message_id: message.id.clone(),
-                                finished: finished_duration.is_some(),
                                 body,
                             });
                         }
@@ -1582,17 +1572,14 @@ impl TuiAIBlock {
                     self.render_rich_text_sections(body, true, app),
                     app,
                 ),
-                TuiAIBlockSection::Summarization {
-                    message_id,
-                    finished,
-                    body,
-                } => render_summarization_section(
-                    &self.collapsible_states,
-                    message_id,
-                    *finished,
-                    self.render_rich_text_sections(body, false, app),
-                    app,
-                ),
+                TuiAIBlockSection::Summarization { message_id, body } => {
+                    render_summarization_section(
+                        &self.collapsible_states,
+                        message_id,
+                        self.render_rich_text_sections(body, true, app),
+                        app,
+                    )
+                }
                 TuiAIBlockSection::TodoList { message_id, todos } => {
                     // Statuses resolve against the conversation's todo
                     // history at render time, so superseded lists restyle

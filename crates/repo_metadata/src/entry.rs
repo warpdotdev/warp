@@ -12,7 +12,7 @@ use ignore::gitignore::Gitignore;
 #[cfg(feature = "local_fs")]
 use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
-use warp_errors::report_error;
+use warp_errors::{ErrorExt, register_error, report_error};
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};
@@ -36,6 +36,14 @@ pub enum BuildTreeError {
     #[error("Maximum directory depth exceeded")]
     MaxDepthExceeded,
 }
+
+impl ErrorExt for BuildTreeError {
+    fn is_actionable(&self) -> bool {
+        false
+    }
+}
+
+register_error!(BuildTreeError);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IgnoredPathStrategy {

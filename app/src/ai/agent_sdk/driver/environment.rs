@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,7 @@ use super::AgentDriverError;
 use super::cache_setup;
 use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::ai::cloud_environments::{CodeForge, SourceRepo};
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
@@ -38,6 +38,14 @@ pub enum PrepareEnvironmentError {
     SetupCommand { command: String },
     #[error("Failed to change directory into {repo_name}")]
     ChangeDirectory { repo_name: String },
+    #[error(
+        "Repositories {first_owner}/{repo_name} and {second_owner}/{repo_name} share a clone directory name"
+    )]
+    CloneDirectoryCollision {
+        repo_name: String,
+        first_owner: String,
+        second_owner: String,
+    },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
@@ -54,8 +62,9 @@ pub enum PrepareEnvironmentError {
 /// caller rather than a path-prefix inference, so non-sandbox callers that
 /// happen to pass a path like `/home/agent/...` don't silently flip into
 /// sandbox-only mode.
-pub fn prepare_environment(
-    environment: AmbientAgentEnvironment,
+pub(crate) fn prepare_environment(
+    source_repos: Vec<SourceRepo>,
+    setup_commands: Vec<String>,
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
@@ -64,9 +73,6 @@ pub fn prepare_environment(
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
     async move {
-        let source_repos = environment.effective_repos();
-        let setup_commands = environment.setup_commands;
-
         // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
         // have their own methods for navigating a codebase.
         let should_index_codebase = harness == Harness::Oz;
@@ -99,6 +105,41 @@ pub fn prepare_environment(
 
         result
     }
+}
+
+/// Merge environment repositories with task-level repositories, preserving
+/// environment order and de-duplicating by forge plus case-insensitive owner
+/// and repository names.
+pub(super) fn merge_repos_deduped(
+    environment_repos: Vec<SourceRepo>,
+    additional_repos: Vec<SourceRepo>,
+) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
+    let mut seen = HashSet::new();
+    let mut names = HashMap::<String, (String, CodeForge)>::new();
+    let mut merged = Vec::with_capacity(environment_repos.len() + additional_repos.len());
+
+    for repo in environment_repos.into_iter().chain(additional_repos) {
+        let forge = repo.code_forge.unwrap_or_default();
+        let key = (forge, repo.owner.to_lowercase(), repo.repo.to_lowercase());
+        if !seen.insert(key) {
+            continue;
+        }
+
+        if let Some((owner, existing_forge)) =
+            names.insert(repo.repo.clone(), (repo.owner.clone(), forge))
+            && (owner != repo.owner || existing_forge != forge)
+        {
+            return Err(PrepareEnvironmentError::CloneDirectoryCollision {
+                repo_name: repo.repo,
+                first_owner: owner,
+                second_owner: repo.owner,
+            });
+        }
+
+        merged.push(repo);
+    }
+
+    Ok(merged)
 }
 
 #[allow(clippy::too_many_arguments)]

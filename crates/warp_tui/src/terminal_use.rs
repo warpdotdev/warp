@@ -69,8 +69,9 @@ fn tui_input_target_for_state(
     startup_script_visible: bool,
     bootstrap_precmd_done: bool,
     inline_process_owns_input: bool,
+    agent_owns_alt_screen_input: bool,
 ) -> TuiInputTarget {
-    if alt_screen_active
+    if (alt_screen_active && !agent_owns_alt_screen_input)
         || (script_execution && startup_script_visible)
         || inline_process_owns_input
     {
@@ -84,14 +85,14 @@ fn tui_input_target_for_state(
 
 pub(super) fn tui_input_target(terminal_model: &TerminalModel) -> TuiInputTarget {
     let block_list = terminal_model.block_list();
+    let active_block = block_list.active_block();
     tui_input_target_for_state(
         terminal_model.is_alt_screen_active(),
         block_list.is_script_execution(),
-        block_list
-            .active_block()
-            .is_visible(block_list.transcript_scope()),
+        active_block.is_visible(block_list.transcript_scope()),
         block_list.is_bootstrapping_precmd_done(),
         inline_process_owns_input(terminal_model),
+        active_block.is_agent_in_control() || active_block.is_agent_tagged_in(),
     )
 }
 

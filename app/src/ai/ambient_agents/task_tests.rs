@@ -2,7 +2,7 @@ use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 
 use super::{
-    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskState, TaskStatusErrorCode,
+    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusErrorCode,
     TaskStatusMessage,
 };
 
@@ -142,4 +142,15 @@ fn ambient_agent_task_deserializes_run_time_iso8601() {
         serde_json::from_value(task_json_with_run_time("run_time", json!("PT2M30S"))).unwrap();
 
     assert_eq!(task.run_time(), Some(Duration::seconds(150)));
+}
+
+#[test]
+fn ambient_agent_task_deserializes_github_webhook_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("GITHUB_WEBHOOK");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, Some(AgentSource::GitHubWebhook));
+    assert!(task.blocks_cloud_followups());
 }

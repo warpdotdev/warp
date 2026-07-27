@@ -66,6 +66,22 @@ fn command_registry_filters_explicit_surface_metadata() {
         }
     ));
 }
+
+#[test]
+fn voice_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command == &VOICE)
+    );
+    assert!(
+        !all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .any(|command| command == &VOICE)
+    );
+    assert!(VOICE.argument.is_none());
+    assert_eq!(VOICE.description, "Start voice input (Ctrl-S)");
+}
 #[test]
 fn view_logs_command_is_registered_only_for_tui_mode() {
     assert!(
@@ -129,6 +145,20 @@ fn logout_command_is_registered_only_for_tui_mode() {
         !all_commands(settings::SettingsMode::Gui)
             .iter()
             .any(|command| command == &LOGOUT)
+    );
+}
+
+#[test]
+fn version_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command == &VERSION)
+    );
+    assert!(
+        !all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .any(|command| command == &VERSION)
     );
 }
 
@@ -268,40 +298,53 @@ fn strip_command_prefix_substring_not_matched() {
 }
 
 #[test]
-fn natural_language_detection_commands_are_registered_only_for_tui_mode() {
+fn natural_language_detection_command_is_registered_only_for_tui_mode() {
     let tui_commands = all_commands(settings::SettingsMode::Tui);
     assert!(
         tui_commands
             .iter()
-            .any(|command| command == &ENABLE_NATURAL_LANGUAGE_DETECTION)
-    );
-    assert!(
-        tui_commands
-            .iter()
-            .any(|command| command == &DISABLE_NATURAL_LANGUAGE_DETECTION)
+            .any(|command| command == &NATURAL_LANGUAGE_DETECTION)
     );
 
     let gui_commands = all_commands(settings::SettingsMode::Gui);
     assert!(
         !gui_commands
             .iter()
-            .any(|command| command == &ENABLE_NATURAL_LANGUAGE_DETECTION)
-    );
-    assert!(
-        !gui_commands
-            .iter()
-            .any(|command| command == &DISABLE_NATURAL_LANGUAGE_DETECTION)
+            .any(|command| command == &NATURAL_LANGUAGE_DETECTION)
     );
 }
 
 #[test]
-fn natural_language_detection_commands_are_ai_enabled_and_execute_immediately() {
-    for command in [
-        &ENABLE_NATURAL_LANGUAGE_DETECTION,
-        &DISABLE_NATURAL_LANGUAGE_DETECTION,
-    ] {
-        assert_eq!(command.availability, Availability::AI_ENABLED);
-        assert!(!command.auto_enter_ai_mode);
-        assert!(command.argument.is_none());
-    }
+fn natural_language_detection_command_is_ai_enabled_and_executes_immediately() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::NaturalLanguageDetection)
+        .expect("expected /natural-language-detection to be registered in TUI mode");
+    assert_eq!(command.availability, Availability::AI_ENABLED);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
+}
+
+#[test]
+fn theme_command_is_registered_only_for_tui_mode() {
+    let tui_commands = all_commands(settings::SettingsMode::Tui);
+    let command = tui_commands
+        .iter()
+        .find(|command| command.kind == SlashCommandKind::Theme)
+        .expect("expected /theme to be registered in TUI mode");
+
+    assert_eq!(command, &THEME);
+    assert_eq!(command.availability, Availability::ALWAYS);
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /theme to require an argument");
+    assert!(!argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(argument.hint_text, Some("<auto|light|dark>"));
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Theme)
+    );
 }

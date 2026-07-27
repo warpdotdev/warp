@@ -43,3 +43,17 @@ fn accepts_startup_without_resume() {
     assert_eq!(args.resume, None);
     assert_eq!(args.api_key, None);
 }
+
+#[test]
+fn version_flag_prints_cli_version() {
+    let error = TuiArgs::try_parse_from(["warp", "--version"])
+        .expect_err("--version should short-circuit clap parsing");
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+    // `run()` prints only CLI_VERSION (no binary-name precursor). Clap's
+    // DisplayVersion payload still contains the configured version string.
+    assert!(
+        error.to_string().contains(super::CLI_VERSION),
+        "--version should be backed by the configured CLI version"
+    );
+}

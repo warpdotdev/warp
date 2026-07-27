@@ -91,6 +91,14 @@ impl From<GqlTeamMember> for TeamMember {
     }
 }
 
+fn order_authenticated_teams_first(workspace: &mut Workspace, user_uid: UserUid) {
+    let (member_teams, non_member_teams): (Vec<_>, Vec<_>) = workspace
+        .teams
+        .drain(..)
+        .partition(|team| team.members.iter().any(|member| member.uid == user_uid));
+    workspace.teams = member_teams.into_iter().chain(non_member_teams).collect();
+}
+
 impl From<GqlManagedByokByoePolicy> for ManagedByokByoePolicy {
     fn from(gql_managed_byok_byoe_policy: GqlManagedByokByoePolicy) -> ManagedByokByoePolicy {
         Self {
@@ -1116,6 +1124,7 @@ impl From<GqlWorkspace> for Workspace {
 
 impl From<GqlUser> for WorkspacesMetadataResponse {
     fn from(gql_user: GqlUser) -> WorkspacesMetadataResponse {
+        let user_uid = UserUid::new(&gql_user.profile.uid);
         let feature_model_choices = gql_user
             .workspaces
             .first()
@@ -1130,7 +1139,14 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
                 // a workspace, and the server no longer returns a placeholder workspace.
                 gql_workspace.uid != PLACEHOLDER_WORKSPACE_UID.into()
             })
-            .map(|gql_workspace| gql_workspace.into())
+            .map(|gql_workspace| {
+                let mut workspace = gql_workspace.into();
+                // TODO(isaiah): this is a temporary measure while the client doesn't support many teams per user.
+                // Workspace admins technically have access to every team in their workspace, but when they're on the
+                // client, they should only see the 1 team they're formally a part of.
+                order_authenticated_teams_first(&mut workspace, user_uid);
+                workspace
+            })
             .collect();
 
         let joinable_teams = gql_user
@@ -1153,6 +1169,10 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "gql_convert_tests.rs"]
+mod tests;
 
 pub fn object_update_message_from_gql(value: WarpDriveUpdate) -> Result<ObjectUpdateMessage> {
     match value {
