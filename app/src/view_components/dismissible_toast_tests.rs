@@ -1,12 +1,14 @@
 use std::time::Duration;
 
 use warp_core::ui::appearance::Appearance;
+use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::{App, TypedActionView, ViewHandle};
 
 use super::{
-    COLLAPSED_MAX_CHARS, DismissibleToast, DismissibleToastAction, DismissibleToastStack,
-    ToastFlavor, toast_message_is_truncated, truncate_toast_message,
+    COLLAPSED_MAX_CHARS, COLLAPSED_MAX_LINES, DismissibleToast, DismissibleToastAction,
+    DismissibleToastStack, ToastFlavor, is_expand_toggle_keystroke, toast_message_is_truncated,
+    truncate_toast_message,
 };
 
 fn stack_handle(app: &mut App) -> ViewHandle<DismissibleToastStack<()>> {
@@ -15,6 +17,28 @@ fn stack_handle(app: &mut App) -> ViewHandle<DismissibleToastStack<()>> {
         DismissibleToastStack::new(Duration::from_secs(30))
     });
     stack
+}
+#[test]
+fn newline_heavy_message_is_truncated_to_collapsed_lines() {
+    let message = "line one\nline two\nline three";
+
+    assert!(toast_message_is_truncated(message));
+    let collapsed = truncate_toast_message(message);
+    assert_eq!(collapsed.lines().count(), COLLAPSED_MAX_LINES);
+    assert!(collapsed.ends_with('…'));
+}
+
+#[test]
+fn expand_toggle_accepts_enter_and_space_without_modifiers() {
+    assert!(is_expand_toggle_keystroke(
+        &Keystroke::parse("enter").expect("enter should parse")
+    ));
+    assert!(is_expand_toggle_keystroke(
+        &Keystroke::parse("space").expect("space should parse")
+    ));
+    assert!(!is_expand_toggle_keystroke(
+        &Keystroke::parse("ctrl-enter").expect("ctrl-enter should parse")
+    ));
 }
 
 fn toast(text: impl Into<String>) -> DismissibleToast<()> {
@@ -73,12 +97,21 @@ fn add_persistent_toasts_caps_at_three_newest() {
 fn evicted_ephemeral_toast_aborts_timer() {
     App::test((), |mut app| async move {
         let stack = stack_handle(&mut app);
-        stack.update(&mut app, |stack, ctx| {
+        let evicted_abort_handle = stack.update(&mut app, |stack, ctx| {
             stack.add_ephemeral_toast(toast("oldest"), ctx);
             stack.add_persistent_toast(toast("second"), ctx);
             stack.add_persistent_toast(toast("third"), ctx);
+            stack
+                .toasts
+                .first()
+                .and_then(|toast| toast.abort_handle.as_ref())
+                .expect("oldest toast should have an ephemeral timer")
+                .abort_handle()
+        });
+        stack.update(&mut app, |stack, ctx| {
             stack.add_persistent_toast(toast("newest"), ctx);
         });
+        assert!(evicted_abort_handle.is_aborted());
 
         stack.read(&app, |stack, _| {
             assert_eq!(stack.toasts.len(), 3);

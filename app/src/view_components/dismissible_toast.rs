@@ -36,21 +36,34 @@ const ICON_RIGHT_MARGIN: f32 = 8.;
 const CLOSE_BUTTON_SIZE: f32 = 16.;
 const MAX_VISIBLE_TOASTS: usize = 3;
 const COLLAPSED_MAX_CHARS: usize = 140;
+const COLLAPSED_MAX_LINES: usize = 2;
 
 const SUCCESS_ICON_PATH: &str = "bundled/svg/check-skinny.svg";
 const ERROR_ICON_PATH: &str = "bundled/svg/alert-circle.svg";
 
 fn toast_message_is_truncated(message: &str) -> bool {
     message.chars().count() > COLLAPSED_MAX_CHARS - 3
+        || message.lines().count() > COLLAPSED_MAX_LINES
 }
 
 fn truncate_toast_message(message: &str) -> String {
-    if toast_message_is_truncated(message) {
+    if message.chars().count() > COLLAPSED_MAX_CHARS - 3 {
         let truncated: String = message.chars().take(COLLAPSED_MAX_CHARS - 3).collect();
+        format!("{truncated}…")
+    } else if message.lines().count() > COLLAPSED_MAX_LINES {
+        let truncated = message
+            .lines()
+            .take(COLLAPSED_MAX_LINES)
+            .collect::<Vec<_>>()
+            .join("\n");
         format!("{truncated}…")
     } else {
         message.to_owned()
     }
+}
+
+fn is_expand_toggle_keystroke(keystroke: &Keystroke) -> bool {
+    keystroke.is_unmodified_enter() || keystroke.is_unmodified_key(" ")
 }
 
 #[cfg(test)]
@@ -491,11 +504,13 @@ impl<A: Action + Clone> DismissibleToast<A> {
             })
             .build()
             .finish();
-        let message_element = if message_expanded || !toast_message_is_truncated(&self.main_text) {
+        let message_element = if message_expanded {
             message_element
         } else {
             ConstrainedBox::new(message_element)
-                .with_max_height(font_size * appearance.line_height_ratio() * 2.)
+                .with_max_height(
+                    font_size * appearance.line_height_ratio() * COLLAPSED_MAX_LINES as f32,
+                )
                 .finish()
         };
 
@@ -521,11 +536,21 @@ impl<A: Action + Clone> DismissibleToast<A> {
                     ..Default::default()
                 })
                 .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(DismissibleToastAction::ToggleMessageExpanded(uuid))
+                })
                 .finish();
             let toggle_button = EventHandler::new(toggle_button)
-                .on_left_mouse_down(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(DismissibleToastAction::ToggleMessageExpanded(uuid));
-                    DispatchEventResult::StopPropagation
+                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+                .on_keydown(move |ctx, _, keystroke| {
+                    if is_expand_toggle_keystroke(keystroke) {
+                        ctx.dispatch_typed_action(DismissibleToastAction::ToggleMessageExpanded(
+                            uuid,
+                        ));
+                        DispatchEventResult::StopPropagation
+                    } else {
+                        DispatchEventResult::PropagateToParent
+                    }
                 })
                 .finish();
             right_aligned.add_child(
