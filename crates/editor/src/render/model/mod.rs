@@ -87,6 +87,8 @@ pub(crate) mod test_utils;
 /// scrolling can introduce a large amount of floating-point rounding error.
 pub const UNIT_MARGIN: (f32, i32) = (0.01, 2);
 const AUTO_SCROLL_MARGIN: f32 = 12.;
+/// Fixed tab-stop width for TUI char-cell layout.
+const CHAR_CELL_TAB_SIZE: usize = 4;
 
 /// The minimum height of a paragraph, not including padding or margins.
 pub const PARAGRAPH_MIN_HEIGHT: Pixels = Pixels::new(24.);
@@ -438,10 +440,9 @@ impl CharCellTemporaryBlock {
         insert_before: LineCount,
         line_decoration: Option<ColorU>,
         inline_decorations: Vec<(Range<usize>, ColorU)>,
-        tab_size: u8,
     ) -> Self {
         let layout_content = content.strip_suffix('\n').unwrap_or(&content);
-        let char_widths = char_cell_display_widths(layout_content, tab_size);
+        let char_widths = char_cell_display_widths(layout_content);
         let line_breaks = char_cell_line_break_opportunities(layout_content);
         Self {
             content,
@@ -454,10 +455,8 @@ impl CharCellTemporaryBlock {
         }
     }
 
-    /// Converts a GUI-side [`TemporaryBlock`] into a char-cell ghost block,
-    /// expanding tab characters using `tab_size` so the layout widths agree
-    /// with what the paint path will render.
-    fn from_block(block: TemporaryBlock, tab_size: u8) -> Self {
+    /// Converts a GUI-side [`TemporaryBlock`] into a char-cell ghost block.
+    fn from_block(block: TemporaryBlock) -> Self {
         let inline_decorations = block
             .inline_text_decorations
             .into_iter()
@@ -474,7 +473,6 @@ impl CharCellTemporaryBlock {
             block.insert_before,
             block.line_decoration.map(|fill| fill.into_solid()),
             inline_decorations,
-            tab_size,
         )
     }
 }
@@ -517,28 +515,22 @@ impl CharCellTextIndex {
         index
     }
 
-    fn rebuild(&mut self, text: &str, terminal_width: u16, tab_size: u8) {
-        self.rebuild_text_metadata(text, tab_size);
+    fn rebuild(&mut self, text: &str, terminal_width: u16) {
+        self.rebuild_text_metadata(text);
         self.rebuild_wrap_cache(terminal_width);
         self.debug_validate();
     }
-
-    fn rebuild_text_metadata(&mut self, text: &str, tab_size: u8) {
+    fn rebuild_text_metadata(&mut self, text: &str) {
         self.line_starts.clear();
         self.char_widths.clear();
         self.line_breaks.clear();
         self.line_starts.push(CharOffset::zero());
         let line_starts = &mut self.line_starts;
-        append_char_cell_display_widths(
-            text,
-            &mut self.char_widths,
-            tab_size,
-            |ch, next_offset| {
-                if ch == '\n' {
-                    line_starts.push(CharOffset::from(next_offset));
-                }
-            },
-        );
+        append_char_cell_display_widths(text, &mut self.char_widths, |ch, next_offset| {
+            if ch == '\n' {
+                line_starts.push(CharOffset::from(next_offset));
+            }
+        });
         self.line_breaks
             .extend(char_cell_line_break_opportunities(text));
     }
@@ -668,33 +660,22 @@ pub struct CharCellState {
     /// height. Lives here — with the display-row math it windows — mirroring
     /// how the GUI keeps scroll state on `RenderState` rather than in views.
     scroll_offset: Cell<u32>,
-    /// Tab stop size in display columns. Applied when computing per-character
-    /// display widths for both the buffer text index and ghost blocks; layout
-    /// uses those widths for geometry and paint consumes them when projecting
-    /// row text. Defaults to 4; set from the editor's
-    /// `ParagraphStyles::fixed_width_tab_size` when available.
-    tab_size: u8,
 }
 
 impl CharCellState {
-    fn new(
-        terminal_width: u16,
-        tab_size: u8,
-        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
-    ) -> Self {
+    fn new(terminal_width: u16, hidden_lines: Option<ModelHandle<HiddenLinesModel>>) -> Self {
         Self {
             terminal_width: Cell::new(terminal_width),
             text_index: RefCell::new(CharCellTextIndex::new(terminal_width)),
             temporary_blocks: RefCell::new(Vec::new()),
             hidden_lines,
             scroll_offset: Cell::new(0),
-            tab_size,
         }
     }
 
     #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test(terminal_width: u16) -> Self {
-        Self::new(terminal_width, 4, None)
+        Self::new(terminal_width, None)
     }
 
     /// Replace the stored ghost lines. Replace-all semantics, mirroring the
@@ -705,13 +686,12 @@ impl CharCellState {
         *self.temporary_blocks.borrow_mut() = blocks;
     }
 
-    /// Converts raw [`TemporaryBlock`]s into char-cell ghost blocks using
-    /// this state's tab size, then stores them sorted by insertion line.
+    /// Converts raw [`TemporaryBlock`]s into char-cell ghost blocks, then
+    /// stores them sorted by insertion line.
     fn set_temporary_blocks_from_source(&self, blocks: impl IntoIterator<Item = TemporaryBlock>) {
-        let tab_size = self.tab_size;
         let mut converted: Vec<CharCellTemporaryBlock> = blocks
             .into_iter()
-            .map(|block| CharCellTemporaryBlock::from_block(block, tab_size))
+            .map(CharCellTemporaryBlock::from_block)
             .collect();
         converted.sort_by_key(|block| block.insert_before);
         *self.temporary_blocks.borrow_mut() = converted;
@@ -796,7 +776,6 @@ impl CharCellState {
 
     #[cfg(any(test, feature = "test-util"))]
     pub fn set_test_temporary_blocks(&self, blocks: Vec<(String, usize)>) {
-        let tab_size = self.tab_size;
         self.set_temporary_blocks(
             blocks
                 .into_iter()
@@ -806,7 +785,6 @@ impl CharCellState {
                         LineCount::from(insert_before),
                         None,
                         Vec::new(),
-                        tab_size,
                     )
                 })
                 .collect(),
@@ -1000,7 +978,7 @@ impl CharCellState {
     pub fn update_text(&self, text: &str) {
         self.text_index
             .borrow_mut()
-            .rebuild(text, self.terminal_width.get(), self.tab_size);
+            .rebuild(text, self.terminal_width.get());
     }
 }
 
@@ -2457,9 +2435,8 @@ impl RenderState {
     /// Required (unlike [`Self::new`]'s optional handle): every char-cell editor is
     /// built through `CodeEditorModel::new_tui`, which always has one.
     ///
-    /// `styles` is consulted for `code_text.fixed_width_tab_size` to derive the tab-stop size
-    /// used for char-cell layout and paint; all other style fields are unused in CharCell mode.
-    /// Callers (e.g. `warp_tui`) should supply a minimal stub with the desired tab size set.
+    /// `styles` is retained for API compatibility but its fields are unused in
+    /// CharCell mode. Callers (e.g. `warp_tui`) may supply a minimal stub.
     pub fn new_tui(
         terminal_width: u16,
         styles: RichTextStyles,
@@ -2476,8 +2453,6 @@ impl RenderState {
         // we create an empty tree rather than the usual style-dependent trailing newline.
         let entity_id = ctx.model_id();
         let (viewport_width, viewport_height) = (Pixels::zero(), Pixels::zero());
-        // Read tab_size before moving `styles` into the struct.
-        let tab_size = styles.code_text.fixed_width_tab_size.unwrap_or(4);
         Self {
             styles,
             show_final_trailing_newline_when_non_empty: false,
@@ -2501,7 +2476,6 @@ impl RenderState {
             hidden_lines: None,
             layout_mode: LayoutMode::CharCell(CharCellState::new(
                 terminal_width,
-                tab_size,
                 Some(hidden_lines),
             )),
         }
@@ -5689,11 +5663,11 @@ impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
 /// character's following offset without allocating intermediate metadata.
 ///
 /// Tab characters (`\t`) are expanded to their actual visual width — the
-/// number of spaces needed to reach the next tab stop at `tab_size`
-/// (minimum 1) from the current column position, which is tracked across
-/// each logical line and reset at every `\n`.  All other graphemes are
-/// charged their Unicode display width (0 for non-printing control
-/// characters, 2 for CJK wide glyphs, 1 otherwise).
+/// number of spaces needed to reach the next
+/// [`CHAR_CELL_TAB_SIZE`]-column tab stop from the current column position,
+/// which is tracked across each logical line and reset at every `\n`. All
+/// other graphemes are charged their Unicode display width (0 for
+/// non-printing control characters, 2 for CJK wide glyphs, 1 otherwise).
 ///
 /// This means `char_widths` entries for tabs match the spaces that paint
 /// must write, so layout (wrapping, cursor column, `offset_at`) and paint
@@ -5701,16 +5675,14 @@ impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
 fn append_char_cell_display_widths(
     text: &str,
     widths: &mut Vec<u8>,
-    tab_size: u8,
     mut visit: impl FnMut(char, usize),
 ) {
-    let tab_size = (tab_size as usize).max(1);
     let mut col: usize = 0;
     for grapheme in text.graphemes(true) {
         // A tab is always a single-char grapheme; handle it specially so its
         // display width advances to the next tab stop from the current column.
         let width = if grapheme == "\t" {
-            let spaces = tab_size - (col % tab_size);
+            let spaces = CHAR_CELL_TAB_SIZE - (col % CHAR_CELL_TAB_SIZE);
             spaces.min(usize::from(u8::MAX)) as u8
         } else {
             grapheme.width().min(usize::from(u8::MAX)) as u8
@@ -5730,11 +5702,11 @@ fn append_char_cell_display_widths(
 
 /// Returns one width entry per character, charging each grapheme's width to
 /// its first character and zero to the remaining characters.
-/// Tab characters are expanded to their visual width using `tab_size`
-/// (see [`append_char_cell_display_widths`]).
-fn char_cell_display_widths(text: &str, tab_size: u8) -> Vec<u8> {
+/// Tab characters are expanded to their visual width (see
+/// [`append_char_cell_display_widths`]).
+fn char_cell_display_widths(text: &str) -> Vec<u8> {
     let mut widths = Vec::with_capacity(text.len());
-    append_char_cell_display_widths(text, &mut widths, tab_size, |_, _| {});
+    append_char_cell_display_widths(text, &mut widths, |_, _| {});
     widths
 }
 

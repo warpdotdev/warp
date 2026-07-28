@@ -9,7 +9,7 @@ use super::{DisplayRow, DisplayRowKind};
 /// A `CharCellState` with wrap tables built for `text`, the public entry
 /// point for everything under test.
 fn state(text: &str, terminal_width: u16) -> CharCellState {
-    let state = CharCellState::new(terminal_width, 4, None);
+    let state = CharCellState::new(terminal_width, None);
     state.update_text(text);
     state
 }
@@ -20,7 +20,6 @@ fn ghost(content: &str, insert_before: usize) -> CharCellTemporaryBlock {
         LineCount::from(insert_before),
         None,
         Vec::new(),
-        4,
     )
 }
 

@@ -1491,7 +1491,7 @@ mod char_cell {
     /// string (mirrors `CharCellState::update_text` logic) so tests can
     /// construct the char-cell layout inputs without a full `RenderState`.
     fn line_starts_for(text: &str) -> (Vec<CharOffset>, Vec<bool>, Vec<u8>) {
-        let char_widths = char_cell_display_widths(text, 4);
+        let char_widths = char_cell_display_widths(text);
         let mut starts = vec![CharOffset::zero()];
         for (i, ch) in text.chars().enumerate() {
             if ch == '\n' {
@@ -1664,7 +1664,7 @@ mod char_cell {
                 .map(|_| alphabet[rng.gen_range(0..alphabet.len())])
                 .collect();
             let width = rng.gen_range(0..20);
-            let state = CharCellState::new(width, 4, None);
+            let state = CharCellState::new(width, None);
             state.update_text(&text);
             let (starts, line_breaks, widths) = line_starts_for(&text);
             assert_eq!(
@@ -1761,7 +1761,7 @@ mod char_cell {
         let text = "abcd";
         let width = 4;
         let eof = CharOffset::from(text.len());
-        let state = CharCellState::new(width, 4, None);
+        let state = CharCellState::new(width, None);
         state.update_text(text);
         let point = state.offset_to_softwrap_point(eof);
         assert_eq!(point, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
@@ -1836,16 +1836,16 @@ mod char_cell {
 
     #[test]
     fn display_width_basic() {
-        assert_eq!(char_cell_display_widths("a", 4), vec![1]);
-        assert_eq!(char_cell_display_widths("你", 4), vec![2]);
-        assert_eq!(char_cell_display_widths("\u{0301}", 4), vec![0]);
+        assert_eq!(char_cell_display_widths("a"), vec![1]);
+        assert_eq!(char_cell_display_widths("你"), vec![2]);
+        assert_eq!(char_cell_display_widths("\u{0301}"), vec![0]);
     }
 
     #[test]
     fn display_widths_preserve_char_offsets_for_graphemes() {
-        assert_eq!(char_cell_display_widths("\u{2328}\u{fe0f}", 4), vec![2, 0]);
-        assert_eq!(char_cell_display_widths("👨‍👩‍👧‍👦", 4), vec![2, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(char_cell_display_widths("🇺🇸", 4), vec![2, 0]);
+        assert_eq!(char_cell_display_widths("\u{2328}\u{fe0f}"), vec![2, 0]);
+        assert_eq!(char_cell_display_widths("👨‍👩‍👧‍👦"), vec![2, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(char_cell_display_widths("🇺🇸"), vec![2, 0]);
     }
 
     #[test]
@@ -2015,14 +2015,14 @@ mod char_cell_scroll {
 
     /// A 4-column state with five one-row logical lines ("l0".."l4").
     fn five_row_state() -> CharCellState {
-        let state = CharCellState::new(4, 4, None);
+        let state = CharCellState::new(4, None);
         state.update_text("l0\nl1\nl2\nl3\nl4");
         state
     }
 
     #[test]
     fn text_index_rebuilds_as_one_valid_snapshot() {
-        let state = CharCellState::new(10, 4, None);
+        let state = CharCellState::new(10, None);
         state.update_text("你\nab");
         let index = state.text_index.borrow();
         assert_eq!(
@@ -2040,7 +2040,7 @@ mod char_cell_scroll {
 
     #[test]
     fn terminal_width_rebuilds_only_visual_rows() {
-        let state = CharCellState::new(10, 4, None);
+        let state = CharCellState::new(10, None);
         state.update_text("abcdef");
         assert_eq!(state.max_line(), LineCount(1));
         state.set_terminal_width(4);
@@ -2089,7 +2089,7 @@ mod char_cell_scroll {
 
     #[test]
     fn clamp_scroll_offset_repairs_stale_offset_without_following_cursor() {
-        let state = CharCellState::new(3, 4, None);
+        let state = CharCellState::new(3, None);
         state.update_text("abcdef");
         state.scroll_by(100, 1, CharOffset::from(6), &[]);
         assert_eq!(state.scroll_offset(), 2);
