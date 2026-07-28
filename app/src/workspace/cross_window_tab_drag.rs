@@ -1607,6 +1607,19 @@ impl CrossWindowTabDrag {
         ctx.windows().show_window_and_focus_app(preview_window_id);
         Self::deferred_focus(preview_window_id, ctx);
 
+        let members = drag.member_pane_group_ids();
+        if !members.is_empty() {
+            // Group drag: cleanup is by member identity, never by index.
+            return if drag.source_is_own_preview() {
+                DropResult::CloseSourceWindowForGroup {
+                    member_pane_group_ids: members.to_vec(),
+                }
+            } else {
+                DropResult::RemoveSourceGroup {
+                    member_pane_group_ids: members.to_vec(),
+                }
+            };
+        }
         if drag.source_is_own_preview() {
             DropResult::CloseSourceWindow {
                 transferred_tab_index: drag.source_tab_index(),
@@ -1653,6 +1666,28 @@ impl CrossWindowTabDrag {
             return DropResult::NoOp;
         }
 
+        let members = drag.member_pane_group_ids();
+        if !members.is_empty() {
+            return if drag.source_is_own_preview() {
+                log::info!(
+                    "tab_drag: finalize_handoff -> CloseSourceWindowForGroup members={}",
+                    members.len()
+                );
+                DropResult::CloseSourceWindowForGroup {
+                    member_pane_group_ids: members.to_vec(),
+                }
+            } else {
+                log::info!(
+                    "tab_drag: finalize_handoff -> RemoveSourceGroupAndClosePreview members={} preview_wid={}",
+                    members.len(),
+                    drag.preview_window_id()
+                );
+                DropResult::RemoveSourceGroupAndClosePreview {
+                    member_pane_group_ids: members.to_vec(),
+                    preview_window_id: drag.preview_window_id(),
+                }
+            };
+        }
         if drag.source_is_own_preview() {
             log::info!(
                 "tab_drag: finalize_handoff -> CloseSourceWindow transferred_tab_index={}",
