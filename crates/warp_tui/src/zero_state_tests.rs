@@ -9,7 +9,7 @@ use warpui::{EntityIdMap, SingletonEntity};
 use warpui_core::App;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, text_width,
 };
 
 use super::{LEFT_COLUMN_COLS, build_zero_state_overlay, mcp_status_label};
@@ -134,7 +134,8 @@ fn render_to_buffer(
     buffer
 }
 
-/// At a wide terminal the path header must NOT be capped at LEFT_COLUMN_COLS.
+/// When the terminal is wide enough, the path header must stay on one row and
+/// must not be capped at LEFT_COLUMN_COLS.
 ///
 /// Calls the real `build_zero_state_overlay` (the same function used by
 /// `TuiZeroStateView::render`) and asserts the path appears verbatim in the
@@ -174,9 +175,10 @@ fn zero_state_path_header_not_truncated_at_wide_terminal() {
                 "resolved header ({header_text:?}) must still exceed LEFT_COLUMN_COLS"
             );
 
+            // Give the overlay exactly enough width for the displayed path.
             // Call build_zero_state_overlay -- the same function render() calls.
             let overlay = build_zero_state_overlay(Some(long_cwd), &builder, app_ctx);
-            let buffer = render_to_buffer(overlay, app_ctx, 200, 12);
+            let buffer = render_to_buffer(overlay, app_ctx, text_width(&header_text), 12);
             let lines = buffer.to_lines();
 
             // The path header should appear as an exact-match row somewhere in the
@@ -203,11 +205,10 @@ fn zero_state_path_header_not_truncated_at_wide_terminal() {
     });
 }
 
-/// At a narrow terminal the layout must degrade gracefully: path clips to the
-/// available width without overflow or panic, and the clipped content matches
-/// exactly what `abbreviate_home_prefix` returns for the cwd.
+/// At a narrow terminal the complete displayed path must wrap across rows
+/// without losing content.
 #[test]
-fn zero_state_path_header_clipped_gracefully_at_narrow_terminal() {
+fn zero_state_path_header_wraps_without_losing_content_at_narrow_terminal() {
     App::test((), |mut app| async move {
         register_tui_session_view_test_singletons(&mut app);
         app.update(crate::autoupdate::TuiAutoupdater::register);
@@ -222,7 +223,7 @@ fn zero_state_path_header_clipped_gracefully_at_narrow_terminal() {
 
             let builder = crate::tui_builder::TuiUiBuilder::from_app(app_ctx);
 
-            // Derive expected clipped content from header_text (the abbreviated path),
+            // Derive expected wrapped rows from header_text (the abbreviated path),
             // not from long_cwd -- so the assertion is correct even if $HOME changes.
             let header_text = {
                 use ai::project_context::model::ProjectContextModel;
@@ -232,8 +233,15 @@ fn zero_state_path_header_clipped_gracefully_at_narrow_terminal() {
                     ProjectContextModel::as_ref(app_ctx).find_applicable_project_rules(&cwd_path);
                 super::project_section_header_text(long_cwd, rules.as_ref())
             };
-            let expected_clipped: String =
-                header_text.chars().take(narrow_width as usize).collect();
+            let header_chars = header_text.chars().collect::<Vec<_>>();
+            let expected_wrapped = header_chars
+                .chunks(usize::from(narrow_width))
+                .map(|chunk| chunk.iter().collect::<String>())
+                .collect::<Vec<_>>();
+            assert!(
+                expected_wrapped.len() > 1,
+                "test path must wrap at the narrow terminal width"
+            );
 
             let overlay = build_zero_state_overlay(Some(long_cwd), &builder, app_ctx);
             let buffer = render_to_buffer(overlay, app_ctx, narrow_width, 12);
@@ -244,11 +252,16 @@ fn zero_state_path_header_clipped_gracefully_at_narrow_terminal() {
                 buffer.area.width, narrow_width,
                 "buffer width should be clamped to narrow_width"
             );
-            // At least one row should contain the clipped path.
-            let has_clipped_row = lines.iter().any(|line| line.trim_end() == expected_clipped);
+            // The wrapped path rows must appear consecutively so joining them
+            // reconstructs the complete displayed path.
+            let has_wrapped_rows = lines.windows(expected_wrapped.len()).any(|rows| {
+                rows.iter()
+                    .map(|row| row.trim_end())
+                    .eq(expected_wrapped.iter().map(String::as_str))
+            });
             assert!(
-                has_clipped_row,
-                "a row equal to the clipped path ({expected_clipped:?}) must appear \
+                has_wrapped_rows,
+                "wrapped path rows {expected_wrapped:?} must appear consecutively \
                  in narrow output;\ngot lines:\n{}",
                 lines.join("\n")
             );

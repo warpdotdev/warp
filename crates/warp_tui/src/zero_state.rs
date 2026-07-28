@@ -200,12 +200,12 @@ fn build_zero_state_overlay(
     // The project path header lives *outside* the 48-column constrained boxes so it
     // can expand to the full available terminal width. Give it a blank-row separator
     // from the top section and place it directly above the constrained bottom section.
-    // Only truncate the path when the terminal is genuinely too narrow to fit it.
+    // Keep the full displayed path: it stays on one row when it fits and wraps only
+    // when the terminal is genuinely too narrow.
     if let Some(path_header_text) = path_header_text {
         let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
         let path_header = TuiText::new(path_header_text)
             .with_style(header_style)
-            .truncate()
             .finish();
         TuiFlex::column()
             .child(constrained_top)
