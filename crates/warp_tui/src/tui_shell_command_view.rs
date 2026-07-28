@@ -17,7 +17,9 @@ use warp::tui_export::{
 };
 use warpui_core::r#async::Timer;
 use warpui_core::elements::MouseStateHandle;
-use warpui_core::elements::tui::{Modifier, TuiChildView, TuiElement, TuiFlex, tui_collapsible};
+use warpui_core::elements::tui::{
+    Modifier, TuiChildView, TuiElement, TuiFlex, TuiText, tui_collapsible,
+};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
 use warpui_core::{
@@ -247,7 +249,6 @@ impl TuiShellCommandView {
         }
         self.permission_prompt
             .update(ctx, |prompt, ctx| prompt.restore_options_focus(ctx));
-        self.invalidate_layout(ctx);
     }
 
     fn accept(&mut self, ctx: &mut ViewContext<Self>) {
@@ -283,11 +284,18 @@ impl TuiShellCommandView {
     }
 
     fn render_blocked(&self, app: &AppContext) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(app);
+        let edit_hint = TuiText::from_spans([
+            ("e".to_owned(), builder.primary_text_style()),
+            (" to edit command".to_owned(), builder.muted_text_style()),
+        ])
+        .truncate()
+        .finish();
         render_permission_card(
             &self.permission_prompt,
             "Is it OK if I run this command and read the output?",
             None,
-            None,
+            Some(edit_hint),
             app,
         )
     }

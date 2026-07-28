@@ -200,12 +200,11 @@ fn leading_editor_participates_in_selector_focus_cycle() {
 }
 
 #[test]
-fn editable_prompt_renders_other_and_e_focuses_the_body_editor() {
+fn e_focuses_the_body_editor_without_interfering_with_other() {
     App::test((), |mut app| async move {
         app.update(super::init);
         let prompt = add_prompt(&mut app, true);
         let lines = render_lines(&mut app, &prompt);
-        assert!(lines.iter().any(|line| line.ends_with("e to edit command")));
         assert!(lines.iter().any(|line| line == "(3) Other"));
 
         let (action_model, action) = app.read(|ctx| {

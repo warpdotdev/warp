@@ -31,112 +31,72 @@ fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
     }
 }
 
-/// Calling `hover_state()` inserts an entry via `entry(key).or_default()`, but
-/// that entry has `collapsed: None` — it must NOT cause `is_collapsed` to
-/// ignore `default_collapsed`. This is the regression from the first rework
-/// attempt where `SectionUiState::default()` set `collapsed: true`.
 #[test]
-fn hover_state_call_does_not_defeat_default_collapsed() {
-    let states = SectionStates::default();
-    // Simulate render_section calling hover_state before is_collapsed.
-    let _ = states.hover_state(SectionKey::File(0));
-    // The hover_state call must not fabricate a collapsed decision.
-    assert!(
-        !states.is_collapsed(SectionKey::File(0), false),
-        "hover_state must not override default_collapsed=false (expanded)"
-    );
-    assert!(
-        states.is_collapsed(SectionKey::File(0), true),
-        "hover_state must not override default_collapsed=true (collapsed)"
-    );
-    // An explicit toggle must still override the default.
-    states.toggle_collapsed(SectionKey::File(0), false);
-    assert!(
-        states.is_collapsed(SectionKey::File(0), false),
-        "explicit toggle should override default_collapsed"
-    );
-}
-
-/// Section state uses `default_collapsed` when no explicit toggle exists.
-/// Non-blocked rendering (default_collapsed=true) → collapsed; blocked
-/// rendering (default_collapsed=false) → expanded; toggling stores an
-/// explicit entry that overrides the default.
-#[test]
-fn section_states_respect_default_collapsed_and_toggle_independently() {
-    let states = SectionStates::default();
-
-    // Non-blocked: sections collapse by default.
-    assert!(states.is_collapsed(SectionKey::Summary, true));
-    assert!(states.is_collapsed(SectionKey::File(0), true));
-    assert!(states.is_collapsed(SectionKey::File(1), true));
-
-    // Blocked: sections expand by default (no explicit entry yet).
-    assert!(!states.is_collapsed(SectionKey::Summary, false));
-    assert!(!states.is_collapsed(SectionKey::File(0), false));
-    assert!(!states.is_collapsed(SectionKey::File(1), false));
-
-    // Toggle File(0) while blocked (default_collapsed=false → was expanded →
-    // explicit entry records collapsed=true).
-    states.toggle_collapsed(SectionKey::File(0), false);
-    assert!(!states.is_collapsed(SectionKey::Summary, false)); // unchanged
-    assert!(states.is_collapsed(SectionKey::File(0), false)); // now explicitly collapsed
-    assert!(!states.is_collapsed(SectionKey::File(1), false)); // still default expanded
-}
-
-/// reset_states clears explicit entries so sections revert to their
-/// context-dependent default on the next render.
-#[test]
-fn reset_states_clears_explicit_toggles() {
-    let states = SectionStates::default();
-    // Record an explicit collapsed entry.
-    states.toggle_collapsed(SectionKey::File(0), true);
-    assert!(!states.is_collapsed(SectionKey::File(0), true)); // was collapsed, now expanded
-    // After reset, reverts to default.
-    states.reset_states();
-    assert!(states.is_collapsed(SectionKey::File(0), true));
-    assert!(!states.is_collapsed(SectionKey::File(0), false));
-}
-
-/// toggle_expand_all collapses all when any are expanded, and expands all
-/// when all are collapsed.
-#[test]
-fn toggle_expand_all_collapses_then_expands() {
-    let states = SectionStates::default();
+fn section_states_expand_and_collapse_for_approval_lifecycle() {
+    let mut states = SectionStates::default();
     let keys = [
         SectionKey::Summary,
         SectionKey::File(0),
         SectionKey::File(1),
     ];
 
-    // Default blocked (default_collapsed=false): all expanded.
-    // First toggle → collapse all.
-    states.toggle_expand_all(&keys, false);
+    states.collapse_all(&keys);
+    assert!(states.is_collapsed(SectionKey::Summary));
+    assert!(states.is_collapsed(SectionKey::File(0)));
+    assert!(states.is_collapsed(SectionKey::File(1)));
+    states.expand_all(&keys);
+    assert!(!states.is_collapsed(SectionKey::Summary));
+    assert!(!states.is_collapsed(SectionKey::File(0)));
+    assert!(!states.is_collapsed(SectionKey::File(1)));
+
+    states.toggle_collapsed(SectionKey::File(0));
+    assert!(!states.is_collapsed(SectionKey::Summary));
+    assert!(states.is_collapsed(SectionKey::File(0)));
+    assert!(!states.is_collapsed(SectionKey::File(1)));
+    states.collapse_all(&keys);
+    assert!(states.is_collapsed(SectionKey::Summary));
+    assert!(states.is_collapsed(SectionKey::File(0)));
+    assert!(states.is_collapsed(SectionKey::File(1)));
+}
+
+/// toggle_expand_all collapses all when any are expanded, and expands all
+/// when all are collapsed.
+#[test]
+fn toggle_expand_all_collapses_then_expands() {
+    let mut states = SectionStates::default();
+    let keys = [
+        SectionKey::Summary,
+        SectionKey::File(0),
+        SectionKey::File(1),
+    ];
+
+    states.expand_all(&keys);
+    states.toggle_expand_all(&keys);
     for &key in &keys {
         assert!(
-            states.is_collapsed(key, false),
+            states.is_collapsed(key),
             "{key:?} should be collapsed after first toggle"
         );
     }
 
-    // Second toggle → expand all.
-    states.toggle_expand_all(&keys, false);
+    states.toggle_expand_all(&keys);
     for &key in &keys {
         assert!(
-            !states.is_collapsed(key, false),
+            !states.is_collapsed(key),
             "{key:?} should be expanded after second toggle"
         );
     }
 
-    // Mixed state (one collapsed) → collapse all.
-    states.toggle_collapsed(SectionKey::File(0), false); // File(0) → collapsed
-    states.toggle_expand_all(&keys, false);
+    states.toggle_collapsed(SectionKey::File(0));
+    states.toggle_expand_all(&keys);
     for &key in &keys {
         assert!(
-            states.is_collapsed(key, false),
+            states.is_collapsed(key),
             "{key:?} should be collapsed after mixed toggle"
         );
     }
 }
+
 #[test]
 fn blocked_file_edit_headers_use_in_progress_wording() {
     assert_eq!(

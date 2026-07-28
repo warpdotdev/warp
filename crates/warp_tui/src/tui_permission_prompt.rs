@@ -207,6 +207,7 @@ impl TuiPermissionPrompt {
         self.selector.update(ctx, |selector, ctx| {
             selector.handle_action(&TuiOptionSelectorAction::SelectItemWithoutConfirm(0), ctx)
         });
+        self.invalidate_layout(ctx);
     }
     #[cfg(test)]
     pub(crate) fn highlighted_index(&self, app: &AppContext) -> Option<usize> {
@@ -285,8 +286,7 @@ impl TuiPermissionPrompt {
 /// Renders a full-width permission card around a tool-specific body.
 ///
 /// `header_trailing` is an optional element rendered in the top-right of the
-/// card header (after the title). When `None` and the prompt has a body
-/// editor, the card automatically shows the `e to edit command` affordance.
+/// card header (after the title).
 pub(crate) fn render_permission_card(
     prompt: &ViewHandle<TuiPermissionPrompt>,
     title: impl Into<String>,
@@ -304,19 +304,7 @@ pub(crate) fn render_permission_card(
     ])
     .truncate()
     .finish();
-    // Fall back to showing the edit-command affordance when no explicit
-    // trailing element is provided and the prompt has a body editor.
-    let trailing = header_trailing.or_else(|| {
-        prompt.as_ref(app).body_editor.is_some().then(|| {
-            TuiText::from_spans([
-                ("e".to_owned(), builder.primary_text_style()),
-                (" to edit command".to_owned(), builder.muted_text_style()),
-            ])
-            .truncate()
-            .finish()
-        })
-    });
-    let header_content = if let Some(trailing) = trailing {
+    let header_content = if let Some(trailing) = header_trailing {
         TuiFlex::row().flex_child(title).child(trailing).finish()
     } else {
         title
@@ -399,6 +387,7 @@ impl TypedActionView for TuiPermissionPrompt {
             TuiPermissionPromptAction::EditBody => {
                 self.selector
                     .update(ctx, |selector, ctx| selector.focus_leading_editor(ctx));
+                self.invalidate_layout(ctx);
             }
             TuiPermissionPromptAction::CancelOrBack => {
                 let handled = self

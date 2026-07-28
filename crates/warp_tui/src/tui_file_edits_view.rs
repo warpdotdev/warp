@@ -18,7 +18,6 @@
 //! verb while awaiting approval. Failed and cancelled actions fall back to a
 //! one-line label from the action's recorded result; restored successful
 //! actions are hydrated from their original `FileEdit` request.
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -154,80 +153,85 @@ pub(super) enum SectionKey {
 /// Persistent collapse and hover state for each section.
 #[derive(Default)]
 struct SectionStates {
-    states: RefCell<HashMap<SectionKey, SectionUiState>>,
-}
-
-/// UI state for a single collapsible section.
-#[derive(Default)]
-struct SectionUiState {
-    /// `None` means no explicit user toggle has been recorded; the render path
-    /// uses `default_collapsed` in that case. Storing `Option<bool>` (instead
-    /// of plain `bool`) ensures that `hover_state()` creating an entry via
-    /// `entry(key).or_default()` does not fabricate a collapsed decision and
-    /// therefore does not defeat `default_collapsed` on repaints.
-    collapsed: Option<bool>,
-    /// Hover state for the header row. Owned here so it survives element-tree
-    /// rebuilds (the GUI `MouseStateHandle` pattern).
-    hover_state: MouseStateHandle,
+    states: HashMap<SectionKey, SectionUiState>,
 }
 
 impl SectionStates {
+    fn expand_all(&mut self, keys: &[SectionKey]) {
+        self.states.clear();
+        for key in keys {
+            self.states.insert(
+                *key,
+                SectionUiState {
+                    collapsed: false,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    fn collapse_all(&mut self, keys: &[SectionKey]) {
+        self.states.clear();
+        for key in keys {
+            self.states.insert(
+                *key,
+                SectionUiState {
+                    collapsed: true,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
     /// Whether the keyed section is collapsed.
-    /// `default_collapsed` is used when no explicit user toggle has been
-    /// recorded (i.e. the section key has no explicit entry in the state map).
-    /// An entry created by `hover_state()` has `collapsed: None` and is
-    /// therefore treated the same as no entry here.
-    fn is_collapsed(&self, key: SectionKey, default_collapsed: bool) -> bool {
+    fn is_collapsed(&self, key: SectionKey) -> bool {
         self.states
-            .borrow()
             .get(&key)
-            .and_then(|state| state.collapsed)
-            .unwrap_or(default_collapsed)
+            .expect("file-edit section state initialized before render")
+            .collapsed
     }
 
-    /// Flips the collapse state of the keyed section, using `default_collapsed`
-    /// as the implicit current state when no explicit toggle exists yet.
-    fn toggle_collapsed(&self, key: SectionKey, default_collapsed: bool) {
-        let mut states = self.states.borrow_mut();
-        let current_collapsed = states
-            .get(&key)
-            .and_then(|s| s.collapsed)
-            .unwrap_or(default_collapsed);
-        let state = states.entry(key).or_default();
-        state.collapsed = Some(!current_collapsed);
-    }
-
-    /// Clears all explicit toggle state so every section reverts to its
-    /// context-dependent default on the next render.
-    fn reset_states(&self) {
-        self.states.borrow_mut().clear();
+    /// Flips the collapse state of the keyed section.
+    fn toggle_collapsed(&mut self, key: SectionKey) {
+        let state = self
+            .states
+            .get_mut(&key)
+            .expect("file-edit section state initialized before toggle");
+        state.collapsed = !state.collapsed;
     }
 
     /// Toggles all sections between fully expanded and fully collapsed:
     /// if any section is currently expanded, collapse all; otherwise expand
-    /// all. `default_collapsed` is used for sections without an explicit entry.
-    fn toggle_expand_all(&self, keys: &[SectionKey], default_collapsed: bool) {
-        let any_expanded = keys
-            .iter()
-            .any(|key| !self.is_collapsed(*key, default_collapsed));
-        // Collapse all when any are expanded; expand all when all are collapsed.
+    /// all.
+    fn toggle_expand_all(&mut self, keys: &[SectionKey]) {
+        let any_expanded = keys.iter().any(|key| !self.is_collapsed(*key));
         let target_collapsed = any_expanded;
-        let mut states = self.states.borrow_mut();
         for key in keys {
-            let state = states.entry(*key).or_default();
-            state.collapsed = Some(target_collapsed);
+            let state = self
+                .states
+                .get_mut(key)
+                .expect("file-edit section state initialized before toggle");
+            state.collapsed = target_collapsed;
         }
     }
 
     /// The persistent hover state handle for the keyed section.
     fn hover_state(&self, key: SectionKey) -> MouseStateHandle {
         self.states
-            .borrow_mut()
-            .entry(key)
-            .or_default()
+            .get(&key)
+            .expect("file-edit section state initialized before render")
             .hover_state
             .clone()
     }
+}
+
+/// UI state for a single collapsible section.
+#[derive(Default)]
+struct SectionUiState {
+    collapsed: bool,
+    /// Hover state for the header row. Owned here so it survives element-tree
+    /// rebuilds (the GUI `MouseStateHandle` pattern).
+    hover_state: MouseStateHandle,
 }
 
 impl TuiFileEditsView {
@@ -280,18 +284,21 @@ impl TuiFileEditsView {
         // the terminal result so the row doesn't stay pending. Successful
         // actions also update their header glyph from this event.
         ctx.subscribe_to_model(action_model, |me, _, event, ctx| {
-            // Reset explicit toggle state as soon as the action leaves Blocked
-            // (ExecutingAction or FinishedAction) so the transcript chrome
-            // renders collapsed rather than showing stale explicit state during
-            // the executing window and after completion.
-            if event.action_id() == &me.action_id
-                && matches!(
-                    event,
-                    BlocklistAIActionEvent::ExecutingAction(_)
-                        | BlocklistAIActionEvent::FinishedAction { .. }
-                )
-            {
-                me.section_states.reset_states();
+            if event.action_id() != &me.action_id {
+                return;
+            }
+            if matches!(
+                event,
+                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+            ) {
+                me.expand_all_sections();
+                ctx.notify();
+            } else if matches!(
+                event,
+                BlocklistAIActionEvent::ExecutingAction(_)
+                    | BlocklistAIActionEvent::FinishedAction { .. }
+            ) {
+                me.collapse_all_sections();
                 ctx.notify();
             }
         });
@@ -390,8 +397,37 @@ impl TuiFileEditsView {
                 diff_ready: false,
             });
         }
+        let is_blocked = self
+            .action_model
+            .as_ref(ctx)
+            .get_action_status(&self.action_id)
+            .is_some_and(|status| status.is_blocked());
+        if is_blocked {
+            self.expand_all_sections();
+        } else {
+            self.collapse_all_sections();
+        }
         ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
         ctx.notify();
+    }
+
+    fn section_keys(&self) -> Vec<SectionKey> {
+        let mut keys = Vec::with_capacity(self.sections.len() + 1);
+        if self.sections.len() > 1 {
+            keys.push(SectionKey::Summary);
+        }
+        keys.extend((0..self.sections.len()).map(SectionKey::File));
+        keys
+    }
+
+    fn expand_all_sections(&mut self) {
+        let keys = self.section_keys();
+        self.section_states.expand_all(&keys);
+    }
+
+    fn collapse_all_sections(&mut self) {
+        let keys = self.section_keys();
+        self.section_states.collapse_all(&keys);
     }
 
     /// The action's display state, driving the header glyph and styling.
@@ -457,17 +493,11 @@ impl TuiFileEditsView {
     /// Renders one collapsible section: the keyed header over `body`. The
     /// body is built lazily, only when the section is expanded; sections
     /// without a body (`None`) render no chevron.
-    ///
-    /// `default_collapsed` determines the initial state for sections that have
-    /// never been explicitly toggled: `false` (expanded) while the permission
-    /// card is active (Blocked), `true` (collapsed) in the transcript chrome.
-    #[allow(clippy::too_many_arguments)]
     fn render_section(
         &self,
         key: SectionKey,
         label: &str,
         line_stats: Option<(usize, usize)>,
-        default_collapsed: bool,
         builder: &TuiUiBuilder,
         app: &AppContext,
         body: Option<impl FnOnce() -> Box<dyn TuiElement>>,
@@ -477,7 +507,7 @@ impl TuiFileEditsView {
             return TuiText::from_spans(header_spans).truncate().finish();
         };
 
-        let collapsed = self.section_states.is_collapsed(key, default_collapsed);
+        let collapsed = self.section_states.is_collapsed(key);
         let hover_state = self.section_states.hover_state(key);
         let hovered = hover_state.lock().unwrap().is_hovered();
         let (mut header_spans, chevron_style) =
@@ -537,12 +567,8 @@ impl TuiFileEditsView {
 
     /// Renders the per-file sections as a column of collapsible sections with
     /// a blank row between files.
-    ///
-    /// `default_collapsed` is forwarded to each section's `render_section`
-    /// call; see that method's doc for the blocked vs. transcript semantics.
     fn render_file_sections(
         &self,
-        default_collapsed: bool,
         builder: &TuiUiBuilder,
         app: &AppContext,
     ) -> Box<dyn TuiElement> {
@@ -558,7 +584,6 @@ impl TuiFileEditsView {
                 SectionKey::File(index),
                 &label,
                 line_stats,
-                default_collapsed,
                 builder,
                 app,
                 has_body.then_some(|| self.render_body(section, builder, app)),
@@ -753,16 +778,6 @@ impl TuiFileEditsView {
     fn render_diff_content(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
 
-        // Sections default to expanded while awaiting approval (Blocked) so
-        // the user can review diffs without extra clicks, and to collapsed
-        // in the transcript chrome after accept (non-Blocked).
-        let is_blocked = self
-            .action_model
-            .as_ref(app)
-            .get_action_status(&self.action_id)
-            .is_some_and(|s| s.is_blocked());
-        let default_collapsed = !is_blocked;
-
         if self.sections.is_empty() {
             let label = self.fallback_label(app);
             return TuiContainer::new(Box::new(
@@ -774,7 +789,7 @@ impl TuiFileEditsView {
         // Single-file edits render the file section alone; multi-file edits
         // nest the sections, indented, under one collapsible summary header.
         if self.sections.len() == 1 {
-            return self.render_file_sections(default_collapsed, &builder, app);
+            return self.render_file_sections(&builder, app);
         }
 
         self.render_section(
@@ -785,11 +800,10 @@ impl TuiFileEditsView {
                 &format!("{} files", self.sections.len()),
             ),
             self.aggregate_stats(app),
-            default_collapsed,
             &builder,
             app,
             Some(|| {
-                TuiContainer::new(self.render_file_sections(default_collapsed, &builder, app))
+                TuiContainer::new(self.render_file_sections(&builder, app))
                     .with_padding_left(2)
                     .finish()
             }),
@@ -801,29 +815,15 @@ impl TypedActionView for TuiFileEditsView {
     type Action = TuiFileEditsViewAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-        let is_blocked = self
-            .action_model
-            .as_ref(ctx)
-            .get_action_status(&self.action_id)
-            .is_some_and(|s| s.is_blocked());
-        let default_collapsed = !is_blocked;
         match action {
             TuiFileEditsViewAction::ToggleSection(key) => {
-                self.section_states
-                    .toggle_collapsed(*key, default_collapsed);
+                self.section_states.toggle_collapsed(*key);
                 ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
                 ctx.notify();
             }
             TuiFileEditsViewAction::ToggleExpandAll => {
-                let mut keys = Vec::new();
-                if self.sections.len() > 1 {
-                    keys.push(SectionKey::Summary);
-                }
-                for i in 0..self.sections.len() {
-                    keys.push(SectionKey::File(i));
-                }
-                self.section_states
-                    .toggle_expand_all(&keys, default_collapsed);
+                let keys = self.section_keys();
+                self.section_states.toggle_expand_all(&keys);
                 ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
                 ctx.notify();
             }
