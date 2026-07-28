@@ -5,7 +5,7 @@ use warpui::elements::DraggableState;
 use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::platform::TerminationMode;
 use warpui::windowing::WindowManager;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, WindowId};
 
 /// Singleton model that owns all cross-window tab drag state.
 ///
@@ -89,6 +89,7 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 /// View transfers between windows are handled by `transfer_view_tree_to_window`.
 use crate::tab::tab_position_id;
 use crate::workspace::WorkspaceRegistry;
+use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::view::{TAB_BAR_POSITION_ID, TransferredTab, tab_bar_rects_for_window};
 
 /// Identifies a window and tab-bar index where a dragged tab can be attached.
@@ -137,6 +138,32 @@ enum DragSource {
         source_tab_index: usize,
         preview_window_id: WindowId,
     },
+    /// A whole tab group is being dragged.
+    ///
+    /// `preview_window_id` is `None` when the group spanned *every* tab in the
+    /// source window: there is nothing left behind, so the source window itself
+    /// acts as the floating preview exactly like [`Self::SingleTabWindow`], and
+    /// no view transfer happens at drag start.
+    ///
+    /// Cleanup keys off `member_pane_group_ids`, never off `source_first_index`.
+    /// The index is a position frozen at drag start and the source tab list can
+    /// change underneath it mid-drag.
+    GroupWindow {
+        source_group_id: TabGroupId,
+        source_first_index: usize,
+        member_pane_group_ids: Vec<EntityId>,
+        preview_window_id: Option<WindowId>,
+    },
+}
+
+/// Which flavour of drag is in flight. Returned by
+/// [`CrossWindowTabDrag::source_kind`] so decision sites can `match`
+/// exhaustively instead of branching on a pair of booleans.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DragSourceKind {
+    SingleTabWindow,
+    MultiTabWindow,
+    GroupWindow,
 }
 
 /// Mutable state for an in-progress cross-window tab drag.
@@ -197,15 +224,62 @@ impl ActiveDrag {
             DragSource::MultiTabWindow {
                 source_tab_index, ..
             } => *source_tab_index,
+            DragSource::GroupWindow {
+                source_first_index, ..
+            } => *source_first_index,
         }
     }
 
-    fn source_was_single_tab(&self) -> bool {
-        matches!(self.source, DragSource::SingleTabWindow)
+    fn source_kind(&self) -> DragSourceKind {
+        match &self.source {
+            DragSource::SingleTabWindow => DragSourceKind::SingleTabWindow,
+            DragSource::MultiTabWindow { .. } => DragSourceKind::MultiTabWindow,
+            DragSource::GroupWindow { .. } => DragSourceKind::GroupWindow,
+        }
+    }
+
+    /// True when the source window is itself the floating preview, so there is
+    /// no separate preview window to promote or close, and the source window
+    /// must be closed rather than have tabs removed from it.
+    ///
+    /// Covers the single-tab drag and a group drag that took every tab with it.
+    fn source_is_own_preview(&self) -> bool {
+        match &self.source {
+            DragSource::SingleTabWindow => true,
+            DragSource::MultiTabWindow { .. } => false,
+            DragSource::GroupWindow {
+                preview_window_id, ..
+            } => preview_window_id.is_none(),
+        }
     }
 
     fn has_dedicated_preview_window(&self) -> bool {
-        matches!(self.source, DragSource::MultiTabWindow { .. })
+        match &self.source {
+            DragSource::SingleTabWindow => false,
+            DragSource::MultiTabWindow { .. } => true,
+            DragSource::GroupWindow {
+                preview_window_id, ..
+            } => preview_window_id.is_some(),
+        }
+    }
+
+    fn source_group_id(&self) -> Option<TabGroupId> {
+        match &self.source {
+            DragSource::SingleTabWindow | DragSource::MultiTabWindow { .. } => None,
+            DragSource::GroupWindow {
+                source_group_id, ..
+            } => Some(*source_group_id),
+        }
+    }
+
+    fn member_pane_group_ids(&self) -> &[EntityId] {
+        match &self.source {
+            DragSource::SingleTabWindow | DragSource::MultiTabWindow { .. } => &[],
+            DragSource::GroupWindow {
+                member_pane_group_ids,
+                ..
+            } => member_pane_group_ids,
+        }
     }
 
     fn preview_window_id(&self) -> WindowId {
@@ -214,6 +288,9 @@ impl ActiveDrag {
             DragSource::MultiTabWindow {
                 preview_window_id, ..
             } => *preview_window_id,
+            DragSource::GroupWindow {
+                preview_window_id, ..
+            } => preview_window_id.unwrap_or(self.source_window_id),
         }
     }
 }
@@ -507,10 +584,35 @@ impl CrossWindowTabDrag {
         })
     }
 
-    pub fn source_was_single_tab(&self) -> bool {
+    /// True when the source window is itself the floating preview: a single-tab
+    /// drag, or a group drag that took every tab in the window.
+    ///
+    /// Callers use this to decide "close the source window" versus "remove tabs
+    /// from it", which is why a whole-window group drag answers the same as a
+    /// single-tab drag.
+    pub fn source_is_own_preview(&self) -> bool {
         self.active_drag
             .as_ref()
-            .is_some_and(|d| d.source_was_single_tab())
+            .is_some_and(|d| d.source_is_own_preview())
+    }
+
+    /// Kind of drag in flight, for decision sites that need three-way dispatch.
+    pub fn source_kind(&self) -> Option<DragSourceKind> {
+        self.active_drag.as_ref().map(|d| d.source_kind())
+    }
+
+    /// Group being dragged, when the drag is a group drag.
+    pub fn source_group_id(&self) -> Option<TabGroupId> {
+        self.active_drag.as_ref().and_then(|d| d.source_group_id())
+    }
+
+    /// Pane-group identities of the dragged group's members, captured at drag
+    /// start. Empty for a non-group drag.
+    pub fn member_pane_group_ids(&self) -> Vec<EntityId> {
+        self.active_drag
+            .as_ref()
+            .map(|d| d.member_pane_group_ids().to_vec())
+            .unwrap_or_default()
     }
 
     pub(crate) fn reset_to_floating(&mut self) {
@@ -1428,7 +1530,7 @@ impl CrossWindowTabDrag {
         ctx.windows().show_window_and_focus_app(preview_window_id);
         Self::deferred_focus(preview_window_id, ctx);
 
-        if drag.source_was_single_tab() {
+        if drag.source_is_own_preview() {
             DropResult::CloseSourceWindow {
                 transferred_tab_index: drag.source_tab_index(),
             }
@@ -1474,7 +1576,7 @@ impl CrossWindowTabDrag {
             return DropResult::NoOp;
         }
 
-        if drag.source_was_single_tab() {
+        if drag.source_is_own_preview() {
             log::info!(
                 "tab_drag: finalize_handoff -> CloseSourceWindow transferred_tab_index={}",
                 drag.source_tab_index()
@@ -1785,7 +1887,7 @@ impl CrossWindowTabDrag {
         });
 
         if !preview_is_self {
-            let is_single_tab_source = drag.source_was_single_tab();
+            let is_single_tab_source = drag.source_is_own_preview();
             if let Some(preview_workspace) =
                 WorkspaceRegistry::as_ref(ctx).get(preview_window_id, ctx)
             {
@@ -1802,7 +1904,7 @@ impl CrossWindowTabDrag {
                     workspace.insert_transferred_tab_at_index(transferred_tab, 0, ctx);
                 });
             }
-        } else if drag.source_was_single_tab() {
+        } else if drag.source_is_own_preview() {
             // For a single-tab source, `preview_window_id == source_window_id`
             // and on this code path the OS-level drag is still bound to the
             // source's draggable, so `caller_window_id == preview_window_id`

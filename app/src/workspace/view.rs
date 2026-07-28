@@ -11477,7 +11477,7 @@ impl Workspace {
             if drag_model.has_dedicated_preview_window() {
                 // Multi-tab drag: skip the dedicated-preview placeholder.
                 drag_model.source_placeholder_tab_index()
-            } else if drag_model.source_was_single_tab() && drag_model.handed_off_target().is_some()
+            } else if drag_model.source_is_own_preview() && drag_model.handed_off_target().is_some()
             {
                 // Single-tab drag in InsertedInTarget phase: the source's
                 // only tab has been transferred to the target window's live
@@ -27970,10 +27970,10 @@ impl Workspace {
         let source_tab_index = CrossWindowTabDrag::as_ref(ctx)
             .transferred_tab_index()
             .unwrap_or(0);
-        let source_was_single_tab = CrossWindowTabDrag::as_ref(ctx).source_was_single_tab();
+        let source_is_own_preview = CrossWindowTabDrag::as_ref(ctx).source_is_own_preview();
 
         log::info!(
-            "tab_drag: perform_handoff caller_wid={caller_window_id} target_wid={} insertion_index={} has_dedicated_preview={has_dedicated_preview} source_tab_index={source_tab_index} source_was_single_tab={source_was_single_tab}",
+            "tab_drag: perform_handoff caller_wid={caller_window_id} target_wid={} insertion_index={} has_dedicated_preview={has_dedicated_preview} source_tab_index={source_tab_index} source_is_own_preview={source_is_own_preview}",
             target.window_id,
             target.insertion_index
         );
@@ -28039,7 +28039,7 @@ impl Workspace {
                 if let Some(tab) = self.tabs.get(source_tab_index) {
                     ctx.unsubscribe_to_view(&tab.pane_group);
                 }
-                if source_was_single_tab {
+                if source_is_own_preview {
                     self.close_window_for_content_transfer(ctx);
                 } else {
                     self.remove_tab_without_undo(source_tab_index, ctx);
