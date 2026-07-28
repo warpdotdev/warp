@@ -48,6 +48,7 @@ mod orchestration_model;
 mod orchestration_tab_bar;
 mod platform;
 mod prompt_and_command_history_menu;
+mod read_only_menu;
 mod resume;
 mod session_registry;
 mod skills_menu;

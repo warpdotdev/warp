@@ -101,6 +101,7 @@ use crate::platform::reveal_path_in_file_manager;
 use crate::prompt_and_command_history_menu::{
     TuiPromptAndCommandHistoryMenuEvent, TuiPromptAndCommandHistoryMenuModel,
 };
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
@@ -2156,18 +2157,18 @@ impl TuiTerminalSessionView {
                 .finish(),
             );
         }
-        if state.should_render_shortcuts() {
-            let keymap_context = self.keymap_context(ctx);
+        if let Some(menu) = state.read_only_menu() {
+            let menu = match menu {
+                TuiReadOnlyMenuKind::Shortcuts => {
+                    let keymap_context = self.keymap_context(ctx);
+                    shortcuts::render(state, &keymap_context, ctx)
+                }
+                TuiReadOnlyMenuKind::Status => {
+                    status_menu::render(self.compute_status_info(ctx), ctx)
+                }
+            };
             content = content.child(
-                TuiContainer::new(shortcuts::render(state, &keymap_context, ctx))
-                    .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
-                    .finish(),
-            );
-        }
-        if state.should_render_status() {
-            let status_info = self.compute_status_info(ctx);
-            content = content.child(
-                TuiContainer::new(status_menu::render(status_info, ctx))
+                TuiContainer::new(menu)
                     .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
                     .finish(),
             );
@@ -2768,7 +2769,9 @@ impl TuiTerminalSessionView {
             return;
         }
         self.suggestions_mode.update(ctx, |mode, ctx| {
-            mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+            if let Some(kind) = mode.mode().read_only_menu() {
+                mode.close_if_active(TuiInputSuggestionsMode::ReadOnlyMenu(kind), ctx);
+            }
         });
         if self.handle_terminal_use_interrupt(ctx) {
             self.exit_confirmation.disarm();
@@ -3880,7 +3883,10 @@ impl TuiTerminalSessionView {
             SlashCommandKind::Status => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.suggestions_mode.update(ctx, |mode, ctx| {
-                    mode.set_mode(TuiInputSuggestionsMode::Status, ctx);
+                    mode.set_mode(
+                        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status),
+                        ctx,
+                    );
                 });
                 record_static_slash_command_accepted(command.name, true, ctx);
             }

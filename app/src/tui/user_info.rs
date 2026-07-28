@@ -34,16 +34,11 @@ pub struct TuiUserInfoSnapshot {
     pub org: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum TuiUserInfoManagerEvent {
-    Updated,
-}
-
 /// Singleton model exposing [`TuiUserInfoSnapshot`] to the `warp_tui` front-end.
 ///
-/// It subscribes to [`AuthManager`] and [`UserWorkspaces`] so it emits
-/// [`TuiUserInfoManagerEvent::Updated`] whenever the underlying auth or
-/// workspace state changes; the snapshot itself is recomputed live on read.
+/// It subscribes to [`AuthManager`] and [`UserWorkspaces`] so it emits an event
+/// whenever the underlying auth or workspace state changes; the snapshot
+/// itself is recomputed live on read.
 pub struct TuiUserInfoManager;
 
 impl TuiUserInfoManager {
@@ -82,12 +77,12 @@ impl TuiUserInfoManager {
     }
 
     fn refresh(&mut self, ctx: &mut ModelContext<Self>) {
-        ctx.emit(TuiUserInfoManagerEvent::Updated);
+        ctx.emit(());
     }
 }
 
 impl Entity for TuiUserInfoManager {
-    type Event = TuiUserInfoManagerEvent;
+    type Event = ();
 }
 
 impl SingletonEntity for TuiUserInfoManager {}

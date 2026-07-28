@@ -50,6 +50,7 @@ use crate::input_mode_policy::AI_LOCKED_CONFIG;
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::model_menu::TuiModelMenuModel;
 use crate::prompt_and_command_history_menu::TuiPromptAndCommandHistoryMenuModel;
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 use crate::test_fixtures::{add_test_conversation_selection, add_test_semantic_selection};
 use crate::tui_builder::TuiUiBuilder;
@@ -1451,7 +1452,7 @@ fn shift_up_requests_focus_above_only_on_first_row_without_selection() {
             type_str(&view, ctx, "?");
             assert_eq!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::Shortcuts
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
             );
             dispatch(
                 &view,
@@ -1636,7 +1637,7 @@ fn move_left_from_shortcuts_replaces_it_with_conversation_menu() {
             type_str(&view, ctx, "?");
             assert_eq!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::Shortcuts
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
             );
 
             dispatch(
@@ -2605,7 +2606,7 @@ fn question_mark_at_empty_agent_input_toggles_shortcuts() {
             type_str(&view, ctx, "?");
             assert_eq!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::Shortcuts
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
             );
             assert_eq!(text(&view, ctx), "");
             assert!(
@@ -2634,7 +2635,7 @@ fn question_mark_at_empty_shell_input_toggles_shortcuts() {
             assert!(view.as_ref(ctx).is_shell_mode(ctx));
             assert_eq!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::Shortcuts
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
             );
             assert_eq!(text(&view, ctx), "");
 
@@ -2668,7 +2669,7 @@ fn escape_closes_shortcuts_before_exiting_shell_mode() {
             assert!(view.as_ref(ctx).is_shell_mode(ctx));
             assert_eq!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::Shortcuts
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
             );
             dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
             assert_eq!(
@@ -3048,7 +3049,7 @@ fn up_from_shortcuts_replaces_it_with_prompt_and_command_history() {
             type_str(&view, ctx, "?");
             assert_eq!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::Shortcuts
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
             );
 
             dispatch(

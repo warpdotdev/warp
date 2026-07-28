@@ -53,6 +53,7 @@ use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestions
 use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP,
 };
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
@@ -542,10 +543,7 @@ impl TuiView for TuiInputView {
         let suggestions_mode = self.suggestions_mode.as_ref(ctx).mode();
         input_keymap_context(InputKeymapContextConfig {
             input_handles_escape: self.active_inline_menu(ctx).is_some()
-                || matches!(
-                    suggestions_mode,
-                    TuiInputSuggestionsMode::Shortcuts | TuiInputSuggestionsMode::Status
-                )
+                || suggestions_mode.read_only_menu().is_some()
                 || self.is_shell_mode(ctx)
                 || self.voice_is_active(ctx),
             plan_toggle_available: self.plan_toggle_available(ctx),
@@ -607,15 +605,12 @@ impl TypedActionView for TuiInputView {
         let outcome = match action {
             TuiInputAction::Editor(editor_action) => {
                 if let TuiEditorAction::PasteText(text) = editor_action {
-                    self.close_shortcuts(ctx);
-                    self.close_status_overlay(ctx);
+                    self.close_read_only_menu(ctx);
                     ctx.emit(TuiInputViewEvent::Pasted(text.clone()));
                     return;
                 }
-                // Close the status overlay on any keystroke (the character is
-                // still processed after closing).
-                self.close_status_overlay(ctx);
-                if self.close_shortcuts(ctx) {
+                let closed_menu = self.close_read_only_menu(ctx);
+                if closed_menu == Some(TuiReadOnlyMenuKind::Shortcuts) {
                     if matches!(editor_action, TuiEditorAction::InsertChar('?')) {
                         return;
                     }
@@ -628,7 +623,10 @@ impl TypedActionView for TuiInputView {
                     )
                 {
                     self.suggestions_mode.update(ctx, |mode, ctx| {
-                        mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                        mode.set_mode(
+                            TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                            ctx,
+                        );
                     });
                     return;
                 }
@@ -649,8 +647,7 @@ impl TypedActionView for TuiInputView {
                 }
             }
             TuiInputAction::Submit => {
-                self.close_shortcuts(ctx);
-                self.close_status_overlay(ctx);
+                self.close_read_only_menu(ctx);
                 if !self.handle_voice_submit(ctx) {
                     self.submit(ctx);
                 }
@@ -667,8 +664,7 @@ impl TypedActionView for TuiInputView {
                 TuiEditorInteractionOutcome::PreserveViewport
             }
             TuiInputAction::EditorCommand(command) => {
-                self.close_shortcuts(ctx);
-                self.close_status_overlay(ctx);
+                self.close_read_only_menu(ctx);
                 if matches!(*command, TuiEditorCommand::SelectUp) && self.can_focus_above(ctx) {
                     ctx.emit(TuiInputViewEvent::MoveFocusUp);
                     return;
@@ -713,8 +709,7 @@ impl TypedActionView for TuiInputView {
                 }
             }
             TuiInputAction::SetCursor { offset } => {
-                self.close_shortcuts(ctx);
-                self.close_status_overlay(ctx);
+                self.close_read_only_menu(ctx);
                 self.model.update(ctx, |m, ctx| {
                     m.select_at(*offset, false, ctx);
                     m.end_selection(ctx);
@@ -1080,10 +1075,7 @@ impl TuiInputView {
 
     /// Handles the input's contextual Escape behavior in explicit priority order.
     fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        if self.close_shortcuts(ctx) {
-            return true;
-        }
-        if self.close_status_overlay(ctx) {
+        if self.close_read_only_menu(ctx).is_some() {
             return true;
         }
         if let Some(inline_menu) = self.active_inline_menu(ctx) {
@@ -1113,32 +1105,13 @@ impl TuiInputView {
         false
     }
 
-    fn close_shortcuts(&self, ctx: &mut ViewContext<Self>) -> bool {
-        let is_open = matches!(
-            self.suggestions_mode.as_ref(ctx).mode(),
-            TuiInputSuggestionsMode::Shortcuts
-        );
-        if is_open {
-            self.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
-            });
-        }
-        is_open
-    }
-
-    /// Closes the dedicated status overlay (opened by `/status`) if it is
-    /// currently active. Returns `true` when the overlay was closed.
-    fn close_status_overlay(&self, ctx: &mut ViewContext<Self>) -> bool {
-        let is_open = matches!(
-            self.suggestions_mode.as_ref(ctx).mode(),
-            TuiInputSuggestionsMode::Status
-        );
-        if is_open {
-            self.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.close_if_active(TuiInputSuggestionsMode::Status, ctx);
-            });
-        }
-        is_open
+    fn close_read_only_menu(&self, ctx: &mut ViewContext<Self>) -> Option<TuiReadOnlyMenuKind> {
+        let mode = self.suggestions_mode.as_ref(ctx).mode();
+        let kind = mode.read_only_menu()?;
+        self.suggestions_mode.update(ctx, |model, ctx| {
+            model.close_if_active(mode, ctx);
+        });
+        Some(kind)
     }
 
     fn active_inline_menu(&self, ctx: &AppContext) -> Option<TuiInlineMenu> {

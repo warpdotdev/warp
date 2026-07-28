@@ -12,6 +12,7 @@ use super::{AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource};
 use crate::input_mode_policy;
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{PLAN_TOGGLE_BINDING_NAME, binding_hint};
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::tab_bar::TuiTabBarView;
 use crate::terminal_use::{TuiInputTarget, inline_process_owns_input, tui_input_target};
 use crate::transcript_view::TuiTranscriptView;
@@ -429,10 +430,7 @@ impl TuiTerminalSessionState {
         let TuiInteractionState::Composer(composer) = &state.interaction else {
             return None;
         };
-        if matches!(
-            composer.suggestions_mode,
-            TuiInputSuggestionsMode::Shortcuts | TuiInputSuggestionsMode::Status
-        ) {
+        if composer.suggestions_mode.read_only_menu().is_some() {
             return None;
         }
         Some(match composer.mode {
@@ -443,26 +441,11 @@ impl TuiTerminalSessionState {
         })
     }
 
-    pub(crate) fn should_render_shortcuts(&self) -> bool {
-        matches!(
-            self.interaction(),
-            TuiInteractionState::Composer(TuiComposerState {
-                suggestions_mode: TuiInputSuggestionsMode::Shortcuts,
-                ..
-            })
-        )
-    }
-
-    /// Returns `true` when the dedicated status menu (opened by `/status`)
-    /// should be rendered above the input.
-    pub(crate) fn should_render_status(&self) -> bool {
-        matches!(
-            self.interaction(),
-            TuiInteractionState::Composer(TuiComposerState {
-                suggestions_mode: TuiInputSuggestionsMode::Status,
-                ..
-            })
-        )
+    pub(crate) fn read_only_menu(&self) -> Option<TuiReadOnlyMenuKind> {
+        let TuiInteractionState::Composer(composer) = self.interaction() else {
+            return None;
+        };
+        composer.suggestions_mode.read_only_menu()
     }
 
     pub(crate) fn shortcut_sections(

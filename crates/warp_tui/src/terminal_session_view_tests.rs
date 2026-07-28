@@ -69,6 +69,7 @@ use crate::orchestration_model::TuiOrchestrationModel;
 use crate::orchestration_tab_bar::{
     ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon, render_orchestration_tab_footer,
 };
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::statusline_config_view::TuiStatuslineConfigEvent;
@@ -1440,7 +1441,10 @@ fn shortcuts_surface_renders_above_the_input() {
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         view.update(&mut app, |view, ctx| {
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                    ctx,
+                );
             });
         });
 
@@ -1655,15 +1659,13 @@ fn status_slash_command_opens_dedicated_status_menu_via_shared_structure() {
             view.execute_tui_slash_command(&slash_commands::STATUS, None, ctx);
         });
 
-        // /status must open the DEDICATED status overlay (Status mode), not
-        // the shortcuts panel (Shortcuts mode).  The two panels share the same
-        // outer styling (wrap_panel from shortcuts.rs) but are surfaced
-        // through different modes and own their own row renderers.
+        // /status and ? select distinct projections of the shared read-only
+        // menu component.
         assert!(
             app.read(|ctx| {
                 matches!(
                     view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                    TuiInputSuggestionsMode::Status
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
                 )
             }),
             "/status should open the dedicated status overlay (Status mode)"
@@ -1672,7 +1674,7 @@ fn status_slash_command_opens_dedicated_status_menu_via_shared_structure() {
             app.read(|ctx| {
                 !matches!(
                     view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                    TuiInputSuggestionsMode::Shortcuts
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
                 )
             }),
             "/status must NOT open the shortcuts panel (Shortcuts mode)"
@@ -1721,13 +1723,16 @@ fn status_slash_command_opens_dedicated_status_menu_via_shared_structure() {
         // Dismissing the panel closes the Status overlay.
         view.update(&mut app, |view, ctx| {
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.close_if_active(TuiInputSuggestionsMode::Status, ctx);
+                mode.close_if_active(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status),
+                    ctx,
+                );
             });
         });
         assert!(
             !app.read(|ctx| matches!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::Status
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
             )),
             "dismissing status mode should close the panel"
         );
@@ -2931,7 +2936,10 @@ fn terminal_use_interrupt_closes_shortcuts_before_taking_control() {
                 )
                 .expect("command should become agent monitored");
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                    ctx,
+                );
             });
 
             view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
