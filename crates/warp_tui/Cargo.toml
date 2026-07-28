@@ -49,6 +49,7 @@ futures-lite.workspace = true
 fs4.workspace = true
 http_client.workspace = true
 instant.workspace = true
+inquire = "0.9.1"
 itertools.workspace = true
 log.workspace = true
 markdown_parser.workspace = true

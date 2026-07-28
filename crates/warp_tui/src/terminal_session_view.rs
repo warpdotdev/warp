@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::LLMProvider;
 use async_channel::Sender;
 use chrono::{Local, NaiveDateTime};
 use instant::Instant;
@@ -27,18 +28,19 @@ use warp::tui_export::{
     ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
     ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
     GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
-    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, ModelEvent, ParsedSlashCommandInput,
-    PersistenceWriter, PtyIntent, PtyIntentEvent, QueuedQueryEvent, QueuedQueryModel,
-    RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken, Sessions,
-    ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
-    SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
-    StaticCommand, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
-    TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
-    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
-    export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event,
-    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData, ModelEvent,
+    ParsedSlashCommandInput, PersistenceWriter, PtyIntent, PtyIntentEvent, QueuedQueryEvent,
+    QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
+    Sessions, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
+    SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
+    StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource,
+    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiZeroStateDataSource,
+    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model,
+    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
+    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
+    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, slash_commands, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -94,7 +96,9 @@ use crate::orchestration_tab_bar::{
     render_orchestration_tab_footer,
 };
 use crate::platform::reveal_path_in_file_manager;
-use crate::prompt_history_menu::{TuiPromptHistoryMenuEvent, TuiPromptHistoryMenuModel};
+use crate::prompt_and_command_history_menu::{
+    TuiPromptAndCommandHistoryMenuEvent, TuiPromptAndCommandHistoryMenuModel,
+};
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
@@ -316,30 +320,53 @@ fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
 }
 
-/// User-facing CLI binary name for the current channel.
+/// Shell command that invokes the TUI for the current build channel.
 ///
-/// Installed builds expose `warp`, `warp-dev`, `warp-preview`, etc. Local cargo
-/// builds don't ship a versioned `warp` binary on PATH, so they intentionally
-/// target `warp-dev` (the dogfood channel name).
-pub(crate) fn tui_cli_binary_name(channel: Channel) -> &'static str {
-    match channel {
+/// Local builds run through the repository script so they select and build the
+/// local TUI binary; installed builds invoke their channel-specific executable.
+fn tui_cli_shell_command(channel: Channel, arguments: &str) -> String {
+    let launcher = match channel {
+        Channel::Local => "./script/run-tui --",
         Channel::Stable => "warp",
-        Channel::Dev | Channel::Local => "warp-dev",
+        Channel::Dev => "warp-dev",
         Channel::Preview => "warp-preview",
         Channel::Oss => "warp-oss",
         Channel::Integration => "warp-integration",
-    }
+    };
+    format!("{launcher} {arguments}")
 }
 
 /// Shell command used by the exit hint to resume a server conversation.
 pub(crate) fn tui_resume_shell_command(channel: Channel, token: &str) -> String {
-    format!("{} --resume {token}", tui_cli_binary_name(channel))
+    tui_cli_shell_command(channel, &format!("--resume {token}"))
 }
 
 /// Shell command used by `/version` to print the binary version as a normal
 /// transcript block.
 fn version_shell_command(channel: Channel) -> String {
-    format!("{} --version", tui_cli_binary_name(channel))
+    tui_cli_shell_command(channel, "--version")
+}
+
+#[derive(Clone, Copy)]
+enum ProviderApiKeyOperation {
+    Set,
+    Clear,
+}
+
+fn provider_api_key_shell_command(
+    channel: Channel,
+    provider: LLMProvider,
+    operation: ProviderApiKeyOperation,
+) -> Option<String> {
+    let provider = provider.api_key_slug()?;
+    let flag = match operation {
+        ProviderApiKeyOperation::Set => "--set-provider-api-key",
+        ProviderApiKeyOperation::Clear => "--clear-provider-api-key",
+    };
+    Some(tui_cli_shell_command(
+        channel,
+        &format!("{flag} {provider}"),
+    ))
 }
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
@@ -431,7 +458,7 @@ impl FooterSegment {
     fn separator_to(&self, next: &Self) -> &'static str {
         match (self, next) {
             (Self::ShellMode | Self::Model(_), Self::WorkingDirectory(_)) => " ",
-            (Self::WorkingDirectory(_), Self::GitBranch(_)) => " ↬ ",
+            (Self::WorkingDirectory(_), Self::GitBranch(_)) => " ⊢ ",
             (Self::ActiveIndicator(_), Self::ActiveIndicator(_)) => " • ",
             (
                 Self::WorkingDirectory(_) | Self::GitBranch(_),
@@ -474,7 +501,7 @@ struct FooterSegments {
 }
 /// Builds the status row from resolved segments. Working directory follows a
 /// leading shell-mode or model label with a plain space; an immediately
-/// following branch uses the existing ` ↬ ` relationship marker. Items in
+/// following branch uses ` ⊢ ` as the relationship marker. Items in
 /// different Figma groups use ` | `; other adjacent pairs use ` • `. The first
 /// item never receives a separator.
 fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) -> TuiFlex {
@@ -1430,16 +1457,18 @@ impl TuiTerminalSessionView {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
         });
-        let prompt_history_menu = ctx.add_model(|ctx| {
-            TuiPromptHistoryMenuModel::new(
+        let prompt_and_command_history_menu = ctx.add_model(|ctx| {
+            TuiPromptAndCommandHistoryMenuModel::new(
                 input_editor_model.clone(),
+                ai_input_model.clone(),
                 suggestions_mode.clone(),
+                active_session.clone(),
                 terminal_surface_id,
                 ctx,
             )
         });
-        ctx.subscribe_to_model(&prompt_history_menu, |_, _, event, ctx| {
-            let TuiPromptHistoryMenuEvent::Updated = event;
+        ctx.subscribe_to_model(&prompt_and_command_history_menu, |_, _, event, ctx| {
+            let TuiPromptAndCommandHistoryMenuEvent::Updated = event;
             ctx.notify();
         });
         let completion_menu =
@@ -1494,7 +1523,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
-            TuiInlineMenu::new(prompt_history_menu.clone()),
+            TuiInlineMenu::new(prompt_and_command_history_menu.clone()),
             TuiInlineMenu::new(completion_menu.clone()),
         ];
         let inline_menus_for_input = inline_menus.clone();
@@ -1579,7 +1608,7 @@ impl TuiTerminalSessionView {
         });
 
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
-            TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), ctx),
+            TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), None, ctx),
             TuiInputViewEvent::Pasted(text) => view.handle_pasted(text.clone(), ctx),
             TuiInputViewEvent::BackspaceAtEmptyInput => {
                 view.attachment_bar
@@ -1597,8 +1626,8 @@ impl TuiTerminalSessionView {
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
             }
-            TuiInputViewEvent::AcceptedPromptHistory(text) => {
-                view.handle_accepted_prompt_history(text.clone(), ctx);
+            TuiInputViewEvent::AcceptedPromptAndCommandHistory { text, kind } => {
+                view.handle_accepted_prompt_and_command_history(text.clone(), kind.clone(), ctx);
             }
             TuiInputViewEvent::RequestShellCompletion => {
                 view.request_shell_completion(ctx);
@@ -3152,9 +3181,53 @@ impl TuiTerminalSessionView {
         input_mode_policy::is_shell_mode(self.ai_input_model.as_ref(ctx))
     }
 
+    fn execute_provider_api_key_command(
+        &mut self,
+        command: &StaticCommand,
+        argument: Option<&String>,
+        operation: ProviderApiKeyOperation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let provider = argument
+            .map(String::as_str)
+            .ok_or_else(|| "provider is required".to_owned())
+            .and_then(LLMProvider::from_api_key_slug);
+        let Ok(provider) = provider else {
+            self.show_error_hint(
+                format!(
+                    "Usage: {} <{}>",
+                    command.name,
+                    LLMProvider::API_KEY_PROVIDER_VALUE_NAME
+                ),
+                ctx,
+            );
+            return;
+        };
+        let Some(command_text) =
+            provider_api_key_shell_command(ChannelState::channel(), provider, operation)
+        else {
+            self.show_error_hint(
+                format!(
+                    "Usage: {} <{}>",
+                    command.name,
+                    LLMProvider::API_KEY_PROVIDER_VALUE_NAME
+                ),
+                ctx,
+            );
+            return;
+        };
+        self.execute_user_command(&command_text, None, ctx);
+        record_static_slash_command_accepted(command.name, true, ctx);
+    }
+
     /// Routes a submission to shell execution or the agent conversation based
     /// on the input mode.
-    fn handle_submitted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+    fn handle_submitted(
+        &mut self,
+        text: String,
+        linked_workflow_data: Option<LinkedWorkflowData>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         // A stale editor frame must not submit into a shell that is still
         // bootstrapping or has handed input to a foreground process.
         if !self.input_target().agent_editor_owns_input() {
@@ -3170,21 +3243,27 @@ impl TuiTerminalSessionView {
             self.input_view
                 .update(ctx, |input, ctx| input.lock_for_agent_control(ctx));
         } else if self.is_shell_mode(ctx) {
-            self.execute_user_command(&text, ctx);
+            self.execute_user_command(&text, linked_workflow_data, ctx);
         } else {
             self.handle_submitted_input(&text, ctx);
         }
         ctx.notify();
     }
 
-    /// Executes `command` in the session's PTY as a plain user command.
+    /// Executes `command` in the session's PTY as a user command, preserving
+    /// workflow origin metadata when it was recalled from history.
     ///
     /// Mirrors the GUI's shell-mode submission: rejected while the agent holds
     /// the PTY with an active long-running command (the input keeps its text
     /// and a transient hint is shown), and an in-progress conversation is
     /// cancelled when the command runs. On success the input clears and exits
     /// shell mode back to agent input.
-    fn execute_user_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) {
+    fn execute_user_command(
+        &mut self,
+        command: &str,
+        linked_workflow_data: Option<LinkedWorkflowData>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         // A whitespace-only command is a no-op; stay in shell mode. The command
         // itself is sent to the PTY untrimmed, exactly as typed.
         if command.trim().is_empty() {
@@ -3232,12 +3311,17 @@ impl TuiTerminalSessionView {
             }
         }
 
+        let (workflow_id, workflow_command) = match linked_workflow_data {
+            Some(LinkedWorkflowData::Id(workflow_id)) => (Some(workflow_id), None),
+            Some(LinkedWorkflowData::Command(workflow_command)) => (None, Some(workflow_command)),
+            None => (None, None),
+        };
         ctx.emit(TuiTerminalSessionEvent::ExecuteCommand(Box::new(
             ExecuteCommandEvent {
                 command: command.to_owned(),
                 session_id,
-                workflow_id: None,
-                workflow_command: None,
+                workflow_id,
+                workflow_command,
                 should_add_command_to_history: true,
                 source: CommandExecutionSource::User,
             },
@@ -3506,14 +3590,28 @@ impl TuiTerminalSessionView {
         ctx.notify();
     }
 
-    /// Fills the accepted prompt-history prompt into the input and submits it
-    /// immediately, matching the GUI's accept-a-prompt-from-history behavior.
-    /// The menu has already closed itself.
-    fn handle_accepted_prompt_history(&mut self, text: String, ctx: &mut ViewContext<Self>) {
-        self.input_view.update(ctx, |input, ctx| {
+    fn handle_accepted_prompt_and_command_history(
+        &mut self,
+        text: String,
+        kind: TuiUpArrowHistoryItemKind,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let linked_workflow_data = self.input_view.update(ctx, |input, ctx| {
             input.set_text(&text, ctx);
+            match kind {
+                TuiUpArrowHistoryItemKind::Prompt => {
+                    input.exit_shell_mode(ctx);
+                    None
+                }
+                TuiUpArrowHistoryItemKind::Command {
+                    linked_workflow_data,
+                } => {
+                    input.enter_shell_mode(ctx);
+                    linked_workflow_data
+                }
+            }
         });
-        self.handle_submitted(text, ctx);
+        self.handle_submitted(text, linked_workflow_data, ctx);
     }
 
     /// Handles a mouse-click accept on the inline menu: selects the row at
@@ -3608,7 +3706,7 @@ impl TuiTerminalSessionView {
         }
 
         match command.kind {
-            SlashCommandKind::Agent | SlashCommandKind::New => {
+            SlashCommandKind::Agent | SlashCommandKind::New | SlashCommandKind::Clear => {
                 if self.start_new_conversation(argument, ctx) {
                     record_static_slash_command_accepted(command.name, true, ctx);
                 }
@@ -3628,6 +3726,22 @@ impl TuiTerminalSessionView {
             }
             SlashCommandKind::Statusline => {
                 self.open_statusline_config(command.name, ctx);
+            }
+            SlashCommandKind::AddApiKey => {
+                self.execute_provider_api_key_command(
+                    command,
+                    argument,
+                    ProviderApiKeyOperation::Set,
+                    ctx,
+                );
+            }
+            SlashCommandKind::ClearApiKey => {
+                self.execute_provider_api_key_command(
+                    command,
+                    argument,
+                    ProviderApiKeyOperation::Clear,
+                    ctx,
+                );
             }
             SlashCommandKind::Cost => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
@@ -3664,7 +3778,7 @@ impl TuiTerminalSessionView {
                 // Run as a normal user shell command so version output lands in
                 // the transcript as a regular shell block.
                 let command_text = version_shell_command(ChannelState::channel());
-                self.execute_user_command(&command_text, ctx);
+                self.execute_user_command(&command_text, None, ctx);
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::ViewLogs => {

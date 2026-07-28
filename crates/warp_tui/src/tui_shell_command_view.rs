@@ -17,7 +17,9 @@ use warp::tui_export::{
 };
 use warpui_core::r#async::Timer;
 use warpui_core::elements::MouseStateHandle;
-use warpui_core::elements::tui::{Modifier, TuiChildView, TuiElement, TuiFlex, tui_collapsible};
+use warpui_core::elements::tui::{
+    Modifier, TuiChildView, TuiElement, TuiFlex, TuiText, tui_collapsible,
+};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
 use warpui_core::{
@@ -42,20 +44,16 @@ const SHELL_COMMAND_EDITING: &str = "TuiShellCommandEditing";
 
 pub(crate) fn init(app: &mut AppContext) {
     let predicate = id!(TuiShellCommandView::ui_name()) & id!(SHELL_COMMAND_EDITING);
-    app.register_fixed_bindings([
-        FixedBinding::new(
-            "escape",
-            TuiShellCommandViewAction::CancelPermission,
-            predicate.clone(),
-        )
-        .with_group(TUI_BINDING_GROUP),
-        FixedBinding::new(
-            "ctrl-e",
-            TuiShellCommandViewAction::SaveCommandEdit,
-            predicate.clone(),
-        )
-        .with_group(TUI_BINDING_GROUP),
-    ]);
+    app.register_fixed_bindings([FixedBinding::new(
+        "escape",
+        // Esc while the command body editor is focused exits the editor
+        // and restores Yes as the highlighted option — it does NOT cancel
+        // the tool call. A subsequent Esc (with the list focused) cancels
+        // via the `PERMISSION_PROMPT_ACTIVE` → `CancelOrBack` path.
+        TuiShellCommandViewAction::SaveCommandEdit,
+        predicate.clone(),
+    )
+    .with_group(TUI_BINDING_GROUP)]);
     app.register_editable_bindings([
         EditableBinding::new(
             "tui:shell-permission:save",
@@ -136,7 +134,6 @@ pub(super) enum TuiShellCommandViewEvent {
 /// User interactions handled by the shell-command view.
 #[derive(Clone, Debug)]
 pub(super) enum TuiShellCommandViewAction {
-    CancelPermission,
     SaveCommandEdit,
     ToggleExpanded,
 }
@@ -244,7 +241,6 @@ impl TuiShellCommandView {
         }
         self.permission_prompt
             .update(ctx, |prompt, ctx| prompt.restore_options_focus(ctx));
-        self.invalidate_layout(ctx);
     }
 
     fn accept(&mut self, ctx: &mut ViewContext<Self>) {
@@ -280,10 +276,18 @@ impl TuiShellCommandView {
     }
 
     fn render_blocked(&self, app: &AppContext) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(app);
+        let edit_hint = TuiText::from_spans([
+            ("e".to_owned(), builder.primary_text_style()),
+            (" to edit command".to_owned(), builder.muted_text_style()),
+        ])
+        .truncate()
+        .finish();
         render_permission_card(
             &self.permission_prompt,
             "Is it OK if I run this command and read the output?",
             None,
+            Some(edit_hint),
             app,
         )
     }
@@ -490,7 +494,6 @@ impl TypedActionView for TuiShellCommandView {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            TuiShellCommandViewAction::CancelPermission => self.reject(ctx),
             TuiShellCommandViewAction::SaveCommandEdit => self.save_command_edit(ctx),
             TuiShellCommandViewAction::ToggleExpanded => {
                 if self.user_controls_command() {

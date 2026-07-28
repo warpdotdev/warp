@@ -67,7 +67,15 @@ brew install getsentry/tools/sentry-cli
 brew install clang-format
 brew install create-dmg
 brew install multitime
-brew install powershell
+# Prefer the cask over the formula to avoid pulling in the dotnet formula
+# dependency, which fails to link when /opt/homebrew/bin/dotnet already
+# exists as a symlink to a non-Homebrew install (e.g. the
+# /usr/local/share/dotnet install from Microsoft or the Xcode toolchain).
+# Skip entirely when a working pwsh is already on PATH — covers an existing
+# cask install, a non-Homebrew /usr/local/bin/pwsh, or any other working pwsh.
+if ! pwsh --version >/dev/null 2>&1; then
+    brew install --cask powershell
+fi
 brew install pkgconf
 brew install llvm
 

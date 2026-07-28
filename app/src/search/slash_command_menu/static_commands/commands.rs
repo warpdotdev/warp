@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use ai::LLMProvider;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
@@ -107,6 +108,32 @@ pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
+};
+pub const ADD_API_KEY: StaticCommand = StaticCommand {
+    name: "/add-api-key",
+    description: "Securely store a model-provider API key",
+    kind: SlashCommandKind::AddApiKey,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME),
+        is_optional: false,
+        should_execute_on_selection: false,
+    }),
+};
+pub const CLEAR_API_KEY: StaticCommand = StaticCommand {
+    name: "/clear-provider-api-key",
+    description: "Remove a stored model-provider API key",
+    kind: SlashCommandKind::ClearApiKey,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME),
+        is_optional: false,
+        should_execute_on_selection: false,
+    }),
 };
 pub const THEME: StaticCommand = StaticCommand {
     name: "/theme",
@@ -483,6 +510,22 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
+
+pub const CLEAR: StaticCommand = StaticCommand {
+    name: "/clear",
+    description: "Clear the transcript and start a new conversation (alias for /agent)",
+    kind: SlashCommandKind::Clear,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::NO_LRC_CONTROL
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: None,
+        is_optional: true,
+        should_execute_on_selection: true,
+    }),
+};
 
 pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/model",
@@ -866,6 +909,8 @@ impl Registry {
 fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
     let mut commands = vec![
         ADD_MCP,
+        ADD_API_KEY,
+        CLEAR_API_KEY,
         ADD_PROMPT.clone(),
         ADD_RULE,
         AUTO_APPROVE,
@@ -880,6 +925,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         OPEN_MCP_SERVERS,
         OPEN_RULES,
         AGENT.clone(),
+        CLEAR,
         NEW.clone(),
         PLAN.clone(),
         RENAME_CONVERSATION.clone(),

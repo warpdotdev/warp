@@ -68,12 +68,17 @@ fn text_styles_follow_light_theme_foreground() {
         shell_command_prefix_style.fg,
         Some(CoreFill::from(shell_command_fill).into())
     );
-    assert_eq!(
-        shell_command_prefix_style.bg,
-        Some(shell_command_background)
-    );
+    assert_eq!(shell_command_prefix_style.bg, None);
     assert!(
         shell_command_prefix_style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+    let shell_command_row_style = builder.shell_command_row_style();
+    assert_eq!(shell_command_row_style.fg, shell_command_prefix_style.fg);
+    assert_eq!(shell_command_row_style.bg, Some(shell_command_background));
+    assert!(
+        shell_command_row_style
             .add_modifier
             .contains(Modifier::BOLD)
     );
