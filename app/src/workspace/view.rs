@@ -19874,8 +19874,7 @@ impl Workspace {
             // perpendicular axis to the laid-out origin, so the detach hit-test
             // could never fire and a group could only ever be reordered in place.
             .with_optional_drag_axis(
-                (!FeatureFlag::DragTabsToWindows.is_enabled())
-                    .then_some(DragAxis::HorizontalOnly),
+                (!FeatureFlag::DragTabsToWindows.is_enabled()).then_some(DragAxis::HorizontalOnly),
             )
             // Yield to a nested per-tab `Draggable` when it claims the mouse-down
             // so dragging a member tab fires `DragTab`, not group drag.
@@ -20878,8 +20877,8 @@ impl Workspace {
                         // Matched by group identity rather than by the drag's
                         // frozen first index, which stops pointing at this run
                         // if the source tab list shifts mid-drag.
-                        let group_is_transferred = transferred_tab_index.is_some()
-                            && dragged_group_id == Some(*group_id);
+                        let group_is_transferred =
+                            transferred_tab_index.is_some() && dragged_group_id == Some(*group_id);
                         let rendered_group = self.render_horizontal_tab_group(
                             &group,
                             *first_index,
@@ -27807,7 +27806,8 @@ impl Workspace {
                 me.handle_file_tree_event(pane_group, event, ctx)
             });
             let mut tab_data = TabData::new(pane_group);
-            tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            tab_data.selected_color =
+                color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
             tab_data.draggable_state = draggable_state;
             tab_data.group_id = Some(group_id);
             self.tabs.push(tab_data);
@@ -27959,7 +27959,8 @@ impl Workspace {
                 me.handle_file_tree_event(pane_group, event, ctx)
             });
             let mut tab_data = TabData::new(pane_group);
-            tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            tab_data.selected_color =
+                color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
             tab_data.draggable_state = draggable_state;
             tab_data.group_id = Some(group_id);
             // Group pinning is the source of truth; members do not carry it.

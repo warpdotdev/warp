@@ -128,6 +128,9 @@ pub struct CrossWindowTabDrag {
 
 /// Describes how the drag was initiated, which determines how the preview window is
 /// managed.
+// The shared `Window` suffix is meaningful here: each variant names what acts
+// as the floating preview window for that flavour of drag.
+#[allow(clippy::enum_variant_names)]
 enum DragSource {
     /// The source window had only one tab, so the window itself acts as the floating
     /// preview. No extra window is created and no view transfers are needed at drag start.
@@ -154,16 +157,6 @@ enum DragSource {
         member_pane_group_ids: Vec<EntityId>,
         preview_window_id: Option<WindowId>,
     },
-}
-
-/// Which flavour of drag is in flight. Returned by
-/// [`CrossWindowTabDrag::source_kind`] so decision sites can `match`
-/// exhaustively instead of branching on a pair of booleans.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DragSourceKind {
-    SingleTabWindow,
-    MultiTabWindow,
-    GroupWindow,
 }
 
 /// Mutable state for an in-progress cross-window tab drag.
@@ -227,14 +220,6 @@ impl ActiveDrag {
             DragSource::GroupWindow {
                 source_first_index, ..
             } => *source_first_index,
-        }
-    }
-
-    fn source_kind(&self) -> DragSourceKind {
-        match &self.source {
-            DragSource::SingleTabWindow => DragSourceKind::SingleTabWindow,
-            DragSource::MultiTabWindow { .. } => DragSourceKind::MultiTabWindow,
-            DragSource::GroupWindow { .. } => DragSourceKind::GroupWindow,
         }
     }
 
@@ -430,7 +415,9 @@ pub enum DropResult {
     /// Members are carried as pane-group identities rather than an index
     /// range: the source tab list can shift while the drag is in flight, and
     /// a stale range removes bystanders that are still in bounds.
-    RemoveSourceGroup { member_pane_group_ids: Vec<EntityId> },
+    RemoveSourceGroup {
+        member_pane_group_ids: Vec<EntityId>,
+    },
     /// As [`Self::RemoveSourceGroup`], plus close the now-unused preview.
     RemoveSourceGroupAndClosePreview {
         member_pane_group_ids: Vec<EntityId>,
@@ -439,7 +426,9 @@ pub enum DropResult {
     /// The dragged group was every tab in the source window, so the source has
     /// nothing left. The caller should unsubscribe the members and close
     /// itself, the same way a single-tab source does.
-    CloseSourceWindowForGroup { member_pane_group_ids: Vec<EntityId> },
+    CloseSourceWindowForGroup {
+        member_pane_group_ids: Vec<EntityId>,
+    },
 }
 
 impl Entity for CrossWindowTabDrag {
@@ -610,11 +599,6 @@ impl CrossWindowTabDrag {
         self.active_drag
             .as_ref()
             .is_some_and(|d| d.source_is_own_preview())
-    }
-
-    /// Kind of drag in flight, for decision sites that need three-way dispatch.
-    pub fn source_kind(&self) -> Option<DragSourceKind> {
-        self.active_drag.as_ref().map(|d| d.source_kind())
     }
 
     /// Group being dragged, when the drag is a group drag.
@@ -1033,19 +1017,39 @@ impl CrossWindowTabDrag {
                 });
 
             if let Some(new_insertion_index) = new_insertion_index {
-                let target_index = if new_insertion_index > target_insertion_index {
-                    new_insertion_index - 1
-                } else {
-                    new_insertion_index
-                };
+                // A group occupies a whole run, so the pre-removal index maps
+                // to the post-removal one through the run's length. Reusing the
+                // single-tab `- 1` would land the block short, and moving one
+                // member would split the run.
+                let member_ids = drag.member_pane_group_ids().to_vec();
+                let run_len = member_ids.len().max(1);
+                let target_index = crate::workspace::view::post_drain_index(
+                    new_insertion_index,
+                    target_insertion_index,
+                    run_len,
+                );
 
                 if target_index != target_insertion_index {
                     if let Some(target_ws) =
                         WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx)
                     {
                         target_ws.update(ctx, |workspace, ctx| {
-                            let tab = workspace.tabs.remove(target_insertion_index);
-                            workspace.tabs.insert(target_index, tab);
+                            if member_ids.is_empty() {
+                                let tab = workspace.tabs.remove(target_insertion_index);
+                                workspace.tabs.insert(target_index, tab);
+                            } else {
+                                // Move the whole run in one piece.
+                                let mut indices =
+                                    workspace.tab_indices_for_pane_group_ids(&member_ids);
+                                indices.sort_unstable();
+                                let mut block = Vec::with_capacity(indices.len());
+                                for index in indices.into_iter().rev() {
+                                    block.push(workspace.tabs.remove(index));
+                                }
+                                block.reverse();
+                                let at = target_index.min(workspace.tabs.len());
+                                workspace.tabs.splice(at..at, block);
+                            }
                             workspace.set_active_tab_index(target_index, ctx);
                             ctx.notify();
                         });

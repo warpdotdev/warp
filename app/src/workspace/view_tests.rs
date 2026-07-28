@@ -326,7 +326,8 @@ fn test_mock_workspace_at_has_real_window_bounds() {
             )
         });
         assert!(
-            app.read(|ctx| ctx.window_bounds(&default_window_id)).is_none(),
+            app.read(|ctx| ctx.window_bounds(&default_window_id))
+                .is_none(),
             "the default-bounds window is expected to have no bounds - that is why \
              mock_workspace_at exists"
         );
@@ -4238,7 +4239,10 @@ fn test_group_source_cleanup_removes_members_by_identity_after_a_shift() {
                 .map(|tab| tab.pane_group.id())
                 .collect();
             for member in &members {
-                assert!(!remaining.contains(member), "every member should be removed");
+                assert!(
+                    !remaining.contains(member),
+                    "every member should be removed"
+                );
             }
             for bystander in bystanders.iter().skip(1) {
                 assert!(
