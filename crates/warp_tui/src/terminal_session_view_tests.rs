@@ -2301,6 +2301,47 @@ fn new_slash_command_clears_shell_commands_from_transcript() {
     });
 }
 #[test]
+fn clear_slash_command_clears_shell_commands_from_transcript() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, _| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.block_list_mut().set_bootstrapped();
+            terminal_model.simulate_block("echo before-clear", "before-clear\r\n");
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(!view.transcript.as_ref(ctx).is_empty());
+            assert!(
+                view.terminal_model
+                    .lock()
+                    .block_list()
+                    .blocks()
+                    .iter()
+                    .any(|block| block.command_to_string() == "echo before-clear")
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::CLEAR, None, ctx);
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(
+                view.transcript.as_ref(ctx).is_empty(),
+                "/clear should clear both agent and shell transcript blocks, identical to /new"
+            );
+            assert_eq!(
+                view.terminal_model.lock().block_list().blocks().len(),
+                1,
+                "/clear should leave only the active prompt block"
+            );
+        });
+    });
+}
+
+#[test]
 fn orchestration_tab_icon_replaces_identity_only_while_active_or_blocked() {
     App::test((), |mut app| async move {
         app.update(|ctx| {

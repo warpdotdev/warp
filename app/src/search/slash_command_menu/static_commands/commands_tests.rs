@@ -331,7 +331,7 @@ fn clear_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
-fn clear_command_has_correct_metadata_and_starts_new_conversation() {
+fn clear_command_has_correct_registry_metadata() {
     let command = all_commands(settings::SettingsMode::Tui)
         .into_iter()
         .find(|command| command.kind == SlashCommandKind::Clear)
