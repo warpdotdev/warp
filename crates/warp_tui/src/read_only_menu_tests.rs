@@ -104,7 +104,7 @@ fn background_fills_available_width_under_loose_constraints() {
                         |_, _| {},
                         |_, _, _| {},
                     ),
-                builder.shortcuts_background(),
+                builder.read_only_menu_background(),
             )
         });
 

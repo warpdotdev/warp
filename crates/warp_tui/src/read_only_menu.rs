@@ -200,7 +200,7 @@ impl TuiReadOnlyMenu {
             .finish();
         TuiContainer::new(content)
             .with_padding_x(1)
-            .with_background(builder.shortcuts_background())
+            .with_background(builder.read_only_menu_background())
             .finish()
     }
 }

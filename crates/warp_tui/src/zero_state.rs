@@ -17,7 +17,7 @@ use ai::project_context::model::{
 use warp::tui_export::{
     ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
     SkillManager, SkillManagerEvent, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
-    TuiUserInfoManager,
+    TuiUserInfoManager, TuiUserInfoManagerEvent,
 };
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -96,7 +96,8 @@ impl TuiZeroStateView {
             |_, _, SkillManagerEvent::SkillsChanged { .. }, ctx| ctx.notify(),
         );
         ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
-        ctx.subscribe_to_model(&TuiUserInfoManager::handle(ctx), |_, _, _, ctx| {
+        ctx.subscribe_to_model(&TuiUserInfoManager::handle(ctx), |_, _, event, ctx| {
+            let TuiUserInfoManagerEvent::Updated = event;
             ctx.notify();
         });
         ctx.subscribe_to_model(&active_session, |_, _, event, ctx| {

@@ -59,9 +59,12 @@ fn text_styles_follow_light_theme_foreground() {
     )
     .into();
     let shortcut_accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-    let shortcuts_background: Color =
+    let read_only_menu_background: Color =
         CoreFill::from(theme.background().blend(&shortcut_accent.with_opacity(10))).into();
-    assert_eq!(builder.shortcuts_background(), shortcuts_background);
+    assert_eq!(
+        builder.read_only_menu_background(),
+        read_only_menu_background
+    );
     assert_eq!(builder.shell_command_background(), shell_command_background);
     let grok_fill = ThemeFill::from(theme.terminal_colors().bright.blue);
     let grok_accent: Color = CoreFill::from(grok_fill).into();

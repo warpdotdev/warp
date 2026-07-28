@@ -13,7 +13,7 @@ pub use mcp::{
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
 use url::Url;
-pub use user_info::{TuiUserInfoManager, TuiUserInfoSnapshot};
+pub use user_info::{TuiUserInfoManager, TuiUserInfoManagerEvent, TuiUserInfoSnapshot};
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use crate::TuiMountFn;

@@ -215,8 +215,8 @@ impl TuiUiBuilder {
         )
     }
 
-    /// Theme-accent overlay for the shortcut reference panel.
-    pub(crate) fn shortcuts_background(&self) -> Color {
+    /// Theme-accent overlay for shared read-only menus.
+    pub(crate) fn read_only_menu_background(&self) -> Color {
         let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
         cell_color(self.base_background().blend(&accent.with_opacity(10)))
     }
