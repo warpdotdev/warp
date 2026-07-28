@@ -16,7 +16,7 @@ use warpui_core::elements::tui::{
     TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
 
-use crate::terminal_use::user_controls_running_command;
+use crate::terminal_use::user_controlled_running_command;
 use crate::tui_builder::TuiUiBuilder;
 const SHELL_COMMAND_PREFIX: &str = "!";
 const SHELL_COMMAND_PREFIX_WIDTH: u16 = 2;
@@ -99,10 +99,11 @@ impl TerminalBlockElement {
 
 fn terminal_block_cursor(
     block: &Block,
+    owns_cursor: bool,
     visible_rows: &Range<usize>,
     size: TuiSize,
 ) -> Option<(u16, u16)> {
-    if !user_controls_running_command(block) || !block.is_mode_set(TermMode::SHOW_CURSOR) {
+    if !owns_cursor || !block.is_mode_set(TermMode::SHOW_CURSOR) {
         return None;
     }
     let (grid, grid_start_row) = if block.is_command_grid_active() {
@@ -184,21 +185,24 @@ impl TuiElement for TerminalBlockElement {
         };
         let model = self.model.lock();
         let colors = model.colors();
-        let Some(block) = model.block_list().block_with_id(&self.block_id) else {
+        let block_list = model.block_list();
+        let cursor_owner = user_controlled_running_command(&model).map(Block::id);
+        let Some(block) = block_list.block_with_id(&self.block_id) else {
             return;
         };
         let (rows, width) = match &self.rows {
             TerminalBlockRows::Visible { rows, width } => (rows.clone(), (*width).min(size.width)),
             TerminalBlockRows::Content => (block_content_rows(block), size.width),
         };
-        let cursor = terminal_block_cursor(block, &rows, size).and_then(|(column, row)| {
-            let column = if self.command_style.is_some() && block.is_command_grid_active() {
-                column.saturating_add(SHELL_COMMAND_PREFIX_WIDTH)
-            } else {
-                column
-            };
-            (column < size.width).then_some((column, row))
-        });
+        let cursor = terminal_block_cursor(block, cursor_owner == Some(block.id()), &rows, size)
+            .and_then(|(column, row)| {
+                let column = if self.command_style.is_some() && block.is_command_grid_active() {
+                    column.saturating_add(SHELL_COMMAND_PREFIX_WIDTH)
+                } else {
+                    column
+                };
+                (column < size.width).then_some((column, row))
+            });
         render_block_rows(
             block,
             rows,
