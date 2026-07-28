@@ -1,4 +1,5 @@
-//! Unit tests for [`CrossWindowTabDrag`] placeholder-collapse policy.
+//! Unit tests for [`CrossWindowTabDrag`] drag-source state and the
+//! placeholder-collapse policy.
 //!
 //! These focus on [`CrossWindowTabDrag::collapsed_source_placeholder_index`],
 //! which decides whether the source window's horizontal tab bar collapses the
@@ -7,10 +8,11 @@
 //! is reordering it back in the source window removed the visible drop zone and
 //! made the slot oscillate every frame.
 
-use warpui::WindowId;
 use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::{EntityId, WindowId};
 
 use super::CrossWindowTabDrag;
+use crate::workspace::tab_group::TabGroupId;
 
 const SOURCE_TAB_INDEX: usize = 2;
 
@@ -99,4 +101,131 @@ fn single_tab_drag_never_collapses_a_slot() {
     );
 
     assert_eq!(drag.collapsed_source_placeholder_index(source), None);
+}
+
+fn begin_group_drag(
+    drag: &mut CrossWindowTabDrag,
+    source_window_id: WindowId,
+    members: Vec<EntityId>,
+    preview_window_id: Option<WindowId>,
+    pinned: bool,
+) -> TabGroupId {
+    let group_id = TabGroupId::new();
+    drag.begin_group_drag(
+        source_window_id,
+        group_id,
+        SOURCE_TAB_INDEX,
+        members,
+        pinned,
+        preview_window_id,
+        Vector2F::zero(),
+        vec2f(800.0, 600.0),
+        Vector2F::zero(),
+        false,
+        vec2f(240.0, 34.0),
+    );
+    group_id
+}
+
+#[test]
+fn group_drag_carries_its_members_and_identity() {
+    // Source cleanup and snapshot filtering both resolve through these, so
+    // they have to survive from drag start to drop.
+    let source = WindowId::from_usize(1);
+    let preview = WindowId::from_usize(2);
+    let members = vec![EntityId::from_usize(11), EntityId::from_usize(12)];
+
+    let mut drag = CrossWindowTabDrag::new();
+    assert_eq!(drag.source_group_id(), None);
+    assert!(drag.member_pane_group_ids().is_empty());
+
+    let group_id = begin_group_drag(&mut drag, source, members.clone(), Some(preview), false);
+    assert_eq!(drag.source_group_id(), Some(group_id));
+    assert_eq!(drag.member_pane_group_ids(), members);
+}
+
+#[test]
+fn whole_window_group_drag_has_no_dedicated_preview() {
+    // A group spanning every tab leaves nothing behind, so the source window
+    // IS the preview - the same shape as a single-tab drag. Getting this wrong
+    // sends the drop down the multi-tab path, which moves one member and
+    // destroys the rest.
+    let source = WindowId::from_usize(1);
+    let members = vec![EntityId::from_usize(11), EntityId::from_usize(12)];
+
+    let mut drag = CrossWindowTabDrag::new();
+    begin_group_drag(&mut drag, source, members, None, false);
+
+    assert!(
+        !drag.has_dedicated_preview_window(),
+        "a whole-window group has no separate preview to close"
+    );
+    assert!(
+        drag.source_is_own_preview(),
+        "the source window must be treated as the preview, so it is closed rather than \
+         having tabs removed from it"
+    );
+
+    // With a dedicated preview both answers invert.
+    let mut drag = CrossWindowTabDrag::new();
+    begin_group_drag(
+        &mut drag,
+        source,
+        vec![EntityId::from_usize(11)],
+        Some(WindowId::from_usize(2)),
+        false,
+    );
+    assert!(drag.has_dedicated_preview_window());
+    assert!(!drag.source_is_own_preview());
+}
+
+#[test]
+fn group_drag_collapses_the_source_placeholder_like_a_tab_drag() {
+    let source = WindowId::from_usize(1);
+    let preview = WindowId::from_usize(2);
+    let other = WindowId::from_usize(3);
+
+    let mut drag = CrossWindowTabDrag::new();
+    begin_group_drag(
+        &mut drag,
+        source,
+        vec![EntityId::from_usize(11), EntityId::from_usize(12)],
+        Some(preview),
+        false,
+    );
+
+    assert_eq!(
+        drag.collapsed_source_placeholder_index(source),
+        Some(SOURCE_TAB_INDEX)
+    );
+    assert_eq!(drag.collapsed_source_placeholder_index(preview), None);
+    assert_eq!(drag.collapsed_source_placeholder_index(other), None);
+
+    // Back over the source's own tab bar the placeholder stays full width, so
+    // the drop zone does not vanish under the cursor.
+    drag.set_reordering_in_source_for_test(true);
+    assert_eq!(drag.collapsed_source_placeholder_index(source), None);
+}
+
+#[test]
+fn group_placeholder_index_follows_a_reorder_in_source() {
+    // set_source_placeholder_index silently no-opped for groups, so a group
+    // reordered back in the source dropped at its drag-start position.
+    let source = WindowId::from_usize(1);
+    let mut drag = CrossWindowTabDrag::new();
+    begin_group_drag(
+        &mut drag,
+        source,
+        vec![EntityId::from_usize(11), EntityId::from_usize(12)],
+        Some(WindowId::from_usize(2)),
+        false,
+    );
+    assert_eq!(drag.transferred_tab_index(), Some(SOURCE_TAB_INDEX));
+
+    drag.set_source_placeholder_index(0);
+    assert_eq!(
+        drag.transferred_tab_index(),
+        Some(0),
+        "the group's placeholder run start must move with the reorder"
+    );
 }
