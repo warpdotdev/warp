@@ -12,6 +12,15 @@ use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::terminal::CLIAgent;
 use crate::themes::theme::Fill as ThemeFill;
 
+/// Background color used for the Oz agent's circle when it is running in an ambient (cloud)
+/// run. Matches the Oz brand purple used in the cloud-mode design spec.
+const OZ_AMBIENT_BACKGROUND_COLOR: ColorU = ColorU {
+    r: 203,
+    g: 176,
+    b: 247,
+    a: 255,
+};
+
 // Sub-component size ratios, expressed as fractions of `total_size`. The brand circle is
 // ~76% wide and the status badge is ~57% wide, with the badge's bottom-right anchored at
 // the box's bottom-right corner. With these ratios the badge center sits *inside* the
@@ -119,9 +128,9 @@ pub(crate) enum IconWithStatusVariant {
     },
     /// A pre-built icon element on an overlay background.
     NeutralElement { icon_element: Box<dyn Element> },
-    /// A Warp agent conversation: monochrome Warp glyph and circle, with the
-    /// foreground/background pair flipped for light and dark themes. Ambient
-    /// (cloud) conversations retain the separate cloud status badge.
+    /// A Warp agent conversation: monochrome Warp glyph and circle. Local conversations
+    /// use a foreground/background pair that flips for light and dark themes; ambient
+    /// (cloud) conversations retain the purple brand background and cloud status badge.
     OzAgent {
         status: Option<ConversationStatus>,
         is_ambient: bool,
@@ -194,7 +203,7 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             total_size,
         ),
         IconWithStatusVariant::OzAgent { status, is_ambient } => {
-            let (circle_background, glyph_color) = warp_agent_circle_colors(theme);
+            let (circle_background, glyph_color) = warp_agent_circle_colors(theme, is_ambient);
             let circle = render_circle(
                 WarpIcon::Agent.to_warpui_icon(glyph_color).finish(),
                 circle_background,
@@ -256,7 +265,13 @@ pub(crate) fn render_icon_with_status_with_badge_style(
     }
 }
 
-fn warp_agent_circle_colors(theme: &WarpTheme) -> (WarpThemeFill, WarpThemeFill) {
+fn warp_agent_circle_colors(theme: &WarpTheme, is_ambient: bool) -> (WarpThemeFill, WarpThemeFill) {
+    if is_ambient {
+        return (
+            ThemeFill::Solid(OZ_AMBIENT_BACKGROUND_COLOR),
+            WarpThemeFill::Solid(ColorU::black()),
+        );
+    }
     match theme.inferred_color_scheme() {
         ColorScheme::LightOnDark => (WarpThemeFill::black(), WarpThemeFill::white()),
         ColorScheme::DarkOnLight => (WarpThemeFill::white(), WarpThemeFill::black()),
