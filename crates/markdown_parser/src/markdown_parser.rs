@@ -1035,6 +1035,28 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
             }
+            InlineToken::HtmlAnchorStart { href, raw } => {
+                // Push the raw opening tag as the literal fallback (used if no `</a>` closes it),
+                // mirroring how `LinkStart` stores its `[` placeholder, and stash the href on the
+                // delimiter for close-time styling.
+                let node_index = state.nodes.len();
+                let mut delimiter = Delimiter::new(
+                    node_index,
+                    DelimiterKind::HtmlAnchorStart,
+                    1,
+                    state
+                        .nodes
+                        .last()
+                        .and_then(|fragment| fragment.text.chars().last()),
+                    remaining.chars().next(),
+                );
+                delimiter.anchor_href = Some(href);
+                state.push_closed_node(FormattedTextFragment::plain_text(raw));
+                state.delimiters.push(delimiter);
+            }
+            InlineToken::HtmlAnchorEnd => {
+                input = parse_html_anchor(&mut state, remaining);
+            }
         }
     }
 
@@ -1316,6 +1338,53 @@ fn parse_underline<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
     remaining
 }
 
+/// Resolve a raw HTML `<a href="…">…</a>` anchor when `</a>` is encountered, using the same
+/// backtracking approach as [`parse_link`]. Applies [`Hyperlink::Url`] styling to the fragments
+/// between the opening tag and `</a>`.
+fn parse_html_anchor<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+    let Some((anchor_start_index, anchor_start)) = state
+        .delimiters
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, delimiter)| delimiter.kind == DelimiterKind::HtmlAnchorStart)
+    else {
+        // No opening tag — treat this as literal `</a>` text.
+        state.push_text("</a>");
+        return remaining;
+    };
+
+    let anchor_start_node = anchor_start.node_index;
+    let href = anchor_start
+        .anchor_href
+        .clone()
+        .expect("HtmlAnchorStart delimiter must carry an href");
+
+    // Apply link styling to every fragment between the opening tag and `</a>`.
+    state.backtrack_styles(anchor_start_node, |styles| {
+        styles.hyperlink = Some(Hyperlink::Url(href.clone()))
+    });
+
+    // Process inline styling within the anchor body, bounded by the opening tag.
+    process_emphasis(state, Some(anchor_start_index));
+
+    // Consume the opening delimiter and deactivate any prior link/anchor starts to prevent nesting.
+    state.delimiters.remove(anchor_start_index);
+    for delimiter in &mut state.delimiters[..anchor_start_index] {
+        if matches!(
+            delimiter.kind,
+            DelimiterKind::LinkStart | DelimiterKind::HtmlAnchorStart
+        ) {
+            delimiter.active = false;
+        }
+    }
+
+    // Drop the placeholder fragment holding the raw opening tag; the styling now lives on the body.
+    state.remove_node(anchor_start_node);
+    state.last_node_closed = true;
+    remaining
+}
+
 /// Process emphasis delimiters on the state's delimiter stack, bounded by `stack_bottom`.
 ///
 /// This is approximately equivalent to the CommonMark [process emphasis](https://spec.commonmark.org/0.30/#phase-2-inline-structure)
@@ -1549,6 +1618,8 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             parse_inline_token_autolink,
             parse_inline_token_underline_start,
             parse_inline_token_underline_end,
+            parse_inline_token_html_anchor_start,
+            parse_inline_token_html_anchor_end,
             whitespace,
             text,
             // This _must_ be the last parser in the chain. It unconditionally consumes a single
@@ -1654,6 +1725,80 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse a single `key="value"` or `key='value'` HTML attribute, returning `(key, value)`.
+/// Whitespace-insensitive around `=`. Bare (valueless) attributes are not supported — every
+/// attribute the anchor grammar cares about (`href`) is always quoted in hand-authored markup.
+fn parse_html_attribute<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, (&'a str, &'a str), E> {
+    let (input, key) =
+        take_while1(|c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_')(input)?;
+    let (input, _) = space0(input)?;
+    let (input, _) = char('=')(input)?;
+    let (input, _) = space0(input)?;
+    let (input, value) = alt((
+        delimited(char('"'), take_while(|c| c != '"'), char('"')),
+        delimited(char('\''), take_while(|c| c != '\''), char('\'')),
+    ))(input)?;
+    Ok((input, (key, value)))
+}
+
+/// Parse an opening `<a href="…">` tag into an [`InlineToken::HtmlAnchorStart`]. Requires an
+/// `href` attribute (the phase-1 hyperlink form); other attributes (`title`, `target`, `class`,
+/// …) are accepted and discarded. An `<a>` tag with no `href` (e.g. a bare `<a id="…">` anchor
+/// target) does not match here — that is a separate phase-2 concern.
+fn parse_inline_token_html_anchor_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("html_anchor_start", |input: &'a str| {
+        let (rest, (raw, href)) = consumed(|input: &'a str| {
+            let (input, _) = tag_no_case("<a")(input)?;
+            // At least one whitespace character must separate `<a` from its attributes, so we
+            // don't match `<abbr>` or similar.
+            let (input, _) = space1(input)?;
+
+            let mut input = input;
+            let mut href: Option<&'a str> = None;
+            loop {
+                let (next, _) = space0(input)?;
+                input = next;
+                if let Ok((next, _)) = char::<_, E>('>')(input) {
+                    input = next;
+                    break;
+                }
+                let (next, (key, value)) = parse_html_attribute(input)?;
+                if key.eq_ignore_ascii_case("href") {
+                    href = Some(value);
+                }
+                input = next;
+            }
+
+            match href {
+                Some(href) => Ok((input, href)),
+                None => Err(nom::Err::Error(make_error(input, ErrorKind::Tag))),
+            }
+        })(input)?;
+
+        Ok((
+            rest,
+            InlineToken::HtmlAnchorStart {
+                href: href.to_string(),
+                raw,
+            },
+        ))
+    })(input)
+}
+
+/// Parse a closing `</a>` into an [`InlineToken::HtmlAnchorEnd`].
+fn parse_inline_token_html_anchor_end<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context(
+        "html_anchor_end",
+        map(tag_no_case("</a>"), |_| InlineToken::HtmlAnchorEnd),
+    )(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
@@ -1700,6 +1845,11 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// An opening `<a href="…">` tag. Carries the parsed `href` value and the original tag text
+    /// (used as the literal fallback if no matching `</a>` is found).
+    HtmlAnchorStart { href: String, raw: &'a str },
+    /// A closing `</a>`, which triggers anchor parsing.
+    HtmlAnchorEnd,
 }
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)
@@ -1720,6 +1870,10 @@ struct Delimiter {
     can_open: bool,
     /// Whether or not this delimiter can close a strong/emphasis range.
     can_close: bool,
+    /// For a [`DelimiterKind::HtmlAnchorStart`], the `href` value of the opening `<a>` tag,
+    /// applied as a [`Hyperlink::Url`] when the matching `</a>` is parsed. `None` for every
+    /// other delimiter kind.
+    anchor_href: Option<String>,
 }
 
 impl Delimiter {
@@ -1750,7 +1904,8 @@ impl Delimiter {
             && (!preceded_by_punctuation || (followed_by_whitespace || followed_by_punctuation));
 
         let can_open = match kind {
-            DelimiterKind::LinkStart => false,
+            // Anchors, like links, are resolved explicitly rather than by emphasis flanking.
+            DelimiterKind::LinkStart | DelimiterKind::HtmlAnchorStart => false,
             DelimiterKind::Asterisk => left_flanking,
             DelimiterKind::Underscore => {
                 left_flanking && (!right_flanking || preceded_by_punctuation)
@@ -1761,7 +1916,7 @@ impl Delimiter {
         };
 
         let can_close = match kind {
-            DelimiterKind::LinkStart => false,
+            DelimiterKind::LinkStart | DelimiterKind::HtmlAnchorStart => false,
             DelimiterKind::Asterisk => right_flanking,
             DelimiterKind::Underscore => {
                 right_flanking && (!left_flanking || followed_by_punctuation)
@@ -1778,6 +1933,7 @@ impl Delimiter {
             can_open,
             active: true,
             node_index,
+            anchor_href: None,
         }
     }
 
@@ -1819,6 +1975,9 @@ enum DelimiterKind {
     LinkStart,
     Strikethrough,
     UnderlineStart,
+    /// The opening `<a href="…">` of a raw HTML anchor. Resolved explicitly when `</a>` is
+    /// encountered (like `LinkStart`), so it never participates in emphasis flanking.
+    HtmlAnchorStart,
 }
 
 impl DelimiterKind {
@@ -1832,6 +1991,7 @@ impl DelimiterKind {
             // tildes do not create strikethrough.
             DelimiterKind::Strikethrough => count <= 2,
             DelimiterKind::UnderlineStart => count == 1,
+            DelimiterKind::HtmlAnchorStart => count == 1,
         }
     }
 
@@ -1842,6 +2002,10 @@ impl DelimiterKind {
             DelimiterKind::LinkStart => "[",
             DelimiterKind::Strikethrough => "~",
             DelimiterKind::UnderlineStart => "<u>",
+            // An anchor's opening tag is variable-length, so its literal fallback text is stored
+            // on the placeholder fragment at parse time rather than reconstructed from a static
+            // string. `to_text`/`truncate_delimiters` are never invoked for this kind.
+            DelimiterKind::HtmlAnchorStart => "<a>",
         }
     }
 }

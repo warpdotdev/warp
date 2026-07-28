@@ -1064,7 +1064,10 @@ fn handle_terminal_view_event(
             Event::OpenFileInWarp { path, session } => {
                 ctx.emit(pane_group::Event::OpenFileInWarp {
                     path: LocalOrRemotePath::Local(path.clone()),
-                    session: session.clone(),
+                    // A terminal always has a session backing the file-path click.
+                    session: Some(session.clone()),
+                    // Terminal file-path clicks never carry a Markdown anchor fragment.
+                    anchor: None,
                 });
             }
             #[cfg(feature = "local_fs")]

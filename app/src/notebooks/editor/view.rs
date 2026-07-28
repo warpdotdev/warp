@@ -1973,17 +1973,21 @@ impl RichTextEditorView {
         };
 
         if let Some(url) = url {
-            if url.starts_with('#')
-                && (cmd || matches!(self.interaction_state(ctx), InteractionState::Selectable))
-            {
-                let scrolled = self
-                    .model
-                    .update(ctx, |model, ctx| model.scroll_to_matching_header(&url, ctx));
-                if scrolled {
-                    self.open_link = None;
-                    ctx.notify();
-                    return;
+            if url.starts_with('#') {
+                // An in-document `#fragment` is resolved entirely within the viewer and never
+                // falls through to the URL/file opener. On an activating interaction (cmd-click,
+                // or a plain click in a read-only Selectable chip) a hit scrolls to the anchor.
+                // A miss — and every non-activating interaction — is a deliberate no-op: the
+                // fragment must not be handed to the resolver, which would treat it as a bogus
+                // relative file path and surface a broken-link tooltip (violating invariant 7's
+                // "no error on miss").
+                if cmd || matches!(self.interaction_state(ctx), InteractionState::Selectable) {
+                    self.model
+                        .update(ctx, |model, ctx| model.scroll_to_matching_header(&url, ctx));
                 }
+                self.open_link = None;
+                ctx.notify();
+                return;
             }
             // In read-only comment chips (Selectable), open the link directly on
             // click instead of showing a tooltip.

@@ -40,9 +40,13 @@ impl FilePane {
     /// is `None`, the pane is created but left empty. For local paths without a target session,
     /// the pane waits for a local session to become active. Remote paths are loaded directly
     /// via the remote server.
+    ///
+    /// `anchor` is an optional `#fragment` to scroll to once the notebook's Markdown layout is
+    /// built — set when a cross-document link (`other-file.md#section`) opens this pane.
     pub fn new<V: View>(
         path: Option<LocalOrRemotePath>,
         target_session: Option<Arc<Session>>,
+        anchor: Option<String>,
         #[cfg(feature = "local_fs")] code_source: Option<CodeSource>,
         ctx: &mut ViewContext<V>,
     ) -> Self {
@@ -53,6 +57,12 @@ impl FilePane {
 
             if let Some(path) = path {
                 view.open(path, target_session, ctx);
+                // Queue the deferred scroll before the file finishes loading: the layout that
+                // resolves the heading offset happens asynchronously, and the pending anchor is
+                // drained on the first `LayoutUpdated`.
+                if let Some(anchor) = anchor {
+                    view.queue_pending_anchor(anchor, ctx);
+                }
             }
 
             view

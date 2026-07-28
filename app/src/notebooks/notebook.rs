@@ -337,7 +337,7 @@ impl NotebookView {
         ctx.observe(&active_notebook_data, Self::handle_active_notebook_change);
 
         let window_id = ctx.window_id();
-        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
+        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::active(window_id), ctx));
 
         let title = ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::as_ref(ctx);

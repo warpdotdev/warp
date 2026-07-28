@@ -106,7 +106,7 @@ fn initialize_editor(
 
     let (window, test_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let window_id = ctx.window_id();
-        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
+        let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::active(window_id), ctx));
         let editor_model = ctx.add_model(|ctx| {
             let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
             NotebooksEditorModel::new(styles, window_id, ctx)
@@ -661,7 +661,13 @@ fn test_link_editing() {
 }
 
 #[test]
-fn test_editable_markdown_anchor_click_opens_link_tooltip() {
+fn test_editable_markdown_anchor_click_is_silent_no_op() {
+    // An in-document `#fragment` is resolved entirely within the viewer (see `maybe_open_url`'s
+    // `#`-branch) and never surfaces a link tooltip. A plain (non-cmd) click in an editable
+    // editor is a non-activating interaction, so it does nothing observable: no tooltip, no
+    // scroll, no fall-through to the URL/file opener. (Superseded: the pre-anchor-links behavior
+    // showed an editable `#goal` link tooltip here; the fragment now belongs to the resolver, not
+    // the tooltip path.)
     App::test((), |mut app| async move {
         let (_, editor_view, _) = initialize_editor(&mut app);
         reset_editor_with_markdown(&mut app, &editor_view, "- [Goal](#goal)\n\n## Goal").await;
@@ -679,12 +685,10 @@ fn test_editable_markdown_anchor_click_opens_link_tooltip() {
         });
 
         editor_view.read(&app, |editor, _ctx| {
-            let open_link = editor
-                .open_link
-                .as_ref()
-                .expect("Editable anchor click should show the link tooltip");
-            assert_eq!(open_link.url, "#goal");
-            assert!(open_link.editable);
+            assert!(
+                editor.open_link.is_none(),
+                "An in-document `#fragment` click must not show a link tooltip"
+            );
         });
     });
 }
@@ -717,10 +721,19 @@ fn test_cmd_click_markdown_anchor_navigates_without_link_tooltip() {
 }
 
 #[test]
-fn test_cmd_click_missing_markdown_anchor_falls_back_to_link_resolution() {
+fn test_cmd_click_missing_markdown_anchor_is_silent_no_op() {
+    // Product invariant 7: a `#fragment` that matches no heading does nothing observable — no
+    // scroll, no error, and crucially "no attempt to open it as an external URL". The fragment
+    // must NOT fall through to the link resolver, which would treat `#missing.png` as a bogus
+    // relative file path and emit an open event / broken-link tooltip. (Superseded: the
+    // pre-anchor-links behavior fell back to link resolution here and emitted `OpenFileWithTarget`
+    // for a literal `#missing.png` file; that fall-through is exactly what the anchor work
+    // removed.)
     App::test((), |mut app| async move {
         let (window_id, editor_view, _) = initialize_editor(&mut app);
         let base = tempdir().expect("Expected temp dir");
+        // A file literally named `#missing.png` would have been the fall-through target under the
+        // old behavior. It must now be ignored entirely — no event for it.
         let fallback_path = base.path().join("#missing.png");
         std::fs::File::create(&fallback_path).expect("Expected fallback file");
         let session = Arc::new(Session::test().with_shell_launch_data(
@@ -770,15 +783,20 @@ fn test_cmd_click_missing_markdown_anchor_falls_back_to_link_resolution() {
             );
         });
 
-        assert_eventually!(
-            events.lock().iter().any(|event| {
-                matches!(
-                    event,
-                    LinkEvent::OpenFileWithTarget { path, .. } if path == &fallback_path
-                )
-            }),
-            "Missing anchor click should fall back to link resolution: {:?}",
-            events.lock().clone()
+        // The `#`-branch handles the fragment synchronously and returns before spawning any
+        // resolution future, so there is nothing async to await: if the branch is correct, no
+        // event was emitted and no tooltip was set by the time `handle_action` returned.
+        editor_view.read(&app, |editor, _ctx| {
+            assert!(
+                editor.open_link.is_none(),
+                "A `#fragment` miss must not surface a link tooltip"
+            );
+        });
+        let emitted = events.lock();
+        assert!(
+            emitted.is_empty(),
+            "A `#fragment` miss must not fall through to link resolution (invariant 7), \
+             but emitted: {emitted:?}"
         );
     });
 }
