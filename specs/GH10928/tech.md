@@ -209,9 +209,21 @@ Resolution is per message:
 1. Format the selected-locale message.
 2. If it is missing or produces a formatting error, record a rate-limited
    diagnostic and format the canonical English message.
-3. English resources are build-validated and embedded. Failure to initialize
+3. If canonical English also cannot format, return the constant built-in
+   emergency text `Text unavailable`. This final fallback takes no arguments,
+   never returns a raw message ID or partially formatted value, and prevents a
+   caller error from producing an empty UI label.
+4. English resources are build-validated and embedded. Failure to initialize
    the English bundle is treated as an application programming error during
-   startup, not as a reason to show raw message IDs.
+   startup.
+
+Formatting diagnostics contain only the message ID, selected locale, fallback
+stage, and a bounded error category such as `missing-message`,
+`missing-variable`, or `resolver-error`. They must not contain `FluentArgs`
+names or values, partially formatted output, or error debug strings that may
+include those values. Dynamic arguments can contain user input, paths,
+repository data, commands, or server-provided content and therefore remain
+outside logs and telemetry.
 
 The translator returns plain strings. FTL values are never parsed as Markdown,
 URLs, menu actions, or rich UI. Dynamic/user/server values enter only as
@@ -359,7 +371,9 @@ flowchart TD
     G --> H{"Selected message formats?"}
     H -- "yes" --> I["Render selected-language plain text"]
     H -- "no" --> J["Log diagnostic and format en-US"]
-    J --> K["Render canonical English plain text"]
+    J --> K{"Canonical English formats?"}
+    K -- "yes" --> O["Render canonical English plain text"]
+    K -- "no" --> P["Render constant emergency text"]
     L["User changes Language setting"] --> M["Persist next locale locally"]
     M --> N["Show restart-required notice"]
     N --> A
@@ -377,6 +391,10 @@ flowchart TD
   locale-specific plural arms format correctly.
 - Protected terms have identical values.
 - A selected-locale miss or formatting error returns canonical English.
+- Missing or invalid arguments in both selected-locale and English messages
+  return the constant emergency text without panicking.
+- Formatting diagnostics never include argument names or values, partially
+  formatted output, or unbounded error debug strings.
 - No successful lookup returns an empty string or raw message ID.
 - English and Simplified Chinese numeric selector examples produce the expected
   variants.
