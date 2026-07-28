@@ -4090,6 +4090,29 @@ fn active_conversation_gated_commands_absent_at_zero_state() {
     });
 }
 
+/// Verifies that the full TUI session renders the no-token error hint in its footer.
+#[test]
+fn copy_debugging_link_footer_hint_renders_in_session() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_LINK, None, ctx);
+        });
+
+        // Render the full session and verify the error hint appears in the
+        // rendered output (footer_hint() feeds transient_hint.current() into
+        // the footer row at the bottom of the session canvas).
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(
+            rendered.contains(super::COPY_DEBUGGING_LINK_NO_TOKEN_HINT),
+            "rendered session must contain the no-token hint in the footer; got:\n{rendered}",
+        );
+    });
+}
+
 /// Verifies that the footer hint slot shows an error-toned notice after
 /// `/copy-debugging-link` is executed when the conversation has no server token.
 /// `transient_hint.current()` is the canonical source read by `footer_hint()`
