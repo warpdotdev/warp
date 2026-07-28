@@ -20556,8 +20556,17 @@ impl Workspace {
     /// Renders the insertion slot for a cross-window ghost drag in the
     /// horizontal tab bar. Shows an empty space with `fg_overlay_1`
     /// background — identical to same-window drag's origin slot.
-    fn render_ghost_tab_slot(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
+    /// Insertion slot shown in the target's tab bar. `member_count` is how many
+    /// tabs will land there, so a group opens a gap the size of the whole block
+    /// rather than of a single tab.
+    fn render_ghost_tab_slot(
+        &self,
+        member_count: usize,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
+        let members = member_count.max(1) as f32;
         let width = self.tab_fixed_width.or_else(|| {
             self.tabs.first().and_then(|_| {
                 ctx.element_position_by_id_at_last_frame(self.window_id, tab_position_id(0))
@@ -20568,11 +20577,11 @@ impl Workspace {
             .with_background(internal_colors::fg_overlay_1(theme))
             .finish();
         let inner = if let Some(w) = width {
-            ConstrainedBox::new(slot).with_width(w).finish()
+            ConstrainedBox::new(slot).with_width(w * members).finish()
         } else {
             ConstrainedBox::new(slot)
-                .with_min_width(80.)
-                .with_max_width(200.)
+                .with_min_width(80. * members)
+                .with_max_width(200. * members)
                 .finish()
         };
         Shrinkable::new(1.0, inner).finish()
@@ -20864,6 +20873,9 @@ impl Workspace {
                 .flatten();
             // Ghost state for cross-window drag hovering over this tab bar.
             let ghost = drag_model.ghost_state_for_window(self.window_id);
+            // Slot is sized for the whole dragged block, so the gap matches
+            // what will land in it.
+            let ghost_member_count = ghost.as_ref().map(|g| g.member_count).unwrap_or(1);
 
             // Collapse tabs into render slots: each ungrouped tab is a
             // `Single`, and each contiguous run of same-group tabs is one
@@ -20882,7 +20894,11 @@ impl Workspace {
                     .as_ref()
                     .is_some_and(|g| g.insertion_index == start_index)
                 {
-                    tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
+                    tab_bar.add_child(self.render_ghost_tab_slot(
+                        ghost_member_count,
+                        appearance,
+                        ctx,
+                    ));
                 }
 
                 match slot {
@@ -20955,7 +20971,7 @@ impl Workspace {
                 .as_ref()
                 .is_some_and(|g| g.insertion_index == self.tabs.len())
             {
-                tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
+                tab_bar.add_child(self.render_ghost_tab_slot(ghost_member_count, appearance, ctx));
             } else if show_before_indicator(self.hovered_tab_index, self.tabs.len(), None) {
                 tab_bar.add_child(self.render_tab_hover_indicator(appearance));
             }

@@ -336,6 +336,10 @@ pub struct GhostState {
     /// Rendered size of the dragged tab in the source layout. The chip is
     /// constrained to this size so it looks identical to the source tab.
     pub source_element_size: Vector2F,
+    /// How many tabs are being dragged: 1 for a tab, the member count for a
+    /// group. The insertion slot is sized for this many tabs so the gap the
+    /// user sees matches what will land in it.
+    pub member_count: usize,
     /// Window id of the preview workspace whose first tab is the dragged
     /// tab. The target's renderer looks this workspace up and renders its
     /// `tabs[0]` using the same code path the source layout uses, so the
@@ -582,6 +586,7 @@ impl CrossWindowTabDrag {
                 cursor_in_window: *ghost_cursor_in_target,
                 cursor_offset_in_element: d.initial_drag_center_offset,
                 source_element_size: d.source_element_size,
+                member_count: d.member_pane_group_ids().len().max(1),
                 preview_window_id: d.preview_window_id(),
                 was_vertical_layout: d.was_vertical_layout,
             }),
