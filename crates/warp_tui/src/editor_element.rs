@@ -43,6 +43,12 @@ const GUTTER_GAP: u16 = 2;
 /// Logical rows scrolled per mouse-wheel notch (matches `TuiScrollable`).
 const WHEEL_STEP: isize = 2;
 
+/// Fallback tab-stop size when the model's char-cell state is not available.
+/// In practice this code path is never hit for char-cell (TUI) editors, which
+/// always have a `CharCellState`; the constant exists only as a type-safe
+/// sentinel to avoid an `.unwrap_or(4)` magic literal scattered in the code.
+const DEFAULT_TAB_SIZE: u8 = 4;
+
 /// Editor-generic actions the element emits from its event handling. The
 /// owning view translates them into its own typed actions and applies them to
 /// the editor model (mirroring how the GUI's element dispatches into its view).
@@ -111,6 +117,10 @@ pub(crate) struct TuiEditorElement {
     /// extras are folded in via [`Self::effective_hidden_ranges`], which is
     /// also what the event path uses over fresh model state.
     hidden_line_ranges: Vec<Range<usize>>,
+    /// Tab stop size in display columns, snapshotted from the model's
+    /// [`CharCellState::tab_size`] at construction. Shared between layout
+    /// (char-widths / wrapping) and paint (`expand_tabs`) so they agree.
+    tab_size: u8,
 
     // ── Config ──────────────────────────────────────────────────────────────
     editable: bool,
@@ -184,12 +194,15 @@ impl TuiEditorElement {
             let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
             start..end
         });
-        let hidden_line_ranges = inner
-            .render_state()
-            .as_ref(app)
+        let render_state = inner.render_state().as_ref(app);
+        let hidden_line_ranges = render_state
             .char_cell()
             .map(|char_cell| char_cell.hidden_line_ranges(app))
             .unwrap_or_default();
+        let tab_size = render_state
+            .char_cell()
+            .map(|cc| cc.tab_size())
+            .unwrap_or(DEFAULT_TAB_SIZE);
 
         Self {
             model: model.clone(),
@@ -197,6 +210,7 @@ impl TuiEditorElement {
             cursor_offset,
             sel_char_range,
             hidden_line_ranges,
+            tab_size,
             editable: false,
             is_focused: false,
             viewport_rows: None,
@@ -504,13 +518,16 @@ impl TuiEditorElement {
         let (content, style) = match &row.kind {
             DisplayRowKind::Buffer { line_index } => {
                 let raw = slice_chars(chars, &row.char_range);
-                // Expand tabs to spaces so that tab-indented content preserves
-                // its horizontal spacing. The expansion is display-only — it
-                // never affects the buffer text or applied edit content.
-                // Continuation rows (soft-wrap overflows) start mid-line; tabs
-                // within those overflows are rare enough that starting the column
-                // counter at 0 is an acceptable approximation.
-                let content = expand_tabs(&raw, 0, TAB_DISPLAY_SIZE);
+                // Tabs in the raw text are expanded to spaces so that the
+                // painted glyphs match the column widths already charged to
+                // `\t` in `char_widths` during layout.  The expansion uses the
+                // same `tab_size` the char-cell layout used, so wrapping,
+                // cursor, selection, and paint all agree on how many columns
+                // each tab occupies.  Continuation rows start mid-line;
+                // leading-tab expansions are rare in continuations, so
+                // starting the column counter at 0 is an acceptable
+                // approximation for that edge case.
+                let content = expand_tabs(&raw, 0, usize::from(self.tab_size));
                 let style = self
                     .styles
                     .line_overrides
@@ -523,9 +540,9 @@ impl TuiEditorElement {
             DisplayRowKind::Ghost { ghost_index } => {
                 let ghost_chars: Vec<char> = ghosts[*ghost_index].content.chars().collect();
                 let raw = slice_chars(&ghost_chars, &row.char_range);
-                // Same tab expansion for ghost (removed-line) rows so that
-                // deleted tab-indented code aligns with the surrounding context.
-                let content = expand_tabs(&raw, 0, TAB_DISPLAY_SIZE);
+                // Same tab expansion for ghost (removed-line) rows: the paint
+                // and the ghost's `char_widths` both use `self.tab_size`.
+                let content = expand_tabs(&raw, 0, usize::from(self.tab_size));
                 (content, self.styles.ghost)
             }
             DisplayRowKind::Gap { line_range } => {
@@ -882,11 +899,6 @@ impl TuiElement for TuiEditorElement {
         false
     }
 }
-
-/// Display columns per tab stop. Tabs in diff content are expanded to this
-/// many spaces so that tab-indented code preserves its horizontal alignment.
-/// This is a display-only transform; it never modifies buffer or edit content.
-const TAB_DISPLAY_SIZE: usize = 4;
 
 /// The chars in `range`, collected into the row's paint text.
 fn slice_chars(chars: &[char], range: &Range<CharOffset>) -> String {

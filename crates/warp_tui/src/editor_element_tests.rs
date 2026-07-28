@@ -542,6 +542,137 @@ fn multiple_leading_tabs_expand_to_successive_tab_stops() {
     });
 }
 
+/// Three leading tabs in a narrow viewport (12 columns, tab size 4) must wrap
+/// at the tab boundary — not lose the trailing content to a truncation bug.
+///
+/// Pre-fix repro: the char-cell lattice charged each \t as 0 columns, so all
+/// three tabs fit on one row and `.truncate()` cut the 12-column expanded
+/// string to 12 cells of blanks, hiding "abcdefgh" entirely.
+/// Post-fix: each tab is charged its expanded width (4 cols), so the 3 tabs
+/// consume all 12 columns of row 0 and the content wraps to row 1.
+#[test]
+fn tab_narrow_viewport_wraps_tabs_content_is_not_truncated() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let m = model(ctx, "\t\t\tabcdefgh");
+            let element = TuiEditorElement::new(&m, ctx);
+            let lines = render_lines(ctx, element, 12, 5);
+            // Row 0: three tabs = 12 leading spaces; trailing-space trim yields "".
+            // Row 1: the eight content glyphs that were previously lost.
+            assert!(
+                lines.len() >= 2,
+                "expected at least 2 rows (tab row + content row), got {lines:?}"
+            );
+            assert_eq!(
+                lines[1], "abcdefgh",
+                "content after leading tabs must not be truncated; rows: {lines:?}"
+            );
+        });
+    });
+}
+
+/// Selecting characters in a tab-indented line must produce a selection
+/// highlight that starts *after* the expanded tab columns, not at the raw
+/// character offset.  Pre-fix, the lattice saw the tab as 0 wide, so the
+/// selection for "foo" in "\tfoo" was placed at columns 1-3 while the glyphs
+/// painted at columns 4-6.
+#[test]
+fn tab_indent_selection_columns_follow_expanded_tab_width() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            // "\tfoo": tab at char 0 (4 cols), then 'f' at col 4, 'o' at 5, 'o' at 6.
+            let m = model(ctx, "\tfoo");
+            let mut element = TuiEditorElement::new(&m, ctx);
+            // Select chars 1..3 — that is 'f' and 'o' at display columns 4-5.
+            element.sel_char_range = Some(CharOffset::range(1..3));
+            let buffer = render_buffer(ctx, element, 10, 1);
+            let selection_bg = TuiUiBuilder::from_app(ctx).selection_style().bg;
+            // Columns 0-3 are the expanded tab — must NOT be highlighted.
+            assert_ne!(
+                Some(buffer[(0, 0)].bg),
+                selection_bg,
+                "column 0 (tab space) must not be selected"
+            );
+            assert_ne!(
+                Some(buffer[(3, 0)].bg),
+                selection_bg,
+                "column 3 (last tab space) must not be selected"
+            );
+            // Columns 4-5 are 'f' and first 'o' — must be highlighted.
+            assert_eq!(
+                Some(buffer[(4, 0)].bg),
+                selection_bg,
+                "column 4 ('f') must be selected"
+            );
+            assert_eq!(
+                Some(buffer[(5, 0)].bg),
+                selection_bg,
+                "column 5 ('o') must be selected"
+            );
+            // Column 6 is the second 'o' (outside selection) — must NOT be highlighted.
+            assert_ne!(
+                Some(buffer[(6, 0)].bg),
+                selection_bg,
+                "column 6 (outside selection) must not be selected"
+            );
+        });
+    });
+}
+
+/// Ghost (removed) rows with tab-indented content must preserve their
+/// leading horizontal indent — the same fix that applies to buffer rows.
+#[test]
+fn tab_indented_ghost_rows_preserve_leading_indent() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            // Buffer has one line; a ghost (deleted) line is inserted before it.
+            let m = model(ctx, "context\n");
+            {
+                let render = m.as_ref(ctx).render_state().as_ref(ctx);
+                let char_cell = render.char_cell().expect("char-cell model");
+                // Ghost line: one tab + "removed" — the tab must expand to 4 spaces.
+                char_cell.set_test_temporary_blocks(vec![("\tremoved\n".to_string(), 0)]);
+            }
+            let element = TuiEditorElement::new(&m, ctx);
+            let lines = render_lines(ctx, element, 40, 10);
+            // The first row is the ghost; it should start with 4 spaces before "removed".
+            assert!(
+                lines[0].starts_with("    removed"),
+                "ghost row must have 4 leading spaces before 'removed', got: {:?}",
+                lines[0]
+            );
+        });
+    });
+}
+
+/// Tab-indented rows paint correctly even when a line-number gutter is active.
+/// The gutter columns are added before the content, and tab expansion inside
+/// the content must use the same tab size as the layout layer.
+#[test]
+fn tab_indented_rows_with_line_number_gutter() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            // Single tab before "fn"; gutter is 1 digit + 2 gap = 3 cols.
+            // Content width = 40 - 3 = 37 cols.
+            let m = model(ctx, "\tfn foo() {}\n");
+            let element = TuiEditorElement::new(&m, ctx)
+                .with_line_number_gutter()
+                .hide_trailing_empty_line();
+            let lines = render_lines(ctx, element, 40, 5);
+            // Gutter "1  " (3 chars) then 4 leading spaces from the tab, then "fn".
+            assert!(
+                lines[0].starts_with("1      fn"),
+                "expected gutter '1  ' + 4 tab spaces before 'fn', got: {:?}",
+                lines[0]
+            );
+        });
+    });
+}
+
 // ── Unit tests for the expand_tabs helper ────────────────────────────────────
 
 #[test]
