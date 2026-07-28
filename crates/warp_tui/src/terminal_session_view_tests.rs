@@ -47,7 +47,8 @@ use super::{
     COST_EMPTY_CONVERSATION_HINT, COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT,
     ConversationRestoreState, DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, FooterSegment,
     FooterSegments, INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT,
-    LOG_BUNDLE_FAILED_HINT, SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
+    LOG_BUNDLE_FAILED_HINT, RUNNING_COMMAND_DETACH_HINT,
+    SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
     SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
     SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
     SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
@@ -2022,24 +2023,29 @@ fn long_running_command_keeps_input_hidden() {
             "LRC must keep the input editor hidden:\n{}",
             lines.join("\n")
         );
-        // The interrupt affordance renders as a ghosted row in the input's
-        // slot while the command owns input.
+        // Manual attachment remains advertised while the running command is visible.
         let hint = view.read(&app, |view, ctx| {
-            view.running_command_hint(true, ctx)
-                .expect("visible running command should have a hint")
+            view.running_command_hint(ctx)
+                .expect("visible running command should have an attachment hint")
         });
         assert!(
             lines.iter().any(|line| line.trim() == hint),
-            "LRC must render the attach and interrupt hint row:\n{}",
+            "LRC must render the attach hint row:\n{}",
             lines.join("\n")
         );
-        assert!(hint.contains("to use agent"));
-        assert!(hint.contains("ctrl-c to interrupt"));
+        assert_eq!(hint, "Ctrl + Shift + ⏎  to use agent");
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains(RUNNING_COMMAND_DETACH_HINT)),
+            "LRC must not show the detach hint before agent attachment:\n{}",
+            lines.join("\n")
+        );
     });
 }
 
 #[test]
-fn zero_state_running_command_hint_omits_interrupt() {
+fn zero_state_running_command_hint_shows_attachment() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
         let fixture = focus_test_fixture(&mut app);
@@ -2075,13 +2081,6 @@ fn zero_state_running_command_hint_omits_interrupt() {
             "zero state should preserve manual attachment:\n{}",
             lines.join("\n")
         );
-        assert!(
-            lines
-                .iter()
-                .all(|line| !line.contains("ctrl-c to interrupt")),
-            "zero state should not advertise an inapplicable interrupt:\n{}",
-            lines.join("\n")
-        );
     });
 }
 
@@ -2091,6 +2090,15 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
         app.update(crate::keybindings::init);
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let interrupt_count = Rc::new(RefCell::new(0));
+        let interrupt_count_for_events = interrupt_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiTerminalSessionEvent::InterruptPty) {
+                    *interrupt_count_for_events.borrow_mut() += 1;
+                }
+            });
+        });
         view.update(&mut app, |view, ctx| {
             view.input_view.update(ctx, |input, ctx| {
                 input.set_text("stale draft", ctx);
@@ -2107,7 +2115,7 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
                     .contains(SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG)
             );
 
-            view.handle_action(&TuiTerminalSessionAction::AttachAgentToRunningCommand, ctx);
+            assert!(view.try_attach_agent_to_running_command(ctx));
 
             assert!(view.input_target().agent_editor_owns_input());
             assert!(
@@ -2154,11 +2162,18 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
             "tagging in should render the composer:\n{}",
             lines.join("\n")
         );
-
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.trim() == RUNNING_COMMAND_DETACH_HINT),
+            "tagging in should replace the footer with the detach hint:\n{}",
+            lines.join("\n")
+        );
         view.update(&mut app, |view, ctx| {
-            view.handle_action(
-                &TuiTerminalSessionAction::DetachAgentFromRunningCommand,
-                ctx,
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+            assert!(
+                !view.exit_confirmation.is_armed(),
+                "leaving a tagged LRC must not arm TUI exit"
             );
 
             assert!(view.input_target().pty_owns_input());
@@ -2176,7 +2191,29 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
                     .last_ai_autodetection_source(),
                 Some(InputTypeAutoDetectionSource::AgentTerminalControl)
             );
+            assert!(
+                !view.try_detach_agent_from_running_command(ctx),
+                "detaching an already-detached command should report no transition"
+            );
         });
+        assert_eq!(
+            *interrupt_count.borrow(),
+            0,
+            "leaving the tagged composer must not send ctrl-c to the running command"
+        );
+        let lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains(RUNNING_COMMAND_DETACH_HINT)),
+            "ctrl-c should remove the detach footer hint:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("to use agent")),
+            "detaching should restore the attach hint:\n{}",
+            lines.join("\n")
+        );
     });
 }
 
@@ -2221,6 +2258,15 @@ fn tagged_in_alt_screen_keeps_output_and_composer_visible() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let interrupt_count = Rc::new(RefCell::new(0));
+        let interrupt_count_for_events = interrupt_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiTerminalSessionEvent::InterruptPty) {
+                    *interrupt_count_for_events.borrow_mut() += 1;
+                }
+            });
+        });
         view.update(&mut app, |view, ctx| {
             let mut terminal_model = view.terminal_model.lock();
             terminal_model.simulate_long_running_block("vim", "");
@@ -2252,6 +2298,34 @@ fn tagged_in_alt_screen_keeps_output_and_composer_visible() {
             lines.iter().any(|line| line.contains('┌')),
             "tagged-in alternate screen should render the composer:\n{}",
             lines.join("\n")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.trim() == RUNNING_COMMAND_DETACH_HINT),
+            "tagged-in alternate screen should show the detach footer hint:\n{}",
+            lines.join("\n")
+        );
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+            assert!(
+                !view.exit_confirmation.is_armed(),
+                "leaving a tagged alternate-screen LRC must not arm TUI exit"
+            );
+            assert!(view.input_target().pty_owns_input());
+            assert!(
+                !view
+                    .terminal_model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .is_agent_tagged_in()
+            );
+        });
+        assert_eq!(
+            *interrupt_count.borrow(),
+            0,
+            "leaving the tagged composer must not send ctrl-c to the alternate-screen command"
         );
     });
 }
@@ -2356,7 +2430,7 @@ fn user_controlled_alt_screen_keeps_full_session_input_on_the_pty() {
             lines.join("\n")
         );
         let hint = view.read(&app, |view, ctx| {
-            view.running_command_hint(true, ctx)
+            view.running_command_hint(ctx)
                 .expect("alternate screen should have a running-command hint")
         });
         assert!(
@@ -2425,9 +2499,9 @@ fn stale_user_pty_bytes_are_dropped_after_agent_takes_control_or_is_tagged_in() 
     });
 }
 /// Visible startup-script execution also routes input to the PTY, but it is
-/// not a user-controlled command: the interrupt hint row must not appear.
+/// not a user-controlled command: the running-command hint row must not appear.
 #[test]
-fn visible_startup_script_shows_no_interrupt_hint() {
+fn visible_startup_script_shows_no_running_command_hint() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -2454,7 +2528,10 @@ fn visible_startup_script_shows_no_interrupt_hint() {
                     .set
                     .contains(SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG)
             );
-            view.handle_action(&TuiTerminalSessionAction::AttachAgentToRunningCommand, ctx);
+            assert!(
+                !view.try_attach_agent_to_running_command(ctx),
+                "startup-script input is not an attachable user LRC"
+            );
             assert!(view.input_target().pty_owns_input());
         });
         assert!(
@@ -2463,11 +2540,9 @@ fn visible_startup_script_shows_no_interrupt_hint() {
         );
 
         let lines = render_session(&mut app, &view, 80, 40);
-        let fallback_hint = crate::input_hints::long_running_command_hint(None, true)
-            .expect("interrupt-only fallback hint");
         assert!(
-            !lines.iter().any(|line| line.trim() == fallback_hint),
-            "startup-script execution must not advertise the interrupt hint:\n{}",
+            !lines.iter().any(|line| line.contains("to use agent")),
+            "startup-script execution must not advertise agent attachment:\n{}",
             lines.join("\n")
         );
     });

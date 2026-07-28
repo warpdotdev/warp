@@ -156,6 +156,7 @@ const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
+const RUNNING_COMMAND_DETACH_HINT: &str = "ctrl-c to return to command";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
 
 /// Fallback strings for the /status status menu.
@@ -1233,6 +1234,9 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_terminal_use_interrupt(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if self.try_detach_agent_from_running_command(ctx) {
+            return true;
+        }
         let control_state = self
             .cli_subagent_controller
             .as_ref(ctx)
@@ -1273,7 +1277,10 @@ impl TuiTerminalSessionView {
         });
         self.refresh_input_focus(ctx);
     }
-    fn attach_agent_to_running_command(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Attempts to expose the agent composer for the active user-controlled LRC.
+    ///
+    /// Returns false when a stale action no longer targets an eligible block.
+    fn try_attach_agent_to_running_command(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let did_attach = {
             let mut terminal_model = self.terminal_model.lock();
             let active_block = terminal_model.block_list_mut().active_block_mut();
@@ -1285,7 +1292,7 @@ impl TuiTerminalSessionView {
             }
         };
         if !did_attach {
-            return;
+            return false;
         }
         self.input_view.update(ctx, |input, ctx| {
             input.clear(ctx);
@@ -1293,9 +1300,13 @@ impl TuiTerminalSessionView {
         });
         self.refresh_input_focus(ctx);
         ctx.notify();
+        true
     }
 
-    fn detach_agent_from_running_command(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Attempts to return input to the active manually tagged LRC.
+    ///
+    /// Returns false when no active block has a manually attached agent.
+    fn try_detach_agent_from_running_command(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let did_detach = {
             let mut terminal_model = self.terminal_model.lock();
             let active_block = terminal_model.block_list_mut().active_block_mut();
@@ -1307,13 +1318,14 @@ impl TuiTerminalSessionView {
             }
         };
         if !did_detach {
-            return;
+            return false;
         }
         self.input_view.update(ctx, |input, ctx| {
             input.reset_after_agent_control(ctx);
         });
         self.refresh_input_focus(ctx);
         ctx.notify();
+        true
     }
 
     fn active_agent_controlled_target(&self, ctx: &AppContext) -> Option<CLISubagentTarget> {
@@ -2243,10 +2255,10 @@ impl TuiTerminalSessionView {
     fn render_orchestration_tab_footer(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
         render_orchestration_tab_footer(builder)
     }
-    fn running_command_hint(&self, include_interrupt: bool, ctx: &AppContext) -> Option<String> {
+    fn running_command_hint(&self, ctx: &AppContext) -> Option<String> {
         let context = self.keymap_context(ctx);
         let attach_key = binding_hint(ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME, &context, ctx);
-        input_hints::long_running_command_hint(attach_key.as_deref(), include_interrupt)
+        input_hints::long_running_command_hint(attach_key.as_deref())
     }
 
     fn render_input_area(
@@ -3039,6 +3051,12 @@ impl TuiTerminalSessionView {
             };
             return Some(FooterHint { text, style });
         }
+        if self
+            .session_state(ctx)
+            .is_ok_and(|state| state.agent_is_tagged_in())
+        {
+            return Some(FooterHint::muted(RUNNING_COMMAND_DETACH_HINT));
+        }
         if voice_statusline_visible {
             return None;
         }
@@ -3060,8 +3078,9 @@ impl TuiTerminalSessionView {
     /// the persisted item order and visibility; shell mode always leads with
     /// its mode label and resolves configured shell-relevant metadata. A
     /// replacing hint — the ctrl-c exit confirmation while armed, the
-    /// conversation-list loading hint, or an active transient notice — occupies
-    /// the whole row instead. An empty resolved configuration consumes no row.
+    /// conversation-list loading hint, an active transient notice, or the
+    /// interrupt hint for a manually attached running command — occupies the
+    /// whole row instead. An empty resolved configuration consumes no row.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
         let shell_mode = self.is_shell_mode(ctx);
@@ -4564,7 +4583,7 @@ impl TuiView for TuiTerminalSessionView {
             let mut content = TuiFlex::column().flex_child(terminal_content.finish());
             if input_target.pty_owns_input()
                 && state.user_owns_running_command()
-                && let Some(hint) = self.running_command_hint(true, ctx)
+                && let Some(hint) = self.running_command_hint(ctx)
             {
                 content = content.child(
                     TuiContainer::new(
@@ -4720,17 +4739,15 @@ impl TuiView for TuiTerminalSessionView {
         }
         // While a user-controlled long-running command owns input, the input
         // box and footer stay hidden; a one-line ghosted hint row takes the
-        // input's slot. The interrupt affordance is omitted when the zero
-        // state is visible because there is no visible command content to
-        // interrupt; manual attachment remains discoverable. Gated on the
+        // input's slot when manual attachment is available. Gated on the
         // user-controlled-command predicate, not the broader PTY input target:
-        // visible startup-script execution also routes input to the PTY but is
-        // not a command the user should be told to interrupt. (Agent-driven
-        // terminal use keeps the composer, and its control hints come from the
-        // CLI-subagent status line.)
+        // visible startup-script execution also routes input to the PTY but
+        // does not support agent attachment. (Agent-driven terminal use keeps
+        // the composer, and its control hints come from the CLI-subagent status
+        // line.)
         if !blocker_active
             && state.user_owns_running_command()
-            && let Some(hint) = self.running_command_hint(!transcript_is_empty, ctx)
+            && let Some(hint) = self.running_command_hint(ctx)
         {
             content = content.child(
                 TuiContainer::new(
@@ -4840,10 +4857,10 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.hand_back_terminal_use_control(ctx)
             }
             TuiTerminalSessionAction::AttachAgentToRunningCommand => {
-                self.attach_agent_to_running_command(ctx)
+                let _ = self.try_attach_agent_to_running_command(ctx);
             }
             TuiTerminalSessionAction::DetachAgentFromRunningCommand => {
-                self.detach_agent_from_running_command(ctx)
+                let _ = self.try_detach_agent_from_running_command(ctx);
             }
             TuiTerminalSessionAction::AcceptBlockedTerminalUseAction => {
                 self.accept_active_cli_subagent_action(ctx);
