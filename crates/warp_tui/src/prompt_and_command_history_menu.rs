@@ -202,9 +202,10 @@ impl TuiPromptAndCommandHistoryMenuModel {
     }
 
     /// Accepts the current selection, closing the menu and returning the text to
-    /// submit. With a highlighted item that is its text; with an empty or
-    /// filtered-to-nothing list it is the current input with the input type
-    /// captured when the menu opened, so Enter behaves as a normal submit.
+    /// submit. The input's current visible type determines how the text is
+    /// submitted, including after the user manually toggles shell mode. Linked
+    /// workflow data is retained only when a recalled command remains in shell
+    /// mode.
     pub(crate) fn accept_selected(
         &mut self,
         ctx: &mut ModelContext<Self>,
@@ -212,23 +213,26 @@ impl TuiPromptAndCommandHistoryMenuModel {
         if !self.is_open(ctx) {
             return None;
         }
-        let (selected, original_input_type) = match &self.state {
-            TuiPromptAndCommandHistoryMenuState::Open {
-                list,
-                original_input_type,
-                ..
-            } => (list.selected_row().cloned(), *original_input_type),
+        let selected = match &self.state {
+            TuiPromptAndCommandHistoryMenuState::Open { list, .. } => list.selected_row().cloned(),
             TuiPromptAndCommandHistoryMenuState::Closed => return None,
         };
-        let accepted = selected.unwrap_or_else(|| TuiPromptAndCommandHistoryRow {
+        let mut accepted = selected.unwrap_or_else(|| TuiPromptAndCommandHistoryRow {
             text: input_text(&self.input_editor, ctx),
-            kind: match original_input_type {
-                InputType::AI => TuiUpArrowHistoryItemKind::Prompt,
-                InputType::Shell => TuiUpArrowHistoryItemKind::Command {
-                    linked_workflow_data: None,
-                },
-            },
+            kind: TuiUpArrowHistoryItemKind::Prompt,
         });
+        let linked_workflow_data = match &accepted.kind {
+            TuiUpArrowHistoryItemKind::Prompt => None,
+            TuiUpArrowHistoryItemKind::Command {
+                linked_workflow_data,
+            } => linked_workflow_data.clone(),
+        };
+        accepted.kind = match self.input_mode.as_ref(ctx).input_type() {
+            InputType::AI => TuiUpArrowHistoryItemKind::Prompt,
+            InputType::Shell => TuiUpArrowHistoryItemKind::Command {
+                linked_workflow_data,
+            },
+        };
         self.close(ctx);
         Some(accepted)
     }

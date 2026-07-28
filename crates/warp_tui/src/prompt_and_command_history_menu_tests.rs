@@ -344,7 +344,7 @@ fn accepting_selected_item_returns_its_kind() {
 }
 
 #[test]
-fn accepting_without_a_match_uses_the_original_input_type() {
+fn accepting_without_a_match_uses_the_current_input_type() {
     agent_mode_test(|mut app| async move {
         let setup = initialized_setup(&mut app, &[], &["echo command"], InputType::AI).await;
         app.update(|ctx| {
@@ -360,7 +360,12 @@ fn accepting_without_a_match_uses_the_original_input_type() {
                 .update(ctx, |menu, ctx| menu.accept_selected(ctx))
                 .expect("typed query is accepted");
             assert_eq!(accepted.text, "no matching prompt");
-            assert_eq!(accepted.kind, TuiUpArrowHistoryItemKind::Prompt);
+            assert_eq!(
+                accepted.kind,
+                TuiUpArrowHistoryItemKind::Command {
+                    linked_workflow_data: None
+                }
+            );
         });
     });
 }
