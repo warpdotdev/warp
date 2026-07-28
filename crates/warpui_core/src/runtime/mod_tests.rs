@@ -285,6 +285,122 @@ fn repeats_dispatch_keymaps_while_modifier_events_bypass_them() {
     });
 }
 
+#[test]
+fn shift_lifecycle_restores_shift_to_alternate_key_events() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            )))
+            .expect("shift press");
+
+        for char in ['A', '!'] {
+            let Some(TuiEvent::KeyDown {
+                keystroke, chars, ..
+            }) = screen.convert_event(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Char(char),
+                KeyModifiers::CONTROL,
+            )))
+            else {
+                panic!("expected KeyDown");
+            };
+            assert!(keystroke.ctrl);
+            assert!(keystroke.shift);
+            assert_eq!(keystroke.key, char.to_string());
+            assert_eq!(chars, char.to_string());
+        }
+
+        screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Release,
+            )))
+            .expect("shift release");
+
+        let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::CONTROL),
+        )) else {
+            panic!("expected KeyDown");
+        };
+        assert!(keystroke.ctrl);
+        assert!(!keystroke.shift);
+        assert_eq!(keystroke.key, "!");
+    });
+}
+
+#[test]
+fn shift_remains_active_until_both_shift_keys_are_released() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        for modifier in [ModifierKeyCode::LeftShift, ModifierKeyCode::RightShift] {
+            screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(modifier),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            )));
+        }
+        screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+            KeyCode::Modifier(ModifierKeyCode::LeftShift),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Release,
+        )));
+
+        let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::empty()),
+        )) else {
+            panic!("expected KeyDown");
+        };
+        assert!(keystroke.shift);
+
+        screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+            KeyCode::Modifier(ModifierKeyCode::RightShift),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Release,
+        )));
+        let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::empty()),
+        )) else {
+            panic!("expected KeyDown");
+        };
+        assert!(!keystroke.shift);
+    });
+}
+
+#[test]
+fn focus_loss_clears_shift_state() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+            KeyCode::Modifier(ModifierKeyCode::LeftShift),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Press,
+        )));
+        assert!(screen.convert_event(CrosstermEvent::FocusLost).is_none());
+
+        let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::empty()),
+        )) else {
+            panic!("expected KeyDown");
+        };
+        assert!(!keystroke.shift);
+    });
+}
 /// End-to-end regression for the Shift+Enter fix: a Shift+Enter key event —
 /// the distinct event a terminal only sends once the Kitty keyboard protocol
 /// is enabled (see `terminal_screen_lifecycle_toggles_keyboard_enhancement`) —
@@ -548,6 +664,26 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 }
 
+#[test]
+fn terminal_screen_lifecycle_toggles_focus_reporting() {
+    let mut enter_output = Vec::new();
+    enter_terminal_screen(&mut enter_output, true).unwrap();
+    assert!(
+        enter_output
+            .windows(b"\x1b[?1004h".len())
+            .any(|window| window == b"\x1b[?1004h"),
+        "entering the TUI should enable focus reporting"
+    );
+
+    let mut leave_output = Vec::new();
+    leave_terminal_screen(&mut leave_output, true).unwrap();
+    assert!(
+        leave_output
+            .windows(b"\x1b[?1004l".len())
+            .any(|window| window == b"\x1b[?1004l"),
+        "leaving the TUI should disable focus reporting"
+    );
+}
 /// Enhancement-capable terminals report standalone modifier event types while
 /// preserving shifted text through Crossterm's alternate-key decoding (CSI
 /// `>15u`), then restore the previous protocol on exit.

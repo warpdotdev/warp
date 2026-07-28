@@ -109,19 +109,18 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
     if event.kind == KeyEventKind::Release {
         return None;
     }
-    let modifiers = key_modifiers(event.code, event.modifiers);
-    let key = key_name(event.code, modifiers)?;
+    let key = key_name(event.code, event.modifiers)?;
 
     Some(TuiEvent::KeyDown {
         keystroke: Keystroke {
-            ctrl: modifiers.contains(KeyModifiers::CONTROL),
-            alt: modifiers.contains(KeyModifiers::ALT),
-            shift: modifiers.contains(KeyModifiers::SHIFT),
-            cmd: modifiers.contains(KeyModifiers::SUPER),
-            meta: modifiers.contains(KeyModifiers::META),
+            ctrl: event.modifiers.contains(KeyModifiers::CONTROL),
+            alt: event.modifiers.contains(KeyModifiers::ALT),
+            shift: event.modifiers.contains(KeyModifiers::SHIFT),
+            cmd: event.modifiers.contains(KeyModifiers::SUPER),
+            meta: event.modifiers.contains(KeyModifiers::META),
             key,
         },
-        chars: produced_chars(event.code, modifiers),
+        chars: produced_chars(event.code, event.modifiers),
         details: KeyEventDetails {
             key_without_modifiers: key_without_modifiers(event.code),
             ..Default::default()
@@ -130,15 +129,44 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
     })
 }
 
-fn key_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyModifiers {
-    if let KeyCode::Char(char) = code
-        && char.is_uppercase()
-    {
-        // Crossterm replaces the base codepoint with Kitty's alternate
-        // uppercase codepoint and clears Shift. Restore it for Warp keymaps.
-        return modifiers | KeyModifiers::SHIFT;
+#[derive(Default)]
+pub(crate) struct ShiftKeyTracker {
+    left_pressed: bool,
+    right_pressed: bool,
+}
+
+impl ShiftKeyTracker {
+    pub(crate) fn update(&mut self, event: &mut CrosstermEvent) {
+        if matches!(event, CrosstermEvent::FocusLost) {
+            self.left_pressed = false;
+            self.right_pressed = false;
+            return;
+        }
+        let CrosstermEvent::Key(key_event) = event else {
+            return;
+        };
+        match key_event.code {
+            KeyCode::Modifier(ModifierKeyCode::LeftShift) => {
+                update_pressed(&mut self.left_pressed, key_event.kind);
+            }
+            KeyCode::Modifier(ModifierKeyCode::RightShift) => {
+                update_pressed(&mut self.right_pressed, key_event.kind);
+            }
+            KeyCode::Modifier(_) => {}
+            _ if self.left_pressed || self.right_pressed => {
+                key_event.modifiers.insert(KeyModifiers::SHIFT);
+            }
+            _ => {}
+        }
     }
-    modifiers
+}
+
+fn update_pressed(pressed: &mut bool, kind: KeyEventKind) {
+    match kind {
+        KeyEventKind::Press => *pressed = true,
+        KeyEventKind::Release => *pressed = false,
+        KeyEventKind::Repeat => {}
+    }
 }
 
 fn modifier_key(code: ModifierKeyCode) -> Option<PhysicalKeyCode> {

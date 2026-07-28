@@ -30,9 +30,9 @@ use std::time::Duration;
 use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as CrosstermEvent, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event as CrosstermEvent, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -48,8 +48,8 @@ mod event_conversion;
 mod renderer;
 mod terminal_probe;
 
-use event_conversion::ClickTracker;
 pub use event_conversion::crossterm_event_to_tui_event;
+use event_conversion::{ClickTracker, ShiftKeyTracker};
 pub use renderer::TuiFrameRenderer;
 pub use terminal_probe::{
     BackgroundLuminance, ProbedRgb, ProbedTerminalColors, probe_terminal_colors,
@@ -83,6 +83,9 @@ struct TuiScreen<T, R: TuiTerminal> {
     /// Synthesizes multi-click counts for left mouse presses, which crossterm
     /// does not report.
     click_tracker: ClickTracker,
+    /// Restores Shift after crossterm substitutes a layout-produced alternate
+    /// character and removes the modifier bit.
+    shift_key_tracker: ShiftKeyTracker,
     /// The pointer position from the most recent positional event, replayed as
     /// a synthetic `MouseMoved` after each draw so hover state tracks elements
     /// that move under a stationary pointer.
@@ -98,6 +101,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             renderer: TuiFrameRenderer::new(),
             terminal,
             click_tracker: ClickTracker::default(),
+            shift_key_tracker: ShiftKeyTracker::default(),
             last_mouse_position: None,
         }
     }
@@ -163,10 +167,11 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         self.dispatch_event(ctx, &event);
     }
 
-    /// Converts a raw crossterm event into the TUI vocabulary, annotating left
-    /// mouse-down events with a synthesized multi-click count (crossterm only
-    /// reports raw presses). Returns `None` for events with no TUI equivalent.
-    fn convert_event(&mut self, event: CrosstermEvent) -> Option<TuiEvent> {
+    /// Converts a raw crossterm event into the TUI vocabulary, restoring Shift
+    /// from modifier lifecycle events and synthesizing mouse multi-click counts.
+    /// Returns `None` for events with no TUI equivalent.
+    fn convert_event(&mut self, mut event: CrosstermEvent) -> Option<TuiEvent> {
+        self.shift_key_tracker.update(&mut event);
         let mut tui_event = crossterm_event_to_tui_event(event)?;
         self.click_tracker.annotate(&mut tui_event, Instant::now());
         Some(tui_event)
@@ -650,6 +655,7 @@ fn enter_terminal_screen(
         out,
         EnterAlternateScreen,
         EnableMouseCapture,
+        EnableFocusChange,
         EnableBracketedPaste,
         Hide
     )?;
@@ -689,6 +695,7 @@ fn leave_terminal_screen(
         out,
         Show,
         DisableBracketedPaste,
+        DisableFocusChange,
         DisableMouseCapture,
         LeaveAlternateScreen
     )
