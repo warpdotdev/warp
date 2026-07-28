@@ -110,13 +110,26 @@ fn only_composer_interactions_produce_input_hints() {
         false,
     );
     assert!(state.hint_text().is_some());
-    let TuiTerminalSessionState::Block(block) = &mut state else {
-        unreachable!();
-    };
-    let TuiInteractionState::Composer(composer) = &mut block.interaction else {
-        unreachable!();
-    };
-    composer.suggestions_mode = TuiInputSuggestionsMode::Shortcuts;
+    {
+        let TuiTerminalSessionState::Block(block) = &mut state else {
+            unreachable!();
+        };
+        let TuiInteractionState::Composer(composer) = &mut block.interaction else {
+            unreachable!();
+        };
+        composer.suggestions_mode = TuiInputSuggestionsMode::Shortcuts;
+    }
+    assert_eq!(state.hint_text(), None);
+    // The dedicated status overlay also suppresses the footer hint.
+    {
+        let TuiTerminalSessionState::Block(block) = &mut state else {
+            unreachable!();
+        };
+        let TuiInteractionState::Composer(composer) = &mut block.interaction else {
+            unreachable!();
+        };
+        composer.suggestions_mode = TuiInputSuggestionsMode::Status;
+    }
     assert_eq!(state.hint_text(), None);
 }
 

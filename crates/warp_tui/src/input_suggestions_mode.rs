@@ -18,6 +18,8 @@ pub(crate) enum TuiInputSuggestionsMode {
     PromptAndCommandHistory,
     CompletionSuggestions,
     Shortcuts,
+    /// Dedicated status overlay opened by the `/status` slash command.
+    Status,
 }
 
 impl TuiInputSuggestionsMode {
@@ -77,7 +79,8 @@ impl TuiInputSuggestionsModeModel {
             | TuiInputSuggestionsMode::Mcp
             | TuiInputSuggestionsMode::PromptAndCommandHistory
             | TuiInputSuggestionsMode::CompletionSuggestions
-            | TuiInputSuggestionsMode::Shortcuts => false,
+            | TuiInputSuggestionsMode::Shortcuts
+            | TuiInputSuggestionsMode::Status => false,
         }
     }
 

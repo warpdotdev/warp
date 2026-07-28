@@ -1452,6 +1452,16 @@ fn shortcuts_surface_renders_above_the_input() {
         assert!(rendered.contains("← conversations"), "{rendered}");
         assert!(rendered.contains("↑ input history"), "{rendered}");
         assert!(rendered.contains("toggle auto-approve"), "{rendered}");
+        // The shortcuts panel must NOT include the status section (that
+        // lives in the dedicated status menu opened by /status).
+        assert!(
+            !rendered.contains("Version"),
+            "Shortcuts panel must not show Version:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Working directory"),
+            "Shortcuts panel must not show Working directory:\n{rendered}"
+        );
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(
@@ -1632,7 +1642,7 @@ fn nld_slash_command_toggles_and_reports_its_effects() {
 }
 
 #[test]
-fn status_slash_command_opens_shortcuts_panel_with_status_info() {
+fn status_slash_command_opens_dedicated_status_menu_via_shared_structure() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
         let fixture = focus_test_fixture(&mut app);
@@ -1645,19 +1655,31 @@ fn status_slash_command_opens_shortcuts_panel_with_status_info() {
             view.execute_tui_slash_command(&slash_commands::STATUS, None, ctx);
         });
 
-        // /status should open the shortcuts panel (Shortcuts mode).
+        // /status must open the DEDICATED status overlay (Status mode), not
+        // the shortcuts panel (Shortcuts mode).  The two panels share the same
+        // read-only visual structure (render_field_row + wrap_panel from
+        // shortcuts.rs) but are surfaced through different modes.
         assert!(
             app.read(|ctx| {
                 matches!(
                     view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                    TuiInputSuggestionsMode::Status
+                )
+            }),
+            "/status should open the dedicated status overlay (Status mode)"
+        );
+        assert!(
+            app.read(|ctx| {
+                !matches!(
+                    view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
                     TuiInputSuggestionsMode::Shortcuts
                 )
             }),
-            "/status should open the shortcuts panel (Shortcuts suggestions mode)"
+            "/status must NOT open the shortcuts panel (Shortcuts mode)"
         );
 
-        // The full session render must include both the Status section and the
-        // keyboard Shortcuts section.
+        // The full session render must show the six status fields through the
+        // shared read-only panel structure.
         let rendered = render_session(&mut app, &view, 80, 24).join("\n");
         assert!(
             rendered.contains("Status"),
@@ -1690,28 +1712,24 @@ fn status_slash_command_opens_shortcuts_panel_with_status_info() {
             "Org placeholder (em dash):\n{rendered}"
         );
 
-        // The keyboard shortcuts section still renders below the status section.
+        // The dedicated status menu does NOT include keyboard shortcut rows.
         assert!(
-            rendered.contains("Shortcuts"),
-            "Shortcuts section header:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("? shortcuts"),
-            "? shortcuts entry:\n{rendered}"
+            !rendered.contains("? shortcuts"),
+            "Status menu must not include shortcuts rows:\n{rendered}"
         );
 
-        // Dismissing the panel closes the Shortcuts suggestions mode.
+        // Dismissing the panel closes the Status overlay.
         view.update(&mut app, |view, ctx| {
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+                mode.close_if_active(TuiInputSuggestionsMode::Status, ctx);
             });
         });
         assert!(
             !app.read(|ctx| matches!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::Shortcuts
+                TuiInputSuggestionsMode::Status
             )),
-            "dismissing shortcuts mode should close the panel"
+            "dismissing status mode should close the panel"
         );
     });
 }

@@ -139,6 +139,7 @@ mod handoff_session;
 mod input_detection;
 mod shortcuts;
 pub(crate) mod state;
+mod status_menu;
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
 use self::state::{
@@ -157,7 +158,7 @@ const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
 
-/// Fallback strings for the /status (shortcuts panel) status section.
+/// Fallback strings for the /status status menu.
 const STATUS_UNAVAILABLE: &str = "\u{2014}"; // em dash
 const STATUS_UNTITLED_SESSION: &str = "Untitled";
 const STATUS_DEV_BUILD: &str = "dev build";
@@ -2134,9 +2135,16 @@ impl TuiTerminalSessionView {
         }
         if state.should_render_shortcuts() {
             let keymap_context = self.keymap_context(ctx);
+            content = content.child(
+                TuiContainer::new(shortcuts::render(state, &keymap_context, ctx))
+                    .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
+                    .finish(),
+            );
+        }
+        if state.should_render_status() {
             let status_info = self.compute_status_info(ctx);
             content = content.child(
-                TuiContainer::new(shortcuts::render(state, &keymap_context, status_info, ctx))
+                TuiContainer::new(status_menu::render(status_info, ctx))
                     .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
                     .finish(),
             );
@@ -2197,10 +2205,10 @@ impl TuiTerminalSessionView {
         ctx.notify();
     }
 
-    /// Computes the current session and account status fields for the shortcuts
-    /// panel's "Status" section. Always returns a complete set of fields;
-    /// individual fields fall back to their `STATUS_*` placeholder constants
-    /// when the underlying data is unavailable.
+    /// Computes the current session and account status fields for the dedicated
+    /// status menu (opened by the `/status` slash command). Always returns a
+    /// complete set of fields; individual fields fall back to their `STATUS_*`
+    /// placeholder constants when the underlying data is unavailable.
     fn compute_status_info(&self, ctx: &AppContext) -> shortcuts::TuiStatusInfo {
         let user_info = TuiUserInfoManager::as_ref(ctx).snapshot(ctx);
         let session = self.active_session.as_ref(ctx).session(ctx);
@@ -3862,7 +3870,7 @@ impl TuiTerminalSessionView {
             SlashCommandKind::Status => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.suggestions_mode.update(ctx, |mode, ctx| {
-                    mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                    mode.set_mode(TuiInputSuggestionsMode::Status, ctx);
                 });
                 record_static_slash_command_accepted(command.name, true, ctx);
             }

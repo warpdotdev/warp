@@ -431,7 +431,7 @@ impl TuiTerminalSessionState {
         };
         if matches!(
             composer.suggestions_mode,
-            TuiInputSuggestionsMode::Shortcuts
+            TuiInputSuggestionsMode::Shortcuts | TuiInputSuggestionsMode::Status
         ) {
             return None;
         }
@@ -448,6 +448,18 @@ impl TuiTerminalSessionState {
             self.interaction(),
             TuiInteractionState::Composer(TuiComposerState {
                 suggestions_mode: TuiInputSuggestionsMode::Shortcuts,
+                ..
+            })
+        )
+    }
+
+    /// Returns `true` when the dedicated status menu (opened by `/status`)
+    /// should be rendered above the input.
+    pub(crate) fn should_render_status(&self) -> bool {
+        matches!(
+            self.interaction(),
+            TuiInteractionState::Composer(TuiComposerState {
+                suggestions_mode: TuiInputSuggestionsMode::Status,
                 ..
             })
         )
