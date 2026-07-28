@@ -3200,7 +3200,13 @@ fn render_grouped_tab_container(
             .on_drop(move |ctx, _, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
             })
-            .with_drag_axis(DragAxis::VerticalOnly)
+            // Unconstrained when cross-window drag is on: the axis lock pins the
+            // perpendicular axis to the laid-out origin, so the detach hit-test
+            // could never fire and a group could only ever be reordered in place.
+            .with_optional_drag_axis(
+                (!FeatureFlag::DragTabsToWindows.is_enabled())
+                    .then_some(DragAxis::VerticalOnly),
+            )
             // Yield to a nested per-tab `Draggable` when it claims the mouse-down.
             // This allows dragging a tab within a group, without triggering the groups `Draggable`.
             .with_defer_to_handled_child_mouse_down()

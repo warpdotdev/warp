@@ -19870,7 +19870,13 @@ impl Workspace {
             .on_drop(move |ctx, _, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
             })
-            .with_drag_axis(DragAxis::HorizontalOnly)
+            // Unconstrained when cross-window drag is on: the axis lock pins the
+            // perpendicular axis to the laid-out origin, so the detach hit-test
+            // could never fire and a group could only ever be reordered in place.
+            .with_optional_drag_axis(
+                (!FeatureFlag::DragTabsToWindows.is_enabled())
+                    .then_some(DragAxis::HorizontalOnly),
+            )
             // Yield to a nested per-tab `Draggable` when it claims the mouse-down
             // so dragging a member tab fires `DragTab`, not group drag.
             .with_defer_to_handled_child_mouse_down()
@@ -24410,6 +24416,9 @@ impl TypedActionView for Workspace {
             StartGroupDrag(_group_id) => {
                 self.clear_tab_multi_selection(ctx);
                 self.finish_tab_group_rename(ctx);
+                // Mirrors `StartTabDrag`: the tab bar renders differently while
+                // a drag is in progress, and a group drag is still a drag.
+                self.current_workspace_state.is_tab_being_dragged = true;
             }
             DragGroup {
                 group_id,
@@ -24419,7 +24428,35 @@ impl TypedActionView for Workspace {
                 self.on_group_drag(*group_id, *position, *cursor_position, ctx);
             }
             DropGroup => {
+                let is_cross_window = CrossWindowTabDrag::as_ref(ctx).is_active();
+                // Members already handed off to another window are cleaned up
+                // by `handle_drop_result` below; everything else must have its
+                // `detached` flag cleared here, on every path including an
+                // aborted drag, or those tabs stay undraggable for the rest of
+                // the session.
+                let handed_off: Vec<usize> = CrossWindowTabDrag::as_ref(ctx)
+                    .handed_off_target()
+                    .map(|_| {
+                        let ids = CrossWindowTabDrag::as_ref(ctx).member_pane_group_ids();
+                        self.tab_indices_for_pane_group_ids(&ids)
+                    })
+                    .unwrap_or_default();
+                self.current_workspace_state.is_tab_being_dragged = false;
+                for (i, tab) in self.tabs.iter_mut().enumerate() {
+                    if handed_off.contains(&i) {
+                        continue;
+                    }
+                    tab.detached = false;
+                    if tab.pinned && tab.group_id.is_some() {
+                        tab.pinned = false;
+                    }
+                }
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTabGroup, ctx);
+                if is_cross_window {
+                    let result =
+                        CrossWindowTabDrag::handle(ctx).update(ctx, |drag, ctx| drag.on_drop(ctx));
+                    self.handle_drop_result(result, ctx);
+                }
                 ctx.notify();
             }
             OpenWarpDrive => {
