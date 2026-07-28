@@ -36,7 +36,7 @@ use warp::tui_export::{
     StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
     TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource,
     TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
-    TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
+    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
     export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event,
     prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
@@ -164,6 +164,13 @@ const STATUS_UNTITLED_SESSION: &str = "Untitled";
 const STATUS_DEV_BUILD: &str = "dev build";
 const STATUS_NOT_SIGNED_IN: &str = "Not signed in";
 const STATUS_SIGNED_IN: &str = "Signed in";
+
+fn status_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
+    matches!(
+        mode,
+        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
+    )
+}
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 const SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG: &str =
@@ -1440,6 +1447,13 @@ impl TuiTerminalSessionView {
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+        let suggestions_mode_for_user_info = suggestions_mode.clone();
+        ctx.subscribe_to_model(&TuiUserInfoManager::handle(ctx), move |_, _, event, ctx| {
+            let TuiUserInfoManagerEvent::Updated = event;
+            if status_menu_is_open(suggestions_mode_for_user_info.as_ref(ctx).mode()) {
+                ctx.notify();
+            }
+        });
         let read_only_menu_selection = TuiSelectionHandle::default();
         let slash_commands_source = ctx.add_model(|ctx| {
             TuiSlashCommandDataSource::new(

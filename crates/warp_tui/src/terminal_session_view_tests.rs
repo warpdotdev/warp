@@ -1748,6 +1748,17 @@ fn status_conversation_id_uses_the_selected_id_or_none() {
     );
     assert_eq!(super::format_status_conversation_id(None), "None");
 }
+
+#[test]
+fn user_info_updates_only_require_an_open_status_menu_repaint() {
+    assert!(!super::status_menu_is_open(TuiInputSuggestionsMode::Closed));
+    assert!(!super::status_menu_is_open(
+        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
+    ));
+    assert!(super::status_menu_is_open(
+        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
+    ));
+}
 #[test]
 fn bootstrap_renders_starting_shell_above_input() {
     App::test((), |mut app| async move {

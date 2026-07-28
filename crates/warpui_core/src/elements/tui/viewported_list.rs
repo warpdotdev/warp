@@ -18,6 +18,12 @@ use super::{
 };
 use crate::AppContext;
 
+fn trimmed_selection_row_end(buffer: &TuiBuffer, row: u16, width: u16) -> Option<u16> {
+    let mut glyphs = row_glyphs(buffer, row, width);
+    trim_trailing_whitespace(&mut glyphs);
+    glyphs.last().map(|glyph| glyph.end_col)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuiViewportPosition {
     End,
@@ -161,11 +167,7 @@ where
         }
         let selection_line_ends = self.trim_selection_line_ends.then(|| {
             (0..visible_height)
-                .map(|row| {
-                    let mut glyphs = row_glyphs(&snapshot, row, size.width);
-                    trim_trailing_whitespace(&mut glyphs);
-                    glyphs.last().map(|glyph| glyph.end_col)
-                })
+                .map(|row| trimmed_selection_row_end(&snapshot, row, size.width))
                 .collect::<Vec<_>>()
         });
         *self.selection_snapshot.borrow_mut() = Some((resolved, snapshot));
@@ -778,11 +780,17 @@ where
                 } else {
                     0
                 };
-                let end_col = if row == selection.end.row {
+                let mut end_col = if row == selection.end.row {
                     selection.end.col
                 } else {
                     size.width
                 };
+                if self.trim_selection_line_ends {
+                    end_col = end_col.min(
+                        trimmed_selection_row_end(&buffer, buffer_row, size.width)
+                            .unwrap_or_default(),
+                    );
+                }
                 lines.push(row_text(&buffer, buffer_row, start_col..end_col));
             }
             chunk_start = chunk_end;
