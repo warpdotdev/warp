@@ -11471,31 +11471,51 @@ impl Workspace {
         // Use the placeholder-aware getter so we don't skip an unrelated
         // tab at a stale `source_tab_index` after a put-back handoff has
         // already removed the real placeholder.
-        let transferred_tab_index = if drag_model.is_active()
+        // Indices of tabs that are mid-transfer and must not be snapshotted.
+        // A group drag puts N of them in flight at once, so this is a set
+        // rather than a single index: snapshotting a tab whose view is being
+        // updated in the target window calls `terminal_view.as_ref()` on a
+        // handle that no longer resolves here, which panics rather than
+        // returning `None`.
+        let transferred_tab_indices: Vec<usize> = if drag_model.is_active()
             && drag_model.source_window_id() == Some(window_id)
         {
             if drag_model.has_dedicated_preview_window() {
-                // Multi-tab drag: skip the dedicated-preview placeholder.
-                drag_model.source_placeholder_tab_index()
+                // A dedicated preview holds the detached tab(s); skip the
+                // placeholder(s) left behind in the source. Resolved by
+                // identity for a group, since the drag-start indices go stale
+                // if the source tab list shifts mid-drag.
+                let member_ids = drag_model.member_pane_group_ids();
+                if member_ids.is_empty() {
+                    drag_model
+                        .source_placeholder_tab_index()
+                        .into_iter()
+                        .collect()
+                } else {
+                    self.tab_indices_for_pane_group_ids(&member_ids)
+                }
             } else if drag_model.source_is_own_preview() && drag_model.handed_off_target().is_some()
             {
-                // Single-tab drag in InsertedInTarget phase: the source's
-                // only tab has been transferred to the target window's live
-                // view context.  Snapshotting it here would call
-                // `terminal_view.as_ref()` while that view is being updated
-                // in the target window, triggering a circular view reference
-                // panic.  Skip index 0 (the sole tab).
-                Some(0)
+                // The source window IS the preview and its content has been
+                // transferred into the target's live view context. Skip every
+                // tab that went with it: index 0 for a single-tab drag, the
+                // whole membership for a whole-window group drag.
+                let member_ids = drag_model.member_pane_group_ids();
+                if member_ids.is_empty() {
+                    vec![0]
+                } else {
+                    self.tab_indices_for_pane_group_ids(&member_ids)
+                }
             } else {
-                None
+                Vec::new()
             }
         } else {
-            None
+            Vec::new()
         };
         let tabs: Vec<TabSnapshot> = self
             .tab_views()
             .enumerate()
-            .filter(|(tab_index, _)| Some(*tab_index) != transferred_tab_index)
+            .filter(|(tab_index, _)| !transferred_tab_indices.contains(tab_index))
             .map(|(tab_index, pane_group_view)| {
                 let resizable_data = ResizableData::handle(app);
                 let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
@@ -28461,6 +28481,21 @@ impl Workspace {
     /// Performs the source-workspace cleanup indicated by `DropResult`.
     /// Cross-workspace mutations (preview/target updates, focus) happen inside
     /// `CrossWindowTabDrag::on_drop`; this method only touches `self`.
+    /// Indices of the tabs whose pane group is in `pane_group_ids`, ascending.
+    ///
+    /// The identity half of cross-window cleanup and snapshot filtering: the
+    /// source tab list can shift while a drag is in flight, so a drag-start
+    /// index no longer identifies the tab it was captured for. Ids that are no
+    /// longer present are simply absent from the result.
+    pub(crate) fn tab_indices_for_pane_group_ids(&self, pane_group_ids: &[EntityId]) -> Vec<usize> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| pane_group_ids.contains(&tab.pane_group.id()))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     pub(crate) fn handle_drop_result(&mut self, result: DropResult, ctx: &mut ViewContext<Self>) {
         match result {
             DropResult::NoOp => {}
