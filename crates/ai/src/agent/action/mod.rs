@@ -156,12 +156,6 @@ pub enum AIAgentActionType {
         /// -window_id` on the foreground-visible window. Applied by the client
         /// only when background computer use is enabled.
         window: Option<computer_use::Target>,
-        /// Server-owned flag gating whether the client captures a PR video
-        /// thumbnail on stop. Set by the server from the
-        /// `github_pr_video_thumbnails` feature flag (see the warp-proto-apis
-        /// `StartRecording.capture_thumbnail` field); the client reads it and
-        /// produces a thumbnail frame on a non-discarding stop when it is set.
-        capture_thumbnail: bool,
     },
 
     /// AI requested to stop an in-progress recording. When `should_persist` is

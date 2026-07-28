@@ -130,10 +130,6 @@ pub(crate) struct ActiveRecording {
     pub(crate) summary: Option<String>,
     /// Optional longer description shown in detail views (from StartRecording.description).
     pub(crate) description: Option<String>,
-    /// Whether the server requested a PR video thumbnail for this recording
-    /// (from `StartRecording.capture_thumbnail`). Carried from start to stop so
-    /// finalization can produce a thumbnail frame after the video uploads.
-    pub(crate) capture_thumbnail: bool,
     /// The currently in-flight `UseComputer` group, if any. It is committed with
     /// its finish offset on success or discarded on failure/cancellation.
     pub(crate) pending_group: Option<PendingActionGroup>,
@@ -222,7 +218,6 @@ impl RecordingController {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn finish_start(
         &mut self,
         recording_id: String,
@@ -232,7 +227,6 @@ impl RecordingController {
         summary: Option<String>,
         description: Option<String>,
         target: computer_use::Target,
-        capture_thumbnail: bool,
     ) {
         if matches!(
             self.state,
@@ -251,7 +245,6 @@ impl RecordingController {
                 actions: Vec::new(),
                 summary,
                 description,
-                capture_thumbnail,
                 pending_group: None,
             }));
         }

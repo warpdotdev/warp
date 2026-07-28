@@ -51,7 +51,6 @@ impl StartRecordingExecutor {
             description,
             playback_speed_multiplier,
             window,
-            capture_thumbnail,
         } = action.action.clone()
         else {
             return ActionExecution::InvalidAction;
@@ -124,7 +123,7 @@ impl StartRecordingExecutor {
                     );
                     let controller = RecordingController::handle(ctx);
                     controller.update(ctx, |controller, _| {
-                        controller.finish_start(
+                    controller.finish_start(
                             recording_id.clone(),
                             conversation_id,
                             handle,
@@ -132,7 +131,6 @@ impl StartRecordingExecutor {
                             summary,
                             description,
                             target,
-                            capture_thumbnail,
                         );
                     });
                     #[cfg(not(target_family = "wasm"))]

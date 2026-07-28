@@ -526,13 +526,6 @@ impl TryFrom<api::message::tool_call::StartRecording> for AIAgentActionType {
             description: (!value.description.trim().is_empty()).then_some(value.description),
             playback_speed_multiplier,
             window,
-            // The `capture_thumbnail` proto field is added by the warp-proto-apis
-            // PR (warpdotdev/warp-proto-apis) on the `StartRecording` message.
-            // Until that PR merges and the client bumps its `warp_multi_agent_api`
-            // dependency, the field is absent from the generated bindings, so the
-            // client defaults to `false` (no thumbnail capture). Once the dep is
-            // bumped, read it directly: `capture_thumbnail: value.capture_thumbnail`.
-            capture_thumbnail: false,
         })
     }
 }
