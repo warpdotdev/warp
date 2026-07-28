@@ -9497,6 +9497,35 @@ fn restore_cloud_followup_input_after_upload_failure_restores_prompt() {
     });
 }
 
+#[test]
+fn should_upload_cloud_followup_attachments_matches_cloud_mode_image_context_flag() {
+    use base64::Engine as _;
+
+    let attachment = PendingAttachment::Image(ImageContext {
+        data: base64::engine::general_purpose::STANDARD.encode(b"fake image"),
+        mime_type: "image/png".to_string(),
+        file_name: "test.png".to_string(),
+        is_figma: false,
+    });
+
+    assert!(
+        !Input::should_upload_cloud_followup_attachments(&[]),
+        "no pending attachments should submit the text-only follow-up immediately"
+    );
+
+    let flag_guard = FeatureFlag::CloudModeImageContext.override_enabled(false);
+    assert!(
+        !Input::should_upload_cloud_followup_attachments(std::slice::from_ref(&attachment)),
+        "follow-up attachments should not upload while CloudModeImageContext is disabled"
+    );
+    drop(flag_guard);
+    let _flag_guard = FeatureFlag::CloudModeImageContext.override_enabled(true);
+    assert!(
+        Input::should_upload_cloud_followup_attachments(&[attachment]),
+        "follow-up attachments should upload when CloudModeImageContext is enabled"
+    );
+}
+
 /// Exercises the async failure path of `upload_files_then_submit_cloud_followup`:
 /// when the server API rejects the attachment upload (the test HTTP client never
 /// connects to a real server), the callback must restore the prompt text so the

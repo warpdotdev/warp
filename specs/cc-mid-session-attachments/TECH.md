@@ -53,6 +53,8 @@ When the user sends a follow-up with a file:
 3. `PUT` file bytes to GCS via an async `ctx.spawn`; block the send button and show a progress indicator while in flight
 4. On upload completion, emit `Event::SubmitCloudFollowup { prompt }` normally
 
+The upload branch is gated by `FeatureFlag::CloudModeImageContext`, matching the neighboring live cloud viewer upload path. In current default-feature production builds this flag is already enabled, so the gate preserves existing production behavior while keeping non-enabled builds text-only.
+
 Also remove the explicit warn-and-drop at [`input.rs:13928`](https://github.com/warpdotdev/warp/blob/b018f09de24a091db686d656a2adb7f3b797dc9f/app/src/terminal/input.rs#L13928) in the queued-prompt cloud follow-up path, which currently logs a warning and discards queued attachments rather than uploading them.
 
 The file is in the task definition before the follow-up is submitted. The new execution's `fetch_and_download_attachments` picks it up automatically. Race-free: GCS PUT completes before submit; new execution starts after submit with seconds of container-startup delay.

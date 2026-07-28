@@ -4123,9 +4123,7 @@ impl Input {
                         .as_ref(ctx)
                         .pending_attachments()
                         .to_vec();
-                    if pending_attachments.is_empty() {
-                        ctx.emit(Event::SubmitCloudFollowup { prompt });
-                    } else {
+                    if Self::should_upload_cloud_followup_attachments(&pending_attachments) {
                         self.freeze_input_in_loading_state(ctx);
                         self.upload_files_then_submit_cloud_followup(
                             task_id,
@@ -4133,6 +4131,13 @@ impl Input {
                             pending_attachments,
                             ctx,
                         );
+                    } else {
+                        if !pending_attachments.is_empty() {
+                            log::warn!(
+                                "Cannot upload cloud follow-up attachments: CloudModeImageContext is disabled"
+                            );
+                        }
+                        ctx.emit(Event::SubmitCloudFollowup { prompt });
                     }
                 } else {
                     // Cloud-to-cloud follow-up is unavailable; block rather than run locally.
@@ -4151,6 +4156,10 @@ impl Input {
                 true
             }
         }
+    }
+
+    fn should_upload_cloud_followup_attachments(pending_attachments: &[PendingAttachment]) -> bool {
+        !pending_attachments.is_empty() && FeatureFlag::CloudModeImageContext.is_enabled()
     }
 
     /// Primary entry point for submitting the input buffer as an AI query. Routes to the correct
