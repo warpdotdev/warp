@@ -117,7 +117,7 @@ impl BillingCycleUsageSectionView {
     }
 
     fn viewer_is_admin(app: &AppContext) -> bool {
-        let Some(team) = UserWorkspaces::as_ref(app).current_team() else {
+        let Some(team) = UserWorkspaces::as_ref(app).self_serve_team() else {
             return false;
         };
         Self::resolved_viewer_email(app)
@@ -200,12 +200,12 @@ impl TypedActionView for BillingCycleUsageSectionView {
                 ctx.notify();
             }
             BillingCycleUsageAction::OpenUpgrade => {
-                if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+                if let Some(team_uid) = UserWorkspaces::as_ref(ctx).self_serve_team_uid() {
                     ctx.open_url(&UserWorkspaces::upgrade_link_for_team(team_uid));
                 }
             }
             BillingCycleUsageAction::OpenAdminPanel => {
-                if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+                if let Some(team_uid) = UserWorkspaces::as_ref(ctx).self_serve_team_uid() {
                     AdminActions::open_admin_panel(team_uid, ctx);
                 }
             }

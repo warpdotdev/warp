@@ -2843,6 +2843,28 @@ impl Workspace {
         // reads the sizes from the window snapshot. A new window initializes with all default sizes.
         let resizable_data = ResizableData::handle(ctx);
         let window_id = ctx.window_id();
+        let source_window_id = match &workspace_setting {
+            NewWorkspaceSource::Empty {
+                previous_active_window,
+                ..
+            } => *previous_active_window,
+            NewWorkspaceSource::TransferredTab {
+                source_window_id, ..
+            } => Some(*source_window_id),
+            NewWorkspaceSource::FromTemplate { .. }
+            | NewWorkspaceSource::Restored { .. }
+            | NewWorkspaceSource::Session { .. }
+            | NewWorkspaceSource::SharedSessionAsViewer { .. }
+            | NewWorkspaceSource::FromCloudConversationId { .. }
+            | NewWorkspaceSource::NotebookFromFilePath { .. }
+            | NewWorkspaceSource::NotebookById { .. }
+            | NewWorkspaceSource::WorkflowById { .. }
+            | NewWorkspaceSource::AgentSession { .. }
+            | NewWorkspaceSource::AmbientAgent => None,
+        };
+        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, source_window_id, ctx);
+        });
         let has_horizontal_split = workspace_setting.has_horizontal_split();
 
         let (left_panel_size, right_panel_size) =
@@ -23387,9 +23409,9 @@ impl Workspace {
     }
 
     fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
-        // TODO this is a stop gap for now - ideally a specific team uid should
-        // be passed into each event
-        UserWorkspaces::as_ref(app).current_team_uid()
+        UserWorkspaces::as_ref(app)
+            .team_for_window(self.window_id)
+            .map(|team| team.uid)
     }
 
     fn initiate_user_signup(
@@ -24164,7 +24186,7 @@ impl TypedActionView for Workspace {
                 let auth_state = AuthStateProvider::as_ref(ctx).get();
                 let user_workspaces = UserWorkspaces::as_ref(ctx);
 
-                let upgrade_url = if let Some(team) = user_workspaces.current_team() {
+                let upgrade_url = if let Some(team) = user_workspaces.self_serve_team() {
                     UserWorkspaces::upgrade_link_for_team(team.uid)
                 } else {
                     let user_id = auth_state.user_id().unwrap_or_default();

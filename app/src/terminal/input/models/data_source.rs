@@ -679,7 +679,7 @@ impl SearchItem for ModelSearchItem {
             .with_child(scores);
 
         if self.disable_reason.as_ref() == Some(&DisableReason::RequiresUpgrade) {
-            let upgrade_url = if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
+            let upgrade_url = if let Some(team) = UserWorkspaces::as_ref(app).self_serve_team() {
                 UserWorkspaces::upgrade_link_for_team(team.uid)
             } else {
                 let user_id = AuthStateProvider::as_ref(app)

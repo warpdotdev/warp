@@ -20,6 +20,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    WeakViewHandle,
 };
 
 use crate::ToastStack;
@@ -99,6 +100,7 @@ const EMPTY_STATE_TEXT: &str = "Once you add a MCP server, it will be shown here
 const NO_SEARCH_RESULTS_TEXT: &str = "No search results found";
 
 pub struct MCPServersListPageView {
+    handle: WeakViewHandle<Self>,
     server_cards: HashMap<ServerCardItemId, ViewHandle<ServerCardView>>,
     gallery_server_cards: HashMap<ServerCardItemId, ViewHandle<ServerCardView>>,
     // MCP server cards for uninstalled file-based servers, grouped by provider.
@@ -216,6 +218,7 @@ impl MCPServersListPageView {
         });
 
         let mut me = Self {
+            handle: ctx.handle(),
             server_cards: Default::default(),
             gallery_server_cards,
             file_based_template_cards: Default::default(),
@@ -307,10 +310,7 @@ impl MCPServersListPageView {
         server_card_status: ServerCardStatus,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if !UserWorkspaces::as_ref(ctx).has_teams() {
-            return false;
-        }
-        if TemplatableMCPServerManager::get_first_team_space_id(ctx).is_none() {
+        if UserWorkspaces::as_ref(ctx).team_for_view(ctx).is_none() {
             return false;
         }
         match item_id {
@@ -379,9 +379,16 @@ impl MCPServersListPageView {
         let is_shareable = Self::is_shareable(item_id, server_card_status, ctx);
         let is_update_available = TemplatableMCPServerManager::as_ref(ctx)
             .is_update_available_for_installation(installation_uuid, ctx);
+        let team_uid = UserWorkspaces::as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|team| team.uid);
         let is_authorized_editor =
             TemplatableMCPServerManager::handle(ctx).read(ctx, |templatable_manager, ctx| {
-                templatable_manager.is_authorized_editor(installation.template_uuid(), ctx)
+                templatable_manager.is_authorized_editor(
+                    installation.template_uuid(),
+                    team_uid,
+                    ctx,
+                )
             });
         let should_show_update_symbol = is_authorized_editor && is_update_available;
 
@@ -480,8 +487,14 @@ impl MCPServersListPageView {
     }
 
     fn share_templatable_mcp_server(&mut self, template_uuid: Uuid, ctx: &mut ViewContext<Self>) {
+        let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|team| team.uid)
+        else {
+            return;
+        };
         TemplatableMCPServerManager::handle(ctx).update(ctx, |templatable_manager, ctx| {
-            templatable_manager.share_templatable_mcp_server(template_uuid, ctx);
+            templatable_manager.share_templatable_mcp_server(template_uuid, team_uid, ctx);
         });
     }
 
@@ -490,8 +503,18 @@ impl MCPServersListPageView {
         installation_uuid: Uuid,
         ctx: &mut ViewContext<Self>,
     ) {
+        let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+            .team_for_window(ctx.window_id())
+            .map(|team| team.uid)
+        else {
+            return;
+        };
         TemplatableMCPServerManager::handle(ctx).update(ctx, |templatable_manager, ctx| {
-            templatable_manager.share_templatable_mcp_server_installation(installation_uuid, ctx);
+            templatable_manager.share_templatable_mcp_server_installation(
+                installation_uuid,
+                team_uid,
+                ctx,
+            );
         });
     }
 
@@ -1263,7 +1286,7 @@ impl MCPServersListPageView {
                 if !shared_server_cards.is_empty() {
                     shared_server_cards.extend(filtered_gallery_cards);
                     let team_name = UserWorkspaces::as_ref(app)
-                        .current_team()
+                        .team_for_view_handle(&self.handle, app)
                         .map(|team| team.name.clone());
                     let shared_by_text = match team_name {
                         Some(name) => format!("Shared by Warp and {name}"),

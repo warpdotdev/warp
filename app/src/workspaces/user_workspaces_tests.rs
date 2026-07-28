@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use mockall::Sequence;
 use settings::{PrivatePreferences, PublicPreferences};
-use warpui::{AddSingletonModel, App};
+use warpui::{AddSingletonModel, App, WindowId};
 use warpui_extras::user_preferences;
 
 use super::*;
@@ -93,6 +93,18 @@ fn initialize_app_with_auth(
     // we need to do it manually for tests.
     TeamTesterStatus::handle(app).update(app, |team_tester, ctx| {
         team_tester.initiate_data_pollers(false, ctx);
+    });
+}
+
+fn initialize_window_team_test_app(app: &mut App, workspaces: Vec<Workspace>) {
+    app.add_singleton_model(PrivacySettings::mock);
+    app.add_singleton_model(|ctx| {
+        UserWorkspaces::mock(
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+            workspaces,
+            ctx,
+        )
     });
 }
 
@@ -655,11 +667,11 @@ fn workspace_for_test(team: &Team) -> Workspace {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![team.clone()],
-        billing_metadata: Default::default(),
+        billing_metadata: team.billing_metadata.clone(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
         has_billing_history: false,
-        settings: Default::default(),
+        settings: team.organization_settings.clone(),
         invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
@@ -667,6 +679,108 @@ fn workspace_for_test(team: &Team) -> Workspace {
         members: vec![],
         total_requests_used_since_last_refresh: 0,
     }
+}
+
+#[test]
+fn test_window_team_assignment_is_immutable() {
+    let first_team = team_for_test();
+    let mut second_team = team_for_test();
+    second_team.uid = 456.into();
+    second_team.name = "second".to_string();
+    let mut workspace = workspace_for_test(&first_team);
+    workspace.teams.push(second_team.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, second_team.uid, ctx);
+            user_workspaces.set_team_for_window(window_id, first_team.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_id),
+                Some(second_team.uid)
+            );
+            assert_eq!(
+                user_workspaces
+                    .team_for_window(window_id)
+                    .map(|team| team.uid),
+                Some(second_team.uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_window_team_assignment_inherits_from_source_or_self_serve_team() {
+    let first_team = team_for_test();
+    let mut second_team = team_for_test();
+    second_team.uid = 456.into();
+    let mut workspace = workspace_for_test(&first_team);
+    workspace.teams.push(second_team.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let source_window_id = WindowId::new();
+        let inherited_window_id = WindowId::new();
+        let fallback_window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(source_window_id, second_team.uid, ctx);
+            user_workspaces.register_window(inherited_window_id, Some(source_window_id), ctx);
+            user_workspaces.register_window(fallback_window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.team_uid_for_window(inherited_window_id),
+                Some(second_team.uid)
+            );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(fallback_window_id),
+                Some(first_team.uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_unassigned_window_is_initialized_after_workspace_metadata_loads() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+    let workspace_uid = workspace.uid;
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                None
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+            user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(team.uid)
+            );
+        });
+    })
 }
 
 #[test]

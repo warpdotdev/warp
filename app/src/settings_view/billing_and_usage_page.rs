@@ -524,7 +524,7 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.current_team_uid();
+                let team_uid = workspaces.self_serve_team_uid();
                 let usage_settings = workspaces.usage_based_pricing_settings();
 
                 if let Some(team_uid) = team_uid {
@@ -552,7 +552,7 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.current_team_uid();
+                let team_uid = workspaces.self_serve_team_uid();
 
                 if let Some(team_uid) = team_uid {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
@@ -919,7 +919,7 @@ impl TypedActionView for BillingAndUsagePageView {
                 self.selected_addon_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    let team_uid = user_workspaces.current_team_uid();
+                    let team_uid = user_workspaces.self_serve_team_uid();
                     if let Some((workspace, team_uid)) =
                         user_workspaces.current_workspace().zip(team_uid)
                         && workspace
@@ -1161,7 +1161,7 @@ impl BillingAndUsagePageView {
 
         // Only show "Buy more" button for users not on a paid plan.
         let is_on_paid_plan = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .is_some_and(|team| team.billing_metadata.is_user_on_paid_plan());
         if !is_on_paid_plan {
             let user_id = AuthStateProvider::as_ref(app).get().user_id();
@@ -1637,7 +1637,7 @@ impl BillingAndUsagePageView {
             .finish();
 
         let team_can_purchase_addon_credits = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
             .is_some_and(|policy| policy.enabled);
         let can_upgrade_to_build = UserWorkspaces::as_ref(app)
@@ -1660,7 +1660,7 @@ impl BillingAndUsagePageView {
                 let upgrade_url = UserWorkspaces::upgrade_link_for_team(team_uid);
                 let is_legacy_paid = UserWorkspaces::handle(app)
                     .as_ref(app)
-                    .current_team()
+                    .self_serve_team()
                     .is_some_and(|team| team.billing_metadata.is_on_legacy_paid_plan());
                 let (link_text, suffix) = if is_legacy_paid {
                     ("Switch to the Build plan", " to purchase add-on credits.")
@@ -1752,7 +1752,7 @@ impl BillingAndUsagePageView {
         }
 
         let team_member_count = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .map(|team| team.members.len())
             .unwrap_or(1);
 
@@ -2128,7 +2128,7 @@ impl BillingAndUsagePageView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let billing_metadata = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .map(|team| team.billing_metadata.clone())
             .unwrap_or_default();
         let ai_overages = billing_metadata.ai_overages.as_ref();
@@ -2430,7 +2430,7 @@ impl BillingAndUsagePageView {
             .format("%b %d at %-I:%M %p")
             .to_string();
         let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .map(|team| team.billing_metadata.is_delinquent_due_to_payment_issue())
             .unwrap_or_default();
 
@@ -2761,7 +2761,7 @@ impl BillingAndUsagePageView {
             .get()
             .user_email()
             .unwrap_or_default();
-        let team = UserWorkspaces::as_ref(app).current_team();
+        let team = UserWorkspaces::as_ref(app).self_serve_team();
         let has_admin_permissions =
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
 
@@ -3056,7 +3056,7 @@ impl BillingAndUsagePageView {
         let auth_state = AuthStateProvider::as_ref(app).get();
 
         let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).current_team()
+            UserWorkspaces::as_ref(app).self_serve_team()
         {
             if workspace_is_delinquent_due_to_payment_issue {
                 if has_admin_permissions {
@@ -3218,7 +3218,7 @@ impl BillingAndUsagePageView {
         );
 
         let workspaces = UserWorkspaces::as_ref(app);
-        if let Some(team) = workspaces.current_team()
+        if let Some(team) = workspaces.self_serve_team()
             && team.billing_metadata.is_usage_based_pricing_toggleable()
         {
             let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
@@ -3558,7 +3558,7 @@ impl BillingAndUsagePageView {
         let current_user_id = auth_state.user_id().unwrap_or_default();
         let workspaces = UserWorkspaces::as_ref(app);
 
-        if let Some(team) = workspaces.current_team() {
+        if let Some(team) = workspaces.self_serve_team() {
             if let Some(plan_badge) = self.render_plan_badge_for_team(team, appearance) {
                 right_side.add_child(plan_badge);
             }

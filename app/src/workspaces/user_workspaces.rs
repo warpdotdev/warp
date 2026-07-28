@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -6,7 +7,10 @@ use warp_core::features::FeatureFlag;
 use warp_core::settings::{ChangeEventReason, Setting};
 use warp_errors::report_error;
 use warp_graphql::workspace::FeatureModelChoice;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, Tracked};
+use warpui::{
+    AppContext, Entity, ModelContext, SingletonEntity, Tracked, ViewContext, WeakViewHandle,
+    WindowId,
+};
 
 use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
@@ -87,6 +91,7 @@ pub enum UserWorkspacesEvent {
 pub struct UserWorkspaces {
     current_workspace_uid: Tracked<Option<WorkspaceUid>>,
     workspaces: Tracked<Vec<Workspace>>,
+    window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
@@ -135,6 +140,7 @@ impl UserWorkspaces {
         Self {
             current_workspace_uid: cached_workspaces.first().map(|w| w.uid).into(),
             workspaces: cached_workspaces.into(),
+            window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             team_client,
             workspace_client,
@@ -183,6 +189,7 @@ impl UserWorkspaces {
         Self {
             current_workspace_uid: current_workspace_uid.into(),
             workspaces: cached_workspaces.into(),
+            window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             team_client,
             workspace_client,
@@ -211,6 +218,63 @@ impl UserWorkspaces {
     pub fn team_from_uid(&self, team_uid: ServerId) -> Option<&Team> {
         self.current_workspace()
             .and_then(|w| w.teams.iter().find(|t| t.uid == team_uid))
+    }
+    pub fn register_window(
+        &mut self,
+        window_id: WindowId,
+        source_window_id: Option<WindowId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let team_uid = source_window_id
+            .and_then(|source_window_id| self.team_uid_for_window(source_window_id))
+            .or_else(|| self.self_serve_team_uid());
+        self.window_team_uids.entry(window_id).or_insert(team_uid);
+        ctx.notify();
+    }
+
+    pub fn set_team_for_window(
+        &mut self,
+        window_id: WindowId,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let window_team_uid = self.window_team_uids.entry(window_id).or_default();
+        if window_team_uid.is_none() {
+            *window_team_uid = Some(team_uid);
+            ctx.notify();
+        }
+    }
+
+    pub fn team_uid_for_window(&self, window_id: WindowId) -> Option<ServerId> {
+        self.window_team_uids.get(&window_id).copied().flatten()
+    }
+
+    pub fn team_for_window(&self, window_id: WindowId) -> Option<&Team> {
+        self.team_uid_for_window(window_id)
+            .and_then(|team_uid| self.team_from_uid(team_uid))
+    }
+    pub fn team_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> Option<&Team> {
+        self.team_for_window(ctx.window_id())
+    }
+
+    pub fn team_for_view_handle<T: Entity>(
+        &self,
+        view_handle: &WeakViewHandle<T>,
+        ctx: &AppContext,
+    ) -> Option<&Team> {
+        view_handle
+            .window_id(ctx)
+            .and_then(|window_id| self.team_for_window(window_id))
+    }
+
+    fn initialize_unassigned_windows(&mut self) {
+        let Some(team_uid) = self.self_serve_team_uid() else {
+            return;
+        };
+
+        for window_team_uid in self.window_team_uids.values_mut() {
+            window_team_uid.get_or_insert(team_uid);
+        }
     }
 
     pub fn team_from_uid_across_all_workspaces(&self, team_uid: ServerId) -> Option<&Team> {
@@ -330,22 +394,23 @@ impl UserWorkspaces {
         }
     }
 
-    /// Return the uid of user's current team (if any) without refreshing.
-    pub fn current_team_uid(&self) -> Option<ServerId> {
-        self.current_team().map(|t| t.uid)
-    }
-
-    pub fn current_team_mut(&mut self) -> Option<&mut Team> {
-        self.current_workspace_mut()
-            .and_then(|w| w.teams.first_mut())
-    }
-
-    /// Note that the team is populated with dummy data until
-    /// the initial fetch completes (only team name and ID are cached in sqlite locally).
-    /// Consider whether you need to wait for the results of the fetch before checking the
-    /// values of other fields.
-    pub fn current_team(&self) -> Option<&Team> {
+    pub fn self_serve_team(&self) -> Option<&Team> {
         self.current_workspace().and_then(|w| w.teams.first())
+    }
+
+    pub fn self_serve_team_uid(&self) -> Option<ServerId> {
+        self.self_serve_team().map(|team| team.uid)
+    }
+
+    pub fn sole_team(&self) -> Option<&Team> {
+        let [team] = self.current_workspace()?.teams.as_slice() else {
+            return None;
+        };
+        Some(team)
+    }
+
+    pub fn sole_team_uid(&self) -> Option<ServerId> {
+        self.sole_team().map(|team| team.uid)
     }
 
     /// Note that the workspace is populated with dummy data until the initial fetch
@@ -373,6 +438,7 @@ impl UserWorkspaces {
         ctx: &mut ModelContext<Self>,
     ) {
         *self.current_workspace_uid = Some(workspace_uid);
+        self.initialize_unassigned_windows();
         self.notify_and_emit_teams_changed(ctx);
     }
 
@@ -381,8 +447,9 @@ impl UserWorkspaces {
     /// In the future, we should store active AI enablement on the policy directly. For now, we
     /// proxy whether active AI by checking whether any active AI feature is enabled.
     pub fn is_active_ai_allowed(&self) -> bool {
-        self.current_team().is_none_or(|team| {
-            team.billing_metadata
+        self.current_workspace().is_none_or(|workspace| {
+            workspace
+                .billing_metadata
                 .tier
                 .warp_ai_policy
                 .is_none_or(|policy| {
@@ -394,27 +461,20 @@ impl UserWorkspaces {
         })
     }
 
-    /// Returns `true` if the current team's enterprise status allows AI features that have an
-    /// enterprise gate. Non-enterprise teams always pass; enterprise teams pass only if they
-    /// are on the Warp Plan or the build is dogfood (both our internal Warp team and dogfood
-    /// team are billed as enterprise).
-    pub fn ai_allowed_for_current_team(&self) -> bool {
-        !self
-            .current_team()
-            .is_some_and(|team| team.billing_metadata.customer_type == CustomerType::Enterprise)
-            || self
-                .current_team()
-                .is_some_and(|team| team.billing_metadata.is_warp_plan())
+    pub fn ai_allowed_for_team(team: Option<&Team>) -> bool {
+        !team.is_some_and(|team| team.billing_metadata.customer_type == CustomerType::Enterprise)
+            || team.is_some_and(|team| team.billing_metadata.is_warp_plan())
             || ChannelState::channel().is_dogfood()
     }
 
     /// Whether Prompt Suggestions should be toggleable for the current user, based on the active policies.
     /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
     pub fn is_prompt_suggestions_toggleable(&self) -> bool {
-        self.current_team()
+        self.current_workspace()
             // If the user has no team, they can toggle prompt suggestions (no restrictions).
-            .is_none_or(|team| {
-                team.billing_metadata
+            .is_none_or(|workspace| {
+                workspace
+                    .billing_metadata
                     .tier
                     .warp_ai_policy
                     .is_some_and(|policy| policy.is_prompt_suggestions_toggleable)
@@ -424,10 +484,11 @@ impl UserWorkspaces {
     /// Whether Code Suggestions should be toggleable for the current user, based on the active policies.
     /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
     pub fn is_code_suggestions_toggleable(&self) -> bool {
-        self.current_team()
+        self.current_workspace()
             // If the user has no team, they can toggle code suggestions (no restrictions).
-            .is_none_or(|team| {
-                team.billing_metadata
+            .is_none_or(|workspace| {
+                workspace
+                    .billing_metadata
                     .tier
                     .warp_ai_policy
                     .is_some_and(|policy| policy.is_code_suggestions_toggleable)
@@ -437,10 +498,11 @@ impl UserWorkspaces {
     /// Whether Next Command should be toggleable for the current user, based on the active policies.
     /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
     pub fn is_next_command_enabled(&self) -> bool {
-        self.current_team()
+        self.current_workspace()
             // If the user has no team, they can toggle Next Command (no restrictions).
-            .is_none_or(|team| {
-                team.billing_metadata
+            .is_none_or(|workspace| {
+                workspace
+                    .billing_metadata
                     .tier
                     .warp_ai_policy
                     .is_some_and(|policy| policy.is_next_command_enabled)
@@ -450,10 +512,11 @@ impl UserWorkspaces {
     /// Whether Git Operations AI is enabled for the current user, based on the active policies.
     /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
     pub fn is_git_operations_ai_enabled(&self) -> bool {
-        self.current_team()
+        self.current_workspace()
             // If the user has no team, they can toggle Git Operations AI (no restrictions).
-            .is_none_or(|team| {
-                team.billing_metadata
+            .is_none_or(|workspace| {
+                workspace
+                    .billing_metadata
                     .tier
                     .warp_ai_policy
                     .is_some_and(|policy| policy.is_git_operations_ai_enabled)
@@ -466,10 +529,11 @@ impl UserWorkspaces {
     pub fn is_voice_enabled(&self) -> bool {
         cfg!(feature = "voice_input")
             && self
-                .current_team()
+                .current_workspace()
                 // If the user has no team, they can toggle Voice (no restrictions).
-                .is_none_or(|team| {
-                    team.billing_metadata
+                .is_none_or(|workspace| {
+                    workspace
+                        .billing_metadata
                         .tier
                         .warp_ai_policy
                         .is_some_and(|policy| policy.is_voice_enabled)
@@ -650,15 +714,15 @@ impl UserWorkspaces {
     /// Returns the AI autonomy settings that are enforced by the workspace for all its members.
     /// If a setting is `None`, the workspace doesn't enforce a particular setting.
     pub fn ai_autonomy_settings(&self) -> AiAutonomySettings {
-        self.current_team()
-            .map(|team| team.organization_settings.ai_autonomy_settings.clone())
+        self.current_workspace()
+            .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
             .unwrap_or_default()
     }
 
     /// Returns the sandboxed agent settings enforced by the workspace, if any.
     pub fn sandboxed_agent_settings(&self) -> Option<SandboxedAgentSettings> {
-        self.current_team()
-            .and_then(|team| team.organization_settings.sandboxed_agent_settings.clone())
+        self.current_workspace()
+            .and_then(|workspace| workspace.settings.sandboxed_agent_settings.clone())
     }
 
     /// Returns true iff AI autonomy features are allowed for this client.
@@ -669,8 +733,8 @@ impl UserWorkspaces {
     /// if so, we'll fall back to their billing metadata's value. Once we've migrated everyone
     /// into org settings, we should remove `is_enabled` from the policy and delete this function.
     pub fn is_ai_autonomy_allowed(&self) -> bool {
-        self.current_team().is_none_or(|team| {
-            let settings = &team.organization_settings.ai_autonomy_settings;
+        self.current_workspace().is_none_or(|workspace| {
+            let settings = &workspace.settings.ai_autonomy_settings;
             let all_settings_none = settings.apply_code_diffs_setting.is_none()
                 && settings.read_files_setting.is_none()
                 && settings.read_files_allowlist.is_none()
@@ -679,7 +743,8 @@ impl UserWorkspaces {
                 && settings.execute_commands_denylist.is_none();
 
             if all_settings_none {
-                team.billing_metadata
+                workspace
+                    .billing_metadata
                     .tier
                     .ai_autonomy_policy
                     .is_some_and(|policy| policy.is_enabled)
@@ -715,9 +780,7 @@ impl UserWorkspaces {
         self.joinable_teams.len()
     }
 
-    // Returns a Vec of the user's active spaces, based on their
-    // team membership. Includes the "Personal Space" by default.
-    pub fn all_user_spaces(&self, ctx: &AppContext) -> Vec<Space> {
+    pub fn spaces_for_window(&self, window_id: WindowId, ctx: &AppContext) -> Vec<Space> {
         if AuthStateProvider::as_ref(ctx)
             .get()
             .is_user_web_anonymous_user()
@@ -725,16 +788,16 @@ impl UserWorkspaces {
         {
             return vec![Space::Shared];
         }
-
-        let mut spaces = Vec::new();
-        spaces.extend(self.team_spaces().iter());
+        let mut spaces = vec![Space::Personal];
+        if let Some(team) = self.team_for_window(window_id) {
+            spaces.push(Space::Team { team_uid: team.uid });
+        }
 
         if FeatureFlag::SharedWithMe.is_enabled()
             && CloudModel::as_ref(ctx).has_directly_shared_objects(self, ctx)
         {
             spaces.push(Space::Shared);
         }
-        spaces.push(Space::Personal);
 
         spaces
     }
@@ -803,6 +866,7 @@ impl UserWorkspaces {
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
         *self.workspaces = workspaces;
+        self.initialize_unassigned_windows();
         self.notify_and_emit_teams_changed(ctx);
 
         if sunsetted_to_build_changed {
@@ -1451,9 +1515,9 @@ impl UserWorkspaces {
                 // TODO: We really need to stop having duplicate billing metadata...
                 if let Some(workspace) = self.current_workspace_mut() {
                     workspace.billing_metadata.ai_overages = Some(fresh_ai_overages.clone());
-                }
-                if let Some(team) = self.current_team_mut() {
-                    team.billing_metadata.ai_overages = Some(fresh_ai_overages);
+                    for team in &mut workspace.teams {
+                        team.billing_metadata.ai_overages = Some(fresh_ai_overages.clone());
+                    }
                 }
 
                 ctx.emit(UserWorkspacesEvent::AiOveragesUpdated);
@@ -1472,43 +1536,34 @@ impl UserWorkspaces {
     }
 
     pub fn is_telemetry_force_enabled(&self) -> bool {
-        self.current_team()
-            .map(|team| team.organization_settings.telemetry_settings.force_enabled)
+        self.current_workspace()
+            .map(|workspace| workspace.settings.telemetry_settings.force_enabled)
             .unwrap_or(false)
     }
 
     pub fn is_enterprise_secret_redaction_enabled(&self) -> bool {
-        self.current_team()
-            .map(|team| team.organization_settings.secret_redaction_settings.enabled)
+        self.current_workspace()
+            .map(|workspace| workspace.settings.secret_redaction_settings.enabled)
             .unwrap_or(false)
     }
 
     pub fn get_enterprise_secret_redaction_regex_list(&self) -> Vec<EnterpriseSecretRegex> {
-        self.current_team()
-            .map(|team| {
-                team.organization_settings
-                    .secret_redaction_settings
-                    .regexes
-                    .clone()
-            })
+        self.current_workspace()
+            .map(|workspace| workspace.settings.secret_redaction_settings.regexes.clone())
             .unwrap_or_default()
     }
 
     pub fn get_ugc_collection_enablement_setting(&self) -> UgcCollectionEnablementSetting {
-        self.current_team()
-            .map(|team| {
-                team.organization_settings
-                    .ugc_collection_settings
-                    .setting
-                    .clone()
-            })
+        self.current_workspace()
+            .map(|workspace| workspace.settings.ugc_collection_settings.setting.clone())
             .unwrap_or_default()
     }
 
     pub fn get_cloud_conversation_storage_enablement_setting(&self) -> AdminEnablementSetting {
-        self.current_team()
-            .map(|team| {
-                team.organization_settings
+        self.current_workspace()
+            .map(|workspace| {
+                workspace
+                    .settings
                     .cloud_conversation_storage_settings
                     .setting
                     .clone()
@@ -1517,9 +1572,10 @@ impl UserWorkspaces {
     }
 
     pub fn is_ai_allowed_in_remote_sessions(&self) -> bool {
-        self.current_team()
-            .map(|team| {
-                team.organization_settings
+        self.current_workspace()
+            .map(|workspace| {
+                workspace
+                    .settings
                     .ai_permissions_settings
                     .allow_ai_in_remote_sessions
             })
@@ -1527,9 +1583,10 @@ impl UserWorkspaces {
     }
 
     pub fn get_remote_session_regex_list(&self) -> Vec<Regex> {
-        self.current_team()
-            .map(|team| {
-                team.organization_settings
+        self.current_workspace()
+            .map(|workspace| {
+                workspace
+                    .settings
                     .ai_permissions_settings
                     .remote_session_regex_list
                     .clone()
@@ -1538,9 +1595,10 @@ impl UserWorkspaces {
     }
 
     pub fn is_anyone_with_link_sharing_enabled(&self) -> bool {
-        self.current_team()
-            .map(|team| {
-                team.organization_settings
+        self.current_workspace()
+            .map(|workspace| {
+                workspace
+                    .settings
                     .link_sharing_settings
                     .anyone_with_link_sharing_enabled
             })
@@ -1548,9 +1606,10 @@ impl UserWorkspaces {
     }
 
     pub fn is_direct_link_sharing_enabled(&self) -> bool {
-        self.current_team()
-            .map(|team| {
-                team.organization_settings
+        self.current_workspace()
+            .map(|workspace| {
+                workspace
+                    .settings
                     .link_sharing_settings
                     .direct_link_sharing_enabled
             })
@@ -1578,8 +1637,8 @@ impl UserWorkspaces {
     }
 
     pub fn default_host_slug(&self) -> Option<&str> {
-        self.current_team()
-            .and_then(|team| team.organization_settings.default_host_slug.as_deref())
+        self.current_workspace()
+            .and_then(|workspace| workspace.settings.default_host_slug.as_deref())
     }
 
     /// Returns the team-level agent attribution setting.
@@ -1587,8 +1646,8 @@ impl UserWorkspaces {
     /// Use this to decide whether the user's attribution toggle should be locked
     /// (`Enable`/`Disable`) or editable (`RespectUserSetting`).
     pub fn get_agent_attribution_setting(&self) -> AdminEnablementSetting {
-        self.current_team()
-            .map(|team| team.organization_settings.enable_warp_attribution.clone())
+        self.current_workspace()
+            .map(|workspace| workspace.settings.enable_warp_attribution.clone())
             .unwrap_or_default()
     }
 
@@ -1596,13 +1655,8 @@ impl UserWorkspaces {
     /// Do not use this function to determine whether codebase context is generally enabled --
     /// use `is_codebase_context_enabled` instead.
     pub fn team_allows_codebase_context(&self) -> AdminEnablementSetting {
-        self.current_team()
-            .map(|team| {
-                team.organization_settings
-                    .codebase_context_settings
-                    .setting
-                    .clone()
-            })
+        self.current_workspace()
+            .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
             .unwrap_or_default()
     }
 
@@ -1622,8 +1676,8 @@ impl UserWorkspaces {
         }
 
         let is_session_sharing_enabled_via_tier_policy = self
-            .current_team()
-            .and_then(|t| t.billing_metadata.tier.session_sharing_policy)
+            .current_workspace()
+            .and_then(|workspace| workspace.billing_metadata.tier.session_sharing_policy)
             .map(|policy| policy.is_enabled)
             .unwrap_or(true);
         FeatureFlag::CreatingSharedSessions.set_enabled(is_session_sharing_enabled_via_tier_policy);

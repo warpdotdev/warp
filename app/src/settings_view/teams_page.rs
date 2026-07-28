@@ -29,7 +29,7 @@ use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::ui_components::text_input::TextInput;
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::SettingsSection;
@@ -454,6 +454,7 @@ enum TeamActionConfirmationTarget {
 }
 
 pub struct TeamsPageView {
+    self_handle: WeakViewHandle<Self>,
     page: PageType<Self>,
     auth_state: Arc<AuthState>,
     create_team_editor: ViewHandle<EditorView>,
@@ -752,7 +753,7 @@ impl TeamsPageView {
             me.handle_email_invites_block_editor_event(event, ctx);
         });
 
-        let current_user_team = user_workspaces.as_ref(ctx).current_team();
+        let current_user_team = user_workspaces.as_ref(ctx).team_for_view(ctx);
 
         let team_members_mouse_state_handles =
             current_user_team.map_or_else(Vec::new, |user_team| {
@@ -833,6 +834,7 @@ impl TeamsPageView {
 
         let page = PageType::new_monolith(TeamsWidget::default(), None, true);
         TeamsPageView {
+            self_handle: ctx.handle(),
             page,
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             create_team_editor,
@@ -869,7 +871,7 @@ impl TeamsPageView {
     }
 
     fn open_member_actions_menu_for_item(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
-        let Some(team) = self.user_workspaces.as_ref(ctx).current_team() else {
+        let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) else {
             return;
         };
         let Some(current_user_email) = self.auth_state.user_email() else {
@@ -1000,7 +1002,7 @@ impl TeamsPageView {
                 let message = self
                     .user_workspaces
                     .as_ref(ctx)
-                    .current_team()
+                    .team_for_view(ctx)
                     .map_or("Successfully joined team".to_string(), |team| {
                         format!("Successfully joined {}", team.name)
                     });
@@ -1282,7 +1284,7 @@ impl TeamsPageView {
     }
 
     fn update_approved_domains_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             self.team_approved_domains_mouse_state_handles = team
                 .invite_link_domain_restrictions
                 .iter()
@@ -1296,7 +1298,7 @@ impl TeamsPageView {
     // to use when rendering the different word chips on the editor.
     fn update_domains_validator(&mut self, ctx: &mut ViewContext<Self>) {
         let current_domain_restrictions =
-            if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+            if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
                 team.invite_link_domain_restrictions
                     .iter()
                     .map(|domain_restriction| domain_restriction.domain.clone())
@@ -1335,7 +1337,7 @@ impl TeamsPageView {
         let blocked = self
             .user_workspaces
             .as_ref(ctx)
-            .current_team()
+            .team_for_view(ctx)
             .map(|team| TeamsWidget::grow_team_warning(team).is_some())
             .unwrap_or(false);
         let state = if blocked {
@@ -1349,7 +1351,7 @@ impl TeamsPageView {
     }
 
     fn update_team_member_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             let total_length = team.pending_email_invites.len() + team.members.len();
             self.team_members_mouse_state_handles =
                 (0..total_length).map(|_| Default::default()).collect();
@@ -1358,7 +1360,7 @@ impl TeamsPageView {
     }
 
     fn update_team_name(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             let team_name = team.name.clone();
             self.rename_team_editor.update(ctx, |editor, ctx| {
                 editor.handle_action(&ClickableTextInputAction::UpdateText(team_name), ctx)
@@ -1370,7 +1372,7 @@ impl TeamsPageView {
     // to use when rendering the different word chips on the editor.
     fn update_email_validator(&mut self, ctx: &mut ViewContext<Self>) {
         let (member_emails, invitee_emails) =
-            if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+            if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
                 (
                     team.members
                         .iter()
@@ -1466,7 +1468,11 @@ impl TeamsPageView {
     }
 
     fn leave_team(&mut self, ctx: &mut ViewContext<Self>) {
-        let team_uid = self.user_workspaces.as_ref(ctx).current_team_uid();
+        let team_uid = self
+            .user_workspaces
+            .as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|team| team.uid);
         if let Some(team_uid) = team_uid {
             TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
                 manager.leave_team(team_uid, CloudObjectEventEntrypoint::TeamSettings, ctx)
@@ -1671,8 +1677,16 @@ impl TeamsPageView {
     ) {
         match event {
             ClickableTextInputEvent::Submit(new_name) => {
+                let Some(team_uid) = self
+                    .user_workspaces
+                    .as_ref(ctx)
+                    .team_for_view(ctx)
+                    .map(|team| team.uid)
+                else {
+                    return;
+                };
                 TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.rename_team(new_name.to_string(), ctx)
+                    manager.rename_team(new_name.to_string(), team_uid, ctx)
                 });
                 self.rename_team_editor.update(ctx, |editor, ctx| {
                     editor.handle_action(
@@ -1690,7 +1704,7 @@ impl TeamsPageView {
     fn focus_on_next_input(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
-        if let Some(team) = workspaces.current_team() {
+        if let Some(team) = workspaces.team_for_view(ctx) {
             if team.organization_settings.is_invite_link_enabled {
                 ctx.focus(&self.approve_domains_block_editor);
             } else {
@@ -4368,7 +4382,7 @@ impl SettingsWidget for TeamsWidget {
             let cloud_model = view.cloud_model.as_ref(app);
             let ai_request_usage_model = view.ai_request_usage_model.as_ref(app);
 
-            match teams.current_team() {
+            match teams.team_for_view_handle(&view.self_handle, app) {
                 Some(team) => self.render_team_management_page(
                     team,
                     cloud_model,

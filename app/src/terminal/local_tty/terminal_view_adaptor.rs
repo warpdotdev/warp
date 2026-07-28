@@ -64,7 +64,7 @@ use crate::terminal::shared_session::sharer::network::{
 };
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
-    SharedSessionStatus,
+    SharedSessionStatus, max_session_size,
 };
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
 use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server_controller_with_view;
@@ -753,6 +753,7 @@ impl TerminalManager<TerminalView> {
             .replica_id(ctx);
 
         let scrollback_first_block_index = scrollback_type.first_block_index(&model.lock());
+        let max_session_size = max_session_size(window_id, ctx);
 
         // TODO: rather than picking which constructor we use here,
         // we might want to use a dedicated terminal manager for tests.
@@ -766,6 +767,7 @@ impl TerminalManager<TerminalView> {
                     active_prompt,
                     selection,
                     input_replica_id,
+                    max_session_size,
                     ctx,
                 ));
             } else {
@@ -852,6 +854,7 @@ impl TerminalManager<TerminalView> {
                         universal_developer_input_context,
                         lifetime,
                         source.clone(),
+                        max_session_size,
                         ctx,
                     )
                 });

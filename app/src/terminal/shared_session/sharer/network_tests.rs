@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_channel::Sender;
+use byte_unit::Byte;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -181,6 +182,7 @@ fn create_network(
             active_prompt,
             Selection::None,
             ReplicaId::random(),
+            Byte::from_u64(MAX_BYTES_SHAREABLE as u64),
             ctx,
         )
     });

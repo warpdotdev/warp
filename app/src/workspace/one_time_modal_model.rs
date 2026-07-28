@@ -762,7 +762,7 @@ impl OneTimeModalModel {
 
         // Check if current workspace has sunsetted_to_build_ts set
         let user_workspaces = UserWorkspaces::as_ref(ctx);
-        let Some(current_team) = user_workspaces.current_team() else {
+        let Some(current_team) = user_workspaces.self_serve_team() else {
             return false;
         };
 

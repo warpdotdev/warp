@@ -497,7 +497,7 @@ impl AccountWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::End);
         let current_user_id = auth_state.user_id().unwrap_or_default();
         let workspaces = UserWorkspaces::as_ref(app);
-        if let Some(team) = workspaces.current_team() {
+        if let Some(team) = workspaces.self_serve_team() {
             if team.billing_metadata.customer_type != CustomerType::Unknown {
                 plan_info.add_child(render_customer_type_badge(
                     appearance,

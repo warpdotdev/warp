@@ -144,6 +144,7 @@ struct CardState {
 }
 
 pub struct AgentManagementView {
+    view_handle: WeakViewHandle<Self>,
     list_state: ListState<()>,
     loading_icon_mouse_state: MouseStateHandle,
     scroll_state: ScrollStateHandle,
@@ -219,7 +220,8 @@ impl AgentManagementView {
             },
         );
 
-        let list_state = Self::construct_fresh_list_state(ctx.handle());
+        let view_handle = ctx.handle();
+        let list_state = Self::construct_fresh_list_state(view_handle.clone());
 
         let all_filter_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("All", NakedTheme)
@@ -343,6 +345,7 @@ impl AgentManagementView {
         ctx.subscribe_to_view(&details_panel, Self::handle_details_panel_event);
 
         let mut view = Self {
+            view_handle,
             list_state,
             scroll_state: ScrollStateHandle::default(),
             items: Vec::new(),
@@ -1900,7 +1903,9 @@ impl AgentManagementView {
             .as_ref(app)
             .is_loading();
 
-        let is_on_team = UserWorkspaces::as_ref(app).current_team().is_some();
+        let is_on_team = UserWorkspaces::as_ref(app)
+            .team_for_view_handle(&self.view_handle, app)
+            .is_some();
 
         let size_switch_threshold = MEDIUM_SIZE_SWITCH_THRESHOLD * appearance.monospace_ui_scalar();
 

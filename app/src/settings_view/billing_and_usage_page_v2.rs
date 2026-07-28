@@ -482,7 +482,7 @@ impl BillingAndUsagePageV2View {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.current_team_uid();
+                let team_uid = workspaces.self_serve_team_uid();
 
                 if let Some(team_uid) = team_uid {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
@@ -579,7 +579,7 @@ impl BillingAndUsagePageV2View {
 
         let workspaces = UserWorkspaces::as_ref(app);
 
-        if let Some(team) = workspaces.current_team() {
+        if let Some(team) = workspaces.self_serve_team() {
             if team.billing_metadata.customer_type != CustomerType::Unknown {
                 right_side.add_child(
                     Container::new(render_customer_type_badge(
@@ -947,7 +947,7 @@ impl BillingAndUsagePageV2View {
         }
 
         let is_on_paid_plan = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .is_some_and(|team| team.billing_metadata.is_user_on_paid_plan());
         if !is_on_paid_plan {
             let user_id = AuthStateProvider::as_ref(app).get().user_id();
@@ -1070,7 +1070,7 @@ impl BillingAndUsagePageV2View {
         app: &AppContext,
     ) -> AddonCreditsPanelState {
         let team_can_purchase = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .and_then(|t| t.billing_metadata.tier.purchase_add_on_credits_policy)
             .is_some_and(|p| p.enabled);
         let can_upgrade = workspace.billing_metadata.can_upgrade_to_build_plan();
@@ -1103,7 +1103,7 @@ impl BillingAndUsagePageV2View {
             .auto_reload_enabled;
 
         let team_count = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .map(|t| t.members.len())
             .unwrap_or(1);
         let description_text = if team_count > 1 {
@@ -1676,13 +1676,13 @@ impl BillingAndUsagePageV2View {
         }
 
         let delinquent = UserWorkspaces::as_ref(app)
-            .current_team()
+            .self_serve_team()
             .map(|t| t.billing_metadata.is_delinquent_due_to_payment_issue())
             .unwrap_or_default();
 
         if let (Some(ws), Some(team)) = (
             UserWorkspaces::as_ref(app).current_workspace(),
-            UserWorkspaces::as_ref(app).current_team(),
+            UserWorkspaces::as_ref(app).self_serve_team(),
         ) {
             let workspace_bonus_credits = ai_model.total_workspace_bonus_credits_remaining(ws.uid);
             let is_payg_zero = ws.billing_metadata.is_enterprise_pay_as_you_go_enabled()
@@ -2037,13 +2037,13 @@ impl TypedActionView for BillingAndUsagePageV2View {
                 self.addon_credits.selected_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
                 UserWorkspaces::handle(ctx).update(ctx, |ws, ctx| {
-                    let has_admin_permissions = ws.current_team().is_some_and(|team| {
+                    let has_admin_permissions = ws.self_serve_team().is_some_and(|team| {
                         AuthStateProvider::as_ref(ctx)
                             .get()
                             .user_email()
                             .is_some_and(|email| team.has_admin_permissions(&email))
                     });
-                    let team_uid = ws.current_team_uid();
+                    let team_uid = ws.self_serve_team_uid();
                     if let Some((workspace, team_uid)) = ws.current_workspace().zip(team_uid)
                         && has_admin_permissions
                         && workspace
