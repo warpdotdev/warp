@@ -32,6 +32,7 @@ use futures_lite::future;
 use is_executable::IsExecutable as _;
 use itertools::Itertools;
 use sha2::{Digest, Sha256};
+use warp_core::safe_info;
 use warp_errors::{ErrorExt, register_error};
 
 pub mod spacectl;
@@ -584,10 +585,9 @@ where
                 Duration::ZERO,
             )
         } else {
-            log::info!(
-                "Mounting cache modes {:?} for {:?}",
-                configuration.modes,
-                configuration.scope
+            safe_info!(
+                safe: ("Mounting cache modes {:?} for scope kind '{}'", configuration.modes, configuration.scope.kind()),
+                full: ("Mounting cache modes {:?} for {:?}", configuration.modes, configuration.scope)
             );
             run_spacectl_mount(
                 configuration.scope.clone(),
@@ -669,12 +669,16 @@ where
 /// - `~/.cargo/registry` => `/cache/shared/$HOME/.cargo/registry`
 /// - `/workspace/repo-a/target` => `/cache/<repo-a-key>/target`
 /// - `/workspace/repo-b/target` => `/cache/<repo-b-key>/target`
-#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, additional_global_modes, resolved_modes = tracing::field::Empty))]
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, additional_global_modes = tracing::field::Empty, resolved_modes = tracing::field::Empty))]
 fn construct_plan(
     cache_root: PathBuf,
     mut detections: Vec<DetectedCacheModes>,
     additional_global_modes: Vec<String>,
 ) -> Result<Option<CacheSetupPlan>, CacheSetupError> {
+    tracing::Span::current().record(
+        "additional_global_modes",
+        additional_global_modes.iter().join(", "),
+    );
     for detection in &mut detections {
         detection.modes = canonical_modes(std::mem::take(&mut detection.modes));
         tracing::info!(modes = ?detection.modes, repo_key = %detection.key, "Adding detected cache modes");
