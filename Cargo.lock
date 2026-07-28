@@ -356,6 +356,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "serde_yaml 0.8.26",
+ "serial_test",
  "sha2 0.10.9",
  "shellexpand",
  "streaming-iterator",
