@@ -82,12 +82,6 @@ fn classify_accepts_id_in_choices_even_when_list_unavailable() {
     // validate even when the server list is unavailable, because custom
     // endpoints are independent of server health (the validator chains custom
     // choices alongside the server list).
-    //
-    // Note: nextest may report a LEAK for this test. The test body is purely
-    // synchronous (LLMId::from is a trivial string wrapper with no side
-    // effects), so the leak is not from this test's own logic. It is likely
-    // from lazy global initialization in the warp binary that fires in this
-    // test's process but not in others; the underlying thread is benign.
     let valid_ids = vec![LLMId::from("custom-config-key")];
     let id = classify_agent_mode_base_model_id("custom-config-key", &valid_ids, true)
         .expect("an id present in the choices should validate");

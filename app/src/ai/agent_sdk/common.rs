@@ -49,11 +49,6 @@ pub fn validate_agent_mode_base_model_id(
 /// Classifies a user-supplied agent-mode model id against the available model
 /// list, distinguishing "the model list fetch failed (so the list is empty or
 /// stale)" from "the id is genuinely not in a valid list".
-///
-/// Note: a fully-unreachable server does not reach this function — auth
-/// (`GetUser`) fails first and `dispatch_command` is never called. The
-/// reachable case here is a *partially* unhealthy server where auth succeeds
-/// but `GetFeatureModelChoices` fails.
 fn classify_agent_mode_base_model_id(
     model_id: &str,
     valid_ids: &[LLMId],
