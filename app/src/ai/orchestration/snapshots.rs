@@ -70,6 +70,7 @@ pub enum OptionBadge {
     Default,
     Recent,
     Connected,
+    Recommended,
 }
 
 /// Load state of the catalog backing a snapshot.
