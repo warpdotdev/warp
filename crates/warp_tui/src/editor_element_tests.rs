@@ -218,8 +218,6 @@ fn editable_editor_ignores_text_when_another_view_is_focused() {
                 },
                 chars: "a".to_owned(),
                 details: KeyEventDetails::default(),
-                physical_key: None,
-                is_repeat: false,
                 is_composing: false,
             };
             assert!(!dispatch_event_with_view_focus(ctx, element, &key, false));
@@ -236,53 +234,6 @@ fn editable_editor_ignores_text_when_another_view_is_focused() {
                 actions.borrow().as_slice(),
                 [TuiEditorAction::InsertChar('a')]
             ));
-        });
-    });
-}
-
-#[test]
-fn editable_editor_inserts_repeats_and_ignores_releases() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            ctx.add_singleton_model(|_| Appearance::mock());
-            let actions = Rc::new(RefCell::new(Vec::new()));
-            let actions_for_repeat = actions.clone();
-            let repeated = TuiEvent::KeyDown {
-                keystroke: Keystroke {
-                    key: "a".to_owned(),
-                    ..Default::default()
-                },
-                chars: "a".to_owned(),
-                details: KeyEventDetails::default(),
-                physical_key: None,
-                is_repeat: true,
-                is_composing: false,
-            };
-            let repeat_model = model(ctx, "");
-            let repeat_element = TuiEditorElement::new(&repeat_model, ctx)
-                .editable()
-                .on_action(move |action, _| actions_for_repeat.borrow_mut().push(action));
-            assert!(dispatch_event(ctx, repeat_element, &repeated));
-            assert!(matches!(
-                actions.borrow().as_slice(),
-                [TuiEditorAction::InsertChar('a')]
-            ));
-
-            let actions_for_release = actions.clone();
-            let release = TuiEvent::KeyUp {
-                keystroke: Keystroke {
-                    key: "a".to_owned(),
-                    ..Default::default()
-                },
-                details: KeyEventDetails::default(),
-                physical_key: None,
-            };
-            let release_model = model(ctx, "");
-            let release_element = TuiEditorElement::new(&release_model, ctx)
-                .editable()
-                .on_action(move |action, _| actions_for_release.borrow_mut().push(action));
-            assert!(!dispatch_event(ctx, release_element, &release));
-            assert_eq!(actions.borrow().len(), 1);
         });
     });
 }

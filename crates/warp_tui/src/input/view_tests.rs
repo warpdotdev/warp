@@ -2262,8 +2262,6 @@ fn printable_key(character: char) -> TuiEvent {
         },
         chars: character.to_string(),
         details: KeyEventDetails::default(),
-        physical_key: None,
-        is_repeat: false,
         is_composing: false,
     }
 }
@@ -2810,8 +2808,6 @@ fn escape_is_not_consumed_by_the_element() {
                 },
                 chars: String::new(),
                 details: KeyEventDetails::default(),
-                physical_key: None,
-                is_repeat: false,
                 is_composing: false,
             };
             assert!(

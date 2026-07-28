@@ -182,10 +182,9 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         }
 
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
-        // responder chain first, exactly like the GUI window event path. Key
-        // releases bypass this pass just as GUI `ModifierKeyChanged` events do:
-        // keymaps represent press-driven keystrokes, while lifecycle events
-        // continue to element dispatch.
+        // responder chain first, exactly like the GUI window event path.
+        // `ModifierKeyChanged` bypasses this pass and continues to element
+        // dispatch because keymaps represent press-driven keystrokes.
         if let Some((keystroke, is_composing)) = event.key_down() {
             let responder_chain = ctx.get_responder_chain(self.window_id);
             match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, is_composing)
@@ -662,6 +661,10 @@ fn enter_terminal_screen(
     // reader starts because crossterm's query cannot run concurrently with
     // event polling.
     if keyboard_enhancement_supported {
+        // Reporting all keys is required for standalone modifier events. With
+        // that mode active, Crossterm 0.29 needs alternate keys to recover the
+        // text produced by shifted keys because it does not expose Kitty's
+        // associated-text field.
         let _ = execute!(
             out,
             PushKeyboardEnhancementFlags(

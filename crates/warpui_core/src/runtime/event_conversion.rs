@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{
 };
 
 use crate::elements::tui::{TuiEvent, TuiPoint, TuiPointExt, TuiScrollDelta};
-use crate::event::{KeyEventDetails, ModifiersState};
+use crate::event::{KeyEventDetails, KeyState, ModifiersState};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode as PhysicalKeyCode;
 
@@ -97,38 +97,37 @@ fn modifiers_state(modifiers: KeyModifiers) -> ModifiersState {
 }
 
 fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
-    let modifiers = key_modifiers(event.code, event.modifiers);
-    // Warp calls the platform's Super modifier `cmd` across surfaces, while
-    // crossterm's distinct Meta modifier remains `meta`.
-    let keystroke = Keystroke {
-        ctrl: modifiers.contains(KeyModifiers::CONTROL),
-        alt: modifiers.contains(KeyModifiers::ALT),
-        shift: modifiers.contains(KeyModifiers::SHIFT),
-        cmd: modifiers.contains(KeyModifiers::SUPER),
-        meta: modifiers.contains(KeyModifiers::META),
-        key: key_name(event.code, modifiers)?,
-    };
-    let details = KeyEventDetails {
-        key_without_modifiers: key_without_modifiers(event.code),
-        ..Default::default()
-    };
-    let physical_key = physical_key(event.code);
-
-    match event.kind {
-        KeyEventKind::Press | KeyEventKind::Repeat => Some(TuiEvent::KeyDown {
-            keystroke,
-            chars: produced_chars(event.code, modifiers),
-            details,
-            physical_key,
-            is_repeat: event.kind == KeyEventKind::Repeat,
-            is_composing: false,
-        }),
-        KeyEventKind::Release => Some(TuiEvent::KeyUp {
-            keystroke,
-            details,
-            physical_key,
-        }),
+    if let KeyCode::Modifier(code) = event.code {
+        let key_code = modifier_key(code)?;
+        let state = match event.kind {
+            KeyEventKind::Press => KeyState::Pressed,
+            KeyEventKind::Release => KeyState::Released,
+            KeyEventKind::Repeat => return None,
+        };
+        return Some(TuiEvent::ModifierKeyChanged { key_code, state });
     }
+    if event.kind == KeyEventKind::Release {
+        return None;
+    }
+    let modifiers = key_modifiers(event.code, event.modifiers);
+    let key = key_name(event.code, modifiers)?;
+
+    Some(TuiEvent::KeyDown {
+        keystroke: Keystroke {
+            ctrl: modifiers.contains(KeyModifiers::CONTROL),
+            alt: modifiers.contains(KeyModifiers::ALT),
+            shift: modifiers.contains(KeyModifiers::SHIFT),
+            cmd: modifiers.contains(KeyModifiers::SUPER),
+            meta: modifiers.contains(KeyModifiers::META),
+            key,
+        },
+        chars: produced_chars(event.code, modifiers),
+        details: KeyEventDetails {
+            key_without_modifiers: key_without_modifiers(event.code),
+            ..Default::default()
+        },
+        is_composing: false,
+    })
 }
 
 fn key_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyModifiers {
@@ -139,28 +138,10 @@ fn key_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyModifiers {
         // uppercase codepoint and clears Shift. Restore it for Warp keymaps.
         return modifiers | KeyModifiers::SHIFT;
     }
-
-    let KeyCode::Modifier(code) = code else {
-        return modifiers;
-    };
-    let modifier = match code {
-        ModifierKeyCode::LeftControl | ModifierKeyCode::RightControl => KeyModifiers::CONTROL,
-        ModifierKeyCode::LeftAlt | ModifierKeyCode::RightAlt => KeyModifiers::ALT,
-        ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift => KeyModifiers::SHIFT,
-        ModifierKeyCode::LeftSuper | ModifierKeyCode::RightSuper => KeyModifiers::SUPER,
-        ModifierKeyCode::LeftMeta | ModifierKeyCode::RightMeta => KeyModifiers::META,
-        ModifierKeyCode::LeftHyper
-        | ModifierKeyCode::RightHyper
-        | ModifierKeyCode::IsoLevel3Shift
-        | ModifierKeyCode::IsoLevel5Shift => KeyModifiers::empty(),
-    };
-    modifiers | modifier
+    modifiers
 }
 
-fn physical_key(code: KeyCode) -> Option<PhysicalKeyCode> {
-    let KeyCode::Modifier(code) = code else {
-        return None;
-    };
+fn modifier_key(code: ModifierKeyCode) -> Option<PhysicalKeyCode> {
     match code {
         ModifierKeyCode::LeftAlt => Some(PhysicalKeyCode::AltLeft),
         ModifierKeyCode::RightAlt => Some(PhysicalKeyCode::AltRight),
@@ -190,7 +171,7 @@ fn produced_chars(code: KeyCode, modifiers: KeyModifiers) -> String {
 }
 
 /// The TUI keystroke `key` name for a crossterm key code, or `None` for keys
-/// with no TUI equivalent (unsupported modifiers, lock keys, media keys, etc.).
+/// with no TUI equivalent (pure modifiers, lock keys, media keys, etc.).
 fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
     match code {
         KeyCode::Backspace => Some("backspace".to_owned()),
@@ -216,18 +197,6 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
             Some(char.to_uppercase().collect())
         }
         KeyCode::Char(char) => Some(char.to_lowercase().to_string()),
-        KeyCode::Modifier(
-            ModifierKeyCode::LeftShift
-            | ModifierKeyCode::LeftControl
-            | ModifierKeyCode::LeftAlt
-            | ModifierKeyCode::LeftSuper
-            | ModifierKeyCode::LeftMeta
-            | ModifierKeyCode::RightShift
-            | ModifierKeyCode::RightControl
-            | ModifierKeyCode::RightAlt
-            | ModifierKeyCode::RightSuper
-            | ModifierKeyCode::RightMeta,
-        ) => Some(String::new()),
         KeyCode::Null
         | KeyCode::CapsLock
         | KeyCode::ScrollLock
@@ -237,12 +206,7 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
         | KeyCode::Menu
         | KeyCode::KeypadBegin
         | KeyCode::Media(_)
-        | KeyCode::Modifier(
-            ModifierKeyCode::LeftHyper
-            | ModifierKeyCode::RightHyper
-            | ModifierKeyCode::IsoLevel3Shift
-            | ModifierKeyCode::IsoLevel5Shift,
-        )
+        | KeyCode::Modifier(_)
         | KeyCode::F(_) => None,
     }
 }

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
 };
 
 use super::*;
@@ -251,7 +251,7 @@ fn keymap_binding_dispatches_typed_action_to_tui_view() {
 }
 
 #[test]
-fn repeats_dispatch_keymaps_while_releases_bypass_them() {
+fn repeats_dispatch_keymaps_while_modifier_events_bypass_them() {
     App::test((), |mut app| async move {
         let (window_id, root) = app.update(|ctx| {
             ctx.register_fixed_bindings([FixedBinding::new("ctrl-c", Bump, id!("BumpParentView"))]);
@@ -264,14 +264,13 @@ fn repeats_dispatch_keymaps_while_releases_bypass_them() {
         let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
         app.update(|ctx| screen.draw(ctx)).unwrap();
 
-        let release = screen
-            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
-                KeyCode::Char('c'),
+        let modifier = screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Modifier(ModifierKeyCode::LeftControl),
                 KeyModifiers::CONTROL,
-                KeyEventKind::Release,
             )))
-            .expect("release event");
-        assert!(!app.update(|ctx| screen.dispatch_event(ctx, &release)));
+            .expect("modifier event");
+        assert!(!app.update(|ctx| screen.dispatch_event(ctx, &modifier)));
         assert_eq!(root.read(&app, |view, _| view.bumps), 0);
 
         let repeat = screen
@@ -549,9 +548,9 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 }
 
-/// Enhancement-capable terminals report disambiguated keys, event types,
-/// alternate shifted keys, and escape-coded plain keys (CSI `>15u`), then
-/// restore the previous protocol on exit.
+/// Enhancement-capable terminals report standalone modifier event types while
+/// preserving shifted text through Crossterm's alternate-key decoding (CSI
+/// `>15u`), then restore the previous protocol on exit.
 ///
 /// Crossterm hard-routes these commands to the unsupported legacy Windows
 /// console API, so the ANSI sequences are only emitted off Windows. The
@@ -572,7 +571,7 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
             enter_output
                 .windows(b"\x1b[>15u".len())
                 .any(|window| window == b"\x1b[>15u"),
-            "entering the TUI should request the complete key lifecycle"
+            "entering the TUI should request modifier lifecycle support"
         );
         assert!(
             leave_output

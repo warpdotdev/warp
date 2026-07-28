@@ -158,8 +158,8 @@ impl TuiElement for TuiTerminalContentElement {
                 TuiEvent::KeyDown {
                     is_composing: true, ..
                 } => return false,
-                TuiEvent::KeyUp { .. } => {}
-                TuiEvent::ScrollWheel { .. }
+                TuiEvent::ModifierKeyChanged { .. }
+                | TuiEvent::ScrollWheel { .. }
                 | TuiEvent::LeftMouseDown { .. }
                 | TuiEvent::LeftMouseUp { .. }
                 | TuiEvent::LeftMouseDragged { .. }
@@ -208,7 +208,6 @@ fn forwarded_pty_input_for_event<'a>(
             chars,
             details,
             is_composing: false,
-            ..
         } => {
             let bytes = KeystrokeWithDetails {
                 keystroke,
@@ -244,7 +243,7 @@ fn forwarded_pty_input_for_event<'a>(
         TuiEvent::KeyDown {
             is_composing: true, ..
         }
-        | TuiEvent::KeyUp { .. }
+        | TuiEvent::ModifierKeyChanged { .. }
         | TuiEvent::ScrollWheel { .. }
         | TuiEvent::LeftMouseDown { .. }
         | TuiEvent::LeftMouseUp { .. }

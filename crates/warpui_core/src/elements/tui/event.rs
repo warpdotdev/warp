@@ -16,7 +16,7 @@ use super::{
     TuiElement, TuiLocalPoint, TuiPoint, TuiScene, TuiScreenPoint, TuiScreenRect, TuiSize,
     TuiViewMapContext, TuiZIndex,
 };
-use crate::event::{KeyEventDetails, ModifiersState};
+use crate::event::{KeyEventDetails, KeyState, ModifiersState};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 use crate::{Action, EntityId, EntityIdMap};
@@ -31,14 +31,11 @@ pub enum TuiEvent {
         keystroke: Keystroke,
         chars: String,
         details: KeyEventDetails,
-        physical_key: Option<KeyCode>,
-        is_repeat: bool,
         is_composing: bool,
     },
-    KeyUp {
-        keystroke: Keystroke,
-        details: KeyEventDetails,
-        physical_key: Option<KeyCode>,
+    ModifierKeyChanged {
+        key_code: KeyCode,
+        state: KeyState,
     },
     Paste {
         text: String,
@@ -91,7 +88,7 @@ impl TuiEvent {
             | Self::MiddleMouseDown { position, .. }
             | Self::RightMouseDown { position, .. }
             | Self::MouseMoved { position, .. } => Some(*position),
-            Self::KeyDown { .. } | Self::KeyUp { .. } | Self::Paste { .. } => None,
+            Self::KeyDown { .. } | Self::ModifierKeyChanged { .. } | Self::Paste { .. } => None,
         }
     }
 

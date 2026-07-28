@@ -6,8 +6,9 @@ use crate::elements::tui::test_support::with_event_context;
 use crate::elements::tui::{
     TuiChildView, TuiDispatchEventResult, TuiElement, TuiEvent, TuiPresentationContext,
 };
-use crate::event::KeyEventDetails;
+use crate::event::{KeyEventDetails, KeyState};
 use crate::keymap::Keystroke;
+use crate::platform::keyboard::KeyCode;
 use crate::{App, EntityId, EntityIdMap};
 
 fn key_event(key: &str) -> TuiEvent {
@@ -18,20 +19,14 @@ fn key_event(key: &str) -> TuiEvent {
         },
         chars: key.to_owned(),
         details: KeyEventDetails::default(),
-        physical_key: None,
-        is_repeat: false,
         is_composing: false,
     }
 }
 
-fn key_up(key: &str) -> TuiEvent {
-    TuiEvent::KeyUp {
-        keystroke: Keystroke {
-            key: key.to_owned(),
-            ..Default::default()
-        },
-        details: KeyEventDetails::default(),
-        physical_key: None,
+fn modifier_event(state: KeyState) -> TuiEvent {
+    TuiEvent::ModifierKeyChanged {
+        key_code: KeyCode::ControlLeft,
+        state,
     }
 }
 
@@ -88,30 +83,33 @@ fn child_consumes_the_event_before_the_wrapper() {
 }
 
 #[test]
-fn key_lifecycle_callback_observes_down_and_up_with_explicit_propagation() {
+fn modifier_callback_controls_propagation() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let hits = Rc::new(Cell::new(0u32));
             let counter = hits.clone();
-            let mut handler = TuiEventHandler::new(().finish()).on_key_event(move |event, _, _| {
-                counter.set(counter.get() + 1);
-                match event {
-                    TuiEvent::KeyDown { .. } => TuiDispatchEventResult::PropagateToParent,
-                    TuiEvent::KeyUp { .. } => TuiDispatchEventResult::StopPropagation,
-                    TuiEvent::Paste { .. }
-                    | TuiEvent::ScrollWheel { .. }
-                    | TuiEvent::LeftMouseDown { .. }
-                    | TuiEvent::LeftMouseUp { .. }
-                    | TuiEvent::LeftMouseDragged { .. }
-                    | TuiEvent::MiddleMouseDown { .. }
-                    | TuiEvent::RightMouseDown { .. }
-                    | TuiEvent::MouseMoved { .. } => unreachable!(),
-                }
-            });
+            let mut handler = TuiEventHandler::new(().finish()).on_modifier_key_changed(
+                move |key_code, state, _, _| {
+                    assert_eq!(key_code, KeyCode::ControlLeft);
+                    counter.set(counter.get() + 1);
+                    match state {
+                        KeyState::Pressed => TuiDispatchEventResult::PropagateToParent,
+                        KeyState::Released => TuiDispatchEventResult::StopPropagation,
+                    }
+                },
+            );
 
             with_event_context(|event_ctx| {
-                assert!(!handler.dispatch_event(&key_event("a"), event_ctx, app_ctx));
-                assert!(handler.dispatch_event(&key_up("a"), event_ctx, app_ctx));
+                assert!(!handler.dispatch_event(
+                    &modifier_event(KeyState::Pressed),
+                    event_ctx,
+                    app_ctx
+                ));
+                assert!(handler.dispatch_event(
+                    &modifier_event(KeyState::Released),
+                    event_ctx,
+                    app_ctx
+                ));
             });
             assert_eq!(hits.get(), 2);
         });
@@ -119,24 +117,26 @@ fn key_lifecycle_callback_observes_down_and_up_with_explicit_propagation() {
 }
 
 #[test]
-fn child_consumes_key_up_before_lifecycle_wrapper() {
+fn child_consumes_modifier_event_before_wrapper() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let inner_hits = Rc::new(Cell::new(0u32));
             let outer_hits = Rc::new(Cell::new(0u32));
             let inner_counter = inner_hits.clone();
             let outer_counter = outer_hits.clone();
-            let inner = TuiEventHandler::new(().finish()).on_key_event(move |_, _, _| {
-                inner_counter.set(inner_counter.get() + 1);
-                TuiDispatchEventResult::StopPropagation
-            });
-            let mut outer = TuiEventHandler::new(inner.finish()).on_key_event(move |_, _, _| {
-                outer_counter.set(outer_counter.get() + 1);
-                TuiDispatchEventResult::StopPropagation
-            });
+            let inner =
+                TuiEventHandler::new(().finish()).on_modifier_key_changed(move |_, _, _, _| {
+                    inner_counter.set(inner_counter.get() + 1);
+                    TuiDispatchEventResult::StopPropagation
+                });
+            let mut outer =
+                TuiEventHandler::new(inner.finish()).on_modifier_key_changed(move |_, _, _, _| {
+                    outer_counter.set(outer_counter.get() + 1);
+                    TuiDispatchEventResult::StopPropagation
+                });
 
             let handled = with_event_context(|event_ctx| {
-                outer.dispatch_event(&key_up("a"), event_ctx, app_ctx)
+                outer.dispatch_event(&modifier_event(KeyState::Pressed), event_ctx, app_ctx)
             });
             assert!(handled);
             assert_eq!(inner_hits.get(), 1);
@@ -144,7 +144,6 @@ fn child_consumes_key_up_before_lifecycle_wrapper() {
         });
     });
 }
-
 #[test]
 fn present_recurses_into_the_wrapped_child() {
     let root = EntityId::from_usize(1);

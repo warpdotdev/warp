@@ -8,6 +8,7 @@ use ratatui::crossterm::event::{
 
 use super::{ClickTracker, crossterm_event_to_tui_event};
 use crate::elements::tui::{TuiEvent, TuiPoint};
+use crate::event::KeyState;
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode as PhysicalKeyCode;
 
@@ -82,9 +83,9 @@ fn ctrl_modifier_is_carried_into_keystroke() {
 #[test]
 fn shifted_letters_preserve_case_and_base_key() {
     let cases = [
-        // Synthetic/base-key form.
         ('a', KeyModifiers::SHIFT, "A", "A", "a"),
-        // Crossterm's decoded Kitty alternate-key form.
+        // Crossterm's decoded Kitty alternate-key form replaces the base
+        // codepoint and clears Shift.
         ('A', KeyModifiers::empty(), "A", "A", "a"),
     ];
     for (char, modifiers, expected_key, expected_chars, expected_base_key) in cases {
@@ -108,14 +109,11 @@ fn shifted_letters_preserve_case_and_base_key() {
 }
 
 #[test]
-fn shifted_punctuation_uses_the_terminal_character_without_guessing_its_base_key() {
-    // With REPORT_ALTERNATE_KEYS, Crossterm returns Kitty's shifted codepoint
-    // as the character but does not expose its base codepoint.
+fn shifted_punctuation_uses_the_terminal_character() {
+    // With REPORT_ALTERNATE_KEYS, Crossterm replaces Kitty's base codepoint
+    // with the shifted codepoint and clears Shift.
     let Some(TuiEvent::KeyDown {
-        keystroke,
-        chars,
-        details,
-        ..
+        keystroke, chars, ..
     }) = key(KeyCode::Char('!'), KeyModifiers::empty())
     else {
         panic!("expected KeyDown");
@@ -123,47 +121,26 @@ fn shifted_punctuation_uses_the_terminal_character_without_guessing_its_base_key
     assert_eq!(keystroke.key, "!");
     assert!(!keystroke.shift);
     assert_eq!(chars, "!");
-    assert_eq!(details.key_without_modifiers.as_deref(), Some("!"));
 }
+
 #[test]
-fn repeated_keys_remain_key_down_events() {
-    let event = KeyEvent::new_with_kind(
+fn repeats_remain_key_down_events_and_non_modifier_releases_are_ignored() {
+    let repeat = KeyEvent::new_with_kind(
         KeyCode::Char('a'),
         KeyModifiers::empty(),
         KeyEventKind::Repeat,
     );
-    let Some(TuiEvent::KeyDown {
-        keystroke,
-        chars,
-        is_repeat,
-        ..
-    }) = crossterm_event_to_tui_event(CrosstermEvent::Key(event))
-    else {
-        panic!("expected repeated KeyDown");
-    };
-    assert_eq!(keystroke.key, "a");
-    assert_eq!(chars, "a");
-    assert!(is_repeat);
-}
+    assert!(matches!(
+        crossterm_event_to_tui_event(CrosstermEvent::Key(repeat)),
+        Some(TuiEvent::KeyDown { .. })
+    ));
 
-#[test]
-fn released_keys_map_to_key_up_events() {
-    let event = KeyEvent::new_with_kind(
+    let release = KeyEvent::new_with_kind(
         KeyCode::Char('a'),
         KeyModifiers::empty(),
         KeyEventKind::Release,
     );
-    let Some(TuiEvent::KeyUp {
-        keystroke,
-        details,
-        physical_key,
-    }) = crossterm_event_to_tui_event(CrosstermEvent::Key(event))
-    else {
-        panic!("expected KeyUp");
-    };
-    assert_eq!(keystroke.key, "a");
-    assert_eq!(details.key_without_modifiers.as_deref(), Some("a"));
-    assert_eq!(physical_key, None);
+    assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(release)).is_none());
 }
 #[test]
 fn paste_preserves_the_complete_payload() {
@@ -177,82 +154,43 @@ fn paste_preserves_the_complete_payload() {
 }
 
 #[test]
-fn modifier_keys_preserve_flags_and_physical_identity_across_the_lifecycle() {
+fn modifier_keys_map_to_modifier_changed_events() {
     let cases = [
-        (
-            ModifierKeyCode::LeftControl,
-            PhysicalKeyCode::ControlLeft,
-            KeyModifiers::CONTROL,
-        ),
-        (
-            ModifierKeyCode::RightControl,
-            PhysicalKeyCode::ControlRight,
-            KeyModifiers::CONTROL,
-        ),
-        (
-            ModifierKeyCode::LeftAlt,
-            PhysicalKeyCode::AltLeft,
-            KeyModifiers::ALT,
-        ),
-        (
-            ModifierKeyCode::RightAlt,
-            PhysicalKeyCode::AltRight,
-            KeyModifiers::ALT,
-        ),
-        (
-            ModifierKeyCode::LeftShift,
-            PhysicalKeyCode::ShiftLeft,
-            KeyModifiers::SHIFT,
-        ),
-        (
-            ModifierKeyCode::RightShift,
-            PhysicalKeyCode::ShiftRight,
-            KeyModifiers::SHIFT,
-        ),
-        (
-            ModifierKeyCode::LeftSuper,
-            PhysicalKeyCode::SuperLeft,
-            KeyModifiers::SUPER,
-        ),
-        (
-            ModifierKeyCode::RightSuper,
-            PhysicalKeyCode::SuperRight,
-            KeyModifiers::SUPER,
-        ),
+        (ModifierKeyCode::LeftControl, PhysicalKeyCode::ControlLeft),
+        (ModifierKeyCode::RightControl, PhysicalKeyCode::ControlRight),
+        (ModifierKeyCode::LeftAlt, PhysicalKeyCode::AltLeft),
+        (ModifierKeyCode::RightAlt, PhysicalKeyCode::AltRight),
+        (ModifierKeyCode::LeftShift, PhysicalKeyCode::ShiftLeft),
+        (ModifierKeyCode::RightShift, PhysicalKeyCode::ShiftRight),
+        (ModifierKeyCode::LeftSuper, PhysicalKeyCode::SuperLeft),
+        (ModifierKeyCode::RightSuper, PhysicalKeyCode::SuperRight),
     ];
 
-    for (modifier, expected_physical_key, expected_modifier) in cases {
-        for kind in [
-            KeyEventKind::Press,
-            KeyEventKind::Repeat,
-            KeyEventKind::Release,
+    for (modifier, expected_key_code) in cases {
+        for (kind, expected_state) in [
+            (KeyEventKind::Press, KeyState::Pressed),
+            (KeyEventKind::Release, KeyState::Released),
         ] {
             let event =
                 KeyEvent::new_with_kind(KeyCode::Modifier(modifier), KeyModifiers::empty(), kind);
-            let event = crossterm_event_to_tui_event(CrosstermEvent::Key(event))
-                .expect("supported modifier event");
-            let (keystroke, physical_key, is_repeat) = match event {
-                TuiEvent::KeyDown {
-                    keystroke,
-                    physical_key,
-                    is_repeat,
-                    ..
-                } => (keystroke, physical_key, is_repeat),
-                TuiEvent::KeyUp {
-                    keystroke,
-                    physical_key,
-                    ..
-                } => (keystroke, physical_key, false),
-                other => panic!("expected key lifecycle event, got {other:?}"),
+            let Some(TuiEvent::ModifierKeyChanged { key_code, state }) =
+                crossterm_event_to_tui_event(CrosstermEvent::Key(event))
+            else {
+                panic!("expected ModifierKeyChanged");
             };
-            assert_eq!(keystroke.key, "");
-            assert_eq!(physical_key, Some(expected_physical_key));
-            assert_eq!(keystroke.ctrl, expected_modifier == KeyModifiers::CONTROL);
-            assert_eq!(keystroke.alt, expected_modifier == KeyModifiers::ALT);
-            assert_eq!(keystroke.shift, expected_modifier == KeyModifiers::SHIFT);
-            assert_eq!(keystroke.cmd, expected_modifier == KeyModifiers::SUPER);
-            assert_eq!(is_repeat, kind == KeyEventKind::Repeat);
+            assert_eq!(key_code, expected_key_code);
+            assert!(matches!(
+                (state, expected_state),
+                (KeyState::Pressed, KeyState::Pressed) | (KeyState::Released, KeyState::Released)
+            ));
         }
+
+        let repeat = KeyEvent::new_with_kind(
+            KeyCode::Modifier(modifier),
+            KeyModifiers::empty(),
+            KeyEventKind::Repeat,
+        );
+        assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(repeat)).is_none());
     }
 }
 
@@ -261,6 +199,8 @@ fn unsupported_modifier_keys_have_no_tui_equivalent() {
     for modifier in [
         ModifierKeyCode::LeftHyper,
         ModifierKeyCode::RightHyper,
+        ModifierKeyCode::LeftMeta,
+        ModifierKeyCode::RightMeta,
         ModifierKeyCode::IsoLevel3Shift,
         ModifierKeyCode::IsoLevel5Shift,
     ] {

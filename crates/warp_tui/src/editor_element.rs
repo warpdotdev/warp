@@ -859,7 +859,7 @@ impl TuiElement for TuiEditorElement {
                     handler(TuiEditorAction::PasteText(text.clone()), event_ctx);
                     return true;
                 }
-                TuiEvent::KeyUp { .. }
+                TuiEvent::ModifierKeyChanged { .. }
                 | TuiEvent::ScrollWheel { .. }
                 | TuiEvent::LeftMouseDown { .. }
                 | TuiEvent::LeftMouseUp { .. }

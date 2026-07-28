@@ -412,7 +412,7 @@ where
             | TuiEvent::LeftMouseUp { .. }
             | TuiEvent::ScrollWheel { .. }
             | TuiEvent::KeyDown { .. }
-            | TuiEvent::KeyUp { .. }
+            | TuiEvent::ModifierKeyChanged { .. }
             | TuiEvent::Paste { .. }
             | TuiEvent::MiddleMouseDown { .. }
             | TuiEvent::RightMouseDown { .. }
