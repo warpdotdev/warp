@@ -207,7 +207,6 @@ impl TuiPermissionPrompt {
         self.selector.update(ctx, |selector, ctx| {
             selector.handle_action(&TuiOptionSelectorAction::SelectItemWithoutConfirm(0), ctx)
         });
-        self.invalidate_layout(ctx);
     }
     #[cfg(test)]
     pub(crate) fn highlighted_index(&self, app: &AppContext) -> Option<usize> {
@@ -349,8 +348,11 @@ impl TuiView for TuiPermissionPrompt {
         vec![self.selector.id()]
     }
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() && self.is_active(ctx) {
-            self.focus(ctx);
+        if self.is_active(ctx) {
+            if focus_ctx.is_self_focused() {
+                self.focus(ctx);
+            }
+            self.invalidate_layout(ctx);
         }
     }
 
@@ -387,7 +389,6 @@ impl TypedActionView for TuiPermissionPrompt {
             TuiPermissionPromptAction::EditBody => {
                 self.selector
                     .update(ctx, |selector, ctx| selector.focus_leading_editor(ctx));
-                self.invalidate_layout(ctx);
             }
             TuiPermissionPromptAction::CancelOrBack => {
                 let handled = self

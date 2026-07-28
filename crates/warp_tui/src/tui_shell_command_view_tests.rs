@@ -195,6 +195,17 @@ fn command_editor_arrows_move_within_multiline_text_then_cycle_at_boundaries() {
         action_model.update(&mut app, |model, ctx| {
             queue_tui_permission_action(model, action, conversation_id, ctx);
         });
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let invalidations_for_subscription = layout_invalidations.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&view, move |_, event, _| match event {
+                TuiShellCommandViewEvent::LayoutChanged => {
+                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                }
+                TuiShellCommandViewEvent::BlockingStateChanged
+                | TuiShellCommandViewEvent::ReplacementGuidanceSubmitted(_) => {}
+            });
+        });
         prompt.update(&mut app, |prompt, ctx| {
             prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
         });
@@ -222,14 +233,24 @@ fn command_editor_arrows_move_within_multiline_text_then_cycle_at_boundaries() {
         assert!(app.read(|ctx| command_editor.as_ref(ctx).is_focused()));
         assert!(dispatch_focused_key(&mut app, &view, "down"));
         assert!(app.read(|ctx| command_editor.as_ref(ctx).is_focused()));
+        let invalidations_before_exit = layout_invalidations.get();
         assert!(dispatch_focused_key(&mut app, &view, "down"));
         app.read(|ctx| {
             assert!(!command_editor.as_ref(ctx).is_focused());
             assert_eq!(prompt.as_ref(ctx).highlighted_index(ctx), Some(0));
+            assert!(layout_invalidations.get() > invalidations_before_exit);
+            let lines = render_non_empty_lines(&view, 80, ctx);
+            assert!(lines.iter().any(|line| line.contains("Esc to cancel")));
+            assert!(!lines.iter().any(|line| line.contains("Esc to exit editor")));
         });
-
-        prompt.update(&mut app, |prompt, ctx| {
-            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
+        let invalidations_before_entry = layout_invalidations.get();
+        assert!(dispatch_focused_key(&mut app, &view, "up"));
+        app.read(|ctx| {
+            assert!(command_editor.as_ref(ctx).is_focused());
+            assert!(layout_invalidations.get() > invalidations_before_entry);
+            let lines = render_non_empty_lines(&view, 80, ctx);
+            assert!(lines.iter().any(|line| line.contains("Esc to exit editor")));
+            assert!(!lines.iter().any(|line| line.contains("Esc to cancel")));
         });
         command_editor.update(&mut app, |editor, ctx| {
             editor.handle_action(
@@ -239,10 +260,15 @@ fn command_editor_arrows_move_within_multiline_text_then_cycle_at_boundaries() {
                 ctx,
             );
         });
+        let invalidations_before_exit = layout_invalidations.get();
         assert!(dispatch_focused_key(&mut app, &view, "up"));
         app.read(|ctx| {
             assert!(!command_editor.as_ref(ctx).is_focused());
             assert_eq!(prompt.as_ref(ctx).highlighted_index(ctx), Some(2));
+            assert!(layout_invalidations.get() > invalidations_before_exit);
+            let lines = render_non_empty_lines(&view, 80, ctx);
+            assert!(lines.iter().any(|line| line.contains("Esc to cancel")));
+            assert!(!lines.iter().any(|line| line.contains("Esc to exit editor")));
         });
     });
 }
@@ -358,21 +384,9 @@ fn escape_and_ctrl_e_while_editing_exit_editor_without_cancelling() {
             queue_tui_permission_action(model, action, conversation_id, ctx);
         });
 
-        let layout_invalidations = Rc::new(Cell::new(0));
-        let invalidations_for_subscription = layout_invalidations.clone();
-        app.update(|ctx| {
-            ctx.subscribe_to_view(&view, move |_, event, _| match event {
-                TuiShellCommandViewEvent::LayoutChanged => {
-                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
-                }
-                TuiShellCommandViewEvent::BlockingStateChanged
-                | TuiShellCommandViewEvent::ReplacementGuidanceSubmitted(_) => {}
-            });
-        });
         prompt.update(&mut app, |prompt, ctx| {
             prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
         });
-        assert!(layout_invalidations.get() > 0);
         app.read(|ctx| {
             assert!(view.as_ref(ctx).command_editor.as_ref(ctx).is_focused());
             let lines = render_non_empty_lines(&view, 80, ctx);
