@@ -644,6 +644,29 @@ fn export_file_success_message(export: &ConversationFileExport) -> String {
     }
 }
 
+/// Resolves the Email field for the `/status` menu using the same fallback
+/// chain as `render_login_line`:
+/// 1. `email` when non-empty
+/// 2. `username` when non-empty (display name or email fallback from auth)
+/// 3. `STATUS_SIGNED_IN` when `is_logged_in` is true but no identifier
+/// 4. `STATUS_NOT_SIGNED_IN` when fully logged out
+fn resolve_status_email(
+    email: Option<String>,
+    username: Option<String>,
+    is_logged_in: bool,
+) -> String {
+    email
+        .filter(|e| !e.is_empty())
+        .or_else(|| username.filter(|u| !u.is_empty()))
+        .unwrap_or_else(|| {
+            if is_logged_in {
+                STATUS_SIGNED_IN.to_owned()
+            } else {
+                STATUS_NOT_SIGNED_IN.to_owned()
+            }
+        })
+}
+
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
 pub(crate) enum TuiTerminalSessionAction {
@@ -2209,7 +2232,7 @@ impl TuiTerminalSessionView {
     /// status menu (opened by the `/status` slash command). Always returns a
     /// complete set of fields; individual fields fall back to their `STATUS_*`
     /// placeholder constants when the underlying data is unavailable.
-    fn compute_status_info(&self, ctx: &AppContext) -> shortcuts::TuiStatusInfo {
+    fn compute_status_info(&self, ctx: &AppContext) -> status_menu::TuiStatusInfo {
         let user_info = TuiUserInfoManager::as_ref(ctx).snapshot(ctx);
         let session = self.active_session.as_ref(ctx).session(ctx);
         let cwd = self
@@ -2237,22 +2260,9 @@ impl TuiTerminalSessionView {
         let org = user_info
             .org
             .unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned());
-        // Mirror render_login_line's fallback chain: email → username →
-        // "Signed in" (logged in but no identifier) → "Not signed in".
-        let is_logged_in = user_info.is_logged_in;
-        let username = user_info.username;
-        let email = user_info
-            .email
-            .filter(|e| !e.is_empty())
-            .or_else(|| username.filter(|u| !u.is_empty()))
-            .unwrap_or_else(|| {
-                if is_logged_in {
-                    STATUS_SIGNED_IN.to_owned()
-                } else {
-                    STATUS_NOT_SIGNED_IN.to_owned()
-                }
-            });
-        shortcuts::TuiStatusInfo {
+        let email =
+            resolve_status_email(user_info.email, user_info.username, user_info.is_logged_in);
+        status_menu::TuiStatusInfo {
             version,
             session: session_name,
             session_id,

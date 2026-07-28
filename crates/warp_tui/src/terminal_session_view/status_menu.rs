@@ -1,21 +1,46 @@
 //! Stateless renderer for the dedicated `/status` menu.
 //!
 //! The status menu is a read-only panel opened by the `/status` slash command.
-//! It reuses the field-row rendering helpers and panel-container wrapper from
-//! the sibling `shortcuts` module so both panels share identical visual
-//! structure (background colour, horizontal padding, label/value alignment)
-//! without duplicating any styling code.  The analogy mirrors how `inline_menu`
-//! provides a shared structure used by slash commands, models, and
-//! conversations: `shortcuts::render_field_row` and `shortcuts::wrap_panel` are
-//! the shared structure here, consumed by both `shortcuts::render` (for
-//! keyboard-shortcut rows) and this module (for status rows).
+//! It owns the session/account data model (`TuiStatusInfo`) and the label/value
+//! row helper (`render_field_row`). The outer panel container (`wrap_panel`)
+//! is borrowed from the sibling `shortcuts` module so both panels share
+//! identical background colour and horizontal padding without duplicating
+//! styling code.
 
 use warpui_core::AppContext;
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::tui::{Modifier, TuiElement, TuiFlex, TuiParentElement, TuiText};
 
-use super::shortcuts::{TuiStatusInfo, render_field_row, wrap_panel};
+use super::shortcuts::wrap_panel;
 use crate::tui_builder::TuiUiBuilder;
+
+/// Session and account information displayed in the dedicated status menu
+/// opened when the user invokes the `/status` slash command.
+pub(super) struct TuiStatusInfo {
+    pub version: String,
+    pub session: String,
+    pub session_id: String,
+    pub working_directory: String,
+    pub org: String,
+    pub email: String,
+}
+
+/// Renders a single read-only label/value row for the status panel.
+///
+/// The label is left-padded to a fixed width so all value columns align
+/// regardless of label length.
+pub(super) fn render_field_row(
+    label: &str,
+    value: &str,
+    builder: &TuiUiBuilder,
+) -> Box<dyn TuiElement> {
+    TuiText::from_spans([
+        (format!("{label:<19}"), builder.dim_text_style()),
+        (value.to_owned(), builder.primary_text_style()),
+    ])
+    .truncate()
+    .finish()
+}
 
 /// Renders the dedicated status menu (opened by `/status`).
 ///

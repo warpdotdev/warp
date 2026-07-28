@@ -1657,8 +1657,8 @@ fn status_slash_command_opens_dedicated_status_menu_via_shared_structure() {
 
         // /status must open the DEDICATED status overlay (Status mode), not
         // the shortcuts panel (Shortcuts mode).  The two panels share the same
-        // read-only visual structure (render_field_row + wrap_panel from
-        // shortcuts.rs) but are surfaced through different modes.
+        // outer styling (wrap_panel from shortcuts.rs) but are surfaced
+        // through different modes and own their own row renderers.
         assert!(
             app.read(|ctx| {
                 matches!(
@@ -3555,6 +3555,43 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
             );
         });
     });
+}
+
+#[test]
+fn status_email_fallback_chain_covers_username_and_signed_in_arms() {
+    // Arm 1: non-empty email wins regardless of username.
+    assert_eq!(
+        super::resolve_status_email(
+            Some("user@example.com".to_owned()),
+            Some("display_name".to_owned()),
+            true,
+        ),
+        "user@example.com"
+    );
+    // Arm 2a: empty email falls back to a non-empty username.
+    assert_eq!(
+        super::resolve_status_email(Some(String::new()), Some("display_name".to_owned()), true,),
+        "display_name"
+    );
+    // Arm 2b: None email falls back to a non-empty username.
+    assert_eq!(
+        super::resolve_status_email(None, Some("display_name".to_owned()), true),
+        "display_name"
+    );
+    // Arm 3: both email and username absent/empty but logged in → "Signed in".
+    assert_eq!(
+        super::resolve_status_email(None, None, true),
+        super::STATUS_SIGNED_IN
+    );
+    assert_eq!(
+        super::resolve_status_email(Some(String::new()), Some(String::new()), true,),
+        super::STATUS_SIGNED_IN
+    );
+    // Arm 4: fully logged out → "Not signed in".
+    assert_eq!(
+        super::resolve_status_email(None, None, false),
+        super::STATUS_NOT_SIGNED_IN
+    );
 }
 
 #[test]
