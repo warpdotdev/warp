@@ -146,64 +146,74 @@ impl TuiView for TuiZeroStateView {
             },
         )
         .finish();
+        let overlay = build_zero_state_overlay(cwd.as_deref(), &builder, ctx);
+        TuiStack::new().child(animation).child(overlay).finish()
+    }
+}
 
-        // Compute project context once — find_applicable_project_rules walks the
-        // directory tree and clones rule file contents, so resolving it once
-        // avoids a redundant allocation on every zero-state re-render (pwd change,
-        // changelog load, MCP update, PathIndexed).
-        let (path_header_text, project_rules) = match cwd.as_deref() {
-            Some(cwd) => {
-                let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
-                let rules =
-                    ProjectContextModel::as_ref(ctx).find_applicable_project_rules(&cwd_path);
-                let header_text = project_section_header_text(cwd, rules.as_ref());
-                (Some(header_text), Some(rules))
-            }
-            None => (None, None),
-        };
+/// Assembles the text-overlay column placed on top of the animation layer.
+///
+/// Both [`TuiZeroStateView::render`] and the regression tests call this function so
+/// that a change to how `render` composes the overlay (e.g. moving the path header
+/// back inside the `LEFT_COLUMN_COLS` constrained box) is caught by the test suite.
+fn build_zero_state_overlay(
+    cwd: Option<&str>,
+    builder: &TuiUiBuilder,
+    ctx: &AppContext,
+) -> Box<dyn TuiElement> {
+    // Compute project context once — find_applicable_project_rules walks the
+    // directory tree and clones rule file contents, so resolving it once
+    // avoids a redundant allocation on every zero-state re-render (pwd change,
+    // changelog load, MCP update, PathIndexed).
+    let (path_header_text, project_rules) = match cwd {
+        Some(cwd) => {
+            let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
+            let rules = ProjectContextModel::as_ref(ctx).find_applicable_project_rules(&cwd_path);
+            let header_text = project_section_header_text(cwd, rules.as_ref());
+            (Some(header_text), Some(rules))
+        }
+        None => (None, None),
+    };
 
-        // Title, version, and changelog — constrained to LEFT_COLUMN_COLS so changelog
-        // bullets (which lack `.truncate()`) do not wrap against the full terminal width.
-        let constrained_top = TuiConstrainedBox::new(render_top_section(&builder, ctx).finish())
-            .with_min_cols(LEFT_COLUMN_COLS)
-            .with_max_cols(LEFT_COLUMN_COLS)
-            .finish();
-
-        // Project context body (rules / skills / placeholder) and MCP — also constrained
-        // to LEFT_COLUMN_COLS, keeping those rows stable.
-        // Pass the pre-computed rules so find_applicable_project_rules is not called twice.
-        let rules_ref = project_rules.flatten();
-        let constrained_bottom = TuiConstrainedBox::new(
-            render_bottom_section(cwd.as_deref(), rules_ref.as_ref(), &builder, ctx).finish(),
-        )
+    // Title, version, and changelog — constrained to LEFT_COLUMN_COLS so changelog
+    // bullets (which lack `.truncate()`) do not wrap against the full terminal width.
+    let constrained_top = TuiConstrainedBox::new(render_top_section(builder, ctx).finish())
         .with_min_cols(LEFT_COLUMN_COLS)
         .with_max_cols(LEFT_COLUMN_COLS)
         .finish();
 
-        // The project path header lives *outside* the 48-column constrained boxes so it
-        // can expand to the full available terminal width. Give it a blank-row separator
-        // from the top section and place it directly above the constrained bottom section.
-        // Only truncate the path when the terminal is genuinely too narrow to fit it.
-        let overlay = if let Some(path_header_text) = path_header_text {
-            let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
-            let path_header = TuiText::new(path_header_text)
-                .with_style(header_style)
-                .truncate()
-                .finish();
-            TuiFlex::column()
-                .child(constrained_top)
-                .child(blank_row())
-                .child(path_header)
-                .child(constrained_bottom)
-                .finish()
-        } else {
-            TuiFlex::column()
-                .child(constrained_top)
-                .child(constrained_bottom)
-                .finish()
-        };
+    // Project context body (rules / skills / placeholder) and MCP — also constrained
+    // to LEFT_COLUMN_COLS, keeping those rows stable.
+    // Pass the pre-computed rules so find_applicable_project_rules is not called twice.
+    let rules_ref = project_rules.flatten();
+    let constrained_bottom = TuiConstrainedBox::new(
+        render_bottom_section(cwd, rules_ref.as_ref(), builder, ctx).finish(),
+    )
+    .with_min_cols(LEFT_COLUMN_COLS)
+    .with_max_cols(LEFT_COLUMN_COLS)
+    .finish();
 
-        TuiStack::new().child(animation).child(overlay).finish()
+    // The project path header lives *outside* the 48-column constrained boxes so it
+    // can expand to the full available terminal width. Give it a blank-row separator
+    // from the top section and place it directly above the constrained bottom section.
+    // Only truncate the path when the terminal is genuinely too narrow to fit it.
+    if let Some(path_header_text) = path_header_text {
+        let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+        let path_header = TuiText::new(path_header_text)
+            .with_style(header_style)
+            .truncate()
+            .finish();
+        TuiFlex::column()
+            .child(constrained_top)
+            .child(blank_row())
+            .child(path_header)
+            .child(constrained_bottom)
+            .finish()
+    } else {
+        TuiFlex::column()
+            .child(constrained_top)
+            .child(constrained_bottom)
+            .finish()
     }
 }
 

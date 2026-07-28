@@ -1,24 +1,18 @@
 use std::path::PathBuf;
 
-use ai::project_context::model::ProjectContextModel;
 use uuid::Uuid;
 use warp::tui_export::{
     TuiMcpConfigState, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot,
     TuiMcpTransport, register_tui_session_view_test_singletons,
 };
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{EntityIdMap, SingletonEntity};
 use warpui_core::App;
 use warpui_core::elements::tui::{
-    Modifier, TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiElement, TuiFlex,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
-    TuiText,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
 
-use super::{
-    LEFT_COLUMN_COLS, blank_row, mcp_status_label, project_section_header_text,
-    render_bottom_section, render_top_section,
-};
+use super::{LEFT_COLUMN_COLS, build_zero_state_overlay, mcp_status_label};
 
 fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     TuiMcpServerSnapshot {
@@ -44,7 +38,7 @@ fn mcp_summary_keeps_missing_config_action_short() {
 
     assert_eq!(
         mcp_status_label(&snapshot),
-        ("Not configured \u{00b7} /mcp".to_string(), false)
+        ("Not configured · /mcp".to_string(), false)
     );
 }
 
@@ -71,7 +65,7 @@ fn mcp_summary_reports_mixed_runtime_states() {
     assert_eq!(
         mcp_status_label(&snapshot),
         (
-            "1 connected \u{00b7} 1 starting \u{00b7} 1 needs auth \u{00b7} 1 stopping \u{00b7} 1 failed \u{00b7} 1 offline \u{00b7} /mcp"
+            "1 connected · 1 starting · 1 needs auth · 1 stopping · 1 failed · 1 offline · /mcp"
                 .to_string(),
             false
         )
@@ -90,20 +84,23 @@ fn mcp_summary_marks_config_errors() {
 
     assert_eq!(
         mcp_status_label(&snapshot),
-        ("Config error \u{00b7} run /mcp".to_string(), true)
+        ("Config error · run /mcp".to_string(), true)
     );
 }
 
 // ---------------------------------------------------------------------------
 // Render tests for the path-header fix (APP-5009)
 //
-// These tests call the real `project_section_header_text` and
-// `render_bottom_section` functions from zero_state.rs, then render the same
-// outer-column structure that `TuiZeroStateView::render` builds and assert on
-// `TuiBuffer::to_lines()`.  They fail if:
-// * `project_section_header_text` or `render_bottom_section` are removed
-//   (compile error), or
-// * the path header is truncated to LEFT_COLUMN_COLS in the rendered output.
+// Both tests call `build_zero_state_overlay` — the same function that
+// `TuiZeroStateView::render` uses to compose the overlay column.  Any change
+// to how `render` places the path header (e.g. moving it back inside the
+// LEFT_COLUMN_COLS constrained box) goes through `build_zero_state_overlay`
+// and is therefore caught here.
+//
+// Verified empirically: wrapping `path_header` back in a TuiConstrainedBox
+// with min=max=LEFT_COLUMN_COLS inside `build_zero_state_overlay` causes the
+// wide-terminal test to fail because the buffer is only 48 cols wide and the
+// 60-char path is clipped — no row matches `header_text`.
 // ---------------------------------------------------------------------------
 
 /// Lay out `element` at `(w, h)`, render it into a fresh buffer, and return
@@ -137,10 +134,14 @@ fn render_to_buffer(
     buffer
 }
 
-/// At a wide terminal the path header must NOT be capped at LEFT_COLUMN_COLS
-/// (APP-5009 regression).  The test exercises the real `project_section_header_text`
-/// and `render_bottom_section` functions and checks the rendered buffer so the
-/// assertion fails if the header moves back inside the constrained box.
+/// At a wide terminal the path header must NOT be capped at LEFT_COLUMN_COLS.
+///
+/// Calls the real `build_zero_state_overlay` (the same function used by
+/// `TuiZeroStateView::render`) and asserts the path appears verbatim in the
+/// rendered `TuiBuffer`.  Any regression that moves the path back inside the
+/// 48-col constrained box causes this test to fail: the buffer would be only
+/// 48 cols wide and the 60-char path would be clipped — no row would equal
+/// `header_text`.
 #[test]
 fn zero_state_path_header_not_truncated_at_wide_terminal() {
     App::test((), |mut app| async move {
@@ -157,72 +158,54 @@ fn zero_state_path_header_not_truncated_at_wide_terminal() {
 
             let builder = crate::tui_builder::TuiUiBuilder::from_app(app_ctx);
 
-            // Resolve project rules via the real model (returns None with the
-            // default ProjectContextModel registered by the test singletons).
-            let cwd_path = LocalOrRemotePath::Local(PathBuf::from(long_cwd));
-            let rules =
-                ProjectContextModel::as_ref(app_ctx).find_applicable_project_rules(&cwd_path);
-
-            // Call the REAL project_section_header_text from zero_state.rs.
-            // With no indexed rules it returns abbreviate_home_prefix(long_cwd).
-            let header_text = project_section_header_text(long_cwd, rules.as_ref());
+            // project_section_header_text returns abbreviate_home_prefix(long_cwd)
+            // when no rules are indexed; with the sandbox HOME=/root the path is
+            // returned unchanged.
+            let header_text = {
+                use ai::project_context::model::ProjectContextModel;
+                use warp_util::local_or_remote_path::LocalOrRemotePath;
+                let cwd_path = LocalOrRemotePath::Local(PathBuf::from(long_cwd));
+                let rules =
+                    ProjectContextModel::as_ref(app_ctx).find_applicable_project_rules(&cwd_path);
+                super::project_section_header_text(long_cwd, rules.as_ref())
+            };
             assert!(
                 header_text.len() as u16 > LEFT_COLUMN_COLS,
                 "resolved header ({header_text:?}) must still exceed LEFT_COLUMN_COLS"
             );
 
-            // Build the outer-column structure exactly as TuiZeroStateView::render does.
-            let constrained_top =
-                TuiConstrainedBox::new(render_top_section(&builder, app_ctx).finish())
-                    .with_min_cols(LEFT_COLUMN_COLS)
-                    .with_max_cols(LEFT_COLUMN_COLS);
-            let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
-            let path_element = TuiText::new(header_text.clone())
-                .with_style(header_style)
-                .truncate();
-            // Call the REAL render_bottom_section from zero_state.rs.
-            let bottom = render_bottom_section(Some(long_cwd), rules.as_ref(), &builder, app_ctx);
-            let constrained_bottom = TuiConstrainedBox::new(bottom.finish())
-                .with_min_cols(LEFT_COLUMN_COLS)
-                .with_max_cols(LEFT_COLUMN_COLS);
-            let outer = TuiFlex::column()
-                .child(constrained_top.finish())
-                .child(blank_row())
-                .child(path_element.finish())
-                .child(constrained_bottom.finish());
-
-            let buffer = render_to_buffer(outer.finish(), app_ctx, 200, 12);
+            // Call build_zero_state_overlay -- the same function render() calls.
+            let overlay = build_zero_state_overlay(Some(long_cwd), &builder, app_ctx);
+            let buffer = render_to_buffer(overlay, app_ctx, 200, 12);
             let lines = buffer.to_lines();
 
             // The path header should appear as an exact-match row somewhere in the
-            // rendered buffer (after the title rows and blank separator).  Its exact
-            // row index varies depending on changelog / version content, so we
-            // search rather than hardcoding an index.
-            //
-            // Critically: if the path were still inside the 48-col constrained box
-            // the buffer would only be 48 cols wide and the 60-char path would be
-            // clipped — no row would equal `header_text`, so the assertion fails.
-            let path_row = lines
+            // rendered buffer.  Its row index varies by title/version content so we
+            // search.  If the path were inside the 48-col box the buffer would be 48
+            // cols wide and the 60-char path would be clipped -- the assertion fails.
+            let _ = lines
                 .iter()
                 .position(|line| line.trim_end() == header_text)
                 .unwrap_or_else(|| {
                     panic!(
-                        "path header {header_text:?} must appear verbatim in the rendered output; \n\
+                        "path header {header_text:?} must appear verbatim in the rendered output;\n\
                          got lines:\n{}",
                         lines.join("\n")
                     )
                 });
             assert!(
                 header_text.len() as u16 > LEFT_COLUMN_COLS,
-                "path at row {path_row} must exceed LEFT_COLUMN_COLS, \
-                 indicating it was rendered outside the constrained box"
+                "path header length {} should exceed LEFT_COLUMN_COLS ({})",
+                header_text.len(),
+                LEFT_COLUMN_COLS
             );
         });
     });
 }
 
-/// At a narrow terminal the layout must degrade gracefully: path clamps to
-/// the available width without overflow or panic.
+/// At a narrow terminal the layout must degrade gracefully: path clips to the
+/// available width without overflow or panic, and the clipped content matches
+/// exactly what `abbreviate_home_prefix` returns for the cwd.
 #[test]
 fn zero_state_path_header_clipped_gracefully_at_narrow_terminal() {
     App::test((), |mut app| async move {
@@ -239,43 +222,34 @@ fn zero_state_path_header_clipped_gracefully_at_narrow_terminal() {
 
             let builder = crate::tui_builder::TuiUiBuilder::from_app(app_ctx);
 
-            let cwd_path = LocalOrRemotePath::Local(PathBuf::from(long_cwd));
-            let rules =
-                ProjectContextModel::as_ref(app_ctx).find_applicable_project_rules(&cwd_path);
-            let header_text = project_section_header_text(long_cwd, rules.as_ref());
+            // Derive expected clipped content from header_text (the abbreviated path),
+            // not from long_cwd -- so the assertion is correct even if $HOME changes.
+            let header_text = {
+                use ai::project_context::model::ProjectContextModel;
+                use warp_util::local_or_remote_path::LocalOrRemotePath;
+                let cwd_path = LocalOrRemotePath::Local(PathBuf::from(long_cwd));
+                let rules =
+                    ProjectContextModel::as_ref(app_ctx).find_applicable_project_rules(&cwd_path);
+                super::project_section_header_text(long_cwd, rules.as_ref())
+            };
+            let expected_clipped: String =
+                header_text.chars().take(narrow_width as usize).collect();
 
-            let constrained_top =
-                TuiConstrainedBox::new(render_top_section(&builder, app_ctx).finish())
-                    .with_min_cols(LEFT_COLUMN_COLS)
-                    .with_max_cols(LEFT_COLUMN_COLS);
-            let path_element = TuiText::new(header_text).truncate();
-            let bottom = render_bottom_section(Some(long_cwd), rules.as_ref(), &builder, app_ctx);
-            let constrained_bottom = TuiConstrainedBox::new(bottom.finish())
-                .with_min_cols(LEFT_COLUMN_COLS)
-                .with_max_cols(LEFT_COLUMN_COLS);
-            let outer = TuiFlex::column()
-                .child(constrained_top.finish())
-                .child(blank_row())
-                .child(path_element.finish())
-                .child(constrained_bottom.finish());
-
-            let buffer = render_to_buffer(outer.finish(), app_ctx, narrow_width, 12);
+            let overlay = build_zero_state_overlay(Some(long_cwd), &builder, app_ctx);
+            let buffer = render_to_buffer(overlay, app_ctx, narrow_width, 12);
             let lines = buffer.to_lines();
 
-            // At narrow_width < LEFT_COLUMN_COLS both the constrained boxes and the
-            // path header all clamp to narrow_width.
+            // Buffer width must clamp to narrow_width.
             assert_eq!(
                 buffer.area.width, narrow_width,
                 "buffer width should be clamped to narrow_width"
             );
-            // At least some row must start with '/' (the clipped path).
-            // The exact row index varies by rendered title content so we search.
-            let first_char = long_cwd.chars().next().unwrap();
-            let has_path_row = lines.iter().any(|line| line.starts_with(first_char));
+            // At least one row should contain the clipped path.
+            let has_clipped_row = lines.iter().any(|line| line.trim_end() == expected_clipped);
             assert!(
-                has_path_row,
-                "a row starting with {first_char:?} (clipped path) should appear in narrow output;\n\
-                 got lines:\n{}",
+                has_clipped_row,
+                "a row equal to the clipped path ({expected_clipped:?}) must appear \
+                 in narrow output;\ngot lines:\n{}",
                 lines.join("\n")
             );
         });
