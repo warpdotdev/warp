@@ -4145,6 +4145,94 @@ fn test_new_tab_group_from_selected_tabs_in_group_anchors_after_group() {
 }
 
 #[test]
+fn test_post_drain_index_maps_around_a_drained_run() {
+    // A run at [first, first+len) collapses to a point at `first`.
+    // Before the run: unchanged. After it: shifts down by the whole run.
+    // Strictly inside: nowhere to go, so it resolves to `first`.
+    let (first, len) = (3usize, 4usize);
+    assert_eq!(post_drain_index(0, first, len), 0);
+    assert_eq!(post_drain_index(3, first, len), 3);
+    // Inside the run - a flat `- len` would under-shoot each of these.
+    assert_eq!(post_drain_index(4, first, len), 3);
+    assert_eq!(post_drain_index(5, first, len), 3);
+    assert_eq!(post_drain_index(6, first, len), 3);
+    // At and past the end.
+    assert_eq!(post_drain_index(7, first, len), 3);
+    assert_eq!(post_drain_index(8, first, len), 4);
+    assert_eq!(post_drain_index(12, first, len), 8);
+    // A single-tab run behaves like the existing `- 1` arithmetic.
+    assert_eq!(post_drain_index(0, 2, 1), 0);
+    assert_eq!(post_drain_index(2, 2, 1), 2);
+    assert_eq!(post_drain_index(3, 2, 1), 2);
+    assert_eq!(post_drain_index(9, 2, 1), 8);
+}
+
+#[test]
+fn test_resolve_group_drop_index_never_splits_a_target_group() {
+    // The load-bearing clamp: a group dropped at an index strictly inside
+    // another group's run must be pushed past that run, or both groups stop
+    // being contiguous and every group_member_index_range caller breaks.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Four tabs, with tabs 1..=2 forming an existing group.
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 4);
+
+            let group = TabGroup::new();
+            let existing_group_id = group.id;
+            workspace.tab_groups.insert(existing_group_id, group);
+            workspace.tabs[1].group_id = Some(existing_group_id);
+            workspace.tabs[2].group_id = Some(existing_group_id);
+
+            // Index 2 is strictly inside the existing run, so it is pushed to
+            // just past its last member.
+            assert_eq!(workspace.resolve_group_drop_index(2, false), 3);
+            // The run's outer edges are untouched.
+            assert_eq!(workspace.resolve_group_drop_index(1, false), 1);
+            assert_eq!(workspace.resolve_group_drop_index(3, false), 3);
+            // Out-of-range is bounded by the list length.
+            assert_eq!(workspace.resolve_group_drop_index(99, false), 4);
+        });
+    });
+}
+
+#[test]
+fn test_resolve_group_drop_index_respects_the_pinned_boundary_both_ways() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _pinned_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            // Pin the first tab, so the unpinned region starts at 1.
+            workspace.tabs[0].pinned = true;
+            assert_eq!(workspace.pinned_boundary_index(&workspace.tabs), 1);
+
+            // An unpinned group may not land inside the pinned prefix.
+            assert_eq!(workspace.resolve_group_drop_index(0, false), 1);
+            assert_eq!(workspace.resolve_group_drop_index(2, false), 2);
+
+            // A pinned group may not land outside it.
+            assert_eq!(workspace.resolve_group_drop_index(3, true), 1);
+            assert_eq!(workspace.resolve_group_drop_index(0, true), 0);
+        });
+    });
+}
+
+#[test]
 fn test_toggle_tab_group_collapsed_flips_state() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 

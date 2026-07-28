@@ -27723,7 +27723,7 @@ impl Workspace {
     /// just past that group's last member so a cross-window drop can't split
     /// the group. Mirrors `clamp_to_unpinned_region`'s "push past the
     /// boundary" behavior; drops at a group's outer edges are left untouched.
-    fn clamp_past_group(&self, index: usize) -> usize {
+    pub(super) fn clamp_past_group(&self, index: usize) -> usize {
         // Record the group of the tab before our insertion.
         let Some(before) = index
             .checked_sub(1)
@@ -29148,6 +29148,28 @@ fn group_member_indices(
 /// in `tabs` that belong to `group_id`, or `None` if the group has no members.
 /// The run is assumed to be contiguous (the workspace enforces this invariant);
 /// only the earliest and latest matching indices are returned.
+/// Maps an insertion index computed BEFORE a contiguous run is drained out of
+/// a list to the equivalent index AFTER the drain.
+///
+/// A run occupying `[first, first + len)` collapses to a single point at
+/// `first`. An insertion at or before `first` is unaffected; one at or after
+/// the run's end shifts down by the whole run; one strictly inside the run has
+/// nowhere to go, because a block cannot be inserted into itself, so it
+/// resolves to `first`.
+///
+/// Subtracting a flat `len` would under-shoot by up to `len - 1` inside that
+/// straddle window, which is why this is not the same arithmetic as the
+/// single-tab path's `- 1`.
+pub(crate) fn post_drain_index(index: usize, first: usize, len: usize) -> usize {
+    if index <= first {
+        index
+    } else if index >= first + len {
+        index - len
+    } else {
+        first
+    }
+}
+
 fn group_member_index_range(tabs: &[TabData], group_id: TabGroupId) -> Option<(usize, usize)> {
     let mut members = group_member_indices(tabs, group_id);
     let first = members.next()?;
