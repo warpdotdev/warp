@@ -402,7 +402,7 @@ fn empty_and_filtered_empty_states_use_history_copy() {
 }
 
 #[test]
-fn command_prefix_renders_bright_green_bold_without_transcript_background() {
+fn command_prefix_matches_the_row_text_style() {
     agent_mode_test(|mut app| async move {
         let setup = initialized_setup(&mut app, &[], &["older", "newer"], InputType::Shell).await;
         app.update(|ctx| {
@@ -421,12 +421,16 @@ fn command_prefix_renders_bright_green_bold_without_transcript_background() {
             assert!(rendered.contains("History"));
             assert!(rendered.contains("! older"));
             assert!(rendered.contains("! newer"));
+            // Unselected commands retain the transcript's bright-green prefix.
             assert_eq!(
                 frame.buffer[(0, 1)].fg,
                 expected.fg.expect("prefix has a color")
             );
             assert!(frame.buffer[(0, 1)].modifier.contains(Modifier::BOLD));
             assert_ne!(frame.buffer[(0, 1)].bg, builder.shell_command_background());
+            // The selected prefix uses the same inverted colors as its row text.
+            assert_eq!(frame.buffer[(0, 2)].fg, frame.buffer[(2, 2)].fg);
+            assert_eq!(frame.buffer[(0, 2)].bg, frame.buffer[(2, 2)].bg);
         });
     });
 }
