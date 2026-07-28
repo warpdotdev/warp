@@ -63,9 +63,7 @@ use crate::terminal::{CLIAgent, TerminalView};
 use crate::themes::theme::Fill as ThemeFill;
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::combo_inner_button;
-use crate::ui_components::icon_with_status::{
-    IconWithStatusVariant, OZ_LOCAL_BACKGROUND_COLOR, render_icon_with_status,
-};
+use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::color::Opacity;
@@ -4954,11 +4952,12 @@ pub(super) fn render_summary_pane_kind_icon_circle(
     let padding = total_size * SUMMARY_INLINE_PADDING_RATIO;
     let (icon_element, background): (Box<dyn Element>, ElementFill) = match kind {
         SummaryPaneKind::OzAgent { .. } => (
-            // Non-ambient local agent: white agent-brand logo on black circle.
+            // Non-ambient local agent: Agent-brand glyph with theme-derived
+            // tint so it stays legible on both light and dark themes.
             WarpIcon::Agent
-                .to_warpui_icon(WarpThemeFill::Solid(ColorU::white()))
+                .to_warpui_icon(theme.main_text_color(theme.background()))
                 .finish(),
-            ThemeFill::Solid(OZ_LOCAL_BACKGROUND_COLOR).into(),
+            theme.background().into(),
         ),
         SummaryPaneKind::CLIAgent { agent, .. } => {
             let icon_color = agent.brand_icon_color();
@@ -5058,11 +5057,12 @@ fn summary_pane_kind_icon(
 
     match kind {
         SummaryPaneKind::Terminal => (WarpIcon::Terminal, main_text),
-        // Local agent: white agent-brand logo, consistent with the tab row and summary circle.
+        // Local agent: Agent-brand glyph with theme main-text color, consistent
+        // with the tab row and summary circle.
         // Note: this arm is currently unreachable — OzAgent is matched by the dedicated arm in
         // render_summary_pane_kind_icon_circle before summary_pane_kind_icon is called.
         // Kept for completeness in case callers change.
-        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Agent, WarpThemeFill::Solid(ColorU::white())),
+        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Agent, main_text),
         SummaryPaneKind::CLIAgent { agent, .. } => (
             agent.icon().unwrap_or(WarpIcon::Terminal),
             WarpThemeFill::Solid(agent.brand_icon_color()),
