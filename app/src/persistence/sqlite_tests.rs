@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ai::workspace::WorkspaceMetadata;
-use chrono::Utc;
+use chrono::{Local, Utc};
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
 use pathfinder_geometry::rect::RectF;
@@ -24,11 +24,14 @@ use crate::cloud_object::{CloudObjectPermissions, Owner};
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::persistence::model::ObjectPermissions;
-use crate::persistence::{BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope};
+use crate::persistence::{
+    BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope, StartedCommandMetadata,
+};
 use crate::server::ids::ClientId;
 use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
 use crate::terminal::model::block::SerializedBlock;
+use crate::terminal::model::session::SessionId;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::tab_group::TabGroupId;
 
@@ -179,13 +182,40 @@ fn tui_database_in_tui_subdirectory_round_trips_data() {
     let metadata = test_codebase_metadata("/tmp/tui-repo");
     save_codebase_index_metadata(&mut conn, metadata.clone())
         .expect("codebase index metadata should save");
+    let writer = start_writer(conn, database_path.clone()).expect("writer should start");
+    writer
+        .sender
+        .send(ModelEvent::InsertCommand {
+            metadata: StartedCommandMetadata {
+                command: "ls".to_owned(),
+                start_ts: Some(Local::now()),
+                pwd: Some("/tmp/tui-repo".to_owned()),
+                shell: Some("zsh".to_owned()),
+                username: Some("test-user".to_owned()),
+                hostname: Some("test-host".to_owned()),
+                session_id: Some(SessionId::from(1)),
+                git_branch: None,
+                cloud_workflow_id: None,
+                workflow_command: None,
+                is_agent_executed: false,
+            },
+        })
+        .expect("insert command event should send");
+    writer
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("terminate event should send");
+    writer.handle.join().expect("writer should terminate");
+
+    let mut conn = setup_database(&database_path).expect("database should reopen");
 
     let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::TuiFrontend)
         .expect("persisted data should load");
-    // The TUI data scope skips GUI session restoration and history...
+    // The TUI data scope skips GUI session restoration...
     assert!(restored.app_state.is_none());
-    assert!(restored.command_history.is_empty());
-    // ...but still round-trips shared data like codebase index metadata.
+    // ...but restores command history and shared data like codebase index metadata.
+    assert_eq!(restored.command_history.len(), 1);
+    assert_eq!(restored.command_history[0].command, "ls");
     assert_eq!(restored.codebase_indices.len(), 1);
     assert_eq!(restored.codebase_indices[0].path, metadata.path);
 }

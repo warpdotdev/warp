@@ -2,7 +2,7 @@
 
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionType, AIConversationId, BlocklistAIActionEvent,
-    BlocklistAIActionModel, CancellationReason, NewConversationDecision,
+    BlocklistAIActionModel, CancellationReason, NewConversationDecision, mcp_server_name_for_id,
 };
 use warpui_core::elements::tui::{TuiElement, TuiText};
 use warpui_core::{AppContext, Entity, EntityId, ModelHandle, TuiView, ViewContext, ViewHandle};
@@ -187,7 +187,11 @@ impl TuiGenericToolCallView {
     }
 
     /// Builds the user-facing question shown above the action details.
-    fn permission_question(&self) -> String {
+    ///
+    /// `server_name` is the pre-resolved originating MCP server name (when
+    /// known) for an MCP tool call, so the question surfaces both the tool and
+    /// its server. `None` for non-MCP actions or unknown/legacy servers.
+    fn permission_question(&self, server_name: Option<&str>) -> String {
         match &self.action.action {
             AIAgentActionType::ReadFiles(_) => "Is it OK if I read these files?".to_owned(),
             AIAgentActionType::UploadArtifact(_) => {
@@ -200,7 +204,19 @@ impl TuiGenericToolCallView {
             AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => {
                 "Is it OK if I find files matching these patterns?".to_owned()
             }
-            AIAgentActionType::CallMCPTool { .. } => "Is it OK if I call this MCP tool?".to_owned(),
+            AIAgentActionType::CallMCPTool { name, .. } => {
+                if name.is_empty() {
+                    match server_name {
+                        Some(server) => format!("Is it OK if I call an MCP tool on {server}?"),
+                        None => "Is it OK if I call this MCP tool?".to_owned(),
+                    }
+                } else {
+                    match server_name {
+                        Some(server) => format!("Is it OK if I call MCP tool {name} on {server}?"),
+                        None => format!("Is it OK if I call MCP tool {name}?"),
+                    }
+                }
+            }
             AIAgentActionType::ReadMCPResource { .. } => {
                 "Is it OK if I read this MCP resource?".to_owned()
             }
@@ -221,7 +237,11 @@ impl TuiGenericToolCallView {
     }
 
     /// Formats the action arguments needed to make an approval decision.
-    fn details(&self) -> String {
+    ///
+    /// `server_name` is the pre-resolved originating MCP server name (when
+    /// known) for an MCP tool call, so the details body labels the tool with
+    /// its server. `None` for non-MCP actions or unknown/legacy servers.
+    fn details(&self, server_name: Option<&str>) -> String {
         match &self.action.action {
             AIAgentActionType::ReadFiles(request) => request
                 .locations
@@ -254,10 +274,14 @@ impl TuiGenericToolCallView {
             AIAgentActionType::CallMCPTool { name, input, .. } => {
                 let input =
                     serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
+                let header = match server_name {
+                    Some(server) => format!("{name} on {server}"),
+                    None => name.clone(),
+                };
                 if input == "{}" || input == "null" {
-                    name.clone()
+                    header
                 } else {
-                    format!("{name}\n{input}")
+                    format!("{header}\n{input}")
                 }
             }
             AIAgentActionType::ReadMCPResource { name, uri, .. } => {
@@ -275,18 +299,31 @@ impl TuiGenericToolCallView {
         }
     }
 
+    /// Resolves the user-facing name of the MCP tool's originating server for
+    /// the blocked permission card. Returns `None` for non-MCP-tool actions,
+    /// legacy/flat calls with no server id, or unknown servers. Non-panicking.
+    fn mcp_server_name(&self, app: &AppContext) -> Option<String> {
+        match &self.action.action {
+            AIAgentActionType::CallMCPTool { server_id, .. } => server_id
+                .as_ref()
+                .and_then(|id| mcp_server_name_for_id(id, app)),
+            _ => None,
+        }
+    }
+
     /// Renders the complete blocked-action card.
     fn render_blocked(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
+        let server_name = self.mcp_server_name(app);
         let prompt = self
             .permission_prompt
             .as_ref()
             .expect("blocked generic actions should own a permission prompt");
         render_permission_card(
             prompt,
-            self.permission_question(),
+            self.permission_question(server_name.as_deref()),
             Some(
-                TuiText::new(self.details())
+                TuiText::new(self.details(server_name.as_deref()))
                     .with_style(builder.primary_text_style())
                     .finish(),
             ),

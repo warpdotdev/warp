@@ -366,6 +366,59 @@ fn strip_command_prefix_substring_not_matched() {
 }
 
 #[test]
+fn clear_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command.kind == SlashCommandKind::Clear),
+        "/clear should be registered in TUI mode"
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Clear),
+        "/clear should not be registered in GUI mode"
+    );
+}
+
+#[test]
+fn clear_command_has_correct_registry_metadata() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::Clear)
+        .expect("expected /clear to be registered in TUI mode");
+
+    assert_eq!(command.name, "/clear");
+    assert_eq!(command.kind, SlashCommandKind::Clear);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert_eq!(command.supported_surfaces.gui_icon_path(), None);
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(
+        command.availability,
+        Availability::NO_LRC_CONTROL | Availability::AI_ENABLED | Availability::NOT_CLOUD_AGENT
+    );
+
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /clear to declare an argument");
+    assert!(argument.is_optional);
+    assert!(argument.should_execute_on_selection);
+    assert_eq!(argument.hint_text, None);
+}
+
+#[test]
+fn clear_command_is_active_only_outside_cloud_mode() {
+    let local_context =
+        Availability::NO_LRC_CONTROL | Availability::AI_ENABLED | Availability::NOT_CLOUD_AGENT;
+    assert!(CLEAR.is_active(local_context));
+
+    // NOT_CLOUD_AGENT is absent → cloud context.
+    let cloud_context = Availability::NO_LRC_CONTROL | Availability::AI_ENABLED;
+    assert!(!CLEAR.is_active(cloud_context));
+}
+
+#[test]
 fn natural_language_detection_command_is_registered_only_for_tui_mode() {
     let tui_commands = all_commands(settings::SettingsMode::Tui);
     assert!(

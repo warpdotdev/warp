@@ -692,6 +692,8 @@ struct AvailableLLMsUpdate {
 /// use as well as the user's preferred LLM for Agent Mode.
 pub struct LLMPreferences {
     models_by_feature: ModelsByFeature,
+    /// Whether the most recent authed agent-mode model-list fetch failed.
+    agent_mode_models_unavailable: bool,
     last_update: Option<AvailableLLMsUpdate>,
     // Stores model overrides for a given terminal view. User selections are
     // normalized against the GUI profile default, while explicit child-run
@@ -768,6 +770,7 @@ impl LLMPreferences {
 
         let mut me = Self {
             models_by_feature,
+            agent_mode_models_unavailable: false,
             last_update: None,
             base_llm_for_terminal_view,
             custom_llms,
@@ -1400,6 +1403,20 @@ impl LLMPreferences {
             .and_then(|id| self.models_by_feature.agent_mode.info_for_id(id))
     }
 
+    /// Returns `true` when the most recent authed agent-mode model-list fetch
+    /// failed, so the server-provided model list is currently unavailable.
+    pub fn agent_mode_models_unavailable(&self) -> bool {
+        self.agent_mode_models_unavailable
+    }
+
+    /// Sets whether the authed agent-mode model list is currently unavailable.
+    /// Called from the authed fetch path on failure, from
+    /// [`Self::on_server_update`] on any successful model-list update, and
+    /// from tests.
+    pub(crate) fn set_agent_mode_models_unavailable(&mut self, unavailable: bool) {
+        self.agent_mode_models_unavailable = unavailable;
+    }
+
     #[cfg(feature = "integration_tests")]
     pub fn is_available_agent_mode_llm(&self, id: &LLMId) -> bool {
         self.models_by_feature.agent_mode.info_for_id(id).is_some()
@@ -1633,9 +1650,14 @@ impl LLMPreferences {
                     if update != me.models_by_feature {
                         me.on_server_update(update, ctx);
                     }
+                    // Clear the flag; on_server_update also clears it but may be skipped when the list is unchanged.
+                    me.set_agent_mode_models_unavailable(false);
                 }
                 Err(e) => {
                     report_error!(e.context("Failed to fetch LLMs from server"));
+                    // Mark the model list unavailable so validators surface a server error
+                    // instead of blaming the user's model id.
+                    me.set_agent_mode_models_unavailable(true);
                 }
             },
         );
@@ -1678,6 +1700,9 @@ impl LLMPreferences {
     }
 
     fn on_server_update(&mut self, update: ModelsByFeature, ctx: &mut ModelContext<Self>) {
+        // Clear the unavailable flag on every successful model-list update.
+        self.set_agent_mode_models_unavailable(false);
+
         let has_existing_persisted_config = get_cached_models(ctx).is_some();
 
         let old = std::mem::replace(&mut self.models_by_feature, update);

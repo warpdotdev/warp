@@ -926,6 +926,12 @@ pub enum FeatureFlag {
     /// `warp_id` values in MCP configs and as bare identifiers in CLI
     /// `--mcp` arguments, resolved server-side at run setup.
     WellKnownMcpIds,
+
+    /// Automatically attaches the Warp-hosted Factory MCP server
+    /// (`/api/v1/mcp/factory`) to agents as a built-in MCP server,
+    /// authenticated with the logged-in user's session token. No manual MCP
+    /// setup or API key required.
+    FactoryMcp,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1001,6 +1007,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::WellKnownMcpIds,
+    FeatureFlag::FactoryMcp,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

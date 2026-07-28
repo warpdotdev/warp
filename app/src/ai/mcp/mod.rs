@@ -49,6 +49,8 @@ cfg_if::cfg_if! {
 
 pub mod gallery;
 pub use gallery::MCPGalleryManager;
+#[cfg(not(target_family = "wasm"))]
+pub mod builtin;
 pub mod templatable;
 #[cfg(not(target_family = "wasm"))]
 pub use cloud_object_models::{

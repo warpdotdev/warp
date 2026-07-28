@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
@@ -6,12 +7,14 @@ use warp::tui_export::{
     TerminalModel, TranscriptScope,
 };
 use warpui::App;
+use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiElement, TuiRect, TuiSize};
 use warpui_core::presenter::tui::TuiPresenter;
 
 use super::{
     TerminalBlockElement, block_content_rows, should_render_terminal_block, terminal_block_cursor,
 };
+use crate::terminal_use::user_controlled_running_command;
 use crate::tui_builder::TuiUiBuilder;
 
 /// Builds a mock model with a single simulated (started + finished) block and
@@ -233,13 +236,63 @@ fn user_controlled_running_command_submits_cursor_within_window() {
     let mut model = TerminalModel::mock(None, None);
     model.simulate_long_running_block("python3", ">>> ");
     let block = model.block_list().active_block();
+    let owns_cursor =
+        user_controlled_running_command(&model).is_some_and(|owner| owner.id() == block.id());
 
     // A finished/agent block never owns the inline cursor; an active
     // user-controlled command does when its cursor lands inside the window.
-    let in_window = terminal_block_cursor(block, &(0..8), TuiSize::new(40, 8));
-    let clipped = terminal_block_cursor(block, &(0..8), TuiSize::new(40, 0));
+    let in_window = terminal_block_cursor(block, owns_cursor, &(0..8), TuiSize::new(40, 8));
+    let clipped = terminal_block_cursor(block, owns_cursor, &(0..8), TuiSize::new(40, 0));
     assert!(in_window.is_some());
     assert_eq!(clipped, None);
+}
+
+#[test]
+fn unfinished_background_block_renders_without_submitting_cursor() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let mut model = TerminalModel::mock(None, None);
+        model.simulate_block("true", "");
+        model.process_bytes("starship: scanning files timed out");
+        let background_block = model
+            .block_list()
+            .blocks()
+            .iter()
+            .find(|block| block.is_background())
+            .expect("early output should create a background block");
+        let block_id = background_block.id().clone();
+        let model = Arc::new(FairMutex::new(model));
+        Timer::after(Duration::from_millis(200)).await;
+        let rows = {
+            let model = model.lock();
+            let background_block = model
+                .block_list()
+                .block_with_id(&block_id)
+                .expect("background block should remain in the transcript");
+            block_content_rows(background_block)
+        };
+        let height = rows.end.saturating_sub(rows.start) as u16;
+
+        app.read(|ctx| {
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                TerminalBlockElement::visible_rows(model, block_id, rows, 40).finish(),
+                TuiRect::new(0, 0, 40, height),
+                ctx,
+            );
+            let rendered_text = frame
+                .buffer
+                .to_lines()
+                .iter()
+                .map(|line| line.trim_end())
+                .collect::<String>();
+            assert!(
+                rendered_text.contains("starship: scanning files timed out"),
+                "{rendered_text:?}"
+            );
+            assert_eq!(frame.cursor, None);
+        });
+    });
 }
 
 #[test]
@@ -249,8 +302,10 @@ fn finished_command_does_not_submit_a_cursor() {
         .block_list()
         .block_with_id(&block_id)
         .expect("block should exist");
+    let owns_cursor =
+        user_controlled_running_command(&model).is_some_and(|owner| owner.id() == block.id());
     assert_eq!(
-        terminal_block_cursor(block, &(0..8), TuiSize::new(40, 8)),
+        terminal_block_cursor(block, owns_cursor, &(0..8), TuiSize::new(40, 8)),
         None
     );
 }

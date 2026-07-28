@@ -234,13 +234,16 @@ impl TuiUiBuilder {
             self.warp_theme.terminal_colors().bright.green,
         )))
     }
-
-    /// Bold pale-green `!` marker for a shell command row, over the same
-    /// [`Self::shell_command_background`] the rest of the row uses.
+    /// Background-independent bold pale-green `!` marker shared by shell-command surfaces.
     pub(crate) fn shell_command_prefix_style(&self) -> TuiStyle {
         self.shell_command_accent_style()
-            .bg(self.shell_command_background())
             .add_modifier(Modifier::BOLD)
+    }
+
+    /// Shell-command marker style over the transcript row background.
+    pub(crate) fn shell_command_row_style(&self) -> TuiStyle {
+        self.shell_command_prefix_style()
+            .bg(self.shell_command_background())
     }
     /// Blue-overlay background for inline plan bodies, matching the TUI
     /// design's `blue_overlay_1` treatment.

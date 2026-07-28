@@ -1,5 +1,7 @@
 //! Public app APIs used by the `warp_tui` frontend.
 
+mod history;
+
 pub use ::ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
 pub use ::ai::agent::action_result::AskUserQuestionAnswerItem;
 pub use ::ai::agent::{
@@ -17,8 +19,10 @@ pub use voice_input::{
 pub use warp_cli::agent::Harness;
 use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
 use warp_completer::signatures::CommandRegistry;
+pub use warp_core::SessionId;
 use warpui::SingletonEntity as _;
 
+pub use self::history::{TuiUpArrowHistoryItem, TuiUpArrowHistoryItemKind, tui_up_arrow_history};
 pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
@@ -140,7 +144,7 @@ pub use crate::ai::orchestration::{
 };
 #[cfg(feature = "voice_input")]
 pub use crate::ai::request_usage_model::AIRequestUsageModel;
-pub use crate::ai::skills::{SkillManager, SkillReference};
+pub use crate::ai::skills::{SkillManager, SkillManagerEvent, SkillReference};
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::tui_api_keys::notify_tui_api_keys_changed;
 pub use crate::appearance::Appearance;
@@ -220,9 +224,9 @@ pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
-    BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo, SizeUpdate,
-    TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
-    prompt_history_for_terminal_view,
+    BlockPadding, History, HistoryEvent, LinkedWorkflowData, PtyIntent, PtyIntentEvent,
+    ShellLaunchData, SizeInfo, SizeUpdate, TerminalManager as TerminalManagerTrait, TerminalModel,
+    TerminalSurface, UpArrowHistoryConfig,
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
@@ -232,8 +236,9 @@ pub use crate::tui::{
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
+    add_tui_history_test_models, append_tui_history_test_command,
     blocklist_ai_history_model_with_queries, queue_tui_permission_action,
-    register_tui_session_view_test_singletons,
+    register_tui_input_mode_test_settings, register_tui_session_view_test_singletons,
 };
 pub use crate::util::image::{
     MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES, MIME_SNIFF_BYTES, ProcessImageResult,
@@ -302,4 +307,12 @@ pub fn tui_completion_context_has_exact_command(
 pub fn agent_conversations_cloud_metadata_load_failed(app: &warpui::AppContext) -> bool {
     crate::ai::agent_conversations_model::AgentConversationsModel::as_ref(app)
         .cloud_conversation_metadata_load_failed()
+}
+
+/// Resolves the user-facing name for an MCP server from its installation/template
+/// UUID. Returns `None` when the server is unknown (e.g. a legacy/flat MCP call
+/// with no server id, or the server is not installed). Used by the TUI to surface
+/// tool/server identity in permission cards and transcript labels.
+pub fn mcp_server_name_for_id(uuid: &uuid::Uuid, app: &warpui::AppContext) -> Option<String> {
+    crate::ai::mcp::TemplatableMCPServerManager::get_mcp_name(uuid, app)
 }

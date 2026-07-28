@@ -511,6 +511,22 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
 
+pub const CLEAR: StaticCommand = StaticCommand {
+    name: "/clear",
+    description: "Clear the transcript and start a new conversation (alias for /agent)",
+    kind: SlashCommandKind::Clear,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::NO_LRC_CONTROL
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: None,
+        is_optional: true,
+        should_execute_on_selection: true,
+    }),
+};
+
 pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/model",
     description: "Switch the base agent model",
@@ -919,6 +935,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         OPEN_MCP_SERVERS,
         OPEN_RULES,
         AGENT.clone(),
+        CLEAR,
         NEW.clone(),
         PLAN.clone(),
         RENAME_CONVERSATION.clone(),

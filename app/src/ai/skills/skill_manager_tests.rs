@@ -1497,6 +1497,7 @@ fn removing_remote_home_skills_preserves_project_skills_below_home() {
         });
     });
 }
+
 // ============================================================================
 // Tests for best_supported_provider
 // ============================================================================
