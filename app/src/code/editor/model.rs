@@ -375,8 +375,8 @@ impl CodeEditorModel {
             ctx,
             |hidden_lines, ctx| {
                 let hidden_lines = hidden_lines.clone();
-                // CharCell layout does not consult text styles, but RenderState
-                // retains them for API compatibility with pixel layout.
+                // CharCell layout consumes the configured tab size; RenderState
+                // retains the remaining styles for API compatibility with pixel layout.
                 ctx.add_model(|ctx| {
                     RenderState::new_tui(
                         terminal_width,
@@ -475,9 +475,9 @@ impl CodeEditorModel {
 
     /// A minimal [`RichTextStyles`] for the TUI char-cell editor.
     ///
-    /// [`RenderState::new_tui`] retains styles for API compatibility, but their
-    /// fields are unused in CharCell mode. This stub lives here so the core
-    /// editor crate doesn't carry a TUI-specific dependency.
+    /// [`RenderState::new_tui`] consumes the base paragraph's tab size and
+    /// retains the remaining styles for API compatibility. This stub lives here
+    /// so the core editor crate doesn't carry a TUI-specific dependency.
     fn tui_stub_text_styles() -> RichTextStyles {
         use warpui::elements::{Border, Fill};
         use warpui::fonts::{FamilyId, Weight};
@@ -488,21 +488,21 @@ impl CodeEditorModel {
             b: 0,
             a: 0,
         };
-        let paragraph = || ParagraphStyles {
+        let paragraph = |fixed_width_tab_size| ParagraphStyles {
             font_family: FamilyId(0),
             font_size: 10.,
             font_weight: Weight::Normal,
             line_height_ratio: 1.,
             text_color: TRANSPARENT,
             baseline_ratio: 0.7,
-            fixed_width_tab_size: None,
+            fixed_width_tab_size,
         };
         RichTextStyles {
-            base_text: paragraph(),
-            code_text: paragraph(),
+            base_text: paragraph(Some(4)),
+            code_text: paragraph(Some(4)),
             code_background: Fill::None,
             embedding_background: Fill::None,
-            embedding_text: paragraph(),
+            embedding_text: paragraph(None),
             code_border: Border::new(0.),
             placeholder_color: TRANSPARENT,
             selection_fill: Fill::None,
