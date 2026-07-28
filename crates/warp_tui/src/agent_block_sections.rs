@@ -248,7 +248,7 @@ pub(crate) fn render_todo_list_section(
 fn todo_glyph(status: &TodoStatus, builder: &TuiUiBuilder) -> (&'static str, TuiStyle) {
     match status {
         TodoStatus::Pending => ("◌", builder.primary_text_style()),
-        TodoStatus::InProgress => ("•", builder.attention_glyph_style()),
+        TodoStatus::InProgress => ("●", builder.attention_glyph_style()),
         TodoStatus::Completed => ("✓", builder.success_glyph_style()),
         TodoStatus::Cancelled | TodoStatus::Stopped => ("■", builder.muted_text_style()),
     }
