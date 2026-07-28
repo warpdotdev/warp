@@ -63,7 +63,7 @@ fn preserves_combining_characters_when_newline_is_after_cluster() {
 #[test]
 fn newline_then_multibyte_results_in_ellipsis_only() {
     let input = "\n🚀";
-    let output = format_command_text(&input);
+    let output = format_command_text(input);
     assert_eq!(output, "…");
 
     // Sanity: output remains valid UTF-8
