@@ -503,7 +503,14 @@ impl TuiEditorElement {
     ) -> Box<dyn TuiElement> {
         let (content, style) = match &row.kind {
             DisplayRowKind::Buffer { line_index } => {
-                let content = slice_chars(chars, &row.char_range);
+                let raw = slice_chars(chars, &row.char_range);
+                // Expand tabs to spaces so that tab-indented content preserves
+                // its horizontal spacing. The expansion is display-only — it
+                // never affects the buffer text or applied edit content.
+                // Continuation rows (soft-wrap overflows) start mid-line; tabs
+                // within those overflows are rare enough that starting the column
+                // counter at 0 is an acceptable approximation.
+                let content = expand_tabs(&raw, 0, TAB_DISPLAY_SIZE);
                 let style = self
                     .styles
                     .line_overrides
@@ -515,10 +522,11 @@ impl TuiEditorElement {
             }
             DisplayRowKind::Ghost { ghost_index } => {
                 let ghost_chars: Vec<char> = ghosts[*ghost_index].content.chars().collect();
-                (
-                    slice_chars(&ghost_chars, &row.char_range),
-                    self.styles.ghost,
-                )
+                let raw = slice_chars(&ghost_chars, &row.char_range);
+                // Same tab expansion for ghost (removed-line) rows so that
+                // deleted tab-indented code aligns with the surrounding context.
+                let content = expand_tabs(&raw, 0, TAB_DISPLAY_SIZE);
+                (content, self.styles.ghost)
             }
             DisplayRowKind::Gap { line_range } => {
                 (format!("… {} lines", line_range.len()), self.styles.gap)
@@ -875,11 +883,45 @@ impl TuiElement for TuiEditorElement {
     }
 }
 
+/// Display columns per tab stop. Tabs in diff content are expanded to this
+/// many spaces so that tab-indented code preserves its horizontal alignment.
+/// This is a display-only transform; it never modifies buffer or edit content.
+const TAB_DISPLAY_SIZE: usize = 4;
+
 /// The chars in `range`, collected into the row's paint text.
 fn slice_chars(chars: &[char], range: &Range<CharOffset>) -> String {
     let start = range.start.as_usize().min(chars.len());
     let end = range.end.as_usize().min(chars.len());
     chars[start..end].iter().collect()
+}
+
+/// Expands tab characters in `text` to spaces, advancing to the next multiple
+/// of `tab_size` display columns from a `starting_col` baseline.  Pass `0`
+/// for `starting_col` when `text` begins at the logical start of a line.
+/// Non-tab characters are assumed to occupy one display column each (sufficient
+/// for ASCII/Latin content; CJK wide chars mid-line before a tab are rare in
+/// diff context and are accepted as a minor display approximation).
+/// Returns the input unchanged when no tab is present.
+fn expand_tabs(text: &str, starting_col: usize, tab_size: usize) -> String {
+    if !text.contains('\t') {
+        return text.to_owned();
+    }
+    let tab_size = tab_size.max(1);
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut col = starting_col;
+    for ch in text.chars() {
+        if ch == '\t' {
+            let spaces = tab_size - (col % tab_size);
+            for _ in 0..spaces {
+                out.push(' ');
+            }
+            col += spaces;
+        } else {
+            out.push(ch);
+            col += 1;
+        }
+    }
+    out
 }
 
 /// The number of decimal digits in `n` (minimum 1), sizing the gutter's

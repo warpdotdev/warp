@@ -477,3 +477,96 @@ fn placeholder_ghost_text_truncates_to_element_width() {
         });
     });
 }
+
+/// Tab-indented diff rows must paint with the correct number of leading blank
+/// columns. A single leading tab at tab-stop 4 should produce four leading
+/// spaces, so the first non-whitespace glyph is at column 4 (0-based).
+/// This is the headless regression test for APP-5014.
+#[test]
+fn tab_indented_buffer_rows_preserve_leading_indent() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            // One tab before "fn"; with tab size 4, that is 4 leading spaces.
+            let m = model(ctx, "\tfn foo() {}\n");
+            let element = TuiEditorElement::new(&m, ctx);
+            let lines = render_lines(ctx, element, 40, 5);
+            // The rendered line must start with 4 spaces, not zero.
+            let first = &lines[0];
+            assert!(
+                first.starts_with("    fn"),
+                "expected 4 leading spaces before 'fn', got: {first:?}"
+            );
+            // Confirm the 'f' is at column 4, not column 0.
+            assert_eq!(&first[..4], "    ");
+            assert_eq!(&first[4..6], "fn");
+        });
+    });
+}
+
+/// Space-indented diff rows must not be altered: spaces already paint
+/// correctly, so the fix must not change them.
+#[test]
+fn space_indented_buffer_rows_are_unchanged() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let m = model(ctx, "    fn foo() {}\n");
+            let element = TuiEditorElement::new(&m, ctx);
+            let lines = render_lines(ctx, element, 40, 5);
+            let first = &lines[0];
+            assert!(
+                first.starts_with("    fn"),
+                "expected 4 leading spaces before 'fn', got: {first:?}"
+            );
+        });
+    });
+}
+
+/// Multiple tabs produce correct cumulative expansion (tab stops at 0, 4, 8, …).
+#[test]
+fn multiple_leading_tabs_expand_to_successive_tab_stops() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            // Two leading tabs → 8 leading spaces.
+            let m = model(ctx, "\t\tbody\n");
+            let element = TuiEditorElement::new(&m, ctx);
+            let lines = render_lines(ctx, element, 40, 5);
+            let first = &lines[0];
+            assert!(
+                first.starts_with("        body"),
+                "expected 8 leading spaces before 'body', got: {first:?}"
+            );
+        });
+    });
+}
+
+// ── Unit tests for the expand_tabs helper ────────────────────────────────────
+
+#[test]
+fn expand_tabs_no_tab_returns_identical_string() {
+    assert_eq!(super::expand_tabs("hello", 0, 4), "hello");
+}
+
+#[test]
+fn expand_tabs_single_leading_tab_becomes_four_spaces() {
+    assert_eq!(super::expand_tabs("\tfoo", 0, 4), "    foo");
+}
+
+#[test]
+fn expand_tabs_at_column_two_advances_to_next_stop() {
+    // Column 2; next stop at 4 → 2 spaces inserted.
+    assert_eq!(super::expand_tabs("\tfoo", 2, 4), "  foo");
+}
+
+#[test]
+fn expand_tabs_multiple_tabs_cumulate_correctly() {
+    // Two tabs from column 0: first → col 4, second → col 8.
+    assert_eq!(super::expand_tabs("\t\tcode", 0, 4), "        code");
+}
+
+#[test]
+fn expand_tabs_empty_string_is_unchanged() {
+    assert_eq!(super::expand_tabs("", 0, 4), "");
+}
