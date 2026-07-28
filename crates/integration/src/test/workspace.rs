@@ -1033,6 +1033,141 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
         )
 }
 
+pub fn test_tab_group_drag_back_to_source_cancels() -> Builder {
+    new_builder()
+        .set_should_run_test(drag_tabs_feature_enabled)
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            execute_command_for_single_terminal_in_tab(
+                0,
+                "echo source-zero".to_string(),
+                ExpectedExitStatus::Success,
+                (),
+            )
+            .add_assertion(save_active_window_id(SOURCE_WINDOW_KEY)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Open a second tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(
+            new_step_with_default_assertions("Open a third tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(2))
+        .with_step(
+            TestStep::new("Group the second and third tabs").with_action(|app, window_id, _| {
+                let workspace = workspace_view(app, window_id);
+                workspace.update(app, |workspace, ctx| {
+                    workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
+                    let group_id = *workspace
+                        .tab_groups_for_test()
+                        .keys()
+                        .next()
+                        .expect("group should have been created");
+                    workspace.handle_action(
+                        &WorkspaceAction::MoveTabToGroup {
+                            tab_index: 2,
+                            group_id,
+                        },
+                        ctx,
+                    );
+                });
+            }),
+        )
+        // Integration tests share a process, so windows from earlier tests are
+        // still around. Pin this window somewhere they are not, or the drag
+        // resolves onto a leftover window's tab bar instead of coming home.
+        .with_step(set_saved_window_origin(
+            SOURCE_WINDOW_KEY,
+            vec2f(1400.0, 900.0),
+        ))
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY))
+        .with_step(
+            TestStep::new("Drag the group out, then back over the source tab bar")
+                .with_action(|app, window_id, _| {
+                    let group_id = only_group_id(app, window_id);
+                    let start = group_header_press_point(app, window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDown {
+                            position: start,
+                            modifiers: ModifiersState::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    let group_id = only_group_id(app, window_id);
+                    let start = group_header_press_point(app, window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(12.0, 0.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                // Clear of the tab bar: the group detaches into a preview.
+                .with_action(|app, window_id, _| {
+                    let start = tab_center(app, window_id, 0);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(0.0, 240.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                // Back over the source's own tab bar: this is the cancel.
+                .with_action(|app, window_id, _| {
+                    let back = tab_center(app, window_id, 0);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDragged {
+                            position: back,
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    let back = tab_center(app, window_id, 0);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseUp {
+                            position: back,
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                }),
+        )
+        .with_step(
+            TestStep::new("The group is back in the source window").with_action(|app, _, data| {
+                let source = *data
+                    .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                    .expect("source window id should exist");
+                let (tabs, groups, grouped) =
+                    workspace_view(app, source).read(app, |workspace, _| {
+                        (
+                            workspace.tab_count(),
+                            workspace.tab_groups_for_test().len(),
+                            workspace.grouped_tab_count_for_test(),
+                        )
+                    });
+                assert_eq!(tabs, 3, "every tab should be back in the source window");
+                assert_eq!(groups, 1, "the group should still exist in the source");
+                assert_eq!(grouped, 2, "both members should still belong to the group");
+            }),
+        )
+}
+
 pub fn test_attach_tab_group_to_other_window() -> Builder {
     new_builder()
         .set_should_run_test(drag_tabs_feature_enabled)

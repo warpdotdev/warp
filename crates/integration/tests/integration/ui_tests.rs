@@ -231,6 +231,7 @@ integration_tests! {
     test_detach_tab_to_new_window_with_drag,
     test_detach_tab_group_to_new_window_with_drag,
     test_attach_tab_group_to_other_window,
+    test_tab_group_drag_back_to_source_cancels,
     test_attach_tab_to_other_window_and_continue_drag,
     test_single_tab_handoff_continues_drag,
     test_multi_tab_drag_back_to_source_and_out_again,

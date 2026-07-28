@@ -1836,11 +1836,33 @@ impl CrossWindowTabDrag {
             workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
         });
 
-        let pane_group_id = transferred_tab.pane_group.id();
-        ctx.transfer_view_tree_to_window(pane_group_id, preview_window_id, caller_window_id);
+        // A group drag left N detached placeholders behind in the source, so
+        // every member's view tree has to come back, not just the first. The
+        // placeholders still carry their group_id, so restoring the views is
+        // what makes the group whole again.
+        let member_ids = drag.member_pane_group_ids().to_vec();
+        if member_ids.is_empty() {
+            let pane_group_id = transferred_tab.pane_group.id();
+            ctx.transfer_view_tree_to_window(pane_group_id, preview_window_id, caller_window_id);
+        } else {
+            preview_workspace.update(ctx, |workspace, ctx| {
+                for id in &member_ids {
+                    if let Some(index) = workspace.tab_index_for_pane_group_id(*id) {
+                        let pane_group = workspace.tabs[index].pane_group.clone();
+                        workspace.prepare_for_transferred_tab_attach(&pane_group, ctx);
+                    }
+                }
+            });
+            for id in &member_ids {
+                ctx.transfer_view_tree_to_window(*id, preview_window_id, caller_window_id);
+            }
+        }
 
+        // The placeholder run is `member_ids.len()` wide for a group, 1 for a
+        // tab, so the pre-removal index maps back through the run length.
+        let run_len = member_ids.len().max(1);
         let insertion_index = if target.insertion_index > drag.source_tab_index() {
-            target.insertion_index - 1
+            target.insertion_index.saturating_sub(run_len)
         } else {
             target.insertion_index
         };

@@ -28783,6 +28783,11 @@ impl Workspace {
     /// source tab list can shift while a drag is in flight, so a drag-start
     /// index no longer identifies the tab it was captured for. Ids that are no
     /// longer present are simply absent from the result.
+    /// Number of tabs that belong to any group, for integration tests.
+    pub fn grouped_tab_count_for_test(&self) -> usize {
+        self.tabs.iter().filter(|t| t.group_id.is_some()).count()
+    }
+
     /// Read access to this window's tab groups, for integration tests.
     pub fn tab_groups_for_test(&self) -> &HashMap<TabGroupId, TabGroup> {
         &self.tab_groups
