@@ -848,9 +848,10 @@ impl TerminalView {
     }
 
     /// Render the info button for toggling the workspace-level conversation details panel on WASM.
-    /// Shown only for ambient cloud tasks without a tab-bar affordance. Like the desktop `(i)` button,
-    /// it derives open state from the authoritative `WorkspaceState` at render time so it stays
-    /// accurate across pane/tab focus changes without any per-view mirroring.
+    /// Shown only for ambient cloud tasks without a tab-bar affordance. Derives open state from
+    /// the authoritative `WorkspaceState` at render time so it stays accurate across pane/tab
+    /// focus changes without any per-view mirroring. Icon color tracks open state (main text when
+    /// open, sub text when closed), matching the desktop button's color logic.
     #[cfg(target_arch = "wasm32")]
     fn render_wasm_conversation_details_toggle_button(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
@@ -875,38 +876,29 @@ impl TerminalView {
             blended_colors::text_sub(theme, theme.background()).into()
         };
 
-        let button = icon_button_with_color(
+        icon_button_with_color(
             appearance,
             icons::Icon::Info,
             is_open, // show active background when panel is open
             self.conversation_details_panel_toggle_mouse_state.clone(),
             icon_color,
-        );
-        // Add explicit surface_2 background when panel is open, matching the desktop button.
-        let button = if is_open {
-            button.with_style(UiComponentStyles::default().set_background(theme.surface_2().into()))
-        } else {
-            button
-        };
-        button
-            .with_tooltip(move || {
-                let tooltip_text = if is_open {
-                    "Hide details"
-                } else {
-                    "Show details"
-                };
-                ui_builder
-                    .tool_tip(tooltip_text.to_string())
-                    .build()
-                    .finish()
-            })
-            .build()
-            .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(
-                    WorkspaceAction::ToggleConversationTranscriptDetailsPanel,
-                );
-            })
-            .finish()
+        )
+        .with_tooltip(move || {
+            let tooltip_text = if is_open {
+                "Hide details"
+            } else {
+                "Show details"
+            };
+            ui_builder
+                .tool_tip(tooltip_text.to_string())
+                .build()
+                .finish()
+        })
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::ToggleConversationTranscriptDetailsPanel);
+        })
+        .finish()
     }
 
     /// Render the indicator for terminal mode (no conversation selected).
