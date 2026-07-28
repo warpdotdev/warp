@@ -2032,6 +2032,61 @@ impl CrossWindowTabDrag {
             return;
         }
 
+        // Group drag: pull the whole block back out of the target, not one tab.
+        // Doing this with the single-tab path would clear the preview's tab
+        // list and re-insert one member, stranding the other N-1 in the target.
+        if let Some(group_id) = drag.source_group_id() {
+            let Some(transferred_group) = target_workspace.read(ctx, |workspace, ctx| {
+                workspace.get_tab_group_transfer_info_for_attach(group_id, ctx)
+            }) else {
+                drag.phase = DragPhase::Floating;
+                return;
+            };
+            let member_pane_group_ids = transferred_group.member_pane_group_ids.clone();
+
+            target_workspace.update(ctx, |workspace, ctx| {
+                for id in &member_pane_group_ids {
+                    if let Some(index) = workspace.tab_index_for_pane_group_id(*id) {
+                        let pane_group = workspace.tabs[index].pane_group.clone();
+                        workspace.prepare_for_transferred_tab_attach(&pane_group, ctx);
+                    }
+                }
+            });
+            for id in &member_pane_group_ids {
+                ctx.transfer_view_tree_to_window(*id, target_window_id, preview_window_id);
+            }
+            // Remove by identity, descending, so earlier indices stay valid.
+            target_workspace.update(ctx, |workspace, ctx| {
+                workspace.current_workspace_state.is_tab_being_dragged = false;
+                let mut indices = workspace.tab_indices_for_pane_group_ids(&member_pane_group_ids);
+                indices.sort_unstable();
+                for index in indices.into_iter().rev() {
+                    workspace.remove_tab_without_undo(index, ctx);
+                }
+            });
+
+            if !preview_is_self
+                && let Some(preview_workspace) =
+                    WorkspaceRegistry::as_ref(ctx).get(preview_window_id, ctx)
+            {
+                preview_workspace.update(ctx, |workspace, ctx| {
+                    workspace.set_is_tab_drag_preview(true);
+                    workspace.tabs.clear();
+                    workspace.tab_groups.clear();
+                    workspace.insert_transferred_tab_group_at_index(transferred_group, 0, ctx);
+                });
+            }
+
+            ctx.windows().set_window_alpha(preview_window_id, 1.0);
+            ctx.windows().show_window_and_focus_app(preview_window_id);
+            drag.phase = DragPhase::Floating;
+            log::info!(
+                "tab_drag: reverse_handoff (group) restored {} members to preview_wid={preview_window_id}",
+                member_pane_group_ids.len()
+            );
+            return;
+        }
+
         let Some(transferred_tab) = target_workspace.read(ctx, |workspace, ctx| {
             workspace.get_tab_transfer_info_for_attach(target_insertion_index, ctx)
         }) else {
