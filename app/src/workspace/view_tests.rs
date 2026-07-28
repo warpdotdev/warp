@@ -17,8 +17,8 @@ use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, ViewHandle};
+use warpui::platform::{WindowBounds, WindowStyle};
+use warpui::{AddSingletonModel, App, ViewHandle, WindowId};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -266,6 +266,71 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
+}
+
+/// Like [`mock_workspace`], but with an explicit window rect.
+///
+/// Required for anything that exercises a cross-window drag. `mock_workspace`
+/// leaves the window at `WindowBounds::Default`, for which
+/// `AppContext::window_bounds` returns `None`, and `CrossWindowTabDrag::on_drag`
+/// then bails early — so a drag test built on `mock_workspace` passes
+/// vacuously without ever running the code it claims to cover.
+pub(crate) fn mock_workspace_at(app: &mut App, bounds: RectF) -> (WindowId, ViewHandle<Workspace>) {
+    let global_resource_handles = GlobalResourceHandles::mock(app);
+    let active_window_id = app.read(|ctx| ctx.windows().active_window());
+    app.add_window_with_bounds(
+        WindowStyle::NotStealFocus,
+        WindowBounds::ExactPosition(bounds),
+        |ctx| {
+            Workspace::new(
+                global_resource_handles,
+                None,
+                NewWorkspaceSource::Empty {
+                    previous_active_window: active_window_id,
+                    shell: None,
+                },
+                ctx,
+            )
+        },
+    )
+}
+
+#[test]
+fn test_mock_workspace_at_has_real_window_bounds() {
+    // Guards the helper itself. A cross-window drag test built on a window
+    // whose bounds resolve to None never reaches the drag machinery at all -
+    // `CrossWindowTabDrag::on_drag` bails immediately - so it would pass
+    // without exercising anything. If this assertion ever fails, every
+    // cross-window test in this file is silently green for the wrong reason.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (window_id, _workspace) =
+            mock_workspace_at(&mut app, RectF::new(vec2f(0., 0.), vec2f(1200., 800.)));
+        let bounds = app.read(|ctx| ctx.window_bounds(&window_id));
+        assert!(
+            bounds.is_some(),
+            "mock_workspace_at must produce a window with resolvable bounds"
+        );
+
+        let handles = GlobalResourceHandles::mock(&mut app);
+        let (default_window_id, _) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            Workspace::new(
+                handles,
+                None,
+                NewWorkspaceSource::Empty {
+                    previous_active_window: None,
+                    shell: None,
+                },
+                ctx,
+            )
+        });
+        assert!(
+            app.read(|ctx| ctx.window_bounds(&default_window_id)).is_none(),
+            "the default-bounds window is expected to have no bounds - that is why \
+             mock_workspace_at exists"
+        );
+    });
 }
 
 fn restored_workspace(
