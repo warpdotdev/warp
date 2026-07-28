@@ -98,10 +98,6 @@ impl TuiTerminalSessionView {
         command_name: &'static str,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(error) = self.grok_oauth_policy_error(ctx) {
-            self.show_error_hint(error.to_owned(), ctx);
-            return;
-        }
         ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.set_grok_tokens(None, ctx);
         });
