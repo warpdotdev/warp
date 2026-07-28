@@ -158,30 +158,30 @@ struct SectionStates {
 }
 
 /// UI state for a single collapsible section.
+#[derive(Default)]
 struct SectionUiState {
-    collapsed: bool,
+    /// `None` means no explicit user toggle has been recorded; the render path
+    /// uses `default_collapsed` in that case. Storing `Option<bool>` (instead
+    /// of plain `bool`) ensures that `hover_state()` creating an entry via
+    /// `entry(key).or_default()` does not fabricate a collapsed decision and
+    /// therefore does not defeat `default_collapsed` on repaints.
+    collapsed: Option<bool>,
     /// Hover state for the header row. Owned here so it survives element-tree
     /// rebuilds (the GUI `MouseStateHandle` pattern).
     hover_state: MouseStateHandle,
-}
-impl Default for SectionUiState {
-    fn default() -> Self {
-        Self {
-            collapsed: true,
-            hover_state: MouseStateHandle::default(),
-        }
-    }
 }
 
 impl SectionStates {
     /// Whether the keyed section is collapsed.
     /// `default_collapsed` is used when no explicit user toggle has been
-    /// recorded (i.e. the section key has no entry in the state map yet).
+    /// recorded (i.e. the section key has no explicit entry in the state map).
+    /// An entry created by `hover_state()` has `collapsed: None` and is
+    /// therefore treated the same as no entry here.
     fn is_collapsed(&self, key: SectionKey, default_collapsed: bool) -> bool {
         self.states
             .borrow()
             .get(&key)
-            .map(|state| state.collapsed)
+            .and_then(|state| state.collapsed)
             .unwrap_or(default_collapsed)
     }
 
@@ -191,10 +191,10 @@ impl SectionStates {
         let mut states = self.states.borrow_mut();
         let current_collapsed = states
             .get(&key)
-            .map(|s| s.collapsed)
+            .and_then(|s| s.collapsed)
             .unwrap_or(default_collapsed);
         let state = states.entry(key).or_default();
-        state.collapsed = !current_collapsed;
+        state.collapsed = Some(!current_collapsed);
     }
 
     /// Clears all explicit toggle state so every section reverts to its
@@ -215,7 +215,7 @@ impl SectionStates {
         let mut states = self.states.borrow_mut();
         for key in keys {
             let state = states.entry(*key).or_default();
-            state.collapsed = target_collapsed;
+            state.collapsed = Some(target_collapsed);
         }
     }
 

@@ -5,8 +5,8 @@ use futures::channel::oneshot;
 use warp::appearance::Appearance;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId, FileDiff, TaskId,
-    queue_tui_permission_action,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId, DiffSessionType, FileDiff,
+    RegisteredDiffStorage, TaskId, queue_tui_permission_action,
 };
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
@@ -22,12 +22,39 @@ use super::{
     TuiFileEditsView, deltas_for, file_edit_header_label, verb_and_name,
 };
 use crate::test_fixtures::{TestHostView, add_test_action_model};
+use crate::tui_diff_storage::TuiDiffStorageHandle;
 
 fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
     DiffDelta {
         replacement_line_range: range,
         insertion: insertion.to_owned(),
     }
+}
+
+/// Calling `hover_state()` inserts an entry via `entry(key).or_default()`, but
+/// that entry has `collapsed: None` — it must NOT cause `is_collapsed` to
+/// ignore `default_collapsed`. This is the regression from the first rework
+/// attempt where `SectionUiState::default()` set `collapsed: true`.
+#[test]
+fn hover_state_call_does_not_defeat_default_collapsed() {
+    let states = SectionStates::default();
+    // Simulate render_section calling hover_state before is_collapsed.
+    let _ = states.hover_state(SectionKey::File(0));
+    // The hover_state call must not fabricate a collapsed decision.
+    assert!(
+        !states.is_collapsed(SectionKey::File(0), false),
+        "hover_state must not override default_collapsed=false (expanded)"
+    );
+    assert!(
+        states.is_collapsed(SectionKey::File(0), true),
+        "hover_state must not override default_collapsed=true (collapsed)"
+    );
+    // An explicit toggle must still override the default.
+    states.toggle_collapsed(SectionKey::File(0), false);
+    assert!(
+        states.is_collapsed(SectionKey::File(0), false),
+        "explicit toggle should override default_collapsed"
+    );
 }
 
 /// Section state uses `default_collapsed` when no explicit toggle exists.
@@ -359,12 +386,29 @@ fn file_edits_action(id: &str) -> AIAgentAction {
     }
 }
 
+/// Seeds `TuiDiffStorage` on the given view with two update diffs so that
+/// `render_diff_content` builds real collapsible sections.
+fn seed_two_file_diffs(app: &mut App, view: &ViewHandle<TuiFileEditsView>) {
+    let handle = app.read(|ctx| TuiDiffStorageHandle::new(view.as_ref(ctx).storage.clone()));
+    app.update(|ctx| {
+        handle.set_candidate_diffs(
+            vec![
+                update_diff("/tmp/a/lib.rs", None),
+                update_diff("/tmp/b/main.rs", None),
+            ],
+            DiffSessionType::Local,
+            ctx,
+        );
+    });
+}
+
 /// The blocked file-edits card renders the permission header, the
-/// `e to expand/collapse` affordance, and the yes/no/Other options.
-/// This mirrors `blocked_command_card_matches_permission_layout` for
-/// `TuiShellCommandView` and covers AC 3 (header affordance).
+/// `e to expand/collapse` affordance, and the yes/no/Other options, and the
+/// diff sections are expanded by default (AC 1, AC 3).
+/// Also asserts repaint-stability: a second render with no input still shows
+/// the expanded sections (guards the hover_state regression).
 #[test]
-fn blocked_file_edits_card_shows_expand_hint_and_options() {
+fn blocked_file_edits_card_shows_expand_hint_sections_and_options() {
     App::test((), |mut app| async move {
         app.update(super::init);
         let action_id = AIAgentActionId::from("file-edits-1".to_owned());
@@ -381,30 +425,61 @@ fn blocked_file_edits_card_shows_expand_hint_and_options() {
                 ctx,
             );
         });
+        // Seed two real diffs so sections exist and the card can render them expanded.
+        seed_two_file_diffs(&mut app, &view);
 
-        let frame = present_file_edits_view(&mut app, &view);
-        let lines = frame.buffer.to_lines();
+        // First render: the blocked card must show the expanded summary header
+        // and both file-section headers (AC 1).
+        let lines1 = present_file_edits_view(&mut app, &view).buffer.to_lines();
 
-        let has_header = lines
+        let has_header = lines1
             .iter()
             .any(|l| l.contains("Is it OK if I make these file edits?"));
-        assert!(has_header, "blocked card header missing in {lines:?}");
+        assert!(has_header, "blocked card header missing in {lines1:?}");
 
         // AC 3: the header row carries the `e to expand/collapse` affordance.
-        let has_expand_hint = lines.iter().any(|l| l.contains("e to expand/collapse"));
+        let has_expand_hint = lines1.iter().any(|l| l.contains("e to expand/collapse"));
         assert!(
             has_expand_hint,
-            "e-to-expand-collapse hint missing in {lines:?}"
+            "e-to-expand-collapse hint missing in {lines1:?}"
         );
 
-        let has_yes_option = lines.iter().any(|l| l.contains("yes"));
-        assert!(has_yes_option, "yes option missing in {lines:?}");
+        let has_yes_option = lines1.iter().any(|l| l.contains("yes"));
+        assert!(has_yes_option, "yes option missing in {lines1:?}");
+
+        // AC 1: the summary header and both file sections must be visible on first render.
+        // The multi-file wrapper shows "Editing 2 files" and each file shows "Editing lib.rs".
+        let has_summary = lines1.iter().any(|l| l.contains("Editing 2 files"));
+        assert!(has_summary, "summary header missing in {lines1:?}");
+        let has_lib_section = lines1.iter().any(|l| l.contains("Editing lib.rs"));
+        assert!(has_lib_section, "lib.rs file section missing in {lines1:?}");
+        let has_main_section = lines1.iter().any(|l| l.contains("Editing main.rs"));
+        assert!(
+            has_main_section,
+            "main.rs file section missing in {lines1:?}"
+        );
+
+        // Repaint-stability (AC 1): a second render with no input must still show the
+        // expanded sections — the hover_state call must not fabricate a collapsed entry.
+        let lines2 = present_file_edits_view(&mut app, &view).buffer.to_lines();
+        let has_summary2 = lines2.iter().any(|l| l.contains("Editing 2 files"));
+        assert!(
+            has_summary2,
+            "summary header collapsed on second render — hover_state regression: {lines2:?}"
+        );
+        let has_lib2 = lines2.iter().any(|l| l.contains("Editing lib.rs"));
+        assert!(
+            has_lib2,
+            "lib.rs section collapsed on second render — hover_state regression: {lines2:?}"
+        );
     });
 }
 
 /// Pressing `e` while the file-edits permission card's option list is focused
 /// dispatches `ToggleExpandAll` through the full responder chain, including
-/// `TuiFileEditsView`. This covers AC 4 (keymap wiring end-to-end).
+/// `TuiFileEditsView`, and the sections actually toggle (AC 4).
+/// Also asserts repaint-stability: sections remain expanded after a repaint
+/// with no input, then collapse on `e`, then expand again on a second `e`.
 #[test]
 fn e_key_dispatches_toggle_expand_all_on_blocked_card() {
     App::test((), |mut app| async move {
@@ -425,6 +500,8 @@ fn e_key_dispatches_toggle_expand_all_on_blocked_card() {
                 ctx,
             );
         });
+        // Seed two real diffs so ToggleExpandAll operates on actual sections.
+        seed_two_file_diffs(&mut app, &view);
 
         // `e` is only gated when FILE_EDITS_PERMISSION_ACTIVE is set, which
         // requires the action to be blocked AND the list to be focused.
@@ -436,12 +513,42 @@ fn e_key_dispatches_toggle_expand_all_on_blocked_card() {
             );
         });
 
+        // Repaint-stability: render once so hover_state entries are populated,
+        // then re-render with no input — sections must still be visible (expanded).
+        let lines_before = present_file_edits_view(&mut app, &view).buffer.to_lines();
+        assert!(
+            lines_before.iter().any(|l| l.contains("Editing 2 files")),
+            "summary unexpanded on first render: {lines_before:?}"
+        );
+        let lines_repaint = present_file_edits_view(&mut app, &view).buffer.to_lines();
+        assert!(
+            lines_repaint.iter().any(|l| l.contains("Editing 2 files")),
+            "summary collapsed on repaint — hover_state regression: {lines_repaint:?}"
+        );
+
         // Dispatch `e` through the focused view's responder chain. Because
         // `TuiFileEditsView` is an ancestor and its context predicate is
         // satisfied, the keystroke must be consumed and emit LayoutChanged.
         assert!(
             dispatch_focused_key(&mut app, &view, "e"),
             "`e` should be consumed as ToggleExpandAll"
+        );
+        // After first `e` all sections collapse (any-expanded → collapse-all).
+        let lines_after_e1 = present_file_edits_view(&mut app, &view).buffer.to_lines();
+        assert!(
+            !lines_after_e1.iter().any(|l| l.contains("Editing lib.rs")),
+            "lib.rs section must be collapsed after first `e`: {lines_after_e1:?}"
+        );
+
+        // Second `e` re-expands all sections (all-collapsed → expand-all).
+        assert!(
+            dispatch_focused_key(&mut app, &view, "e"),
+            "second `e` should be consumed as ToggleExpandAll"
+        );
+        let lines_after_e2 = present_file_edits_view(&mut app, &view).buffer.to_lines();
+        assert!(
+            lines_after_e2.iter().any(|l| l.contains("Editing lib.rs")),
+            "lib.rs section must be expanded after second `e`: {lines_after_e2:?}"
         );
     });
 }

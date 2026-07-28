@@ -264,6 +264,36 @@ fn editable_prompt_renders_other_and_e_focuses_the_body_editor() {
     });
 }
 
+/// When the body editor owns focus `render_footer` shows "Esc to exit editor"
+/// instead of "Esc to cancel". This guards the branch at the top of
+/// `render_footer` against future focus-model changes.
+#[test]
+fn footer_shows_exit_editor_hint_while_body_editor_is_focused() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        let prompt = add_prompt(&mut app, true);
+        let (action_model, action) = app.read(|ctx| {
+            let prompt = prompt.as_ref(ctx);
+            (prompt.action_model.clone(), pending_action(prompt))
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
+        });
+        // Focus the body editor via EditBody so body_editor_is_focused returns true.
+        dispatch_focused_key(&mut app, &prompt, "e");
+        // Render and assert the footer reflects the editor-focus state.
+        let lines = render_lines(&mut app, &prompt);
+        assert!(
+            lines.iter().any(|l| l.contains("to exit editor")),
+            "footer must show 'Esc to exit editor' while body editor is focused; got: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("to cancel")),
+            "footer must not show 'Esc to cancel' while body editor is focused; got: {lines:?}"
+        );
+    });
+}
+
 fn pending_action(prompt: &TuiPermissionPrompt) -> AIAgentAction {
     AIAgentAction {
         id: prompt.action_id.clone(),
