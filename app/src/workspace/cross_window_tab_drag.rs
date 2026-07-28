@@ -211,6 +211,13 @@ struct ActiveDrag {
     /// preview window's alpha is only toggled on the transition in/out of this
     /// mode; the phase stays `Floating` throughout.
     reordering_in_source: bool,
+    /// Identity of the pane group being dragged, captured at drag start.
+    ///
+    /// `source_tab_index` is a position, and nothing keeps it in step with the
+    /// source window's tab list: a shell exiting, a cmd-W, or another window
+    /// handing a tab off all shift the list mid-drag. Source cleanup at drop
+    /// time therefore resolves the tab by this id rather than by that index.
+    source_pane_group_id: EntityId,
     phase: DragPhase,
 }
 
@@ -402,15 +409,19 @@ pub enum DropResult {
     FocusSelf,
     /// The source window's only tab was transferred elsewhere.  The calling
     /// workspace should unsubscribe the pane group and close itself.
-    CloseSourceWindow { transferred_tab_index: usize },
+    CloseSourceWindow { pane_group_id: EntityId },
     /// One tab was transferred out of a multi-tab source.  The calling
     /// workspace should unsubscribe and remove the tab.
-    RemoveSourceTab { transferred_tab_index: usize },
+    ///
+    /// Carries the pane group's identity rather than its index: the source tab
+    /// list can shift while the drag is in flight, and removing by a drag-start
+    /// index then destroys whichever tab happens to have slid into that slot.
+    RemoveSourceTab { pane_group_id: EntityId },
     /// One tab was transferred out of a multi-tab source via a handoff to
     /// a different window.  The calling workspace should unsubscribe, remove
     /// the tab, and close the now-unused preview window.
     RemoveSourceTabAndClosePreview {
-        transferred_tab_index: usize,
+        pane_group_id: EntityId,
         preview_window_id: WindowId,
     },
     /// A `Floating` drop landed on empty space but a prior put-back had
@@ -495,6 +506,16 @@ impl CrossWindowTabDrag {
     /// Returns the tab index of the dragged tab within the source window, if a drag is active.
     pub fn transferred_tab_index(&self) -> Option<usize> {
         self.active_drag.as_ref().map(|d| d.source_tab_index())
+    }
+
+    /// Identity of the pane group being dragged, captured at drag start.
+    ///
+    /// Prefer this over [`Self::transferred_tab_index`] anywhere the result is
+    /// used to pick a tab out of the source window: the index is a position
+    /// frozen at drag start, and the source tab list can change underneath it
+    /// while the drag is in flight.
+    pub fn source_pane_group_id(&self) -> Option<EntityId> {
+        self.active_drag.as_ref().map(|d| d.source_pane_group_id)
     }
 
     /// Returns the tab index in the source window of the detached placeholder
@@ -656,6 +677,7 @@ impl CrossWindowTabDrag {
     pub fn begin_single_tab_drag(
         &mut self,
         source_window_id: WindowId,
+        source_pane_group_id: EntityId,
         initial_drag_center_offset: Vector2F,
         window_size: Vector2F,
         last_known_target_tab_origin_in_window: Vector2F,
@@ -668,6 +690,7 @@ impl CrossWindowTabDrag {
         self.active_drag = Some(ActiveDrag {
             source_window_id,
             source: DragSource::SingleTabWindow,
+            source_pane_group_id,
             window_size,
             initial_drag_center_offset,
             last_known_target_tab_origin_in_window,
@@ -708,6 +731,13 @@ impl CrossWindowTabDrag {
         );
         self.active_drag = Some(ActiveDrag {
             source_window_id,
+            // The first member stands in as the drag's pane group for the
+            // single-tab-shaped code paths; group cleanup uses the full member
+            // list instead.
+            source_pane_group_id: member_pane_group_ids
+                .first()
+                .copied()
+                .unwrap_or(EntityId::from_usize(0)),
             source: DragSource::GroupWindow {
                 source_group_id,
                 source_first_index,
@@ -734,6 +764,7 @@ impl CrossWindowTabDrag {
         &mut self,
         source_window_id: WindowId,
         source_tab_index: usize,
+        source_pane_group_id: EntityId,
         initial_drag_center_offset: Vector2F,
         window_size: Vector2F,
         last_known_target_tab_origin_in_window: Vector2F,
@@ -750,6 +781,7 @@ impl CrossWindowTabDrag {
                 source_tab_index,
                 preview_window_id,
             },
+            source_pane_group_id,
             window_size,
             initial_drag_center_offset,
             last_known_target_tab_origin_in_window,
@@ -1670,11 +1702,11 @@ impl CrossWindowTabDrag {
         }
         if drag.source_is_own_preview() {
             DropResult::CloseSourceWindow {
-                transferred_tab_index: drag.source_tab_index(),
+                pane_group_id: drag.source_pane_group_id,
             }
         } else {
             DropResult::RemoveSourceTab {
-                transferred_tab_index: drag.source_tab_index(),
+                pane_group_id: drag.source_pane_group_id,
             }
         }
     }
@@ -1738,20 +1770,20 @@ impl CrossWindowTabDrag {
         }
         if drag.source_is_own_preview() {
             log::info!(
-                "tab_drag: finalize_handoff -> CloseSourceWindow transferred_tab_index={}",
-                drag.source_tab_index()
+                "tab_drag: finalize_handoff -> CloseSourceWindow pane_group={:?}",
+                drag.source_pane_group_id
             );
             DropResult::CloseSourceWindow {
-                transferred_tab_index: drag.source_tab_index(),
+                pane_group_id: drag.source_pane_group_id,
             }
         } else {
             log::info!(
-                "tab_drag: finalize_handoff -> RemoveSourceTabAndClosePreview transferred_tab_index={} preview_wid={}",
-                drag.source_tab_index(),
+                "tab_drag: finalize_handoff -> RemoveSourceTabAndClosePreview pane_group={:?} preview_wid={}",
+                drag.source_pane_group_id,
                 drag.preview_window_id()
             );
             DropResult::RemoveSourceTabAndClosePreview {
-                transferred_tab_index: drag.source_tab_index(),
+                pane_group_id: drag.source_pane_group_id,
                 preview_window_id: drag.preview_window_id(),
             }
         }

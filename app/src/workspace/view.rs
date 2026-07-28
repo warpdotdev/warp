@@ -11500,12 +11500,14 @@ impl Workspace {
             if drag_model.has_dedicated_preview_window() {
                 // A dedicated preview holds the detached tab(s); skip the
                 // placeholder(s) left behind in the source. Resolved by
-                // identity for a group, since the drag-start indices go stale
-                // if the source tab list shifts mid-drag.
+                // identity in both cases, since the drag-start indices go
+                // stale if the source tab list shifts mid-drag.
                 let member_ids = drag_model.member_pane_group_ids();
                 if member_ids.is_empty() {
                     drag_model
                         .source_placeholder_tab_index()
+                        .and_then(|_| drag_model.source_pane_group_id())
+                        .and_then(|id| self.tab_index_for_pane_group_id(id))
                         .into_iter()
                         .collect()
                 } else {
@@ -20864,8 +20866,14 @@ impl Workspace {
             // drag and must stay full width, otherwise the drop zone vanishes
             // and the slot oscillates ("fuzzy shake"). See
             // `CrossWindowTabDrag::collapsed_source_placeholder_index`.
-            let transferred_tab_index =
-                drag_model.collapsed_source_placeholder_index(self.window_id);
+            // Resolved by identity: `collapsed_source_placeholder_index`
+            // decides WHETHER to collapse a slot, but the index it carries is
+            // frozen at drag start, so after a mid-drag tab close it would
+            // zero-width an innocent neighbour.
+            let transferred_tab_index = drag_model
+                .collapsed_source_placeholder_index(self.window_id)
+                .and_then(|_| drag_model.source_pane_group_id())
+                .and_then(|id| self.tab_index_for_pane_group_id(id));
             // Set only while THIS window is the source of a group drag, so the
             // detached group's slot can be collapsed by identity below.
             let dragged_group_id = (drag_model.source_window_id() == Some(self.window_id))
@@ -28337,6 +28345,11 @@ impl Workspace {
         let source_tab_index = CrossWindowTabDrag::as_ref(ctx)
             .transferred_tab_index()
             .unwrap_or(0);
+        // Identity of the dragged pane group. The put-back branch below
+        // resolves the source tab through this rather than through
+        // `source_tab_index`, which is frozen at drag start and goes stale if
+        // the source tab list changes mid-drag.
+        let source_pane_group_id = CrossWindowTabDrag::as_ref(ctx).source_pane_group_id();
         let source_is_own_preview = CrossWindowTabDrag::as_ref(ctx).source_is_own_preview();
 
         log::info!(
@@ -28381,10 +28394,12 @@ impl Workspace {
                 return;
             }
 
-            let caller_draggable_state = self
-                .tabs
-                .get(source_tab_index)
-                .map(|tab| tab.draggable_state.clone());
+            // Resolve once by identity and reuse for the draggable-state clone,
+            // the unsubscribe and the removal below.
+            let source_index =
+                source_pane_group_id.and_then(|id| self.tab_index_for_pane_group_id(id));
+            let caller_draggable_state =
+                source_index.map(|index| self.tabs[index].draggable_state.clone());
 
             let Some(caller_draggable_state) = caller_draggable_state else {
                 CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
@@ -28420,13 +28435,13 @@ impl Workspace {
             }
 
             if let Some(info) = result {
-                if let Some(tab) = self.tabs.get(source_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
+                if let Some(index) = source_index {
+                    ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
                 }
                 if source_is_own_preview {
                     self.close_window_for_content_transfer(ctx);
-                } else {
-                    self.remove_tab_without_undo(source_tab_index, ctx);
+                } else if let Some(index) = source_index {
+                    self.remove_tab_without_undo(index, ctx);
                 }
                 // The source placeholder is now removed, so `source_tab_index`
                 // is stale. Mark it consumed so a later reverse_handoff +
@@ -28716,9 +28731,11 @@ impl Workspace {
                         .adjust_mouse_position(source_window_origin - window_position);
                 }
 
+                let source_pane_group_id = self.tabs[current_index].pane_group.id();
                 CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _ctx| {
                     drag.begin_single_tab_drag(
                         source_window_id,
+                        source_pane_group_id,
                         initial_drag_center_offset,
                         window_size,
                         last_known_target_tab_origin_in_window,
@@ -28732,6 +28749,7 @@ impl Workspace {
                 else {
                     return;
                 };
+                let source_pane_group_id = transferred_tab.pane_group.id();
 
                 let preview_window_id = crate::root_view::create_transferred_window(
                     transferred_tab,
@@ -28747,6 +28765,7 @@ impl Workspace {
                     drag.begin_multi_tab_drag(
                         source_window_id,
                         current_index,
+                        source_pane_group_id,
                         initial_drag_center_offset,
                         window_size,
                         last_known_target_tab_origin_in_window,
@@ -28901,6 +28920,39 @@ impl Workspace {
         }
     }
 
+    /// Removes the tab that was handed off to another window, resolving it by
+    /// pane-group identity.
+    ///
+    /// Resolving by the index captured at drag start is not safe: the source
+    /// tab list can shift while the drag is in flight (a shell exits and closes
+    /// its tab, a cmd-W, another window hands a tab off), and the stale index
+    /// then points at a bystander that is still in bounds, so a bounds check
+    /// does not catch it. A tab that is already gone is simply skipped.
+    fn remove_transferred_source_tab(
+        &mut self,
+        pane_group_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(index) = self.tab_index_for_pane_group_id(pane_group_id) else {
+            log::warn!(
+                "tab_drag: handle_drop_result source tab for pane_group={pane_group_id:?} is already gone (skipping remove)"
+            );
+            return;
+        };
+        ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
+        if self.tabs.len() == 1 {
+            // `remove_tab` treats the last tab as "close the window" and does so
+            // with a plain `ctx.close_window()`, which leaves
+            // `suppress_detach_panes_on_window_close` false — `on_window_closed`
+            // would then detach the panes of every tab, including this pane
+            // group, which now lives in the target window. Close the same way
+            // the other content-transfer paths do instead.
+            self.close_window_for_content_transfer(ctx);
+            return;
+        }
+        self.remove_tab_without_undo(index, ctx);
+    }
+
     /// Performs the source-workspace cleanup indicated by `DropResult`.
     /// Cross-workspace mutations (preview/target updates, focus) happen inside
     /// `CrossWindowTabDrag::on_drop`; this method only touches `self`.
@@ -28954,44 +29006,20 @@ impl Workspace {
                 }
                 self.focus_active_tab(ctx);
             }
-            DropResult::CloseSourceWindow {
-                transferred_tab_index,
-            } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
+            DropResult::CloseSourceWindow { pane_group_id } => {
+                if let Some(index) = self.tab_index_for_pane_group_id(pane_group_id) {
+                    ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
                 }
                 self.close_window_for_content_transfer(ctx);
             }
-            DropResult::RemoveSourceTab {
-                transferred_tab_index,
-            } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
-                } else {
-                    log::warn!(
-                        "tab_drag: handle_drop_result RemoveSourceTab stale index={transferred_tab_index} tabs_len={} (skipping remove)",
-                        self.tabs.len()
-                    );
-                }
-                if transferred_tab_index < self.tabs.len() {
-                    self.remove_tab_without_undo(transferred_tab_index, ctx);
-                }
+            DropResult::RemoveSourceTab { pane_group_id } => {
+                self.remove_transferred_source_tab(pane_group_id, ctx);
             }
             DropResult::RemoveSourceTabAndClosePreview {
-                transferred_tab_index,
+                pane_group_id,
                 preview_window_id,
             } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
-                } else {
-                    log::warn!(
-                        "tab_drag: handle_drop_result RemoveSourceTabAndClosePreview stale index={transferred_tab_index} tabs_len={} (skipping remove)",
-                        self.tabs.len()
-                    );
-                }
-                if transferred_tab_index < self.tabs.len() {
-                    self.remove_tab_without_undo(transferred_tab_index, ctx);
-                }
+                self.remove_transferred_source_tab(pane_group_id, ctx);
                 ctx.windows()
                     .close_window(preview_window_id, TerminationMode::ContentTransferred);
             }
