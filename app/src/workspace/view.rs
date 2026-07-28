@@ -27856,6 +27856,66 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// Inserts a transferred group into this window's tab list as one
+    /// contiguous block.
+    ///
+    /// `insertion_index` must already have been resolved through
+    /// [`Self::resolve_group_drop_index`] - this does NOT re-clamp. The
+    /// per-tab insert clamps internally, which would shove a pinned group back
+    /// out of the pinned prefix and make the block land somewhere other than
+    /// where its ghost was drawn.
+    ///
+    /// Members go in with a single splice so the pinned boundary is not
+    /// re-evaluated part-way through, and the group is registered only after
+    /// the splice so anything reading `tab_groups` during it still sees the
+    /// pre-insert state. Activates once at the end rather than per member.
+    pub(crate) fn insert_transferred_tab_group_at_index(
+        &mut self,
+        transferred_group: TransferredTabGroup,
+        insertion_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let TransferredTabGroup {
+            mut group,
+            tabs,
+            member_pane_group_ids: _,
+        } = transferred_group;
+        if tabs.is_empty() {
+            return;
+        }
+        let group_id = group.id;
+        // The source's drag state must not be shared with this window's copy;
+        // the two would then be one live drag bound to two elements.
+        group.draggable_state = Default::default();
+
+        let index = insertion_index.min(self.tabs.len());
+        let mut members = Vec::with_capacity(tabs.len());
+        for member in tabs {
+            let TransferredTab {
+                pane_group,
+                color,
+                draggable_state,
+                ..
+            } = member;
+            ctx.subscribe_to_view(&pane_group, move |me, pane_group, event, ctx| {
+                me.handle_file_tree_event(pane_group, event, ctx)
+            });
+            let mut tab_data = TabData::new(pane_group);
+            tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            tab_data.draggable_state = draggable_state;
+            tab_data.group_id = Some(group_id);
+            // Group pinning is the source of truth; members do not carry it.
+            tab_data.pinned = false;
+            members.push(tab_data);
+        }
+        let member_count = members.len();
+        self.tabs.splice(index..index, members);
+        self.tab_groups.insert(group_id, group);
+
+        self.activate_tab_internal(index + member_count - 1, ctx);
+        ctx.notify();
+    }
+
     /// If an insertion at `index` would land strictly inside a group's
     /// contiguous run (i.e. between two members of the same group), pushes it
     /// just past that group's last member so a cross-window drop can't split

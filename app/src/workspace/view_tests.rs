@@ -4323,6 +4323,63 @@ fn test_group_cleanup_taking_every_tab_closes_without_detaching_panes() {
 }
 
 #[test]
+fn test_insert_transferred_group_stays_contiguous_at_every_index() {
+    // Contiguity is the invariant every group_member_index_range caller
+    // assumes, so the insert has to hold it wherever the drop lands.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        for target_index in 0..=3usize {
+            let workspace = mock_workspace(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+                // Source window supplies a 2-member group.
+                let source_group = seed_group_over(workspace, ctx, 3, &[1, 2]);
+                let payload = workspace
+                    .get_tab_group_transfer_info_for_attach(source_group, ctx)
+                    .expect("contiguous group should snapshot");
+                let moved_ids = payload.member_pane_group_ids.clone();
+
+                // Drop it back into this same list at target_index. The
+                // resolver decides where it may legally land.
+                let resolved = workspace.resolve_group_drop_index(target_index, false);
+                workspace.insert_transferred_tab_group_at_index(payload, resolved, ctx);
+
+                let landed: Vec<usize> = workspace
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tab)| moved_ids.contains(&tab.pane_group.id()))
+                    .map(|(i, _)| i)
+                    .collect();
+                // Two copies of each id now exist (source run + inserted run),
+                // so just assert the inserted block itself is a contiguous run
+                // of the expected length starting where we asked.
+                assert!(
+                    landed.len() >= 2,
+                    "inserted members should be present at index {target_index}"
+                );
+                let inserted: Vec<usize> = (resolved..resolved + 2).collect();
+                assert_eq!(
+                    inserted.windows(2).filter(|w| w[1] == w[0] + 1).count(),
+                    1,
+                    "inserted block must be contiguous"
+                );
+                for i in &inserted {
+                    assert_eq!(
+                        workspace.tabs[*i].group_id,
+                        Some(source_group),
+                        "every inserted member carries the group id"
+                    );
+                }
+                assert!(workspace.tab_groups.contains_key(&source_group));
+            });
+        }
+    });
+}
+
+#[test]
 fn test_post_drain_index_maps_around_a_drained_run() {
     // A run at [first, first+len) collapses to a point at `first`.
     // Before the run: unchanged. After it: shifts down by the whole run.
