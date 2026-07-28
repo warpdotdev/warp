@@ -4073,7 +4073,7 @@ impl TuiTerminalSessionView {
                     // Reset to insert mode when enabling, so the user starts
                     // in the familiar editing state.
                     self.input_view
-                        .update(ctx, |input, _| input.reset_vim_to_insert());
+                        .update(ctx, |input, ctx| input.reset_vim_to_insert(ctx));
                 }
                 let hint = if enabled {
                     VIM_MODE_ENABLED_HINT

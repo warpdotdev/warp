@@ -3372,8 +3372,9 @@ fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
             );
         });
 
-        // Enable vim mode. The FSA starts in Insert mode — indicator is None
-        // (Insert mode has no label).
+        // Enable vim mode. The FSA starts in Insert mode — indicator shows
+        // "INS" (matching the GUI vim status indicator behaviour added in
+        // commit cdc763323).
         app.update(|ctx| {
             AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
                 settings
@@ -3384,9 +3385,10 @@ fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
         });
         app.read(|ctx| {
             let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
-            assert!(
-                indicator.is_none(),
-                "indicator must be None in Insert mode (vim just enabled), got {indicator:?}"
+            assert_eq!(
+                indicator,
+                Some("INS"),
+                "indicator must be INS in Insert mode when vim mode is enabled, got {indicator:?}"
             );
         });
 

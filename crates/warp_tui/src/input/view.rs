@@ -24,7 +24,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use string_offset::{ByteOffset, CharOffset};
-use vim::vim::VimMode;
+use vim::vim::{VimMode, VimModel, VimSubscriber as _};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::AppEditorSettings;
 use warp::tui_export::{
@@ -37,7 +37,7 @@ use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::{self, EditableBinding};
+use warpui_core::keymap::{self, EditableBinding, Keystroke};
 use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
@@ -58,7 +58,6 @@ use crate::keybindings::{
 };
 use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
-use crate::tui_vim_input::TuiVimInputModel;
 use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
 
 /// Keymap-context flag set while the input has contextual Escape behavior.
@@ -217,9 +216,14 @@ pub struct TuiInputView {
     can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
     /// TUI voice state used for Escape routing and shell-gutter suppression.
     voice_input: ModelHandle<TuiVoiceInputModel>,
-    /// Vim-mode state machine. Always present but only active when
-    /// `AppEditorSettings::vim_mode_enabled()` returns `true`.
-    vim: TuiVimInputModel,
+    /// Vim model (shared FSA + event dispatch layer). Always present but only
+    /// active when `AppEditorSettings::vim_mode_enabled()` returns `true`.
+    /// Wired via `VimSubscriber` to dispatch `VimEvent`s to `VimHandler` impls
+    /// on `TuiInputView` (see `input/vim.rs`).
+    vim_model: ModelHandle<VimModel>,
+    /// Internal yank / delete clipboard for vim operations. Separate from the
+    /// OS clipboard so that `p`/`P` work even without clipboard access.
+    yank_buffer: String,
     /// The cursor offset at which visual mode was entered, used to track the
     /// visual selection range. `None` when not in visual mode.
     visual_selection_anchor: Option<CharOffset>,
@@ -296,6 +300,10 @@ impl TuiInputView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let voice_input = ctx.add_model(TuiVoiceInputModel::new);
+        let vim_model = ctx.add_model(|_| VimModel::new());
+        // Subscribe to vim events: VimSubscriber blanket impl (TuiInputView: VimHandler)
+        // dispatches each VimEvent to the appropriate VimHandler method.
+        ctx.subscribe_to_model(&vim_model, Self::handle_vim_event);
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 ctx.notify();
@@ -319,7 +327,8 @@ impl TuiInputView {
             keyboard_enhancement_supported: false,
             can_accept_inline_menu: Rc::new(|_| true),
             voice_input,
-            vim: TuiVimInputModel::new(),
+            vim_model,
+            yank_buffer: String::new(),
             visual_selection_anchor: None,
         }
     }
@@ -359,14 +368,18 @@ impl TuiInputView {
     /// Reset the vim state machine to insert mode. Called when vim mode is
     /// enabled (so the user starts in insert mode, not whatever mode they
     /// were in previously).
-    pub(crate) fn reset_vim_to_insert(&mut self) {
-        self.vim.reset_to_insert();
+    pub(crate) fn reset_vim_to_insert(&mut self, ctx: &mut ViewContext<Self>) {
+        self.vim_model
+            .update(ctx, |vim, ctx| vim.force_insert_mode(ctx));
+        // force_insert_mode bypasses the normal ChangeMode event path; notify
+        // the footer indicator manually so it reflects the new Insert state.
+        ctx.emit(TuiInputViewEvent::VimModeChanged);
     }
 
     /// The current vim mode, or `None` when vim mode is disabled.
     pub(crate) fn vim_mode(&self, ctx: &AppContext) -> Option<VimMode> {
         if self.vim_mode_enabled(ctx) {
-            Some(self.vim.mode())
+            Some(self.vim_model.as_ref(ctx).state().mode)
         } else {
             None
         }
@@ -586,13 +599,15 @@ impl TuiView for TuiInputView {
         // passing it through allows session-level bindings (e.g.
         // orchestration focus-main, cancel-restore) to fire instead.
         let vim_mode_enabled = self.vim_mode_enabled(ctx);
+        let vim_state = self.vim_model.as_ref(ctx).state();
         input_keymap_context(InputKeymapContextConfig {
             input_handles_escape: self.active_inline_menu(ctx).is_some()
                 || matches!(suggestions_mode, TuiInputSuggestionsMode::Shortcuts)
                 || self.is_shell_mode(ctx)
                 || self.voice_is_active(ctx)
                 || (vim_mode_enabled
-                    && (!matches!(self.vim.mode(), VimMode::Normal) || self.vim.has_pending())),
+                    && (!matches!(vim_state.mode, VimMode::Normal)
+                        || !vim_state.showcmd.is_empty())),
             plan_toggle_available: self.plan_toggle_available(ctx),
             keyboard_enhancement_supported: self.keyboard_enhancement_supported,
             shell_completion_available: self.is_shell_mode(ctx),
@@ -676,13 +691,13 @@ impl TypedActionView for TuiInputView {
                 // the start still enters shell mode regardless of vim mode.
                 if let TuiEditorAction::InsertChar(c) = *editor_action
                     && self.vim_mode_enabled(ctx)
-                    && !matches!(self.vim.mode(), VimMode::Insert)
+                    && !matches!(self.vim_model.as_ref(ctx).state().mode, VimMode::Insert)
                 {
-                    // Capture mode BEFORE the FSA advances so apply_vim_action can
-                    // detect a mode transition and emit VimModeChanged.
-                    let prev_mode = self.vim.mode();
-                    let vim_action = self.vim.process_char(c);
-                    return self.apply_vim_action(vim_action, prev_mode, ctx);
+                    // Drive the shared FSA; VimSubscriber dispatches the resulting
+                    // VimEvent synchronously to our VimHandler impl (vim.rs).
+                    self.vim_model
+                        .update(ctx, |vim, ctx| vim.typed_character(c, ctx));
+                    return;
                 }
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
@@ -728,11 +743,12 @@ impl TypedActionView for TuiInputView {
                 // In vim normal/visual mode, backspace is a leftward motion.
                 if matches!(*command, TuiEditorCommand::Backspace)
                     && self.vim_mode_enabled(ctx)
-                    && !matches!(self.vim.mode(), VimMode::Insert)
+                    && !matches!(self.vim_model.as_ref(ctx).state().mode, VimMode::Insert)
                 {
-                    let prev_mode = self.vim.mode();
-                    let vim_action = self.vim.process_special_key("backspace");
-                    return self.apply_vim_action(vim_action, prev_mode, ctx);
+                    let backspace = Keystroke::parse("backspace").expect("backspace key is valid");
+                    self.vim_model
+                        .update(ctx, |vim, ctx| vim.keypress(&backspace, ctx));
+                    return;
                 }
                 // Only open the conversation list from normal agent input; in
                 // `!` shell mode the `!` prefix is not part of `plain_text`, so
@@ -776,8 +792,12 @@ impl TypedActionView for TuiInputView {
             }
             TuiInputAction::SetCursor { offset } => {
                 // Clicking in the input switches to insert mode in vim.
-                if self.vim_mode_enabled(ctx) && !matches!(self.vim.mode(), VimMode::Insert) {
-                    self.vim.force_insert_mode();
+                if self.vim_mode_enabled(ctx)
+                    && !matches!(self.vim_model.as_ref(ctx).state().mode, VimMode::Insert)
+                {
+                    self.vim_model
+                        .update(ctx, |vim, ctx| vim.force_insert_mode(ctx));
+                    ctx.emit(TuiInputViewEvent::VimModeChanged);
                 }
                 self.close_shortcuts(ctx);
                 self.model.update(ctx, |m, ctx| {
@@ -1168,18 +1188,19 @@ impl TuiInputView {
         // input, a second Escape should exit shell mode if active (matching
         // bash/zsh vi-mode behaviour where `<Esc><Esc>` exits shell mode).
         if self.vim_mode_enabled(ctx) {
-            if matches!(self.vim.mode(), VimMode::Normal)
-                && !self.vim.has_pending()
+            let vim_state = self.vim_model.as_ref(ctx).state();
+            if matches!(vim_state.mode, VimMode::Normal)
+                && vim_state.showcmd.is_empty()
                 && self.is_shell_mode(ctx)
             {
                 self.exit_shell_mode(ctx);
                 return true;
             }
-            // Capture mode BEFORE the FSA advances so apply_vim_action can
-            // detect the transition and emit VimModeChanged.
-            let prev_mode = self.vim.mode();
-            let vim_action = self.vim.process_special_key("escape");
-            self.apply_vim_action(vim_action, prev_mode, ctx);
+            // Drive the shared FSA via VimModel. VimSubscriber dispatches the
+            // resulting VimEvent (Escape or ChangeMode) to our VimHandler impl.
+            let escape = Keystroke::parse("escape").expect("escape key is valid");
+            self.vim_model
+                .update(ctx, |vim, ctx| vim.keypress(&escape, ctx));
             ctx.notify();
             return true;
         }
@@ -1212,8 +1233,9 @@ impl TuiInputView {
     }
 }
 
-// Vim-mode action dispatch is in a dedicated submodule so it can access
-// the private fields of `TuiInputView` while keeping the main view file focused.
+// VimHandler implementation for TuiInputView. Declared as a submodule so it
+// can access the private fields of TuiInputView while keeping the main view
+// file focused on prompt policy.
 #[path = "vim.rs"]
 mod vim_impl;
 

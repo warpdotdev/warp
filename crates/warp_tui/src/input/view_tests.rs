@@ -3411,3 +3411,203 @@ fn escape_exits_shell_mode_in_vim_normal_mode() {
         });
     });
 }
+
+// ── VimHandler regression tests ───────────────────────────────────────────────
+//
+// These tests verify the VimHandler-based dispatch (now via VimModel/VimSubscriber)
+// produces the same behavior as the old TuiVimAction-based dispatch.
+//
+// IMPORTANT: VimModel events (navigate, operation, undo, etc.) are dispatched
+// to the VimHandler via subscriptions, which are flushed AFTER the current
+// `app.update()` or `view.update()` call returns.  Assertions about buffer
+// content or cursor position must therefore appear in a SEPARATE `app.update` /
+// `app.read` call so that the flush has already run by the time we read state.
+
+/// `dd` via the VimHandler operation path kills the current line.
+#[test]
+fn vim_handler_dd_kills_line() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            // Type some text in Insert mode.
+            type_str(&view, ctx, "hello world");
+            // Escape: Insert → Normal (shell-mode exit guard not active, so this
+            // transitions vim mode).
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        // `dd` in Normal mode.  Effects (the buffer kill) are flushed after
+        // this app.update call completes.
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[
+                    TuiInputAction::Editor(TuiEditorAction::InsertChar('d')),
+                    TuiInputAction::Editor(TuiEditorAction::InsertChar('d')),
+                ],
+            );
+        });
+
+        // Assert in a separate app.read (effects already flushed).
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "", "`dd` must kill the entire line");
+        });
+    });
+}
+
+/// `h` and `l` in Normal mode move the cursor left and right.
+#[test]
+fn vim_handler_hl_navigation() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "abc");
+            // Escape: Insert → Normal
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        // Capture cursor after escape (effects already flushed).
+        let cursor_after_escape = app.read(|ctx| cursor_and_height(&view, ctx).0);
+
+        // `h` moves left — dispatch in its own update so effects flush before read.
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('h'))],
+            );
+        });
+        let cursor_after_h = app.read(|ctx| cursor_and_height(&view, ctx).0);
+        assert!(
+            cursor_after_h.is_some_and(|c| cursor_after_escape.is_some_and(|b| c.0 < b.0)),
+            "h must move cursor left: before={cursor_after_escape:?}, after={cursor_after_h:?}"
+        );
+
+        // `l` moves right back to the original position.
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('l'))],
+            );
+        });
+        let cursor_after_l = app.read(|ctx| cursor_and_height(&view, ctx).0);
+        assert_eq!(
+            cursor_after_l, cursor_after_escape,
+            "l must restore cursor position"
+        );
+    });
+}
+
+/// Mode change emits `VimModeChanged` when transitioning Insert → Normal.
+#[test]
+fn vim_handler_mode_change_emits_vim_mode_changed() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let (view, mode_change_count) = app.update(|ctx| {
+            let view = build_view(ctx);
+            let count = Rc::new(Cell::new(0u32));
+            let count_for_sub = count.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiInputViewEvent::VimModeChanged) {
+                    count_for_sub.set(count_for_sub.get() + 1);
+                }
+            });
+            (view, count)
+        });
+
+        app.update(|ctx| {
+            // Escape: Insert → Normal — should emit VimModeChanged.
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+        });
+        assert!(
+            mode_change_count.get() >= 1,
+            "Escape from Insert must emit VimModeChanged"
+        );
+
+        let count_before_i = mode_change_count.get();
+        app.update(|ctx| {
+            // `i` in Normal: Normal → Insert — should emit VimModeChanged.
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('i'))],
+            );
+        });
+        assert!(
+            mode_change_count.get() > count_before_i,
+            "`i` in Normal mode must emit VimModeChanged"
+        );
+    });
+}
+
+/// `u` in Normal mode undoes the last edit.
+#[test]
+fn vim_handler_u_undoes_last_edit() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello");
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        // `u` in Normal mode.
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('u'))],
+            );
+        });
+
+        // After undo, buffer should be empty (initial state before "hello").
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "", "`u` must undo the last edit");
+        });
+    });
+}
+
+/// `w` in Normal mode moves the cursor one word forward.
+#[test]
+fn vim_handler_w_moves_word_forward() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        // `^` to go to first non-whitespace.
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('^'))],
+            );
+        });
+        let start_cursor = app.read(|ctx| cursor_and_height(&view, ctx).0);
+
+        // `w` moves to start of next word.
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('w'))],
+            );
+        });
+        let word_cursor = app.read(|ctx| cursor_and_height(&view, ctx).0);
+        assert!(
+            word_cursor.is_some_and(|c| start_cursor.is_some_and(|s| c.0 > s.0)),
+            "w must move cursor forward past 'hello': before={start_cursor:?}, after={word_cursor:?}"
+        );
+    });
+}
