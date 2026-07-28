@@ -56,6 +56,7 @@ use super::{
     voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
+use crate::grok_oauth::{TuiGrokOAuthBlock, TuiGrokOAuthBlockAction};
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
@@ -430,8 +431,63 @@ fn provider_api_key_shell_command_uses_shared_tui_launcher() {
         ),
         None
     );
+    assert_eq!(
+        super::provider_api_key_shell_command(
+            Channel::Stable,
+            LLMProvider::Xai,
+            super::ProviderApiKeyOperation::Set,
+        ),
+        None,
+        "Grok OAuth must stay in the active TUI process"
+    );
 }
 
+#[test]
+fn grok_oauth_block_exclusively_owns_input_until_escape() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let block = view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/add-api-key grok", ctx);
+                input.clear(ctx);
+            });
+            let block = ctx.add_typed_action_tui_view(TuiGrokOAuthBlock::new_for_test);
+            view.install_grok_oauth_block(block.clone(), ctx);
+            block
+        });
+
+        view.read(&app, |session, ctx| {
+            let state = session.session_state(ctx).expect("session state resolves");
+            assert!(matches!(
+                state.blocking_input_source(),
+                Some(BlockingInputSource::GrokOAuth(active)) if active.id() == block.id()
+            ));
+            assert_eq!(state.input_target(), TuiInputTarget::Disabled);
+            assert!(session.child_view_ids(ctx).contains(&block.id()));
+            assert!(session.input_view.as_ref(ctx).is_empty(ctx));
+        });
+        let rendered = render_session(&mut app, &view, 80, 40).join("\n");
+        assert!(rendered.contains("Connect Grok"), "{rendered}");
+        assert!(rendered.contains("Esc to close"), "{rendered}");
+        assert!(!rendered.contains("Ask the agent anything"), "{rendered}");
+        assert!(!rendered.contains("for commands"), "{rendered}");
+
+        block.update(&mut app, |block, ctx| {
+            block.handle_action(&TuiGrokOAuthBlockAction::Cancel, ctx);
+        });
+        view.read(&app, |session, ctx| {
+            assert!(session.grok_oauth.is_none());
+            let state = session.session_state(ctx).expect("session state resolves");
+            assert!(!state.has_blocking_interaction());
+            assert_eq!(state.input_target(), TuiInputTarget::AgentEditor);
+            assert!(session.input_view.as_ref(ctx).is_empty(ctx));
+        });
+        let rendered = render_session(&mut app, &view, 80, 40).join("\n");
+        assert!(!rendered.contains("Connect Grok"), "{rendered}");
+    });
+}
 #[test]
 fn log_bundle_failure_hint_does_not_hardcode_a_frontend_path() {
     assert!(!LOG_BUNDLE_FAILED_HINT.contains("warp.log"));

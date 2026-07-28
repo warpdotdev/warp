@@ -8257,6 +8257,7 @@ impl ApiKeysWidget {
 
         let provider_api_key_editors = LLMProvider::API_KEY_PROVIDERS
             .into_iter()
+            .filter(|provider| provider.supports_pasted_api_key())
             .map(|provider| {
                 let key = provider
                     .api_key(ApiKeyManager::as_ref(ctx).keys())

@@ -31,6 +31,7 @@ mod editor_element;
 mod editor_interaction;
 mod editor_view;
 mod exit_confirmation;
+mod grok_oauth;
 mod handoff;
 mod inline_menu;
 mod input_hints;

@@ -63,6 +63,20 @@ fn text_styles_follow_light_theme_foreground() {
         CoreFill::from(theme.background().blend(&shortcut_accent.with_opacity(10))).into();
     assert_eq!(builder.shortcuts_background(), shortcuts_background);
     assert_eq!(builder.shell_command_background(), shell_command_background);
+    let grok_fill = ThemeFill::from(theme.terminal_colors().bright.blue);
+    let grok_accent: Color = CoreFill::from(grok_fill).into();
+    let grok_surface: Color =
+        CoreFill::from(theme.background().blend(&grok_fill.with_opacity(10))).into();
+    let grok_header: Color = CoreFill::from(
+        theme
+            .background()
+            .blend(&grok_fill.with_opacity(10))
+            .blend(&grok_fill.with_opacity(10)),
+    )
+    .into();
+    assert_eq!(builder.grok_oauth_accent_style().fg, Some(grok_accent));
+    assert_eq!(builder.grok_oauth_surface_background(), grok_surface);
+    assert_eq!(builder.grok_oauth_header_background(), grok_header);
     let shell_command_prefix_style = builder.shell_command_prefix_style();
     assert_eq!(
         shell_command_prefix_style.fg,

@@ -74,6 +74,7 @@ use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuMode
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
 use crate::exit_confirmation::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
+use crate::grok_oauth::TuiGrokOAuthBlock;
 use crate::handoff::TuiHandoffBlock;
 use crate::inline_menu::{MAX_INLINE_MENU_ROWS, TuiInlineMenu, active_inline_menu};
 use crate::input::view::TuiInputAction;
@@ -127,6 +128,8 @@ use crate::zero_state_animation::{
 };
 mod completions;
 
+#[path = "grok_oauth/session.rs"]
+mod grok_oauth_session;
 #[path = "handoff/session.rs"]
 mod handoff_session;
 mod input_detection;
@@ -173,6 +176,8 @@ pub(super) enum BlockingInputSource {
     Orchestration(ViewHandle<TuiOrchestrationBlock>),
     /// A local-to-cloud handoff configuration or result card.
     Handoff(ViewHandle<TuiHandoffBlock>),
+    /// An in-process Grok OAuth connection flow.
+    GrokOAuth(ViewHandle<TuiGrokOAuthBlock>),
 }
 
 impl BlockingInputSource {
@@ -187,6 +192,7 @@ impl BlockingInputSource {
             Self::Permission(view) => Some(TuiChildView::new(&view).finish()),
             Self::Orchestration(view) => Some(TuiChildView::new(&view).finish()),
             Self::Handoff(view) => Some(TuiChildView::new(&view).finish()),
+            Self::GrokOAuth(view) => Some(TuiChildView::new(&view).finish()),
         }
     }
 }
@@ -358,6 +364,9 @@ fn provider_api_key_shell_command(
     provider: LLMProvider,
     operation: ProviderApiKeyOperation,
 ) -> Option<String> {
+    if !provider.supports_pasted_api_key() {
+        return None;
+    }
     let provider = provider.api_key_slug()?;
     let flag = match operation {
         ProviderApiKeyOperation::Set => "--set-provider-api-key",
@@ -751,6 +760,7 @@ pub(crate) struct TuiTerminalSessionView {
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
     handoff: Option<ViewHandle<TuiHandoffBlock>>,
+    grok_oauth: Option<ViewHandle<TuiGrokOAuthBlock>>,
     statusline_config_view: Option<ViewHandle<TuiStatuslineConfigView>>,
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
     orchestration_tabs_focused: bool,
@@ -931,7 +941,9 @@ impl TuiTerminalSessionView {
         ctx: &AppContext,
     ) -> Result<TuiTerminalSessionState, TuiTerminalSessionStateResolveError> {
         let state = self.session_state.as_ref(ctx).resolve(ctx)?;
-        Ok(if let Some(handoff) = self.active_handoff(ctx) {
+        Ok(if let Some(grok_oauth) = self.active_grok_oauth(ctx) {
+            state.with_blocking_input_source(BlockingInputSource::GrokOAuth(grok_oauth))
+        } else if let Some(handoff) = self.active_handoff(ctx) {
             state.with_blocking_input_source(BlockingInputSource::Handoff(handoff))
         } else {
             state
@@ -954,6 +966,7 @@ impl TuiTerminalSessionView {
             BlockingInputSource::Permission(view) => ctx.focus(&view),
             BlockingInputSource::Orchestration(view) => ctx.focus(&view),
             BlockingInputSource::Handoff(view) => ctx.focus(&view),
+            BlockingInputSource::GrokOAuth(view) => ctx.focus(&view),
         }
     }
 
@@ -1911,6 +1924,7 @@ impl TuiTerminalSessionView {
             next_restore_request_id: 0,
             exit_summary,
             handoff: None,
+            grok_oauth: None,
             statusline_config_view: None,
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
@@ -3203,21 +3217,31 @@ impl TuiTerminalSessionView {
             );
             return;
         };
-        let Some(command_text) =
-            provider_api_key_shell_command(ChannelState::channel(), provider, operation)
-        else {
-            self.show_error_hint(
-                format!(
-                    "Usage: {} <{}>",
-                    command.name,
-                    LLMProvider::API_KEY_PROVIDER_VALUE_NAME
-                ),
-                ctx,
-            );
-            return;
-        };
-        self.execute_user_command(&command_text, None, ctx);
-        record_static_slash_command_accepted(command.name, true, ctx);
+        match (provider, operation) {
+            (LLMProvider::Xai, ProviderApiKeyOperation::Set) => {
+                self.start_grok_oauth(command.name, ctx);
+            }
+            (LLMProvider::Xai, ProviderApiKeyOperation::Clear) => {
+                self.clear_grok_oauth(command.name, ctx);
+            }
+            (LLMProvider::OpenAI | LLMProvider::Anthropic | LLMProvider::Google, operation) => {
+                let command_text =
+                    provider_api_key_shell_command(ChannelState::channel(), provider, operation)
+                        .expect("pasted-key providers have canonical API-key slugs");
+                self.execute_user_command(&command_text, None, ctx);
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            (LLMProvider::Unknown, _) => {
+                self.show_error_hint(
+                    format!(
+                        "Usage: {} <{}>",
+                        command.name,
+                        LLMProvider::API_KEY_PROVIDER_VALUE_NAME
+                    ),
+                    ctx,
+                );
+            }
+        }
     }
 
     /// Routes a submission to shell execution or the agent conversation based
@@ -4182,6 +4206,9 @@ impl TuiView for TuiTerminalSessionView {
         if let Some(handoff) = self.active_handoff(ctx) {
             view_ids.push(handoff.id());
         }
+        if let Some(grok_oauth) = self.active_grok_oauth(ctx) {
+            view_ids.push(grok_oauth.id());
+        }
         if let Some(statusline_config_view) = self.statusline_config_view.as_ref() {
             view_ids.push(statusline_config_view.id());
         }
@@ -4461,6 +4488,9 @@ impl TuiView for TuiTerminalSessionView {
         }
         if let Some(BlockingInputSource::Handoff(handoff)) = state.blocking_input_source() {
             content = content.child(TuiChildView::new(handoff).finish());
+        }
+        if let Some(BlockingInputSource::GrokOAuth(grok_oauth)) = state.blocking_input_source() {
+            content = content.child(TuiChildView::new(grok_oauth).finish());
         }
         if !blocker_active
             && let Some(statusline_config_view) = self.statusline_config_view.as_ref()

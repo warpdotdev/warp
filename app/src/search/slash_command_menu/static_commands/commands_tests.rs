@@ -116,6 +116,11 @@ fn add_api_key_command_is_tui_only_and_requires_a_provider() {
         Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME)
     );
     assert!(
+        argument
+            .hint_text
+            .is_some_and(|hint| hint.split('|').any(|provider| provider == "grok"))
+    );
+    assert!(
         all_commands(settings::SettingsMode::Gui)
             .iter()
             .all(|command| command.kind != SlashCommandKind::AddApiKey)
@@ -140,6 +145,11 @@ fn clear_api_key_command_is_tui_only_and_requires_a_provider() {
     assert_eq!(
         argument.hint_text,
         Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME)
+    );
+    assert!(
+        argument
+            .hint_text
+            .is_some_and(|hint| hint.split('|').any(|provider| provider == "grok"))
     );
     assert!(
         all_commands(settings::SettingsMode::Gui)

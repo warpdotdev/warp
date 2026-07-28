@@ -55,3 +55,33 @@ fn manual_code_exchange_rejects_blank_code() {
     let result = warpui_core::r#async::block_on(exchange.exchange("   "));
     assert!(result.is_err());
 }
+
+#[test]
+fn cancelling_loopback_wait_releases_listener() {
+    let listener =
+        TcpListener::bind((REDIRECT_HOST, 0)).expect("test callback listener should bind");
+    listener
+        .set_nonblocking(true)
+        .expect("test callback listener should be non-blocking");
+    let address = listener
+        .local_addr()
+        .expect("test callback listener should have an address");
+    let cancellation = OauthCancellationHandle {
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    cancellation.cancel();
+
+    let result = warpui_core::r#async::block_on(run_oauth_flow(
+        listener,
+        PkceParams::generate(),
+        cancellation,
+    ));
+
+    assert_eq!(
+        result
+            .expect_err("cancelled callback wait should fail")
+            .to_string(),
+        "Grok authorization was cancelled"
+    );
+    TcpListener::bind(address).expect("cancelled callback listener should release its port");
+}

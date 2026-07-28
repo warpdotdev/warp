@@ -381,7 +381,8 @@ impl TuiTerminalSessionState {
                     BlockingInputSource::AskQuestion(_)
                     | BlockingInputSource::Permission(_)
                     | BlockingInputSource::Orchestration(_)
-                    | BlockingInputSource::Handoff(_) => TuiInputTarget::Disabled,
+                    | BlockingInputSource::Handoff(_)
+                    | BlockingInputSource::GrokOAuth(_) => TuiInputTarget::Disabled,
                 },
                 TuiInteractionState::StartingShell => TuiInputTarget::Disabled,
                 TuiInteractionState::Composer(_) => TuiInputTarget::AgentEditor,
@@ -472,7 +473,8 @@ impl TuiTerminalSessionState {
                 BlockingInputSource::AskQuestion(_)
                 | BlockingInputSource::Permission(_)
                 | BlockingInputSource::Orchestration(_)
-                | BlockingInputSource::Handoff(_),
+                | BlockingInputSource::Handoff(_)
+                | BlockingInputSource::GrokOAuth(_),
             )
             | TuiInteractionState::StartingShell
             | TuiInteractionState::Pty(TuiPtyState::Process) => return Vec::new(),
