@@ -249,6 +249,15 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
+    /// Returns `true` when the user belongs to more than one team in the current
+    /// workspace, meaning the team-switcher pill and dropdown should be shown.
+    /// Single-team and no-workspace users return `false` so their UI is unchanged.
+    pub fn can_switch_teams(&self) -> bool {
+        self.current_workspace()
+            .map(|ws| ws.teams.len() > 1)
+            .unwrap_or(false)
+    }
+
     /// Registers a new window pre-assigned to a specific team.
     /// Unlike `register_window`, this bypasses the source-window / self-serve fallback
     /// and always uses the provided `team_uid`. Used when the user explicitly requests
@@ -259,9 +268,15 @@ impl UserWorkspaces {
         team_uid: ServerId,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.window_team_uids
-            .entry(window_id)
-            .or_insert(Some(team_uid));
+        // Mirror `set_team_for_window`: insert a default (None) entry if absent, then
+        // set only when no team has been assigned yet.  Using `or_insert(Some(uid))`
+        // would silently no-op when the entry already exists as `None` (which
+        // `register_window` stores when there is no source window and no self-serve
+        // team), causing the explicit team choice to be discarded.
+        let window_team_uid = self.window_team_uids.entry(window_id).or_default();
+        if window_team_uid.is_none() {
+            *window_team_uid = Some(team_uid);
+        }
         ctx.notify();
     }
 

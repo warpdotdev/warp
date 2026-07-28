@@ -32,7 +32,7 @@ use crate::palette::PaletteMode;
 use crate::pane_group::PaneGroup;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::telemetry::{
     AddTabWithShellSource, AgentModeEntrypoint, PaletteSource, SharingDialogSource,
 };
@@ -878,7 +878,7 @@ pub enum WorkspaceAction {
     /// Opens a new window pre-scoped to the specified team, triggered from
     /// the title-bar team-switcher dropdown.
     OpenNewWindowForTeam {
-        team_uid: crate::server::ids::ServerId,
+        team_uid: ServerId,
     },
     /// Shows (toggles) the team-switcher dropdown menu in the title bar.
     ShowTeamSwitcherMenu,

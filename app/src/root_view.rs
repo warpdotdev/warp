@@ -72,7 +72,7 @@ use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
@@ -1583,7 +1583,7 @@ pub enum NewWorkspaceSource {
     AmbientAgent,
     /// Opens a new window pre-scoped to a specific team, chosen via the title-bar team switcher.
     TeamSwitched {
-        team_uid: crate::server::ids::ServerId,
+        team_uid: ServerId,
     },
     /// A tab is being transferred from another window via the transferable views framework.
     /// The workspace will create a placeholder tab, which will be replaced by the transferred

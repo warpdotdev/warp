@@ -1109,24 +1109,15 @@ fn test_agent_attribution_respects_user_setting() {
     })
 }
 
-/// Returns true when the current workspace has > 1 team (team-switcher should be visible),
-/// and false when there are 0 or 1 teams (team-switcher should be hidden).
-fn workspace_has_multiple_teams(user_workspaces: &UserWorkspaces) -> bool {
-    user_workspaces
-        .current_workspace()
-        .map(|ws| ws.teams.len() > 1)
-        .unwrap_or(false)
-}
-
 #[test]
 fn test_team_switcher_hidden_with_zero_teams() {
-    // When the user is in no workspace / no teams, the pill must not render.
+    // When the user is in no workspace / no teams, `can_switch_teams` must return
+    // false so the pill does not render.
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![]);
         app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert!(
-                !workspace_has_multiple_teams(user_workspaces),
+                !UserWorkspaces::as_ref(ctx).can_switch_teams(),
                 "0 teams: switcher should be hidden"
             );
         });
@@ -1135,15 +1126,14 @@ fn test_team_switcher_hidden_with_zero_teams() {
 
 #[test]
 fn test_team_switcher_hidden_with_single_team() {
-    // With exactly 1 team the pill must not appear.
+    // With exactly 1 team, `can_switch_teams` must return false.
     let team = team_for_test();
     let workspace = workspace_for_test(&team);
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
         app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert!(
-                !workspace_has_multiple_teams(user_workspaces),
+                !UserWorkspaces::as_ref(ctx).can_switch_teams(),
                 "1 team: switcher should be hidden"
             );
         });
@@ -1152,7 +1142,7 @@ fn test_team_switcher_hidden_with_single_team() {
 
 #[test]
 fn test_team_switcher_visible_with_multiple_teams() {
-    // With 2+ teams the pill must be visible.
+    // With 2+ teams, `can_switch_teams` must return true so the pill is shown.
     let team1 = team_for_test();
     let mut team2 = team_for_test();
     team2.uid = 456.into();
@@ -1163,9 +1153,8 @@ fn test_team_switcher_visible_with_multiple_teams() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
         app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert!(
-                workspace_has_multiple_teams(user_workspaces),
+                UserWorkspaces::as_ref(ctx).can_switch_teams(),
                 "2 teams: switcher should be visible"
             );
         });
@@ -1228,6 +1217,58 @@ fn test_register_window_for_team_is_immutable_after_set() {
                 user_workspaces.team_uid_for_window(window_id),
                 Some(team2.uid),
                 "second call to register_window_for_team must not override the first"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_register_window_for_team_succeeds_when_register_window_stored_none() {
+    // Regression: when `register_window` runs before workspace metadata loads it
+    // stores `None` for the window.  A subsequent `register_window_for_team` must
+    // still assign the requested team instead of silently no-oping.
+    let team1 = team_for_test();
+    let mut team2 = team_for_test();
+    team2.uid = 456.into();
+    team2.name = "Second Team".to_string();
+    let mut workspace = workspace_for_test(&team1);
+    workspace.teams.push(team2.clone());
+
+    App::test((), |mut app| async move {
+        // No workspace loaded yet — self_serve_team_uid() returns None, so
+        // register_window stores None for this window_id.
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        // Confirm the entry is None (simulating the unassigned state).
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                None,
+                "window should be unassigned after register_window with no workspace loaded"
+            );
+        });
+
+        // Load the workspace so the teams are available.
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+        });
+
+        // Now call register_window_for_team — it must assign team2 even though
+        // the entry already exists as None (the old `or_insert` bug would drop it).
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window_for_team(window_id, team2.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(team2.uid),
+                "register_window_for_team must assign team2 even when entry was previously None"
             );
         });
     })

@@ -283,8 +283,8 @@ use crate::experiments::{BlockOnboarding, Experiment};
 use crate::launch_configs::launch_config::WindowTemplate;
 use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::menu::{
-    Event as MenuEvent, MENU_VERTICAL_PADDING, Menu, MenuItem, MenuItemFields, MenuSelectionSource,
-    MenuVariant,
+    CustomMenuItemLabelFn, Event as MenuEvent, MENU_VERTICAL_PADDING, Menu, MenuItem,
+    MenuItemFields, MenuSelectionSource, MenuVariant,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -431,7 +431,7 @@ use crate::terminal::view::{
 };
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::{self, BlockListSettings, SizeInfo, TerminalModel, TerminalView};
-use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
+use crate::themes::theme::{AnsiColorIdentifier, Blend, RespectSystemTheme, ThemeKind};
 use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
 use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
 use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
@@ -6147,24 +6147,61 @@ impl Workspace {
     fn show_team_switcher_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
         let window_id = self.window_id;
         let user_workspaces = UserWorkspaces::as_ref(ctx);
+        // Only meaningful when the user can switch teams.
+        if !user_workspaces.can_switch_teams() {
+            return;
+        }
         let Some(workspace) = user_workspaces.current_workspace() else {
             return;
         };
-        // Only meaningful when there are multiple teams.
-        if workspace.teams.len() <= 1 {
-            return;
-        }
         let current_team_uid = user_workspaces.team_uid_for_window(window_id);
         let items: Vec<MenuItem<WorkspaceAction>> = workspace
             .teams
             .iter()
             .map(|team| {
                 let uid = team.uid;
-                let label = team.name.clone();
+                let team_name = team.name.clone();
+                let team_color_hex = team.color.clone();
                 let is_current = Some(uid) == current_team_uid;
-                let mut fields = MenuItemFields::new(label)
+                // Render each item as [color dot] {team name}, matching the pill style.
+                let label_text = team_name.clone();
+                let builder: CustomMenuItemLabelFn =
+                    Arc::new(move |_selected, _hovered, appearance, _ctx| {
+                        let theme = appearance.theme();
+                        let dot_color = team_color_hex
+                            .as_deref()
+                            .and_then(|hex| {
+                                warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok()
+                            })
+                            .unwrap_or_else(|| internal_colors::neutral_5(theme));
+                        let dot = ConstrainedBox::new(
+                            Rect::new()
+                                .with_background(Fill::Solid(dot_color))
+                                .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+                                .finish(),
+                        )
+                        .with_width(8.)
+                        .with_height(8.)
+                        .finish();
+                        let text_color = theme.foreground();
+                        let name_text = Text::new_inline(
+                            team_name.clone(),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size(),
+                        )
+                        .with_color(text_color.into())
+                        .finish();
+                        Flex::row()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .with_spacing(6.)
+                            .with_child(dot)
+                            .with_child(name_text)
+                            .finish()
+                    });
+                let mut fields = MenuItemFields::new_with_custom_label(builder, Some(label_text))
                     .with_on_select_action(WorkspaceAction::OpenNewWindowForTeam { team_uid: uid });
                 if is_current {
+                    // Leading check mark for the currently-active team.
                     fields = fields.with_icon(icons::Icon::Check);
                 }
                 fields.into_item()
@@ -6186,12 +6223,17 @@ impl Workspace {
         ctx: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
-        let workspace = user_workspaces.current_workspace()?;
         // Only show when the user has access to more than one team.
-        if workspace.teams.len() <= 1 {
+        if !user_workspaces.can_switch_teams() {
             return None;
         }
-        let current_team = user_workspaces.team_for_window(self.window_id)?;
+        let workspace = user_workspaces.current_workspace()?;
+        // If no team is explicitly assigned to this window yet (e.g., the window was
+        // just opened and `initialize_unassigned_windows` hasn't run), fall back to
+        // the first available team as a placeholder so the pill renders.
+        let current_team = user_workspaces
+            .team_for_window(self.window_id)
+            .or_else(|| workspace.teams.first())?;
         let team_name = current_team.name.clone();
         let team_color_hex = current_team.color.clone();
         let theme = appearance.theme();
@@ -6199,17 +6241,12 @@ impl Workspace {
         let pill_bg_normal = internal_colors::fg_overlay_1(theme);
         let pill_bg_hover = internal_colors::fg_overlay_2(theme);
 
-        // Parse the team color for the dot; fall back to accent if invalid/missing.
+        // Parse the team color for the dot; fall back to a neutral theme grey
+        // (matching the server contract / admin UI default) if invalid/missing.
         let dot_color = team_color_hex
             .as_deref()
             .and_then(|hex| warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok())
-            .unwrap_or_else(|| {
-                if let Fill::Solid(c) = theme.accent() {
-                    c
-                } else {
-                    ColorU::new(100, 100, 200, 255)
-                }
-            });
+            .unwrap_or_else(|| internal_colors::neutral_5(theme));
 
         let pill = Hoverable::new(self.mouse_states.team_switcher_pill.clone(), move |state| {
             let dot = ConstrainedBox::new(
@@ -21365,19 +21402,40 @@ impl Workspace {
                 .finish(),
         )
         .with_border(tab_bar_border);
+        // Determine the tab bar background, combining NewTabStyling with the
+        // per-team tint.  Only tint when the user has >1 team (AC4: single-team
+        // users must see unchanged behavior), and blend rather than replace so
+        // the fg_overlay_1 base is preserved when NewTabStyling is active.
+        let is_multi_team = UserWorkspaces::as_ref(ctx).can_switch_teams();
         if FeatureFlag::NewTabStyling.is_enabled() {
-            tab_bar_container = tab_bar_container
-                .with_background(internal_colors::fg_overlay_1(appearance.theme()));
-        }
-        // Tint the title bar with the window's team color when one is set.
-        if let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id) {
-            if let Some(hex) = team.color.as_deref() {
-                if let Ok(mut team_color) =
-                    warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
-                {
-                    // Apply a subtle semi-transparent tint (alpha ~25%) over the tab bar.
-                    team_color.a = 64;
-                    tab_bar_container = tab_bar_container.with_background(Fill::Solid(team_color));
+            let mut fill = internal_colors::fg_overlay_1(appearance.theme());
+            if is_multi_team {
+                if let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id) {
+                    if let Some(hex) = team.color.as_deref() {
+                        if let Ok(mut team_color) =
+                            warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
+                        {
+                            // Blend a subtle semi-transparent tint (~25% alpha) over the
+                            // fg_overlay_1 base so the tint doesn't discard it.
+                            team_color.a = 64;
+                            fill = fill.blend(&Fill::Solid(team_color));
+                        }
+                    }
+                }
+            }
+            tab_bar_container = tab_bar_container.with_background(fill);
+        } else if is_multi_team {
+            // NewTabStyling is off: still apply the team tint, but as its own
+            // background pass (no fg_overlay_1 to preserve in this branch).
+            if let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id) {
+                if let Some(hex) = team.color.as_deref() {
+                    if let Ok(mut team_color) =
+                        warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
+                    {
+                        team_color.a = 64;
+                        tab_bar_container =
+                            tab_bar_container.with_background(Fill::Solid(team_color));
+                    }
                 }
             }
         }
