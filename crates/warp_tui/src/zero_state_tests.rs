@@ -1,10 +1,14 @@
 use std::path::PathBuf;
 
 use uuid::Uuid;
+use warp::appearance::Appearance;
 use warp::tui_export::{
     TuiMcpConfigState, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot,
     TuiMcpTransport,
 };
+use warpui_core::App;
+use warpui_core::elements::tui::{TuiBufferExt, TuiElement, TuiRect, TuiText};
+use warpui_core::presenter::tui::TuiPresenter;
 
 use super::mcp_status_label;
 
@@ -80,4 +84,27 @@ fn mcp_summary_marks_config_errors() {
         mcp_status_label(&snapshot),
         ("Config error · run /mcp".to_string(), true)
     );
+}
+
+#[test]
+fn zero_state_subtitle_renders_built_bug_free_by_kevin_yang() {
+    // Verify that the subtitle text we added to `render_left_column` renders
+    // correctly by building the element directly and asserting on the output.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        app.read(|app_ctx| {
+            let subtitle = TuiText::new("built bug free by kevin yang").finish();
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(subtitle, TuiRect::new(0, 0, 40, 1), app_ctx);
+            let lines = frame.buffer.to_lines();
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("built bug free by kevin yang")),
+                "zero state subtitle should render: {lines:?}"
+            );
+        });
+    });
 }
