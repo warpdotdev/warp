@@ -47,8 +47,13 @@ pub fn validate_agent_mode_base_model_id(
 }
 
 /// Classifies a user-supplied agent-mode model id against the available model
-/// list, distinguishing "the model list itself is unavailable (server
-/// unhealthy)" from "the id is genuinely not in a valid list".
+/// list, distinguishing "the model list fetch failed (so the list is empty or
+/// stale)" from "the id is genuinely not in a valid list".
+///
+/// Note: a fully-unreachable server does not reach this function — auth
+/// (`GetUser`) fails first and `dispatch_command` is never called. The
+/// reachable case here is a *partially* unhealthy server where auth succeeds
+/// but `GetFeatureModelChoices` fails.
 fn classify_agent_mode_base_model_id(
     model_id: &str,
     valid_ids: &[LLMId],
@@ -59,7 +64,8 @@ fn classify_agent_mode_base_model_id(
         Ok(llm_id)
     } else if list_unavailable {
         Err(anyhow::anyhow!(
-            "Could not retrieve the agent-mode model list from the server; it may be unavailable or unhealthy. Verify your network connection and try again later."
+            "Could not retrieve the agent-mode model list from the server \
+             (the request failed or returned no models). Try again later."
         ))
     } else {
         let suggestions = valid_ids

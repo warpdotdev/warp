@@ -1678,7 +1678,21 @@ impl LLMPreferences {
                 }
                 Err(e) => {
                     report_error!(e.context("Failed to fetch LLMs from server"));
-                    // Mark the model list unavailable so validators surface a server error instead of blaming the user's model id.
+                    // Mark the model list unavailable so validators surface a server error
+                    // instead of blaming the user's model id.
+                    //
+                    // Timing note: this callback runs from a spawned task that is
+                    // started on `AuthManagerEvent::AuthComplete`. `dispatch_command`
+                    // fires on the same event, so there is a race — but in the `agent
+                    // run` path `setup_and_run_driver` awaits `refresh_team_metadata`
+                    // and `refresh_warp_drive` (see `app/src/ai/agent_sdk/mod.rs`,
+                    // `setup_and_run_driver`) before `build_driver_options_and_task`
+                    // calls `validate_agent_mode_base_model_id`. Those two network
+                    // round-trips give this `Err` callback enough time to land and set
+                    // the flag. If model validation is ever moved earlier in
+                    // `setup_and_run_driver` (or a new call site validates before those
+                    // awaits), the flag may still be `false` at validation time and the
+                    // misleading "Unknown model id" error will silently return.
                     me.set_agent_mode_models_unavailable(true);
                 }
             },
