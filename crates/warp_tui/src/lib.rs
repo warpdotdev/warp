@@ -40,6 +40,7 @@ mod input_mode_policy;
 mod input_suggestions_mode;
 mod keybindings;
 mod link;
+mod mcp_install_flow;
 mod mcp_menu;
 mod model_menu;
 mod option_selector;

@@ -56,6 +56,7 @@ use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestions
 use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, TUI_BINDING_GROUP,
 };
+use crate::mcp_install_flow::TuiMcpInstallFlowAction;
 use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
@@ -69,6 +70,8 @@ use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStart
 /// after the menu branch.
 const INPUT_HANDLES_ESCAPE_FLAG: &str = "TuiInputHandlesEscape";
 const SHELL_COMPLETION_AVAILABLE_FLAG: &str = "TuiShellCompletionAvailable";
+pub(crate) const MCP_MENU_ACTIVE_FLAG: &str = "TuiMcpMenuActive";
+pub(crate) const MCP_LOGOUT_BINDING_NAME: &str = "tui:input:mcp_logout";
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,6 +108,14 @@ pub fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("escape"),
         EditableBinding::new(
+            MCP_LOGOUT_BINDING_NAME,
+            "Log out of the selected MCP server and remove its credentials",
+            TuiInputAction::LogOutSelectedMcp,
+        )
+        .with_context_predicate(id!("TuiInputView") & id!(MCP_MENU_ACTIVE_FLAG))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-r"),
+        EditableBinding::new(
             "tui:input:complete_shell_command",
             "Complete the shell command",
             TuiInputAction::Complete,
@@ -137,6 +148,8 @@ pub enum TuiInputViewEvent {
     AcceptedModel(LLMId),
     /// The user selected an action from the MCP menu.
     AcceptedMcp(TuiMcpAction),
+    /// The user advanced the explicit MCP installation flow.
+    AcceptedMcpInstall(TuiMcpInstallFlowAction),
     /// Shift+Up should move focus from the first visual row to the region above.
     MoveFocusUp,
     /// The user accepted an item from the up-arrow prompt-and-command history menu.
@@ -170,6 +183,8 @@ pub enum TuiInputAction {
     Submit,
     /// Handle contextual input Escape behavior, prioritizing an open inline menu.
     HandleEscape,
+    /// Log out of the selected MCP server and remove its stored credentials.
+    LogOutSelectedMcp,
     /// Request or advance shell-command completion.
     Complete,
     /// Apply an editing command shared with generic TUI editors.
@@ -621,6 +636,7 @@ impl TuiView for TuiInputView {
                 || (vim_mode_enabled
                     && (!matches!(vim_state.mode, VimMode::Normal)
                         || !vim_state.showcmd.is_empty())),
+            mcp_menu_active: suggestions_mode == TuiInputSuggestionsMode::Mcp,
             plan_toggle_available: self.plan_toggle_available(ctx),
             keyboard_enhancement_supported: self.keyboard_enhancement_supported,
             shell_completion_available: self.is_shell_mode(ctx),
@@ -648,6 +664,7 @@ impl TuiView for TuiInputView {
 #[derive(Clone, Copy, Debug, Default)]
 struct InputKeymapContextConfig {
     input_handles_escape: bool,
+    mcp_menu_active: bool,
     plan_toggle_available: bool,
     keyboard_enhancement_supported: bool,
     shell_completion_available: bool,
@@ -658,6 +675,9 @@ fn input_keymap_context(config: InputKeymapContextConfig) -> keymap::Context {
     context.set.insert(TuiInputView::ui_name());
     if config.input_handles_escape {
         context.set.insert(INPUT_HANDLES_ESCAPE_FLAG);
+    }
+    if config.mcp_menu_active {
+        context.set.insert(MCP_MENU_ACTIVE_FLAG);
     }
     if config.plan_toggle_available {
         context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
@@ -749,6 +769,7 @@ impl TypedActionView for TuiInputView {
                 self.handle_escape(ctx);
                 TuiEditorInteractionOutcome::FollowCursor
             }
+            TuiInputAction::LogOutSelectedMcp => TuiEditorInteractionOutcome::PreserveViewport,
             TuiInputAction::Complete => {
                 if self.is_shell_mode(ctx) {
                     ctx.emit(TuiInputViewEvent::RequestShellCompletion);
@@ -1162,6 +1183,9 @@ impl TuiInputView {
             TuiInlineMenuAccepted::Mcp(action) => {
                 ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
             }
+            TuiInlineMenuAccepted::McpInstall(action) => {
+                ctx.emit(TuiInputViewEvent::AcceptedMcpInstall(action));
+            }
             TuiInlineMenuAccepted::PromptAndCommandHistory { text, kind } => {
                 ctx.emit(TuiInputViewEvent::AcceptedPromptAndCommandHistory { text, kind });
             }
@@ -1180,6 +1204,7 @@ impl TuiInputView {
             TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp | TuiEditorCommand::MoveDown)
                 | TuiInputAction::Submit
                 | TuiInputAction::HandleEscape
+                | TuiInputAction::LogOutSelectedMcp
                 | TuiInputAction::Complete
         ) {
             return false;
@@ -1212,6 +1237,12 @@ impl TuiInputView {
             TuiInputAction::Submit => {
                 if let Some(accepted) = inline_menu.accept(ctx) {
                     self.route_inline_menu_acceptance(accepted, ctx);
+                }
+            }
+            TuiInputAction::LogOutSelectedMcp => {
+                if let Some(TuiInlineMenuAccepted::Mcp(action)) = inline_menu.accept_secondary(ctx)
+                {
+                    ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
                 }
             }
             TuiInputAction::HandleEscape => return self.handle_escape(ctx),
