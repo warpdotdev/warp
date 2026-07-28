@@ -1018,8 +1018,24 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
           # OpenSSH passes remote commands to the user's login shell. Build the bootstrap as a
           # separate string and pass it through a small sh launcher so non-Bourne login
           # shells such as fish do not parse it before it can fall back to the login shell.
+          local local_tty_rows local_tty_columns
+          read -r local_tty_rows local_tty_columns < <(command stty size 2>/dev/null)
+          if [[ ! "$local_tty_rows" =~ ^[0-9]+$ ]]; then
+              local_tty_rows=0
+          fi
+          if [[ ! "$local_tty_columns" =~ ^[0-9]+$ ]]; then
+              local_tty_columns=0
+          fi
+
           local remote_command="
 export TERM_PROGRAM='WarpTerminal'
+# Some SSH gateways transpose the PTY dimensions when a remote command is supplied. Correct that
+# specific corruption without overriding dimensions reported correctly by the remote PTY.
+_warp_tty_size=\$(command stty size 2>/dev/null)
+if [ '$local_tty_rows' -gt 0 ] && [ '$local_tty_columns' -gt 0 ] && [ \"\$_warp_tty_size\" = '$local_tty_columns $local_tty_rows' ]; then
+  command stty rows '$local_tty_rows' cols '$local_tty_columns'
+fi
+unset _warp_tty_size
 # Mark the remote side of a Warp-managed SSH session so the bootstrap
 # body can distinguish it from local shells. Used to gate the ExitShell
 # hook which tears down the remote-server-proxy subprocess.
@@ -1033,7 +1049,9 @@ printf '$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR%s$OSC_END' "'$hook'"
 if test \"\${SHELL##*/}\" = \"fish\"; then
   FISH_INIT_SCRIPT='"'set -g WARP_SESSION_ID $WARP_SESSION_ID; set _hostname (command -v hostname >/dev/null 2>&1 && command hostname 2>/dev/null || uname -n); set _user (command -v whoami >/dev/null 2>&1 && command whoami 2>/dev/null || echo $USER); set _msg (printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"fish\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command od -An -v -tx1 | command tr -d " \n"); printf "\x1b\x50\x24\x64%s\x1b\x5c" "$_msg"; set -e _hostname _user _msg'"'
   if \"\$SHELL\" --help 2>&1 | command -p grep -q -- '--init-command'; then
-    WARP_SESSION_ID='$remote_session_id' exec \"\$SHELL\" -f no-mark-prompt --login --init-command \"\$FISH_INIT_SCRIPT\"
+    # Fish treats an unset WARP_HONOR_PS1 as custom-prompt mode. Keep it synchronized with the
+    # client so prompt redraws, including abbreviation expansion, update the command grid correctly.
+    WARP_SESSION_ID='$remote_session_id' WARP_HONOR_PS1='$WARP_HONOR_PS1' exec \"\$SHELL\" -f no-mark-prompt --login --init-command \"\$FISH_INIT_SCRIPT\"
   fi
 fi
 
