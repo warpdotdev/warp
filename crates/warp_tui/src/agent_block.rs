@@ -62,17 +62,6 @@ const COMPARE_PLANS_LABEL: &str = "Compare plans";
 const USE_YOUR_OWN_API_KEYS_LABEL: &str = "Use your own API keys";
 const FAILURE_WARNING_PREFIX: &str = "⚠ ";
 
-fn render_stateless_tool_call_section(
-    action: &AIAgentAction,
-    status: Option<&AIActionStatus>,
-    output_streaming: bool,
-    app: &AppContext,
-) -> Box<dyn TuiElement> {
-    render_review_comments_tool_call(action, status, output_streaming, app).unwrap_or_else(|| {
-        render_fallback_tool_call_section(action, status, output_streaming, None, app)
-    })
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct TuiCodeBlockKey {
     message_id: MessageId,
@@ -1189,20 +1178,40 @@ impl TuiAIBlock {
                 self.render_rich_text_section(section, false, app)
             }
             TuiAIBlockSection::ToolCall(action) => {
-                if let Some(view) = self.action_views.get(&action.id) {
-                    match view {
-                        TuiToolCallView::Generic(view)
-                            if view.as_ref(app).active_permission_prompt(app).is_none() => {}
-                        TuiToolCallView::AskQuestion(_)
-                        | TuiToolCallView::FileEdits(_)
-                        | TuiToolCallView::Generic(_)
-                        | TuiToolCallView::Plan(_)
-                        | TuiToolCallView::ShellCommand(_)
-                        | TuiToolCallView::OrchestrationBlock(_) => return None,
+                let status = self.action_model.as_ref(app).get_action_status(&action.id);
+                match &action.action {
+                    AIAgentActionType::InsertCodeReviewComments { comments, .. } => {
+                        render_review_comments_tool_call(
+                            action,
+                            comments,
+                            status.as_ref(),
+                            output_streaming,
+                            app,
+                        )
+                    }
+                    _ => {
+                        if let Some(view) = self.action_views.get(&action.id) {
+                            match view {
+                                TuiToolCallView::Generic(view)
+                                    if view.as_ref(app).active_permission_prompt(app).is_none() => {
+                                }
+                                TuiToolCallView::AskQuestion(_)
+                                | TuiToolCallView::FileEdits(_)
+                                | TuiToolCallView::Generic(_)
+                                | TuiToolCallView::Plan(_)
+                                | TuiToolCallView::ShellCommand(_)
+                                | TuiToolCallView::OrchestrationBlock(_) => return None,
+                            }
+                        }
+                        render_fallback_tool_call_section(
+                            action,
+                            status.as_ref(),
+                            output_streaming,
+                            None,
+                            app,
+                        )
                     }
                 }
-                let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                render_stateless_tool_call_section(action, status.as_ref(), output_streaming, app)
             }
             TuiAIBlockSection::Thinking {
                 message_id,
@@ -1532,37 +1541,57 @@ impl TuiAIBlock {
                 }
                 // Stateful tool calls render their registered child view; every
                 // other tool call stays a pure render fn.
-                TuiAIBlockSection::ToolCall(action) => match self.action_views.get(&action.id) {
-                    Some(TuiToolCallView::Plan(view)) if !view.as_ref(app).renders_rich_body() => {
+                TuiAIBlockSection::ToolCall(action) => match &action.action {
+                    AIAgentActionType::InsertCodeReviewComments { comments, .. } => {
                         let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        render_stateless_tool_call_section(
+                        render_review_comments_tool_call(
                             action,
+                            comments,
                             status.as_ref(),
                             output_streaming,
                             app,
                         )
                     }
-                    Some(TuiToolCallView::Generic(view))
-                        if view.as_ref(app).active_permission_prompt(app).is_none() =>
-                    {
-                        let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        render_stateless_tool_call_section(
-                            action,
-                            status.as_ref(),
-                            output_streaming,
-                            app,
-                        )
-                    }
-                    Some(view) => TuiContainer::new(Box::new(view.render_child())).finish(),
-                    None => {
-                        let status = self.action_model.as_ref(app).get_action_status(&action.id);
-                        render_stateless_tool_call_section(
-                            action,
-                            status.as_ref(),
-                            output_streaming,
-                            app,
-                        )
-                    }
+                    _ => match self.action_views.get(&action.id) {
+                        Some(TuiToolCallView::Plan(view))
+                            if !view.as_ref(app).renders_rich_body() =>
+                        {
+                            let status =
+                                self.action_model.as_ref(app).get_action_status(&action.id);
+                            render_fallback_tool_call_section(
+                                action,
+                                status.as_ref(),
+                                output_streaming,
+                                None,
+                                app,
+                            )
+                        }
+                        Some(TuiToolCallView::Generic(view))
+                            if view.as_ref(app).active_permission_prompt(app).is_none() =>
+                        {
+                            let status =
+                                self.action_model.as_ref(app).get_action_status(&action.id);
+                            render_fallback_tool_call_section(
+                                action,
+                                status.as_ref(),
+                                output_streaming,
+                                None,
+                                app,
+                            )
+                        }
+                        Some(view) => TuiContainer::new(Box::new(view.render_child())).finish(),
+                        None => {
+                            let status =
+                                self.action_model.as_ref(app).get_action_status(&action.id);
+                            render_fallback_tool_call_section(
+                                action,
+                                status.as_ref(),
+                                output_streaming,
+                                None,
+                                app,
+                            )
+                        }
+                    },
                 },
                 TuiAIBlockSection::Thinking {
                     message_id,

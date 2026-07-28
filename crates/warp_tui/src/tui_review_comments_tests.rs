@@ -119,11 +119,15 @@ fn renders_shared_markdown_thread_only_after_success() {
             comment("1", "alice", "**Root**", None, None),
             comment("2", "bob", "Reply", Some("1"), None),
         ]);
+        let AIAgentActionType::InsertCodeReviewComments { comments, .. } = &action.action else {
+            unreachable!("expected review comment action");
+        };
         app.read(|ctx| {
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 render_review_comments_tool_call(
                     &action,
+                    comments,
                     Some(&finished_status(
                         &action,
                         InsertReviewCommentsResult::Success {
@@ -132,8 +136,7 @@ fn renders_shared_markdown_thread_only_after_success() {
                     )),
                     false,
                     ctx,
-                )
-                .expect("review comment action should render"),
+                ),
                 TuiRect::new(0, 0, 80, 20),
                 ctx,
             );
@@ -160,8 +163,7 @@ fn renders_shared_markdown_thread_only_after_success() {
 
             let mut presenter = TuiPresenter::new();
             let pending = presenter.present_element(
-                render_review_comments_tool_call(&action, None, false, ctx)
-                    .expect("review comment action should render"),
+                render_review_comments_tool_call(&action, comments, None, false, ctx),
                 TuiRect::new(0, 0, 80, 4),
                 ctx,
             );
@@ -186,8 +188,13 @@ fn renders_shared_markdown_thread_only_after_success() {
                 let mut presenter = TuiPresenter::new();
                 let status = finished_status(&action, result);
                 let frame = presenter.present_element(
-                    render_review_comments_tool_call(&action, Some(&status), false, ctx)
-                        .expect("review comment action should render"),
+                    render_review_comments_tool_call(
+                        &action,
+                        comments,
+                        Some(&status),
+                        false,
+                        ctx,
+                    ),
                     TuiRect::new(0, 0, 80, 4),
                     ctx,
                 );

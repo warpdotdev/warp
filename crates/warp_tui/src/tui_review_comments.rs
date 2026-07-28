@@ -1,6 +1,6 @@
 use ai::agent::action::{
-    AIAgentActionType, CommentSide, InsertReviewComment, InsertedCommentLocation,
-    format_review_comment_thread, group_review_comment_threads,
+    CommentSide, InsertReviewComment, InsertedCommentLocation, format_review_comment_thread,
+    group_review_comment_threads,
 };
 use markdown_parser::parse_markdown;
 use warp::tui_export::{AIActionStatus, AIAgentAction};
@@ -13,17 +13,14 @@ use crate::tui_markdown::{TuiMarkdownBlockHooks, TuiMarkdownPalette, render_form
 
 pub(crate) fn render_review_comments_tool_call(
     action: &AIAgentAction,
+    comments: &[InsertReviewComment],
     status: Option<&AIActionStatus>,
     output_streaming: bool,
     app: &AppContext,
-) -> Option<Box<dyn TuiElement>> {
-    let AIAgentActionType::InsertCodeReviewComments { comments, .. } = &action.action else {
-        return None;
-    };
-
+) -> Box<dyn TuiElement> {
     let status_row = render_fallback_tool_call_section(action, status, output_streaming, None, app);
     if !status.is_some_and(AIActionStatus::is_success) || comments.is_empty() {
-        return Some(status_row);
+        return status_row;
     }
 
     let builder = TuiUiBuilder::from_app(app);
@@ -66,7 +63,7 @@ pub(crate) fn render_review_comments_tool_call(
         );
     }
 
-    Some(column.finish())
+    column.finish()
 }
 
 fn format_comment_target(comment: &InsertReviewComment) -> String {
