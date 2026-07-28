@@ -4357,12 +4357,12 @@ impl TuiTerminalSessionView {
                             }
                             Err(error) => {
                                 log::warn!("Failed to copy TUI debugging link: {error}");
-                                self.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
+                                self.show_error_hint(COPY_FAILED_HINT.to_owned(), ctx);
                             }
                         }
                     }
                     None => {
-                        self.show_transient_hint(COPY_DEBUGGING_LINK_NO_TOKEN_HINT.to_owned(), ctx);
+                        self.show_error_hint(COPY_DEBUGGING_LINK_NO_TOKEN_HINT.to_owned(), ctx);
                     }
                 }
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));

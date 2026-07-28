@@ -3,14 +3,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-#[cfg(feature = "voice_input")]
-use warpui::SingletonEntity as _;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::core::subscribe_to_shared_dependencies;
 use super::{
     InlineItem, SlashCommandDataSource, SlashCommandDataSourceState, UpdatedActiveCommands,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 #[cfg(feature = "voice_input")]
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
@@ -134,9 +133,13 @@ impl TuiSlashCommandDataSource {
         let mut availability =
             self.base_availability(ctx) | Availability::AGENT_VIEW | Availability::NOT_CLOUD_AGENT;
         // Unlike the GUI where agent-view always implies an active conversation,
-        // the TUI can be at the zero state before any messages are sent. Only
-        // set ACTIVE_CONVERSATION when the history model confirms one exists.
-        if self.has_active_conversation(false, ctx) {
+        // `TuiConversationSelection::new` eagerly creates a blank conversation at
+        // startup. Require at least one exchange so commands gated on
+        // `ACTIVE_CONVERSATION` remain hidden until the user sends a message.
+        if BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(self.terminal_view_id())
+            .is_some_and(|c| !c.is_empty())
+        {
             availability |= Availability::ACTIVE_CONVERSATION;
         }
         availability

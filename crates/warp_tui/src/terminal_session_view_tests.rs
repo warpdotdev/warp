@@ -17,9 +17,9 @@ use warp::tui_export::{
     AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel, ConversationStatus,
     ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMPreferences,
     LinkedWorkflowData, LongRunningCommandControlState, PtyIntent, PtyIntentEvent,
-    QueuedQueryModel, SizeInfo, SizeUpdate, TaskId, TranscriptScope, TuiUpArrowHistoryItemKind,
-    UserTakeOverReason, export_conversation_markdown, register_tui_session_view_test_singletons,
-    slash_commands,
+    QueuedQueryModel, SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId,
+    TranscriptScope, TuiUpArrowHistoryItemKind, UserTakeOverReason, export_conversation_markdown,
+    register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::channel::Channel;
 use warp_core::settings::Setting as _;
@@ -4033,30 +4033,93 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
     });
 }
 
+/// Verifies that `/copy-debugging-link` is absent from the TUI slash-command
+/// data source's active command set when the current conversation is empty
+/// (zero state). `TuiConversationSelection::new` eagerly creates a blank
+/// conversation, so active-conversation commands require at least one exchange.
 #[test]
-fn copy_debugging_link_shows_no_token_hint_when_conversation_has_no_server_token() {
+fn copy_debugging_link_absent_from_active_commands_at_zero_state() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
-        // Start a conversation so the selection has a conversation ID, but
-        // do not send any messages. The conversation therefore has no server
-        // conversation token yet.
-        view.update(&mut app, |view, ctx| {
-            view.conversation_selection.update(ctx, |selection, ctx| {
-                selection
-                    .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
-                    .expect("test conversation should start");
-            });
+        // At zero state the eagerly-created conversation is empty — the command
+        // must NOT be in the active set.
+        view.read(&app, |view, ctx| {
+            let has_copy_debugging_link = view
+                .slash_commands_source
+                .as_ref(ctx)
+                .active_commands()
+                .any(|(_, cmd)| cmd.kind == SlashCommandKind::CopyDebuggingLink);
+            assert!(
+                !has_copy_debugging_link,
+                "/copy-debugging-link must be absent from active commands while the \
+                 conversation is empty (ACTIVE_CONVERSATION gate)",
+            );
         });
+    });
+}
 
+/// Verifies that `ACTIVE_CONVERSATION`-gated commands are absent at the zero state.
+#[test]
+fn active_conversation_gated_commands_absent_at_zero_state() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        // `/auto-approve` requires ACTIVE_CONVERSATION | AGENT_VIEW | AI_ENABLED |
+        // NOT_CLOUD_AGENT. ACTIVE_CONVERSATION is false at zero state, so the
+        // command is absent regardless of the other bits.
+        view.read(&app, |view, ctx| {
+            let active_names: Vec<&str> = view
+                .slash_commands_source
+                .as_ref(ctx)
+                .active_commands()
+                .map(|(_, cmd)| cmd.name)
+                .collect();
+
+            assert!(
+                !active_names.contains(&slash_commands::COPY_DEBUGGING_LINK.name),
+                "/copy-debugging-link must not be active at zero state",
+            );
+            assert!(
+                !active_names.contains(&slash_commands::AUTO_APPROVE.name),
+                "/auto-approve must not be active at zero state",
+            );
+        });
+    });
+}
+
+/// Verifies that the footer hint slot shows an error-toned notice after
+/// `/copy-debugging-link` is executed when the conversation has no server token.
+/// `transient_hint.current()` is the canonical source read by `footer_hint()`
+/// when rendering the footer row, so asserting it covers the rendered behavior.
+#[test]
+fn copy_debugging_link_shows_error_hint_when_no_server_token() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        // Execute the command directly (bypassing availability gating so we can
+        // test the execution path in isolation without a real exchange).
         view.update(&mut app, |view, ctx| {
             view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_LINK, None, ctx);
         });
+
+        // The hint slot must carry the no-token error text with Error tone.
+        // `footer_hint()` reads `transient_hint.current()` verbatim when
+        // present, so this assertion covers what the footer renders.
         view.read(&app, |view, _| {
+            let hint = view.transient_hint.current();
             assert_eq!(
-                view.transient_hint.current().map(|(text, _)| text),
+                hint.map(|(text, _)| text),
                 Some(super::COPY_DEBUGGING_LINK_NO_TOKEN_HINT),
+                "/copy-debugging-link with no server token must set the no-token error hint",
+            );
+            assert_eq!(
+                hint.map(|(_, tone)| tone),
+                Some(super::super::transient_hint::TransientHintTone::Error),
+                "the no-token hint must use the error tone",
             );
         });
     });
