@@ -2753,6 +2753,170 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
     });
 }
 
+// ── Vim mode tests ───────────────────────────────────────────────────────────
+
+/// The `/vim-mode` slash command static definition must be correctly
+/// populated: a non-empty name, a non-empty description, and a TUI-only
+/// supported surface (so the command appears only in the TUI's slash-command
+/// menu, not in the GUI).
+///
+/// The global `COMMAND_REGISTRY` is initialized with `SettingsMode::Gui` in
+/// unit-test processes (the mode defaults to Gui when not explicitly set at
+/// startup), so TUI-only commands are correctly excluded from that registry.
+/// This test validates the static definition directly without relying on the
+/// filtered registry.
+#[test]
+fn vim_mode_slash_command_is_registered_in_command_registry() {
+    use warp::tui_export::SlashCommandSurfaces;
+
+    let cmd = &slash_commands::VIM_MODE;
+    assert_eq!(cmd.name, "/vim-mode");
+    assert!(
+        !cmd.description.is_empty(),
+        "/vim-mode must have a non-empty description"
+    );
+    // The command must be TUI-only so it appears in the TUI's slash-command
+    // menu but is excluded from the GUI surface.
+    assert_eq!(
+        cmd.supported_surfaces,
+        SlashCommandSurfaces::TuiOnly,
+        "/vim-mode must be registered as TUI-only"
+    );
+}
+
+/// Executing the `/vim-mode` slash command must toggle and persist the
+/// `AppEditorSettings::vim_mode` setting on each invocation.
+#[test]
+fn vim_mode_slash_command_persists_toggle() {
+    App::test((), |mut app| async move {
+        use warp::settings::AppEditorSettings;
+        use warpui::SingletonEntity as _;
+
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        // AppEditorSettings is not included in the standard TUI test fixture;
+        // register it explicitly (mirrors the `enable_vim_mode` helper in
+        // view_tests.rs).
+        app.update(AppEditorSettings::register);
+
+        assert!(
+            !app.read(|ctx| AppEditorSettings::as_ref(ctx).vim_mode_enabled()),
+            "vim mode should start disabled"
+        );
+
+        // First toggle: off → on.
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::VIM_MODE, None, ctx);
+        });
+        assert!(
+            app.read(|ctx| AppEditorSettings::as_ref(ctx).vim_mode_enabled()),
+            "/vim-mode should enable vim mode on the first toggle"
+        );
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(super::VIM_MODE_ENABLED_HINT.to_owned()),
+            "should surface an enabled hint after enabling vim mode"
+        );
+
+        // Second toggle: on → off.
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::VIM_MODE, None, ctx);
+        });
+        assert!(
+            !app.read(|ctx| AppEditorSettings::as_ref(ctx).vim_mode_enabled()),
+            "/vim-mode should disable vim mode on the second toggle"
+        );
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(super::VIM_MODE_DISABLED_HINT.to_owned()),
+            "should surface a disabled hint after disabling vim mode"
+        );
+    });
+}
+
+/// The vim mode indicator (NOR/VIS/REP) must appear in the footer only when
+/// vim mode is enabled and the current mode is non-Insert. In Insert mode
+/// (the default when vim is first enabled) no indicator is shown.
+#[test]
+fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
+    App::test((), |mut app| async move {
+        use warp::settings::AppEditorSettings;
+        use warpui::SingletonEntity as _;
+
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        app.update(AppEditorSettings::register);
+
+        // Vim mode off: vim_mode_indicator returns None regardless of mode.
+        app.read(|ctx| {
+            let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
+            assert!(
+                indicator.is_none(),
+                "indicator must be None when vim mode is disabled, got {indicator:?}"
+            );
+        });
+
+        // Enable vim mode. The FSA starts in Insert mode — indicator is None
+        // (Insert mode has no label).
+        app.update(|ctx| {
+            AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .vim_mode
+                    .set_value(true, ctx)
+                    .expect("failed to enable vim mode");
+            });
+        });
+        app.read(|ctx| {
+            let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
+            assert!(
+                indicator.is_none(),
+                "indicator must be None in Insert mode (vim just enabled), got {indicator:?}"
+            );
+        });
+
+        // Drive the input to Normal mode (Escape from Insert): indicator → Some("NOR").
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                // Process Escape to move Insert → Normal.
+                input.handle_action(&crate::input::view::TuiInputAction::HandleEscape, ctx);
+            });
+        });
+        app.read(|ctx| {
+            let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
+            assert_eq!(
+                indicator,
+                Some("NOR"),
+                "indicator must be NOR in Normal mode when vim mode is enabled"
+            );
+        });
+
+        // Disable vim mode: indicator → None again.
+        app.update(|ctx| {
+            AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .vim_mode
+                    .set_value(false, ctx)
+                    .expect("failed to disable vim mode");
+            });
+        });
+        app.read(|ctx| {
+            let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
+            assert!(
+                indicator.is_none(),
+                "indicator must be None after vim mode is disabled, got {indicator:?}"
+            );
+        });
+    });
+}
+
 #[test]
 fn version_shell_command_uses_channel_cli_names() {
     use warp_core::channel::Channel;

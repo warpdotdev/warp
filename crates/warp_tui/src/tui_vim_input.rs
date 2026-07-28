@@ -83,6 +83,12 @@ pub(crate) enum TuiVimAction {
     Pending,
     /// The keystroke was not handled in the current mode.
     Unhandled,
+    /// Delete the visual selection (for `d` and `c` in visual mode).
+    /// The view tracks the visual anchor; this action signals that the
+    /// range [anchor, cursor] (or [cursor, anchor]) should be deleted.
+    DeleteVisualSelection,
+    /// Yank (copy) the visual selection without deleting it (for `y` in visual mode).
+    YankVisualSelection,
     /// Repeat an inner action `count` times (for count-prefixed commands).
     RepeatCount {
         inner: Box<TuiVimAction>,
@@ -369,11 +375,10 @@ impl TuiVimInputModel {
 
     fn map_visual_operator(&mut self, operator: VimOperator) -> TuiVimAction {
         match operator {
-            // The TUI editor does not track a separate vim selection range;
-            // for now apply a whole-line kill so `d`/`c` in visual mode at
-            // least clear meaningful content rather than deleting a single char.
-            VimOperator::Delete | VimOperator::Change => TuiVimAction::KillLine,
-            VimOperator::Yank => TuiVimAction::YankBuffer,
+            // In visual mode, d/c operate on the visual selection from anchor to
+            // cursor. The view tracks the anchor and deletes/yanks accordingly.
+            VimOperator::Delete | VimOperator::Change => TuiVimAction::DeleteVisualSelection,
+            VimOperator::Yank => TuiVimAction::YankVisualSelection,
             _ => TuiVimAction::Unhandled,
         }
     }

@@ -1546,6 +1546,11 @@ impl TuiTerminalSessionView {
             TuiInputViewEvent::MoveFocusUp => {
                 view.focus_orchestration_tabs(ctx);
             }
+            // The vim mode changed — re-render so the footer indicator (NOR/VIS/REP)
+            // updates. The indicator is rendered by this view's render_footer, not
+            // by TuiInputView itself, so a notify from TuiInputView alone is not
+            // sufficient to update the parent's element tree.
+            TuiInputViewEvent::VimModeChanged => ctx.notify(),
         });
         ctx.subscribe_to_model(&action_model, |view, action_model, event, ctx| {
             let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event else {

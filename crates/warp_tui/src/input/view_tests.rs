@@ -430,7 +430,8 @@ fn enter_and_escape_stop_listening_while_escape_cancels_transcribing() {
                 | TuiInputViewEvent::AcceptedPromptHistory(_)
                 | TuiInputViewEvent::RequestShellCompletion
                 | TuiInputViewEvent::ClipboardCopySucceeded
-                | TuiInputViewEvent::ClipboardCopyFailed => {}
+                | TuiInputViewEvent::ClipboardCopyFailed
+                | TuiInputViewEvent::VimModeChanged => {}
             });
             (view, voice_input, submissions)
         });
@@ -1299,7 +1300,8 @@ fn multiline_paste_emits_once_and_fallback_inserts_without_submitting() {
                 | TuiInputViewEvent::BackspaceAtEmptyInput
                 | TuiInputViewEvent::MoveFocusUp
                 | TuiInputViewEvent::ClipboardCopySucceeded
-                | TuiInputViewEvent::ClipboardCopyFailed => {}
+                | TuiInputViewEvent::ClipboardCopyFailed
+                | TuiInputViewEvent::VimModeChanged => {}
             });
             (view, pasted, submitted)
         });

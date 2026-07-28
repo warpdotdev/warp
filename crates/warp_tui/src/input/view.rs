@@ -148,6 +148,9 @@ pub enum TuiInputViewEvent {
     ClipboardCopySucceeded,
     /// Selected prompt text could not be copied to the host clipboard.
     ClipboardCopyFailed,
+    /// The vim mode changed (Insert↔Normal↔Visual↔Replace). Emitted so the
+    /// parent session view can re-render its footer vim-mode indicator.
+    VimModeChanged,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,6 +220,9 @@ pub struct TuiInputView {
     /// Vim-mode state machine. Always present but only active when
     /// `AppEditorSettings::vim_mode_enabled()` returns `true`.
     vim: TuiVimInputModel,
+    /// The cursor offset at which visual mode was entered, used to track the
+    /// visual selection range. `None` when not in visual mode.
+    visual_selection_anchor: Option<CharOffset>,
 }
 
 impl Entity for TuiInputView {
@@ -314,6 +320,7 @@ impl TuiInputView {
             can_accept_inline_menu: Rc::new(|_| true),
             voice_input,
             vim: TuiVimInputModel::new(),
+            visual_selection_anchor: None,
         }
     }
 
@@ -567,15 +574,20 @@ impl TuiView for TuiInputView {
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
         let suggestions_mode = self.suggestions_mode.as_ref(ctx).mode();
-        // In vim mode, escape is always handled (to switch between modes or
-        // clear pending commands) regardless of the current vim mode.
+        // In vim mode, escape is handled only when vim actually needs it:
+        // - Non-Normal modes (Insert→Normal, Visual→Normal, Replace→Normal)
+        // - Normal mode with pending input (clear the partial command)
+        // In Normal mode with no pending input, escape is a no-op for vim;
+        // passing it through allows session-level bindings (e.g.
+        // orchestration focus-main, cancel-restore) to fire instead.
         let vim_mode_enabled = self.vim_mode_enabled(ctx);
         input_keymap_context(InputKeymapContextConfig {
             input_handles_escape: self.active_inline_menu(ctx).is_some()
                 || matches!(suggestions_mode, TuiInputSuggestionsMode::Shortcuts)
                 || self.is_shell_mode(ctx)
                 || self.voice_is_active(ctx)
-                || vim_mode_enabled,
+                || (vim_mode_enabled
+                    && (!matches!(self.vim.mode(), VimMode::Normal) || self.vim.has_pending())),
             plan_toggle_available: self.plan_toggle_available(ctx),
             keyboard_enhancement_supported: self.keyboard_enhancement_supported,
             shell_completion_available: self.is_shell_mode(ctx),
@@ -1172,6 +1184,7 @@ impl TuiInputView {
     /// Applies a [`TuiVimAction`] — returned by the vim FSA — to the backing
     /// editor model and re-renders.
     fn apply_vim_action(&mut self, action: TuiVimAction, ctx: &mut ViewContext<Self>) {
+        let prev_vim_mode = self.vim.mode();
         match action {
             TuiVimAction::InsertChar(c) => {
                 // Normal character insert (insert mode or insert-mode char from FSA).
@@ -1316,40 +1329,46 @@ impl TuiInputView {
                 self.follow_cursor(ctx);
             }
             TuiVimAction::YankToLineEnd => {
-                // `y$` — yank from cursor to end of the visual row.
-                // Kill to end, re-insert the text to make the operation
-                // non-destructive, and restore the cursor position.
-                let text = self
-                    .model
-                    .update(ctx, |m, ctx| m.kill_to_char_cell_visual_row_end(ctx))
-                    .unwrap_or_default();
-                if !text.is_empty() {
-                    // Re-insert the killed text (non-destructive yank).
-                    self.model.update(ctx, |m, ctx| m.user_insert(&text, ctx));
-                    // Move cursor back to where it was before the kill.
-                    for _ in 0..text.chars().count() {
-                        self.model.update(ctx, |m, ctx| m.move_left(ctx));
-                    }
-                    self.vim.set_yank_buffer(text);
+                // `y$` — yank from cursor to end of the line, non-destructively.
+                // Read the buffer text directly so the undo stack is untouched;
+                // the kill+re-insert approach previously broke `u` by leaving
+                // the kill/re-insert pair on the undo stack.
+                let cursor = self.cursor_offset(ctx);
+                let buffer_text = {
+                    let inner = self.model.as_ref(ctx);
+                    let buffer = inner.content().as_ref(ctx);
+                    buffer.text().into_string()
+                };
+                // cursor is a 1-based gap offset; char index = as_usize() - 1
+                let char_idx = cursor.as_usize().saturating_sub(1);
+                // Yank to end of the current line (’\n’ is the line separator).
+                let yanked: String = buffer_text
+                    .chars()
+                    .skip(char_idx)
+                    .take_while(|&c| c != '\n')
+                    .collect();
+                if !yanked.is_empty() {
+                    self.vim.set_yank_buffer(yanked);
                 }
+                // No buffer mutation — undo stack is unchanged.
                 self.follow_cursor(ctx);
             }
             TuiVimAction::YankWordForward => {
-                // `yw` — yank one word. The TUI editor model does not expose a
-                // word-delete that returns the deleted text, so we fall back to
-                // yanking the entire buffer content. This is a known limitation:
-                // `yw` and `yy` behave identically here.
-                let text = {
+                // `yw` — yank one word forward from the cursor, non-destructively.
+                // Uses vim's `w`-motion word boundary: skip the current token
+                // (word chars or punctuation) then include trailing whitespace.
+                let cursor = self.cursor_offset(ctx);
+                let buffer_text = {
                     let inner = self.model.as_ref(ctx);
                     let buffer = inner.content().as_ref(ctx);
-                    if buffer.is_empty() {
-                        String::new()
-                    } else {
-                        buffer.text().into_string()
-                    }
+                    buffer.text().into_string()
                 };
-                self.vim.set_yank_buffer(text);
-                // Stay in current mode (yank is non-destructive).
+                let char_idx = cursor.as_usize().saturating_sub(1);
+                let yanked = yank_word_from_offset(&buffer_text, char_idx);
+                if !yanked.is_empty() {
+                    self.vim.set_yank_buffer(yanked);
+                }
+                // Non-destructive: no cursor or buffer mutation needed.
             }
             TuiVimAction::YankBuffer => {
                 // `yy` / visual `y` — yank the full buffer content.
@@ -1404,7 +1423,92 @@ impl TuiInputView {
                     // for TUI single-line prompts; treat as a plain mode switch.
                     InsertPosition::LineAbove | InsertPosition::LineBelow => {}
                 }
+                // Entering insert mode clears any visual selection anchor.
+                self.visual_selection_anchor = None;
                 self.follow_cursor(ctx);
+            }
+            TuiVimAction::ModeTransition => {
+                // When entering visual mode, record the cursor position as the
+                // visual selection anchor. On any other transition (Escape
+                // Visual→Normal, Escape Normal→Normal, etc.), clear the anchor.
+                match self.vim.mode() {
+                    VimMode::Visual(_) => {
+                        self.visual_selection_anchor = Some(self.cursor_offset(ctx));
+                    }
+                    _ => {
+                        self.visual_selection_anchor = None;
+                    }
+                }
+            }
+            TuiVimAction::DeleteVisualSelection => {
+                // `d`/`c` in visual mode: delete from anchor to current cursor.
+                if let Some(anchor) = self.visual_selection_anchor.take() {
+                    let cursor = self.cursor_offset(ctx);
+                    let (sel_start, sel_end) = if anchor <= cursor {
+                        (anchor, cursor)
+                    } else {
+                        (cursor, anchor)
+                    };
+                    // Capture the text in [sel_start, sel_end) for the yank buffer before
+                    // deleting. Read directly from the buffer so no trait import is needed.
+                    let yank_text = {
+                        let inner = self.model.as_ref(ctx);
+                        let buffer = inner.content().as_ref(ctx);
+                        let buffer_text = buffer.text().into_string();
+                        let start_char = sel_start.as_usize().saturating_sub(1);
+                        let end_char = sel_end.as_usize().saturating_sub(1);
+                        if end_char > start_char {
+                            buffer_text
+                                .chars()
+                                .skip(start_char)
+                                .take(end_char - start_char)
+                                .collect::<String>()
+                        } else {
+                            String::new()
+                        }
+                    };
+                    // Establish the selection in the model so backspace deletes it.
+                    self.model.update(ctx, |m, ctx| {
+                        m.select_at(sel_start, false, ctx);
+                        m.set_last_selection_head(sel_end, ctx);
+                    });
+                    // Delete the selection.
+                    self.model.update(ctx, |m, ctx| m.backspace(ctx));
+                    if !yank_text.is_empty() {
+                        self.vim.set_yank_buffer(yank_text);
+                    }
+                    self.follow_cursor(ctx);
+                }
+            }
+            TuiVimAction::YankVisualSelection => {
+                // `y` in visual mode: yank from anchor to cursor, non-destructively.
+                if let Some(anchor) = self.visual_selection_anchor.take() {
+                    let cursor = self.cursor_offset(ctx);
+                    let (sel_start, sel_end) = if anchor <= cursor {
+                        (anchor, cursor)
+                    } else {
+                        (cursor, anchor)
+                    };
+                    // Extract the selected text from the buffer directly.
+                    let buffer_text = {
+                        let inner = self.model.as_ref(ctx);
+                        let buffer = inner.content().as_ref(ctx);
+                        buffer.text().into_string()
+                    };
+                    let start_char = sel_start.as_usize().saturating_sub(1);
+                    let end_char = sel_end.as_usize().saturating_sub(1);
+                    if end_char > start_char {
+                        let yank_text: String = buffer_text
+                            .chars()
+                            .skip(start_char)
+                            .take(end_char - start_char)
+                            .collect();
+                        if !yank_text.is_empty() {
+                            self.vim.set_yank_buffer(yank_text);
+                        }
+                    }
+                    // Non-destructive: no buffer mutation.
+                }
             }
             TuiVimAction::RepeatCount { inner, count } => {
                 // Execute the inner action `count` times.
@@ -1415,9 +1519,15 @@ impl TuiInputView {
                 // already handled notification; return early.
                 return;
             }
-            // Mode transitions and no-ops — the FSA already updated its internal
-            // mode; we just need a re-render (ctx.notify is called below).
-            TuiVimAction::ModeTransition | TuiVimAction::Pending | TuiVimAction::Unhandled => {}
+            // Pending / unhandled — no buffer edit needed.
+            TuiVimAction::Pending | TuiVimAction::Unhandled => {}
+        }
+        // Emit a mode-change notification whenever the vim FSA transitions to a
+        // different mode. This lets TuiTerminalSessionView re-render its footer
+        // vim-mode indicator (NOR/VIS/REP) without the indicator living in this
+        // view's own render tree.
+        if self.vim.mode() != prev_vim_mode {
+            ctx.emit(TuiInputViewEvent::VimModeChanged);
         }
         ctx.notify();
     }
@@ -1441,6 +1551,54 @@ impl TuiInputView {
             ctx,
         )
     }
+}
+
+/// Compute the text that vim's `yw` (word-forward yank) would capture,
+/// starting at character index `char_idx` (0-based) in `text`.
+///
+/// Matches vim's `w`-motion word definition:
+/// - From a word character (alphanumeric/underscore): skip word chars, then
+///   include any trailing whitespace.
+/// - From punctuation: skip non-word/non-whitespace chars, then include
+///   any trailing whitespace.
+/// - From whitespace: skip all whitespace.
+///
+/// The returned string is a non-destructive yank that leaves the buffer
+/// untouched, so `u` after `yw` does not delete the yanked text.
+fn yank_word_from_offset(text: &str, char_idx: usize) -> String {
+    let chars: Vec<char> = text.chars().skip(char_idx).collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let mut end = 0;
+    let first = chars[0];
+    if first.is_whitespace() {
+        // Starting on whitespace: skip all whitespace.
+        while end < chars.len() && chars[end].is_whitespace() {
+            end += 1;
+        }
+    } else if first.is_alphanumeric() || first == '_' {
+        // Starting on a word character: skip word chars, then whitespace.
+        while end < chars.len() && (chars[end].is_alphanumeric() || chars[end] == '_') {
+            end += 1;
+        }
+        while end < chars.len() && chars[end].is_whitespace() {
+            end += 1;
+        }
+    } else {
+        // Starting on punctuation: skip non-word, non-whitespace chars, then whitespace.
+        while end < chars.len()
+            && !chars[end].is_alphanumeric()
+            && chars[end] != '_'
+            && !chars[end].is_whitespace()
+        {
+            end += 1;
+        }
+        while end < chars.len() && chars[end].is_whitespace() {
+            end += 1;
+        }
+    }
+    chars.into_iter().take(end).collect()
 }
 
 #[cfg(test)]
