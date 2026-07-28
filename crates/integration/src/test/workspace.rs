@@ -886,7 +886,7 @@ fn only_group_id(
     let workspace = workspace_view(app, window_id);
     workspace.read(app, |workspace, _| {
         *workspace
-            .tab_groups_for_test()
+            .tab_groups_read()
             .keys()
             .next()
             .expect("a tab group should exist")
@@ -924,7 +924,7 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
                 workspace.update(app, |workspace, ctx| {
                     workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
                     let group_id = *workspace
-                        .tab_groups_for_test()
+                        .tab_groups_read()
                         .keys()
                         .next()
                         .expect("group should have been created");
@@ -1016,9 +1016,9 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
 
                     // The source keeps only the ungrouped tab, and the group
                     // itself is gone from it.
-                    let (source_tabs, source_groups) =
-                        workspace_view(app, source).read(app, |workspace, _| {
-                            (workspace.tab_count(), workspace.tab_groups_for_test().len())
+                    let (source_tabs, source_groups) = workspace_view(app, source)
+                        .read(app, |workspace, _| {
+                            (workspace.tab_count(), workspace.tab_groups_read().len())
                         });
                     assert_eq!(
                         source_tabs, 1,
@@ -1084,7 +1084,7 @@ pub fn test_detach_tab_group_to_new_window_in_vertical_tabs() -> Builder {
                 workspace.update(app, |workspace, ctx| {
                     workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
                     let group_id = *workspace
-                        .tab_groups_for_test()
+                        .tab_groups_read()
                         .keys()
                         .next()
                         .expect("group should have been created");
@@ -1206,7 +1206,7 @@ pub fn test_whole_window_tab_group_attaches_to_other_window() -> Builder {
                     workspace.update(app, |workspace, ctx| {
                         workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(0), ctx);
                         let group_id = *workspace
-                            .tab_groups_for_test()
+                            .tab_groups_read()
                             .keys()
                             .next()
                             .expect("group should have been created");
@@ -1218,7 +1218,7 @@ pub fn test_whole_window_tab_group_attaches_to_other_window() -> Builder {
                             ctx,
                         );
                         assert_eq!(
-                            workspace.grouped_tab_count_for_test(),
+                            workspace.grouped_tab_count(),
                             workspace.tab_count(),
                             "the group must span every tab for this test to mean anything"
                         );
@@ -1348,8 +1348,8 @@ pub fn test_whole_window_tab_group_attaches_to_other_window() -> Builder {
                         workspace_view(app, target).read(app, |workspace, _| {
                             (
                                 workspace.tab_count(),
-                                workspace.tab_groups_for_test().len(),
-                                workspace.grouped_tab_count_for_test(),
+                                workspace.tab_groups_read().len(),
+                                workspace.grouped_tab_count(),
                             )
                         });
                     assert_eq!(
@@ -1393,7 +1393,7 @@ pub fn test_tab_group_drag_back_to_source_cancels() -> Builder {
                 workspace.update(app, |workspace, ctx| {
                     workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
                     let group_id = *workspace
-                        .tab_groups_for_test()
+                        .tab_groups_read()
                         .keys()
                         .next()
                         .expect("group should have been created");
@@ -1488,8 +1488,8 @@ pub fn test_tab_group_drag_back_to_source_cancels() -> Builder {
                     workspace_view(app, source).read(app, |workspace, _| {
                         (
                             workspace.tab_count(),
-                            workspace.tab_groups_for_test().len(),
-                            workspace.grouped_tab_count_for_test(),
+                            workspace.tab_groups_read().len(),
+                            workspace.grouped_tab_count(),
                         )
                     });
                 assert_eq!(tabs, 3, "every tab should be back in the source window");
@@ -1528,7 +1528,7 @@ pub fn test_attach_tab_group_to_other_window() -> Builder {
                 workspace.update(app, |workspace, ctx| {
                     workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
                     let group_id = *workspace
-                        .tab_groups_for_test()
+                        .tab_groups_read()
                         .keys()
                         .next()
                         .expect("group should have been created");
@@ -1672,7 +1672,7 @@ pub fn test_attach_tab_group_to_other_window() -> Builder {
                 // Target had one tab and gains both members as one group.
                 let (target_tabs, target_groups) = workspace_view(app, target)
                     .read(app, |workspace, _| {
-                        (workspace.tab_count(), workspace.tab_groups_for_test().len())
+                        (workspace.tab_count(), workspace.tab_groups_read().len())
                     });
                 assert_eq!(
                     target_tabs, 3,
@@ -1683,7 +1683,7 @@ pub fn test_attach_tab_group_to_other_window() -> Builder {
                 // Source keeps only the ungrouped tab and loses the group.
                 let (source_tabs, source_groups) = workspace_view(app, source)
                     .read(app, |workspace, _| {
-                        (workspace.tab_count(), workspace.tab_groups_for_test().len())
+                        (workspace.tab_count(), workspace.tab_groups_read().len())
                     });
                 assert_eq!(source_tabs, 1, "source should keep only the ungrouped tab");
                 assert_eq!(source_groups, 0, "the group should be gone from the source");

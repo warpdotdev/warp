@@ -28907,16 +28907,19 @@ impl Workspace {
     /// Indices of the tabs whose pane group is in `pane_group_ids`, ascending.
     ///
     /// The identity half of cross-window cleanup and snapshot filtering: the
-    /// source tab list can shift while a drag is in flight, so a drag-start
-    /// index no longer identifies the tab it was captured for. Ids that are no
-    /// longer present are simply absent from the result.
-    /// Number of tabs that belong to any group, for integration tests.
-    pub fn grouped_tab_count_for_test(&self) -> usize {
+    /// Number of tabs that belong to any group, for integration testing.
+    ///
+    /// Gated on `integration_tests` so it does not exist in shipped builds.
+    #[cfg(feature = "integration_tests")]
+    pub fn grouped_tab_count(&self) -> usize {
         self.tabs.iter().filter(|t| t.group_id.is_some()).count()
     }
 
-    /// Read access to this window's tab groups, for integration tests.
-    pub fn tab_groups_for_test(&self) -> &HashMap<TabGroupId, TabGroup> {
+    /// Read access to this window's tab groups, for integration testing.
+    ///
+    /// Gated on `integration_tests` so it does not exist in shipped builds.
+    #[cfg(feature = "integration_tests")]
+    pub fn tab_groups_read(&self) -> &HashMap<TabGroupId, TabGroup> {
         &self.tab_groups
     }
 
@@ -28927,6 +28930,12 @@ impl Workspace {
             .position(|tab| tab.pane_group.id() == pane_group_id)
     }
 
+    /// Indices of the tabs whose pane group is in `pane_group_ids`, ascending.
+    ///
+    /// The identity half of cross-window cleanup and snapshot filtering: the
+    /// source tab list can shift while a drag is in flight, so a drag-start
+    /// index no longer identifies the tab it was captured for. Ids that are no
+    /// longer present are simply absent from the result.
     pub(crate) fn tab_indices_for_pane_group_ids(&self, pane_group_ids: &[EntityId]) -> Vec<usize> {
         self.tabs
             .iter()
