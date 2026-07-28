@@ -35,9 +35,10 @@ use warp::tui_export::{
     SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
     StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
     TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiZeroStateDataSource,
-    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model,
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
+    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
+    TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
+    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
+    export_conversation_markdown, log_out_tui,
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
     record_static_slash_command_accepted, saved_prompt_text_for_id,
@@ -104,7 +105,6 @@ use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
-use crate::status_menu::{TuiStatusMenuEvent, TuiStatusMenuModel};
 use crate::statusline_config_view::{TuiStatuslineConfigEvent, TuiStatuslineConfigView};
 use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
 use crate::terminal_background::probed_colors;
@@ -119,7 +119,10 @@ use crate::tui_ask_question_view::TuiAskQuestionView;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::tui_permission_prompt::TuiPermissionPrompt;
-use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
+use crate::ui::{
+    abbreviate_home_prefix, compact_footer_path, conversation_restore_failed,
+    conversation_restoring,
+};
 use crate::usage::UsageToggle;
 use crate::voice_input::{TuiVoiceInputEvent, TuiVoiceInputState, VoiceInputStartSource};
 use crate::warping_indicator::{render_response_summary, render_warping_indicator_row};
@@ -153,6 +156,12 @@ const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
+
+/// Fallback strings for the /status (shortcuts panel) status section.
+const STATUS_UNAVAILABLE: &str = "\u{2014}"; // em dash
+const STATUS_UNTITLED_SESSION: &str = "Untitled";
+const STATUS_DEV_BUILD: &str = "dev build";
+const STATUS_NOT_SIGNED_IN: &str = "Not signed in";
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 const SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG: &str =
@@ -704,7 +713,6 @@ pub(crate) struct TuiTerminalSessionView {
     model_menu: ModelHandle<TuiModelMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
     mcp_menu: ModelHandle<TuiMcpMenuModel>,
-    status_menu: ModelHandle<TuiStatusMenuModel>,
     completion_menu: ModelHandle<TuiCompletionMenuModel>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
@@ -1472,17 +1480,6 @@ impl TuiTerminalSessionView {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
         });
-        let status_menu = ctx.add_model(|ctx| {
-            TuiStatusMenuModel::new(
-                suggestions_mode.clone(),
-                active_session.clone(),
-                conversation_selection.clone(),
-                ctx,
-            )
-        });
-        ctx.subscribe_to_model(&status_menu, |_, _, _: &TuiStatusMenuEvent, ctx| {
-            ctx.notify();
-        });
         let prompt_and_command_history_menu = ctx.add_model(|ctx| {
             TuiPromptAndCommandHistoryMenuModel::new(
                 input_editor_model.clone(),
@@ -1549,7 +1546,6 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
-            TuiInlineMenu::new(status_menu.clone()),
             TuiInlineMenu::new(prompt_and_command_history_menu.clone()),
             TuiInlineMenu::new(completion_menu.clone()),
         ];
@@ -1905,7 +1901,6 @@ impl TuiTerminalSessionView {
             model_menu,
             skills_menu,
             mcp_menu,
-            status_menu,
             completion_menu,
             slash_commands_source,
             conversation_selection,
@@ -2138,8 +2133,9 @@ impl TuiTerminalSessionView {
         }
         if state.should_render_shortcuts() {
             let keymap_context = self.keymap_context(ctx);
+            let status_info = self.compute_status_info(ctx);
             content = content.child(
-                TuiContainer::new(shortcuts::render(state, &keymap_context, ctx))
+                TuiContainer::new(shortcuts::render(state, &keymap_context, status_info, ctx))
                     .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
                     .finish(),
             );
@@ -2198,6 +2194,51 @@ impl TuiTerminalSessionView {
         self.focus_current_owner(ctx);
         self.write_exit_summary(ctx);
         ctx.notify();
+    }
+
+    /// Computes the current session and account status fields for the shortcuts
+    /// panel's "Status" section. Always returns a complete set of fields;
+    /// individual fields fall back to their `STATUS_*` placeholder constants
+    /// when the underlying data is unavailable.
+    fn compute_status_info(&self, ctx: &AppContext) -> shortcuts::TuiStatusInfo {
+        let user_info = TuiUserInfoManager::as_ref(ctx).snapshot(ctx);
+        let session = self.active_session.as_ref(ctx).session(ctx);
+        let cwd = self
+            .active_session
+            .as_ref(ctx)
+            .current_working_directory()
+            .map(|cwd| abbreviate_home_prefix(cwd))
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|cwd| abbreviate_home_prefix(&cwd.display().to_string()))
+            });
+        let session_name = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation(ctx)
+            .and_then(|conversation| conversation.title())
+            .unwrap_or_else(|| STATUS_UNTITLED_SESSION.to_owned());
+        let session_id = session
+            .map(|s| s.id().as_u64().to_string())
+            .unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned());
+        let version = ChannelState::app_version()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| STATUS_DEV_BUILD.to_owned());
+        let org = user_info
+            .org
+            .unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned());
+        let email = user_info
+            .email
+            .unwrap_or_else(|| STATUS_NOT_SIGNED_IN.to_owned());
+        shortcuts::TuiStatusInfo {
+            version,
+            session: session_name,
+            session_id,
+            working_directory: cwd.unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned()),
+            org,
+            email,
+        }
     }
 
     /// Whether this view projects the focused session.
@@ -3807,7 +3848,9 @@ impl TuiTerminalSessionView {
             }
             SlashCommandKind::Status => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-                self.status_menu.update(ctx, |menu, ctx| menu.open(ctx));
+                self.suggestions_mode.update(ctx, |mode, ctx| {
+                    mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                });
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::Exit => {

@@ -57,7 +57,7 @@ use super::{
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
-use crate::inline_menu::{MAX_INLINE_MENU_ROWS, render_inline_menu};
+use crate::inline_menu::MAX_INLINE_MENU_ROWS;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::keybindings::{
@@ -1632,8 +1632,9 @@ fn nld_slash_command_toggles_and_reports_its_effects() {
 }
 
 #[test]
-fn status_slash_command_opens_read_only_info_menu() {
+fn status_slash_command_opens_shortcuts_panel_with_status_info() {
     App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
@@ -1644,103 +1645,74 @@ fn status_slash_command_opens_read_only_info_menu() {
             view.execute_tui_slash_command(&slash_commands::STATUS, None, ctx);
         });
 
-        let snapshot = app.read(|ctx| {
-            assert!(
-                view.as_ref(ctx).status_menu.as_ref(ctx).is_open(ctx),
-                "/status should open the status menu"
-            );
-            view.as_ref(ctx).status_menu.as_ref(ctx).snapshot(ctx)
-        });
-        let snapshot = snapshot.expect("status menu snapshot should render while open");
-
-        assert_eq!(
-            snapshot
-                .header
-                .as_ref()
-                .and_then(|header| header.title.as_deref()),
-            Some("Status")
-        );
-
-        let labels: Vec<&str> = snapshot.rows.iter().map(|row| row.title.as_str()).collect();
-        assert_eq!(
-            labels,
-            [
-                "Version",
-                "Session",
-                "Session ID",
-                "Working directory",
-                "Org",
-                "Email",
-            ]
-        );
-        // Read-only info menu: no row is selectable, so accepting is a no-op.
+        // /status should open the shortcuts panel (Shortcuts mode).
         assert!(
-            snapshot.rows.iter().all(|row| !row.is_selectable),
-            "status menu rows must be non-selectable"
+            app.read(|ctx| {
+                matches!(
+                    view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                    TuiInputSuggestionsMode::Shortcuts
+                )
+            }),
+            "/status should open the shortcuts panel (Shortcuts suggestions mode)"
         );
 
-        let row_value = |label: &str| {
-            snapshot
-                .rows
-                .iter()
-                .find(|row| row.title == label)
-                .and_then(|row| row.description.clone())
-                .unwrap_or_else(|| panic!("missing {label} row"))
-        };
-        // The fixture signs in as the test user, so the menu surfaces that
-        // email. No workspace is loaded in the fixture (Org degrades to the
-        // dash placeholder) and there is no conversation yet (Session falls
-        // back to "Untitled").
-        assert_eq!(row_value("Email"), "test_user@warp.dev");
-        assert_eq!(row_value("Org"), "—");
-        assert_eq!(row_value("Session"), "Untitled");
-
-        // Render the open menu through `render_inline_menu` + `TuiBuffer::to_lines`
-        // (mirroring `login_line_shows_signed_in_account_email`) so the proof
-        // exercises the actual rendered output, not just the model snapshot.
-        let lines = app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            render_element_with_size(render_inline_menu(&snapshot, &builder), ctx, 60, 12)
-                .to_lines()
-        });
-        let rendered = lines.join("\n");
+        // The full session render must include both the Status section and the
+        // keyboard Shortcuts section.
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
         assert!(
-            lines.iter().any(|line| line.trim() == "Status"),
-            "Status header should render on its own line:\n{rendered}"
+            rendered.contains("Status"),
+            "Status section header:\n{rendered}"
         );
-        // Each row renders as `<label>  <value>` on a single line. The helper
-        // matches the label followed by the two-space description separator so
-        // "Session" does not also match the "Session ID" row, and trims the
-        // buffer's trailing column padding from the value.
-        let rendered_row_value = |label: &str| -> String {
-            for line in &lines {
-                if let Some(rest) = line.trim_start().strip_prefix(label)
-                    && rest.starts_with("  ")
-                {
-                    return rest.trim().to_owned();
-                }
-            }
-            panic!("missing {label} row in rendered status menu:\n{rendered}")
-        };
-        assert_eq!(rendered_row_value("Session"), "Untitled");
-        assert_eq!(rendered_row_value("Org"), "—");
-        assert_eq!(rendered_row_value("Email"), "test_user@warp.dev");
-        // Version, Session ID, and Working directory are fixture-dependent
-        // (app version, generated session id, test cwd), so assert each row
-        // rendered a non-empty value rather than pinning the exact string.
-        for label in ["Version", "Session ID", "Working directory"] {
-            let value = rendered_row_value(label);
-            assert!(
-                !value.is_empty(),
-                "{label} row should render a value:\n{rendered}"
-            );
-        }
+        assert!(rendered.contains("Version"), "Version row:\n{rendered}");
+        assert!(rendered.contains("Session"), "Session row:\n{rendered}");
+        assert!(
+            rendered.contains("Session ID"),
+            "Session ID row:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Working directory"),
+            "Working directory row:\n{rendered}"
+        );
+        assert!(rendered.contains("Org"), "Org row:\n{rendered}");
+        assert!(rendered.contains("Email"), "Email row:\n{rendered}");
 
-        // Dismissing closes the menu and frees the input-suggestions mode.
+        // The fixture signs in as the test user, so the panel surfaces that
+        // email. No workspace is loaded (Org degrades to the em-dash placeholder)
+        // and there is no conversation yet (Session falls back to "Untitled").
+        assert!(
+            rendered.contains("test_user@warp.dev"),
+            "Email value:\n{rendered}"
+        );
+        assert!(rendered.contains("Untitled"), "Session value:\n{rendered}");
+        // Em dash (—) appears as the Org placeholder.
+        assert!(
+            rendered.contains("\u{2014}"),
+            "Org placeholder (em dash):\n{rendered}"
+        );
+
+        // The keyboard shortcuts section still renders below the status section.
+        assert!(
+            rendered.contains("Shortcuts"),
+            "Shortcuts section header:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("? shortcuts"),
+            "? shortcuts entry:\n{rendered}"
+        );
+
+        // Dismissing the panel closes the Shortcuts suggestions mode.
         view.update(&mut app, |view, ctx| {
-            view.status_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
         });
-        assert!(!app.read(|ctx| view.as_ref(ctx).status_menu.as_ref(ctx).is_open(ctx)));
+        assert!(
+            !app.read(|ctx| matches!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Shortcuts
+            )),
+            "dismissing shortcuts mode should close the panel"
+        );
     });
 }
 
