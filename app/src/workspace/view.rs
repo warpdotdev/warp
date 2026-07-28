@@ -27720,6 +27720,52 @@ impl Workspace {
         })
     }
 
+    /// Appends the remaining members of a transferred group to this window and
+    /// registers the group itself.
+    ///
+    /// The first member arrives through the normal
+    /// `NewWorkspaceSource::TransferredTab` placeholder path, so this handles
+    /// members 1..N. Their view trees must already have been transferred into
+    /// this window.
+    ///
+    /// Activates once at the end rather than per member: the per-tab insert
+    /// path activates on every call, which for an N-member group would close
+    /// the palette, close the agent view and retitle the window N times.
+    pub(crate) fn adopt_transferred_group_members(
+        &mut self,
+        group: TabGroup,
+        members: Vec<TransferredTab>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let group_id = group.id;
+        for member in members {
+            let TransferredTab {
+                pane_group,
+                color,
+                draggable_state,
+                ..
+            } = member;
+            ctx.subscribe_to_view(&pane_group, move |me, pane_group, event, ctx| {
+                me.handle_file_tree_event(pane_group, event, ctx)
+            });
+            let mut tab_data = TabData::new(pane_group);
+            tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            tab_data.draggable_state = draggable_state;
+            tab_data.group_id = Some(group_id);
+            self.tabs.push(tab_data);
+        }
+        // Stamp the placeholder member that arrived via the TransferredTab
+        // path, then register the group so every member resolves to it.
+        if let Some(first) = self.tabs.first_mut() {
+            first.group_id = Some(group_id);
+        }
+        self.tab_groups.insert(group_id, group);
+
+        let last = self.tabs.len().saturating_sub(1);
+        self.activate_tab_internal(last, ctx);
+        ctx.notify();
+    }
+
     /// Removes the members of a transferred group from this (source) window,
     /// resolved by pane-group identity.
     ///
