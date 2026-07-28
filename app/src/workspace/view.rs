@@ -20158,6 +20158,34 @@ impl Workspace {
     /// (via `render_tab_in_tab_bar`) when it was horizontal. Constructed with
     /// neutral `TabBarState` so the snapshot doesn't carry over local-drag or
     /// rename state.
+    /// Renders every tab in this (preview) workspace as one chip, for the
+    /// floating ghost of a whole-group drag.
+    ///
+    /// Each member goes through [`Self::render_tab_for_drag_ghost`], which uses
+    /// `TabComponent::for_drag_ghost()` and therefore skips the outer
+    /// `SavePosition` / `Draggable` / `DropTarget` wrappers - so the chip
+    /// overlay cannot pollute the target window's position cache.
+    pub(crate) fn render_group_for_drag_ghost(
+        &self,
+        was_vertical: bool,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        if self.tabs.is_empty() {
+            return Empty::new().finish();
+        }
+        // Laid out along the axis the source used, so the chip reads like the
+        // block the user grabbed.
+        let mut row = if was_vertical {
+            Flex::column()
+        } else {
+            Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center)
+        };
+        for index in 0..self.tabs.len() {
+            row.add_child(self.render_tab_for_drag_ghost(index, was_vertical, ctx));
+        }
+        row.finish()
+    }
+
     pub(crate) fn render_tab_for_drag_ghost(
         &self,
         tab_index: usize,
@@ -29751,11 +29779,18 @@ fn render_cross_window_ghost_chip(
     // (single-tab drags use the source window itself as the preview, which
     // by definition has only one tab; multi-tab drags move the dragged tab
     // to a dedicated preview window's index 0).
+    // A group drag shows every member, so the chip matches the block that was
+    // grabbed rather than just its first tab.
+    let is_group_drag = CrossWindowTabDrag::as_ref(app).source_group_id().is_some();
     let inner = WorkspaceRegistry::as_ref(app)
         .get(ghost.preview_window_id, app)
         .map(|ws| {
-            ws.as_ref(app)
-                .render_tab_for_drag_ghost(0, ghost.was_vertical_layout, app)
+            let workspace = ws.as_ref(app);
+            if is_group_drag {
+                workspace.render_group_for_drag_ghost(ghost.was_vertical_layout, app)
+            } else {
+                workspace.render_tab_for_drag_ghost(0, ghost.was_vertical_layout, app)
+            }
         })
         .unwrap_or_else(|| Empty::new().finish());
 
