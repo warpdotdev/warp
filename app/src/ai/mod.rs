@@ -55,7 +55,6 @@ pub(crate) mod voice;
 pub use agent_tips::*;
 pub use request_usage_model::*;
 use warpui::AppContext;
-#[cfg(not(target_family = "wasm"))]
 pub mod agent_sdk;
 pub mod cloud_agent_config;
 pub mod cloud_agent_settings;

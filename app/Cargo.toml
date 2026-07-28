@@ -364,6 +364,9 @@ syntect = { version = "5.0", default-features = false, features = [
     "default-fancy",
 ] }
 wasm-bindgen.workspace = true
+# `#[wasm_bindgen] pub async fn` (the wasm32 + Node prototype entrypoint in
+# `app/src/wasm_node_driver.rs`) generates code that uses wasm-bindgen-futures.
+wasm-bindgen-futures.workspace = true
 # We need to make sure that "js" is enabled as a feature when using wasm.
 getrandom = { version = "0.2", features = ["js"] }
 gloo.workspace = true

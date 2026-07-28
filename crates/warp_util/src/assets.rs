@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+#[cfg(target_family = "wasm")]
+use std::sync::OnceLock;
 
 pub const ASSETS_DIR: &str = "assets";
 pub const BUNDLED_ASSETS_DIR: &str = "bundled";
@@ -44,14 +46,48 @@ pub fn hashed_asset_url(hashed_asset_path: &Path) -> String {
     )
 }
 
+/// Origin override for headless/CLI wasm runs (e.g. the Node prototype,
+/// REMOTE-2264) where there is no browser `window`. Set by the app from
+/// `ChannelState::server_root_url()` at startup; when set, `make_absolute_url`
+/// uses it instead of `window().location().origin()`.
+#[cfg(target_family = "wasm")]
+static HEADLESS_ASSET_ORIGIN: OnceLock<String> = OnceLock::new();
+
+/// Set the origin used by [`make_absolute_url`] on headless/CLI wasm runs that
+/// have no browser `window`.
+///
+/// Call this once at app startup (before any `bundled_or_fetched_asset!`/
+/// `make_absolute_url` use) with `ChannelState::server_root_url()` (trimmed of
+/// any trailing slash). Has no effect on the browser web-GUI path, which keeps
+/// using `window().location().origin()`.
+#[cfg(target_family = "wasm")]
+pub fn set_headless_asset_origin(origin: impl Into<String>) {
+    let mut origin = origin.into();
+    while origin.ends_with('/') {
+        origin.pop();
+    }
+    let _ = HEADLESS_ASSET_ORIGIN.set(origin);
+}
+
 #[cfg(target_family = "wasm")]
 /// Makes a domain-relative url absolute by prepending the current origin.
+///
+/// On the browser web-GUI path this uses `window().location().origin()`. On a
+/// headless/CLI wasm run (no `window`) it uses the origin registered via
+/// [`set_headless_asset_origin`]; if neither is available it falls back to an
+/// empty origin (relative URL) rather than panicking.
 pub fn make_absolute_url(relative_url: &str) -> String {
-    // This should be infallible.
+    // Prefer an explicit headless origin (set by the app from
+    // ChannelState::server_root_url()) so DOM-free runtimes (Node) work.
+    if let Some(origin) = HEADLESS_ASSET_ORIGIN.get() {
+        return format!("{origin}{relative_url}");
+    }
+    // Browser web-GUI path: use the window origin. If there is no window
+    // (headless/CLI wasm without a registered origin), fall back to an empty
+    // origin rather than panicking.
     let origin = gloo::utils::window()
         .location()
         .origin()
-        .expect("Can't get window origin.");
-
+        .unwrap_or_default();
     format!("{origin}{relative_url}")
 }

@@ -1,3 +1,10 @@
+// The full AgentDriver depends on many native-only backends (MCP, skills/fs,
+// blocklist recording, bedrock credentials, harness support, etc.) that are
+// cfg(not(target_family="wasm"))-gated. On wasm, a minimal AgentDriver stub
+// is provided in `driver_wasm.rs` instead — see the mod declaration in
+// `agent_sdk/mod.rs`.
+#![cfg(not(target_family = "wasm"))]
+
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -108,7 +115,6 @@ mod harness_output_monitor;
 pub(super) mod output;
 mod snapshot;
 pub(crate) mod terminal;
-
 use environment::PrepareEnvironmentError;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
 use terminal::TerminalDriverEvent;

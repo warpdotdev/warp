@@ -1,0 +1,21 @@
+[package]
+name = "warp_wasm_node"
+version = "0.1.0"
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Re-exports the wasm32 + Node AgentDriver entrypoint defined in the `warp` app
+# crate. The app crate owns the AgentDriver/terminal types (pub(crate)), so the
+# `#[wasm_bindgen]` entrypoint lives there and is re-exported here for the
+# cdylib. See `app/src/wasm_node_driver.rs` (REMOTE-2264).
+warp = { workspace = true }
+wasm-bindgen.workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen-futures.workspace = true

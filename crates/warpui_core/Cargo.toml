@@ -115,6 +115,8 @@ arboard = { workspace = true, features = ["image-data"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 gloo.workspace = true
+js-sys = "0.3.63"
+wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 woothee = "0.13.0"
 

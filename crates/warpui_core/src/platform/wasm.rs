@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+use wasm_bindgen::JsValue;
 use woothee::parser::{Parser, WootheeResult};
 
 use crate::platform::OperatingSystem;
@@ -35,6 +36,22 @@ impl ParsedUserAgent {
 fn parsed_user_agent() -> Option<&'static ParsedUserAgent> {
     PARSED_USER_AGENT
         .get_or_init(|| {
+            // In a DOM-free runtime (e.g. the Node prototype, REMOTE-2264) there
+            // is no browser `window`, so `gloo::utils::window()` throws. Check
+            // for the window's existence first and return `None` when absent so
+            // `current_platform` falls back to a default OS (Linux) instead of
+            // panicking.
+            let window = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("window"))
+                .ok()
+                .filter(|v| !v.is_undefined() && !v.is_null())?;
+            if window.as_f64().is_some()
+                || window.as_string().is_some()
+                || window.as_bool().is_some()
+            {
+                // The global `window` is a primitive, not a Window object —
+                // not a browser environment.
+                return None;
+            }
             let Ok(user_agent) = gloo::utils::window().navigator().user_agent() else {
                 return None;
             };
@@ -48,14 +65,16 @@ fn parsed_user_agent() -> Option<&'static ParsedUserAgent> {
 }
 
 /// Returns the current operating system by reading the user agent. If the user agent was not able
-/// to be read, [`OperatingSystem::Other`] is returned.
+/// to be read (or there is no browser `window`, e.g. a DOM-free Node runtime),
+/// [`OperatingSystem::Linux`] is returned as a headless default.
 ///
 /// # Panics
-/// Panics if called before the app was attached to the DOM.
+/// Panics if called before the app was attached to the DOM (browser web-GUI path only).
 pub(super) fn current_platform() -> OperatingSystem {
     *PLATFORM.get_or_init(|| {
         let Some(parsed_user_agent) = parsed_user_agent() else {
-            return OperatingSystem::Other(None);
+            // No browser window (DOM-free runtime): default to Linux.
+            return OperatingSystem::Linux;
         };
 
         // Try to parse the user agent to determine the OS. _heavily_ inspired by
@@ -71,8 +90,17 @@ pub(super) fn current_platform() -> OperatingSystem {
 }
 
 /// Returns the user agent provided by the browser. If the user agent was
-/// unable to be read, returns None.
+/// unable to be read, or there is no browser `window`, returns None.
 pub fn user_agent() -> Option<String> {
+    // Check for the window's existence first to avoid panicking in a DOM-free
+    // runtime (e.g. Node). `gloo::utils::window()` throws when there is no
+    // `window` global.
+    let window = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("window"))
+        .ok()
+        .filter(|v| !v.is_undefined() && !v.is_null())?;
+    if window.as_f64().is_some() || window.as_string().is_some() || window.as_bool().is_some() {
+        return None;
+    }
     gloo::utils::window().navigator().user_agent().ok()
 }
 
