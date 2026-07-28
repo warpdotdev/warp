@@ -7689,6 +7689,7 @@ impl Input {
             editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
         });
     }
+
     pub fn reset_after_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) {
         self.editor.update(ctx, |editor, ctx| {
             editor.set_interaction_state(InteractionState::Editable, ctx);
