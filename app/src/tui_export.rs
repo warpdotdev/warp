@@ -224,9 +224,9 @@ pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
-    BlockPadding, History, HistoryEvent, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo,
-    SizeUpdate, TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
-    UpArrowHistoryConfig,
+    BlockPadding, History, HistoryEvent, LinkedWorkflowData, PtyIntent, PtyIntentEvent,
+    ShellLaunchData, SizeInfo, SizeUpdate, TerminalManager as TerminalManagerTrait, TerminalModel,
+    TerminalSurface, UpArrowHistoryConfig,
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;

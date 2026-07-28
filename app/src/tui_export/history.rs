@@ -31,21 +31,20 @@ pub fn tui_up_arrow_history(
         .as_ref(app)
         .up_arrow_suggestions_for_terminal_surface(terminal_surface_id, session_id, config, app)
         .into_iter()
-        .filter_map(|suggestion| match suggestion {
-            HistoryInputSuggestion::Command { entry } => {
-                let text = entry.command.trim();
-                (!text.is_empty()).then(|| TuiUpArrowHistoryItem {
-                    text: text.to_owned(),
+        .map(|suggestion| {
+            let text = suggestion.normalized_text().to_owned();
+            match suggestion {
+                HistoryInputSuggestion::Command { entry } => TuiUpArrowHistoryItem {
+                    text,
                     kind: TuiUpArrowHistoryItemKind::Command {
                         linked_workflow_data: entry.linked_workflow_data(),
                     },
-                })
-            }
-            HistoryInputSuggestion::AIQuery { entry } => (!entry.query_text.trim().is_empty())
-                .then_some(TuiUpArrowHistoryItem {
-                    text: entry.query_text,
+                },
+                HistoryInputSuggestion::AIQuery { .. } => TuiUpArrowHistoryItem {
+                    text,
                     kind: TuiUpArrowHistoryItemKind::Prompt,
-                }),
+                },
+            }
         })
         .collect()
 }

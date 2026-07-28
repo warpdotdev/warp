@@ -5,16 +5,16 @@ use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp::settings::AISettingsChangedEvent;
 use warp::tui_export::{
-    BlocklistAIInputModel, ConversationSelectionEvent, InputConfig, InputModePolicy, InputType,
-    PolicyConfigUpdate, TuiUpArrowHistoryItemKind, add_tui_history_test_models,
-    append_tui_history_test_command, blocklist_ai_history_model_with_queries,
-    register_tui_input_mode_test_settings,
+    BlocklistAIInputModel, ConversationSelectionEvent, History, HistoryEvent, InputConfig,
+    InputModePolicy, InputType, PolicyConfigUpdate, TuiUpArrowHistoryItemKind,
+    add_tui_history_test_models, append_tui_history_test_command,
+    blocklist_ai_history_model_with_queries, register_tui_input_mode_test_settings,
 };
 use warp_core::features::FeatureFlag;
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityId, ModelHandle};
+use warpui_core::{App, AppContext, EntityId, ModelHandle, SingletonEntity};
 
 use super::{
     TuiPromptAndCommandHistoryMenuModel, TuiPromptAndCommandHistoryRow, reconciled_selection_index,
@@ -215,6 +215,27 @@ fn shell_mode_excludes_prompts_and_previews_commands() {
 }
 
 #[test]
+fn command_history_initialization_refreshes_an_open_menu() {
+    agent_mode_test(|mut app| async move {
+        let setup = initialized_setup(&mut app, &[], &[], InputType::AI).await;
+        app.update(|ctx| {
+            setup.menu.update(ctx, |menu, ctx| menu.open(ctx));
+            assert!(row_titles(&setup.menu, ctx).is_empty());
+
+            append_tui_history_test_command(setup.session_id, "git status".to_owned(), ctx);
+            History::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(HistoryEvent::Initialized(setup.session_id));
+            });
+        });
+
+        app.read(|ctx| {
+            assert_eq!(row_titles(&setup.menu, ctx), vec!["git status"]);
+            assert_eq!(buffer_text(&setup.input, ctx), "git status");
+            assert_eq!(setup.input_mode.as_ref(ctx).input_type(), InputType::Shell);
+        });
+    });
+}
+#[test]
 fn prompt_and_command_with_same_text_remain_distinct() {
     agent_mode_test(|mut app| async move {
         let setup = initialized_setup(&mut app, &["build"], &["build"], InputType::AI).await;
@@ -317,6 +338,28 @@ fn accepting_selected_item_returns_its_kind() {
                 .update(ctx, |menu, ctx| menu.accept_selected(ctx))
                 .expect("selected prompt is accepted");
             assert_eq!(accepted.text, "prompt");
+            assert_eq!(accepted.kind, TuiUpArrowHistoryItemKind::Prompt);
+        });
+    });
+}
+
+#[test]
+fn accepting_without_a_match_uses_the_original_input_type() {
+    agent_mode_test(|mut app| async move {
+        let setup = initialized_setup(&mut app, &[], &["echo command"], InputType::AI).await;
+        app.update(|ctx| {
+            setup.menu.update(ctx, |menu, ctx| menu.open(ctx));
+            assert_eq!(setup.input_mode.as_ref(ctx).input_type(), InputType::Shell);
+        });
+        app.update(|ctx| {
+            set_text(&setup.input, "no matching prompt", ctx);
+        });
+        app.update(|ctx| {
+            let accepted = setup
+                .menu
+                .update(ctx, |menu, ctx| menu.accept_selected(ctx))
+                .expect("typed query is accepted");
+            assert_eq!(accepted.text, "no matching prompt");
             assert_eq!(accepted.kind, TuiUpArrowHistoryItemKind::Prompt);
         });
     });

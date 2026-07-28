@@ -49,7 +49,11 @@ fn sort_and_dedupe_suggestions<'a>(
     let mut seen_ai_queries: HashSet<&str> = HashSet::new();
     let mut skip_indices: HashSet<usize> = HashSet::new();
     for (idx, suggestion) in suggestions.iter().enumerate().rev() {
-        let text = suggestion.text();
+        let text = suggestion.normalized_text();
+        if text.is_empty() {
+            skip_indices.insert(idx);
+            continue;
+        }
         if suggestion.is_ai_query() {
             if seen_ai_queries.contains(text) {
                 skip_indices.insert(idx);

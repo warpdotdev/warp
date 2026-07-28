@@ -100,12 +100,15 @@ fn combined_history(
             app,
         )
         .into_iter()
-        .map(|suggestion| match suggestion {
-            HistoryInputSuggestion::Command { entry } => TestHistoryItem::Command {
-                text: entry.command.trim().to_owned(),
-                linked_workflow_data: entry.linked_workflow_data(),
-            },
-            HistoryInputSuggestion::AIQuery { entry } => TestHistoryItem::Prompt(entry.query_text),
+        .map(|suggestion| {
+            let text = suggestion.normalized_text().to_owned();
+            match suggestion {
+                HistoryInputSuggestion::Command { entry } => TestHistoryItem::Command {
+                    text,
+                    linked_workflow_data: entry.linked_workflow_data(),
+                },
+                HistoryInputSuggestion::AIQuery { .. } => TestHistoryItem::Prompt(text),
+            }
         })
         .collect()
 }
@@ -217,7 +220,7 @@ fn combined_history_dedupes_each_kind() {
             vec![
                 command_entry(session_id, " same ", 0, false, None),
                 command_entry(session_id, "older command", 1, false, None),
-                command_entry(session_id, " same ", 2, false, None),
+                command_entry(session_id, "same", 2, false, None),
                 command_entry(session_id, "   ", 3, false, None),
             ],
         )
@@ -235,10 +238,6 @@ fn combined_history_dedupes_each_kind() {
                     },
                     TestHistoryItem::Command {
                         text: "same".to_owned(),
-                        linked_workflow_data: None,
-                    },
-                    TestHistoryItem::Command {
-                        text: String::new(),
                         linked_workflow_data: None,
                     },
                 ]

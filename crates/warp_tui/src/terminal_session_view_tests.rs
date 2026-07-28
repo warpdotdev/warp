@@ -15,10 +15,10 @@ use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
     AIAgentActionId, AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId,
     AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel, ConversationStatus,
-    ConversationUsageTotals, Harness, LLMPreferences, LongRunningCommandControlState, PtyIntent,
-    PtyIntentEvent, QueuedQueryModel, SizeInfo, SizeUpdate, TaskId, TranscriptScope,
-    TuiUpArrowHistoryItemKind, UserTakeOverReason, export_conversation_markdown,
-    register_tui_session_view_test_singletons, slash_commands,
+    ConversationUsageTotals, Harness, LLMPreferences, LinkedWorkflowData,
+    LongRunningCommandControlState, PtyIntent, PtyIntentEvent, QueuedQueryModel, SizeInfo,
+    SizeUpdate, TaskId, TranscriptScope, TuiUpArrowHistoryItemKind, UserTakeOverReason,
+    export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::channel::Channel;
 use warp_core::settings::Setting as _;
@@ -1679,7 +1679,7 @@ fn submit_is_blocked_during_bootstrap_and_allowed_at_prompt() {
                 input.set_text("draft", ctx);
             });
             view.terminal_model.lock().block_list_mut().reinit_shell();
-            view.handle_submitted("draft".to_owned(), ctx);
+            view.handle_submitted("draft".to_owned(), None, ctx);
         });
 
         assert_eq!(
@@ -1721,6 +1721,44 @@ fn accepted_command_history_executes_through_the_shell_submission_path() {
 
         assert_eq!(executed.borrow().as_slice(), &["echo from history"]);
         assert_eq!(app.read(|ctx| input_text(&view, ctx)), "");
+    });
+}
+
+#[test]
+fn accepted_command_history_preserves_workflow_metadata() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let executed = Rc::new(RefCell::new(Vec::new()));
+        app.update(|ctx| {
+            let executed = executed.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if let TuiTerminalSessionEvent::ExecuteCommand(event) = event {
+                    executed.borrow_mut().push((**event).clone());
+                }
+            });
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_accepted_prompt_and_command_history(
+                "deploy production".to_owned(),
+                TuiUpArrowHistoryItemKind::Command {
+                    linked_workflow_data: Some(LinkedWorkflowData::Command(
+                        "deploy {{environment}}".to_owned(),
+                    )),
+                },
+                ctx,
+            );
+        });
+
+        let executed = executed.borrow();
+        let event = executed.as_slice().first().expect("command was executed");
+        assert_eq!(event.command, "deploy production");
+        assert_eq!(event.workflow_id, None);
+        assert_eq!(
+            event.workflow_command.as_deref(),
+            Some("deploy {{environment}}")
+        );
     });
 }
 

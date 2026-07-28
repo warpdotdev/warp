@@ -7,8 +7,8 @@
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     ActiveSession, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel,
-    InputType, InputTypeAutoDetectionSource, TuiUpArrowHistoryItemKind, UpArrowHistoryConfig,
-    tui_up_arrow_history,
+    History, HistoryEvent, InputType, InputTypeAutoDetectionSource, SessionId,
+    TuiUpArrowHistoryItemKind, UpArrowHistoryConfig, tui_up_arrow_history,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -93,6 +93,10 @@ impl TuiPromptAndCommandHistoryMenuModel {
                 }
             },
         );
+        ctx.subscribe_to_model(&History::handle(ctx), |model, _, event, ctx| {
+            let HistoryEvent::Initialized(session_id) = event;
+            model.on_command_history_initialized(*session_id, ctx);
+        });
         Self {
             input_editor,
             input_mode,
@@ -199,8 +203,8 @@ impl TuiPromptAndCommandHistoryMenuModel {
 
     /// Accepts the current selection, closing the menu and returning the text to
     /// submit. With a highlighted item that is its text; with an empty or
-    /// filtered-to-nothing list it is the current input, so Enter behaves as a
-    /// normal submit.
+    /// filtered-to-nothing list it is the current input with the input type
+    /// captured when the menu opened, so Enter behaves as a normal submit.
     pub(crate) fn accept_selected(
         &mut self,
         ctx: &mut ModelContext<Self>,
@@ -208,13 +212,17 @@ impl TuiPromptAndCommandHistoryMenuModel {
         if !self.is_open(ctx) {
             return None;
         }
-        let selected = match &self.state {
-            TuiPromptAndCommandHistoryMenuState::Open { list, .. } => list.selected_row().cloned(),
-            TuiPromptAndCommandHistoryMenuState::Closed => None,
+        let (selected, original_input_type) = match &self.state {
+            TuiPromptAndCommandHistoryMenuState::Open {
+                list,
+                original_input_type,
+                ..
+            } => (list.selected_row().cloned(), *original_input_type),
+            TuiPromptAndCommandHistoryMenuState::Closed => return None,
         };
         let accepted = selected.unwrap_or_else(|| TuiPromptAndCommandHistoryRow {
             text: input_text(&self.input_editor, ctx),
-            kind: match self.input_mode.as_ref(ctx).input_type() {
+            kind: match original_input_type {
                 InputType::AI => TuiUpArrowHistoryItemKind::Prompt,
                 InputType::Shell => TuiUpArrowHistoryItemKind::Command {
                     linked_workflow_data: None,
@@ -281,6 +289,26 @@ impl TuiPromptAndCommandHistoryMenuModel {
             *query = current;
         }
         self.refresh_rows(ctx);
+    }
+
+    fn on_command_history_initialized(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.is_open(ctx) || self.active_session.as_ref(ctx).session_id(ctx) != Some(session_id)
+        {
+            return;
+        }
+        let had_selection = matches!(
+            &self.state,
+            TuiPromptAndCommandHistoryMenuState::Open { list, .. }
+                if list.selected_row().is_some()
+        );
+        self.refresh_rows(ctx);
+        if !had_selection {
+            self.preview_selection(ctx);
+        }
     }
 
     /// Closes the menu without touching the input buffer.
