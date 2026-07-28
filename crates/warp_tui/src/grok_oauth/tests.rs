@@ -1,3 +1,4 @@
+use uuid::Uuid;
 use warp::tui_export::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, EntityIdMap};
@@ -5,13 +6,25 @@ use warpui_core::elements::tui::{
     TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect,
     TuiScreenPosition, TuiSize,
 };
-use warpui_core::{TuiView as _, TypedActionView as _};
+use warpui_core::{TuiView as _, TypedActionView as _, ViewContext};
 
 use super::{
     CALLBACK_FAILURE_MESSAGE, MANUAL_FAILURE_MESSAGE, TuiGrokOAuthBlock, TuiGrokOAuthBlockAction,
     TuiGrokOAuthPhase,
 };
+use crate::editor_view::TuiEditorView;
 use crate::tui_builder::TuiUiBuilder;
+
+pub(crate) fn new_block(ctx: &mut ViewContext<TuiGrokOAuthBlock>) -> TuiGrokOAuthBlock {
+    TuiGrokOAuthBlock {
+        active_attempt_id: Some(Uuid::new_v4()),
+        manual_exchange: None,
+        cancellation: None,
+        code_editor: ctx.add_typed_action_tui_view(TuiEditorView::single_line),
+        phase: TuiGrokOAuthPhase::Waiting { manual_error: None },
+        callback_error: None,
+    }
+}
 
 #[test]
 fn waiting_card_uses_handoff_structure_and_only_escape_footer_hint() {
@@ -23,7 +36,7 @@ fn waiting_card_uses_handoff_structure_and_only_escape_footer_hint() {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                TuiGrokOAuthBlock::new_for_test,
+                new_block,
             )
         });
 
@@ -90,7 +103,7 @@ fn callback_and_manual_failures_do_not_claim_success_or_expose_raw_details() {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                TuiGrokOAuthBlock::new_for_test,
+                new_block,
             )
         });
 
@@ -148,11 +161,12 @@ fn fatal_card_sanitizes_the_body_and_escape_closes_the_attempt() {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                TuiGrokOAuthBlock::new_for_test,
+                new_block,
             )
         });
         block.update(&mut app, |block, _| {
-            block.set_fatal_error_for_test("Authorization failed without exposing a code");
+            block.phase =
+                TuiGrokOAuthPhase::Fatal("Authorization failed without exposing a code".to_owned());
         });
         let rendered = app.read(|ctx| {
             let mut element = block.as_ref(ctx).render(ctx);

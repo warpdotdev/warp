@@ -112,23 +112,6 @@ impl TuiGrokOAuthBlock {
         self.active_attempt_id.is_some()
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_for_test(ctx: &mut ViewContext<Self>) -> Self {
-        Self {
-            active_attempt_id: Some(Uuid::new_v4()),
-            manual_exchange: None,
-            cancellation: None,
-            code_editor: ctx.add_typed_action_tui_view(TuiEditorView::single_line),
-            phase: TuiGrokOAuthPhase::Waiting { manual_error: None },
-            callback_error: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn set_fatal_error_for_test(&mut self, error: impl Into<String>) {
-        self.phase = TuiGrokOAuthPhase::Fatal(error.into());
-    }
-
     fn handle_callback_result(
         &mut self,
         attempt_id: Uuid,
@@ -257,6 +240,7 @@ impl TuiGrokOAuthBlock {
                     .with_style(builder.muted_text_style())
                     .finish(),
             );
+
         match &self.phase {
             TuiGrokOAuthPhase::Waiting { manual_error } => {
                 body = body.child(
@@ -291,10 +275,6 @@ impl TuiGrokOAuthBlock {
         body.finish()
     }
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
 
 impl Drop for TuiGrokOAuthBlock {
     fn drop(&mut self) {
@@ -374,3 +354,9 @@ impl TypedActionView for TuiGrokOAuthBlock {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::new_block;
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

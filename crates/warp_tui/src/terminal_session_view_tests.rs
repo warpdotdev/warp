@@ -56,7 +56,7 @@ use super::{
     voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
-use crate::grok_oauth::{TuiGrokOAuthBlock, TuiGrokOAuthBlockAction};
+use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
@@ -453,7 +453,7 @@ fn grok_oauth_block_exclusively_owns_input_until_escape() {
                 input.set_text("/add-api-key grok", ctx);
                 input.clear(ctx);
             });
-            let block = ctx.add_typed_action_tui_view(TuiGrokOAuthBlock::new_for_test);
+            let block = ctx.add_typed_action_tui_view(new_block);
             view.install_grok_oauth_block(block.clone(), ctx);
             block
         });
