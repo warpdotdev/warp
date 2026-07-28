@@ -145,6 +145,7 @@ fn team_for_test() -> Team {
     Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],

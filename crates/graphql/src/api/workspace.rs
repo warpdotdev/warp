@@ -299,6 +299,7 @@ pub struct Team {
     pub uid: cynic::Id,
     pub name: String,
     pub members: Vec<TeamMember>,
+    pub color: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

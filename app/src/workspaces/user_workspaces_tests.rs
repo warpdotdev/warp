@@ -115,6 +115,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
     let team = Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],
@@ -246,6 +247,7 @@ fn team_for_test() -> Team {
     Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],
@@ -927,6 +929,7 @@ fn test_joining_team_moves_objects() {
     let team = Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],
@@ -1106,6 +1109,130 @@ fn test_agent_attribution_respects_user_setting() {
     })
 }
 
+/// Returns true when the current workspace has > 1 team (team-switcher should be visible),
+/// and false when there are 0 or 1 teams (team-switcher should be hidden).
+fn workspace_has_multiple_teams(user_workspaces: &UserWorkspaces) -> bool {
+    user_workspaces
+        .current_workspace()
+        .map(|ws| ws.teams.len() > 1)
+        .unwrap_or(false)
+}
+
+#[test]
+fn test_team_switcher_hidden_with_zero_teams() {
+    // When the user is in no workspace / no teams, the pill must not render.
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                !workspace_has_multiple_teams(user_workspaces),
+                "0 teams: switcher should be hidden"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_switcher_hidden_with_single_team() {
+    // With exactly 1 team the pill must not appear.
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                !workspace_has_multiple_teams(user_workspaces),
+                "1 team: switcher should be hidden"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_switcher_visible_with_multiple_teams() {
+    // With 2+ teams the pill must be visible.
+    let team1 = team_for_test();
+    let mut team2 = team_for_test();
+    team2.uid = 456.into();
+    team2.name = "Second Team".to_string();
+    let mut workspace = workspace_for_test(&team1);
+    workspace.teams.push(team2);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                workspace_has_multiple_teams(user_workspaces),
+                "2 teams: switcher should be visible"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_register_window_for_team_assigns_specific_team() {
+    // register_window_for_team must pin the window to the requested team,
+    // bypassing the self-serve / source-window fallback.
+    let team1 = team_for_test();
+    let mut team2 = team_for_test();
+    team2.uid = 456.into();
+    team2.name = "Second Team".to_string();
+    let mut workspace = workspace_for_test(&team1);
+    workspace.teams.push(team2.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window_for_team(window_id, team2.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_id),
+                Some(team2.uid),
+                "register_window_for_team should assign team2 directly"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_register_window_for_team_is_immutable_after_set() {
+    // Calling register_window_for_team a second time must not change the
+    // already-assigned team (consistent with the general immutability contract).
+    let team1 = team_for_test();
+    let mut team2 = team_for_test();
+    team2.uid = 456.into();
+    let mut workspace = workspace_for_test(&team1);
+    workspace.teams.push(team2.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window_for_team(window_id, team2.uid, ctx);
+            // Attempt to override with team1 — must have no effect.
+            user_workspaces.register_window_for_team(window_id, team1.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_id),
+                Some(team2.uid),
+                "second call to register_window_for_team must not override the first"
+            );
+        });
+    })
+}
+
 #[test]
 fn test_leaving_team_moves_objects() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
@@ -1113,6 +1240,7 @@ fn test_leaving_team_moves_objects() {
     let team = Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],

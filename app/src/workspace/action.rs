@@ -875,6 +875,13 @@ pub enum WorkspaceAction {
     /// Opens (or focuses) the in-app network log pane as a right-split of the
     /// active pane group. Gated on `ContextFlag::NetworkLogConsole`.
     OpenNetworkLogPane,
+    /// Opens a new window pre-scoped to the specified team, triggered from
+    /// the title-bar team-switcher dropdown.
+    OpenNewWindowForTeam {
+        team_uid: crate::server::ids::ServerId,
+    },
+    /// Shows (toggles) the team-switcher dropdown menu in the title bar.
+    ShowTeamSwitcherMenu,
 }
 
 impl From<&WorkspaceAction> for LoginGatedFeature {
@@ -1196,7 +1203,9 @@ impl WorkspaceAction {
             | ShowHandoffEnvironmentCreationModal
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
-            | OpenNetworkLogPane => false,
+            | OpenNetworkLogPane
+            | OpenNewWindowForTeam { .. }
+            | ShowTeamSwitcherMenu => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
             #[cfg(target_family = "wasm")]

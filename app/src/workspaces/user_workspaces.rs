@@ -249,6 +249,22 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
+    /// Registers a new window pre-assigned to a specific team.
+    /// Unlike `register_window`, this bypasses the source-window / self-serve fallback
+    /// and always uses the provided `team_uid`. Used when the user explicitly requests
+    /// a new window scoped to a chosen team via the team switcher.
+    pub fn register_window_for_team(
+        &mut self,
+        window_id: WindowId,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.window_team_uids
+            .entry(window_id)
+            .or_insert(Some(team_uid));
+        ctx.notify();
+    }
+
     pub fn team_for_window(&self, window_id: WindowId) -> Option<&Team> {
         self.team_uid_for_window(window_id)
             .and_then(|team_uid| self.team_from_uid(team_uid))
@@ -1701,6 +1717,7 @@ impl UserWorkspaces {
             teams: vec![Team {
                 uid: ServerId::from(2),
                 name: "Test Team".to_string(),
+                color: None,
                 organization_settings: workspace_settings.clone(),
                 billing_metadata: BillingMetadata::default(),
                 members: vec![],
