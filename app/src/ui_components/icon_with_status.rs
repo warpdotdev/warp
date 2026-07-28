@@ -2,7 +2,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::{Fill as WarpThemeFill, WarpTheme};
+use warp_core::ui::theme::{ColorScheme, Fill as WarpThemeFill, WarpTheme};
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, Element, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Stack,
@@ -11,15 +11,6 @@ use warpui::elements::{
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::terminal::CLIAgent;
 use crate::themes::theme::Fill as ThemeFill;
-
-/// Background color used for the Oz agent's circle when it is running in an ambient (cloud)
-/// run. Matches the Oz brand purple used in the cloud-mode design spec.
-const OZ_AMBIENT_BACKGROUND_COLOR: ColorU = ColorU {
-    r: 203,
-    g: 176,
-    b: 247,
-    a: 255,
-};
 
 // Sub-component size ratios, expressed as fractions of `total_size`. The brand circle is
 // ~76% wide and the status badge is ~57% wide, with the badge's bottom-right anchored at
@@ -128,9 +119,9 @@ pub(crate) enum IconWithStatusVariant {
     },
     /// A pre-built icon element on an overlay background.
     NeutralElement { icon_element: Box<dyn Element> },
-    /// A local Oz agent conversation: Agent-brand glyph tinted by
-    /// `theme.main_text_color` on the theme background (adapts to light/dark).
-    /// An ambient (cloud) Oz agent: Oz/cloud glyph on the brand-purple background.
+    /// A Warp agent conversation: monochrome Warp glyph and circle, with the
+    /// foreground/background pair flipped for light and dark themes. Ambient
+    /// (cloud) conversations retain the separate cloud status badge.
     OzAgent {
         status: Option<ConversationStatus>,
         is_ambient: bool,
@@ -203,32 +194,9 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             total_size,
         ),
         IconWithStatusVariant::OzAgent { status, is_ambient } => {
-            let circle_background = if is_ambient {
-                ThemeFill::Solid(OZ_AMBIENT_BACKGROUND_COLOR)
-            } else {
-                // Theme-derived background so the circle adapts to light and
-                // dark themes. The glyph stays legible in both because
-                // `main_text_color` always contrasts with `background()`.
-                theme.background()
-            };
-            // In ambient/cloud mode use the combined `OzCloud` silhouette (Oz + cloud),
-            // matching the treatment used in the agent view header. Non-ambient runs
-            // use the Warp logo glyph tinted by the theme text color.
-            let agent_glyph = if is_ambient {
-                WarpIcon::OzCloud
-            } else {
-                WarpIcon::Agent
-            };
-            // Cloud (ambient) runs use a black glyph on the light-purple background
-            // for consistency with the web app; local runs use the theme main-text
-            // color so the glyph is legible on both light and dark themes.
-            let glyph_color = if is_ambient {
-                WarpThemeFill::Solid(ColorU::black())
-            } else {
-                theme.main_text_color(theme.background())
-            };
+            let (circle_background, glyph_color) = warp_agent_circle_colors(theme);
             let circle = render_circle(
-                agent_glyph.to_warpui_icon(glyph_color).finish(),
+                WarpIcon::Agent.to_warpui_icon(glyph_color).finish(),
                 circle_background,
                 total_size,
             );
@@ -285,6 +253,13 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             theme,
             status_container_background,
         ),
+    }
+}
+
+fn warp_agent_circle_colors(theme: &WarpTheme) -> (WarpThemeFill, WarpThemeFill) {
+    match theme.inferred_color_scheme() {
+        ColorScheme::LightOnDark => (WarpThemeFill::black(), WarpThemeFill::white()),
+        ColorScheme::DarkOnLight => (WarpThemeFill::white(), WarpThemeFill::black()),
     }
 }
 
@@ -500,3 +475,7 @@ fn render_with_optional_status_badge(
         .with_height(total_size)
         .finish()
 }
+
+#[cfg(test)]
+#[path = "icon_with_status_tests.rs"]
+mod tests;
