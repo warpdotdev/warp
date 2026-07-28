@@ -119,6 +119,7 @@ for arg in "$@"; do
       export WARP_SKIP_GCLOUD_AUTH=1
       ;;
     *)
+      echo "warning: unknown argument '${arg}' (ignored)" >&2
       PLATFORM_ARGS+=("${arg}")
       ;;
   esac
