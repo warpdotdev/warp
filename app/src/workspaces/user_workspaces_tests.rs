@@ -9,6 +9,8 @@ use super::*;
 use crate::ai::llms::LLMModelHost;
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObject, CloudObjectGuest};
+use crate::drive::sharing::{SharingAccessLevel, Subject, UserKind};
 use crate::features::FeatureFlag;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -749,6 +751,123 @@ fn test_window_team_assignment_inherits_from_source_or_self_serve_team() {
     })
 }
 
+#[test]
+fn test_window_team_assignment_falls_back_when_team_is_removed() {
+    let first_team = team_for_test();
+    let mut removed_team = team_for_test();
+    removed_team.uid = 456.into();
+    let mut workspace = workspace_for_test(&first_team);
+    workspace.teams.push(removed_team.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace.clone()]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, removed_team.uid, ctx);
+            workspace.teams.retain(|team| team.uid != removed_team.uid);
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(first_team.uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_window_team_assignment_reconciles_when_current_workspace_changes() {
+    let first_team = team_for_test();
+    let first_workspace = workspace_for_test(&first_team);
+    let mut second_team = team_for_test();
+    second_team.uid = 456.into();
+    let mut second_workspace = workspace_for_test(&second_team);
+    second_workspace.uid = "workspace_uid987654321".to_string().into();
+    let second_workspace_uid = second_workspace.uid;
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![first_workspace, second_workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+            user_workspaces.set_current_workspace_uid(second_workspace_uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(second_team.uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_spaces_for_window_orders_selected_team_shared_and_personal() {
+    let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
+    let first_team = team_for_test();
+    let mut selected_team = team_for_test();
+    selected_team.uid = 456.into();
+    selected_team.name = "selected".to_string();
+    let mut workspace = workspace_for_test(&first_team);
+    workspace.teams.push(selected_team.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, selected_team.uid, ctx);
+        });
+
+        let current_user_uid = app.read(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .user_id()
+                .expect("test user should be authenticated")
+        });
+        let mut shared_object = CloudWorkflow::new_local(
+            CloudWorkflowModel {
+                data: Workflow::new("shared workflow", "echo shared"),
+            },
+            Owner::User {
+                user_uid: UserUid::new("other-user"),
+            },
+            None,
+            ClientId::default(),
+        );
+        shared_object
+            .permissions_mut()
+            .guests
+            .push(CloudObjectGuest {
+                subject: Subject::User(UserKind::Account(current_user_uid)),
+                access_level: SharingAccessLevel::View,
+                source: None,
+            });
+        CloudModel::handle(&app).update(&mut app, |cloud_model, _| {
+            cloud_model.add_object(shared_object.id, shared_object);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).spaces_for_window(window_id, ctx),
+                vec![
+                    Space::Team {
+                        team_uid: selected_team.uid
+                    },
+                    Space::Shared,
+                    Space::Personal,
+                ]
+            );
+        });
+    })
+}
 #[test]
 fn test_unassigned_window_is_initialized_after_workspace_metadata_loads() {
     let team = team_for_test();

@@ -267,13 +267,23 @@ impl UserWorkspaces {
             .and_then(|window_id| self.team_for_window(window_id))
     }
 
-    fn initialize_unassigned_windows(&mut self) {
-        let Some(team_uid) = self.self_serve_team_uid() else {
-            return;
-        };
+    fn reconcile_window_team_assignments(&mut self) {
+        let team_uids = self
+            .current_workspace()
+            .map(|workspace| {
+                workspace
+                    .teams
+                    .iter()
+                    .map(|team| team.uid)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let fallback_team_uid = team_uids.first().copied();
 
         for window_team_uid in self.window_team_uids.values_mut() {
-            window_team_uid.get_or_insert(team_uid);
+            if window_team_uid.is_none_or(|team_uid| !team_uids.contains(&team_uid)) {
+                *window_team_uid = fallback_team_uid;
+            }
         }
     }
 
@@ -438,7 +448,7 @@ impl UserWorkspaces {
         ctx: &mut ModelContext<Self>,
     ) {
         *self.current_workspace_uid = Some(workspace_uid);
-        self.initialize_unassigned_windows();
+        self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
     }
 
@@ -788,7 +798,7 @@ impl UserWorkspaces {
         {
             return vec![Space::Shared];
         }
-        let mut spaces = vec![Space::Personal];
+        let mut spaces = vec![];
         if let Some(team) = self.team_for_window(window_id) {
             spaces.push(Space::Team { team_uid: team.uid });
         }
@@ -798,6 +808,7 @@ impl UserWorkspaces {
         {
             spaces.push(Space::Shared);
         }
+        spaces.push(Space::Personal);
 
         spaces
     }
@@ -866,7 +877,7 @@ impl UserWorkspaces {
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
         *self.workspaces = workspaces;
-        self.initialize_unassigned_windows();
+        self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
 
         if sunsetted_to_build_changed {
