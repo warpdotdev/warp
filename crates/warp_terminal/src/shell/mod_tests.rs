@@ -124,6 +124,14 @@ fn test_from_name() {
 }
 
 #[test]
+fn test_fully_supported_remote_shells() {
+    assert!(ShellType::Bash.is_fully_supported_remotely());
+    assert!(ShellType::Zsh.is_fully_supported_remotely());
+    assert!(ShellType::Fish.is_fully_supported_remotely());
+    assert!(!ShellType::PowerShell.is_fully_supported_remotely());
+}
+
+#[test]
 fn test_from_markdown_language_spec() {
     // Standard shell languages
     assert_eq!(

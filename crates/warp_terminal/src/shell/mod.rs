@@ -599,8 +599,8 @@ impl ShellType {
     /// If true, Warp will bootstrap the shell if it's the login shell on the remote host.
     pub fn is_fully_supported_remotely(&self) -> bool {
         match self {
-            ShellType::Zsh | ShellType::Bash => true,
-            ShellType::Fish | ShellType::PowerShell => false,
+            ShellType::Zsh | ShellType::Bash | ShellType::Fish => true,
+            ShellType::PowerShell => false,
         }
     }
 

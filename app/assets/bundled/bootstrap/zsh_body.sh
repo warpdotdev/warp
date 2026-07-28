@@ -1014,16 +1014,11 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
               esac
           fi
 
-          # Keep remote commands up-to-date with shell.rs & bash.sh.
-          # Note that in this command, we're passing a string to the remote shell. Any variable expansions need to be
-          # escaped with "''" to avoid the local shell from expanding them before they're passed to the remote shell.
-          # We check the SHELL env var and use shell string manipulation to get the contents after the last slash to
-          # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
-          # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
-          # support.
-          command ssh -o ControlMaster=$control_master_mode -o ControlPath="$control_path" \
-          -t "${@:1}" \
-"
+          # Keep remote commands up-to-date with bash_body.sh & fish.sh.
+          # OpenSSH passes remote commands to the user's login shell. Build the bootstrap as a
+          # separate string and pass it through a small sh launcher so non-Bourne login
+          # shells such as fish do not parse it before it can fall back to the login shell.
+          local remote_command="
 export TERM_PROGRAM='WarpTerminal'
 # Mark the remote side of a Warp-managed SSH session so the bootstrap
 # body can distinguish it from local shells. Used to gate the ExitShell
@@ -1034,6 +1029,13 @@ test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSI
 test -n '$WARP_CLI_AGENT_PROTOCOL_VERSION' && export WARP_CLI_AGENT_PROTOCOL_VERSION='$WARP_CLI_AGENT_PROTOCOL_VERSION'
 hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$control_path'\", \"remote_shell\": \"%s\", \"session_id\": '"$WARP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"', \"external_control_master\": '"$external_control_master"'}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
 printf '$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR%s$OSC_END' "'$hook'"
+
+if test \"\${SHELL##*/}\" = \"fish\"; then
+  FISH_INIT_SCRIPT='"'set -g WARP_SESSION_ID $WARP_SESSION_ID; set _hostname (command -v hostname >/dev/null 2>&1 && command hostname 2>/dev/null || uname -n); set _user (command -v whoami >/dev/null 2>&1 && command whoami 2>/dev/null || echo $USER); set _msg (printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"fish\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command od -An -v -tx1 | command tr -d " \n"); printf "\x1b\x50\x24\x64%s\x1b\x5c" "$_msg"; set -e _hostname _user _msg'"'
+  if \"\$SHELL\" --help 2>&1 | command -p grep -q -- '--init-command'; then
+    WARP_SESSION_ID='$remote_session_id' exec \"\$SHELL\" -f no-mark-prompt --login --init-command \"\$FISH_INIT_SCRIPT\"
+  fi
+fi
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then
   # Emulate the SSHD logic to print the MotD. Because the Warp SSH wrapper passes
@@ -1096,6 +1098,12 @@ case "'${SHELL##*/}'" in
       ;;
 esac
 "
+          # Base64 keeps the bootstrap opaque to the login shell that OpenSSH invokes. Decode
+          # it in the sh launcher, accepting the GNU, BusyBox, and BSD base64 flags.
+          local encoded_remote_command=$(printf %s "$remote_command" | base64 | tr -d '\n')
+          command ssh -o ControlMaster=$control_master_mode -o ControlPath="$control_path" \
+              -t "${@:1}" \
+              "exec sh -c 'remote_command=\$(printf %s \"\$1\" | base64 --decode 2>/dev/null) || remote_command=\$(printf %s \"\$1\" | base64 -d 2>/dev/null) || remote_command=\$(printf %s \"\$1\" | base64 -D 2>/dev/null) || exec \"\$SHELL\"; case \"\${SHELL##*/}\" in zsh|bash) exec \"\$SHELL\" -c \"\$remote_command\" ;; *) command -v bash >/dev/null 2>&1 && exec bash -c \"\$remote_command\"; exec \"\$SHELL\" ;; esac' warp '$encoded_remote_command'"
       }
 
       function ssh() {

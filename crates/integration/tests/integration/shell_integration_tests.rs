@@ -81,8 +81,8 @@ integration_tests! {
     // Tests of ssh wrapper logic from bootstrap script.
     test_ssh_wrapper_into_bash,
     test_ssh_wrapper_into_zsh,
-    // TODO(vorporeal): Reenable fish once we actually support it as a remote
-    // shell.
+    // TODO: Upgrade fish in the testing VM to a version with `--init-command`,
+    // then replace this fallback-only test with a remote bootstrap test.
     // test_ssh_into_fish,
     test_ssh_into_sh,
     test_ssh_into_ash,
