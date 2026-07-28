@@ -35,7 +35,7 @@ fn selection_span_uses_grapheme_width() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let model = model(ctx, "a\u{2328}\u{fe0f}b");
             let mut element = TuiEditorElement::new(&model, ctx);
-            element.sel_char_range = Some(CharOffset::range(1..3));
+            element.selection_ranges = vec![CharOffset::range(1..3)];
             let buffer = render_buffer(ctx, element, 10, 1);
 
             // The selection style uses a solid bg color (theme foreground);

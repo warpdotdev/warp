@@ -24,7 +24,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use string_offset::{ByteOffset, CharOffset};
-use vim::vim::{VimMode, VimModel, VimSubscriber as _};
+use vim::vim::{MotionType, VimMode, VimModel, VimSubscriber as _};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::AppEditorSettings;
 use warp::tui_export::{
@@ -224,9 +224,9 @@ pub struct TuiInputView {
     /// Internal yank / delete clipboard for vim operations. Separate from the
     /// OS clipboard so that `p`/`P` work even without clipboard access.
     yank_buffer: String,
-    /// The cursor offset at which visual mode was entered, used to track the
-    /// visual selection range. `None` when not in visual mode.
-    visual_selection_anchor: Option<CharOffset>,
+    /// Selection shape stored in `yank_buffer`, used to preserve linewise
+    /// `dd`/`yy` and Visual-line paste semantics.
+    yank_motion_type: MotionType,
 }
 
 impl Entity for TuiInputView {
@@ -329,7 +329,7 @@ impl TuiInputView {
             voice_input,
             vim_model,
             yank_buffer: String::new(),
-            visual_selection_anchor: None,
+            yank_motion_type: MotionType::Charwise,
         }
     }
 
@@ -437,6 +437,9 @@ impl TuiInputView {
     pub fn clear(&mut self, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |m, ctx| m.clear_buffer(ctx));
         self.reset_to_default_agent_mode(ctx);
+        if self.vim_mode_enabled(ctx) {
+            self.reset_vim_to_insert(ctx);
+        }
         // The cursor is back at the buffer start, so following it scrolls the
         // viewport back to the top.
         self.follow_cursor(ctx);
@@ -477,6 +480,13 @@ impl TuiInputView {
             .on_action(|action, event_ctx| {
                 event_ctx.dispatch_typed_action(TuiInputAction::Editor(action))
             });
+        if let VimMode::Visual(motion_type) = self.vim_model.as_ref(ctx).state().mode {
+            let ranges = self
+                .model
+                .as_ref(ctx)
+                .vim_visual_selection_ranges(motion_type, ctx);
+            element = element.with_selection_ranges(ranges);
+        }
         if let Some(hint_text) = self
             .inline_menus
             .iter()
@@ -685,18 +695,19 @@ impl TypedActionView for TuiInputView {
                     });
                     return;
                 }
-                // Route through vim FSA when vim mode is enabled and the
-                // FSA is NOT in Insert mode. In Insert mode the character
-                // falls through to normal editor handling so that `!` at
-                // the start still enters shell mode regardless of vim mode.
+                // Route every typed character through the shared Vim FSA when
+                // enabled. Insert-mode routing is required for insert counts
+                // and dot-repeat; prompt-specific insertion policy lives in
+                // `VimHandler::insert_char`.
                 if let TuiEditorAction::InsertChar(c) = *editor_action
                     && self.vim_mode_enabled(ctx)
-                    && !matches!(self.vim_model.as_ref(ctx).state().mode, VimMode::Insert)
                 {
-                    // Drive the shared FSA; VimSubscriber dispatches the resulting
-                    // VimEvent synchronously to our VimHandler impl (vim.rs).
+                    let old_mode = self.vim_model.as_ref(ctx).state().mode;
                     self.vim_model
                         .update(ctx, |vim, ctx| vim.typed_character(c, ctx));
+                    if self.vim_model.as_ref(ctx).state().mode != old_mode {
+                        ctx.emit(TuiInputViewEvent::VimModeChanged);
+                    }
                     return;
                 }
                 // A `!` typed at the very start of the input enters shell mode
@@ -740,14 +751,52 @@ impl TypedActionView for TuiInputView {
                     ctx.emit(TuiInputViewEvent::MoveFocusUp);
                     return;
                 }
-                // In vim normal/visual mode, backspace is a leftward motion.
-                if matches!(*command, TuiEditorCommand::Backspace)
-                    && self.vim_mode_enabled(ctx)
-                    && !matches!(self.vim_model.as_ref(ctx).state().mode, VimMode::Insert)
+                let vim_keystroke = match command {
+                    TuiEditorCommand::Backspace
+                        if !self.is_cursor_at_start(ctx)
+                            || (!self.is_shell_mode(ctx) && !self.plain_text(ctx).is_empty()) =>
+                    {
+                        Some("backspace")
+                    }
+                    TuiEditorCommand::DeleteForward => Some("delete"),
+                    TuiEditorCommand::InsertNewline => Some("shift-enter"),
+                    TuiEditorCommand::Backspace
+                    | TuiEditorCommand::DeleteWordBackward
+                    | TuiEditorCommand::DeleteWordForward
+                    | TuiEditorCommand::MoveLeft
+                    | TuiEditorCommand::MoveRight
+                    | TuiEditorCommand::MoveUp
+                    | TuiEditorCommand::MoveDown
+                    | TuiEditorCommand::MoveWordLeft
+                    | TuiEditorCommand::MoveWordRight
+                    | TuiEditorCommand::MoveToLineStart
+                    | TuiEditorCommand::MoveToLineEnd
+                    | TuiEditorCommand::SelectLeft
+                    | TuiEditorCommand::SelectRight
+                    | TuiEditorCommand::SelectUp
+                    | TuiEditorCommand::SelectDown
+                    | TuiEditorCommand::SelectWordLeft
+                    | TuiEditorCommand::SelectWordRight
+                    | TuiEditorCommand::SelectAll
+                    | TuiEditorCommand::Copy
+                    | TuiEditorCommand::Cut
+                    | TuiEditorCommand::KillToLineEnd
+                    | TuiEditorCommand::KillToLineStart
+                    | TuiEditorCommand::Yank
+                    | TuiEditorCommand::Undo
+                    | TuiEditorCommand::Redo => None,
+                };
+                if self.vim_mode_enabled(ctx)
+                    && let Some(keystroke) = vim_keystroke
                 {
-                    let backspace = Keystroke::parse("backspace").expect("backspace key is valid");
+                    let old_mode = self.vim_model.as_ref(ctx).state().mode;
+                    let keystroke =
+                        Keystroke::parse(keystroke).expect("static Vim keystroke is valid");
                     self.vim_model
-                        .update(ctx, |vim, ctx| vim.keypress(&backspace, ctx));
+                        .update(ctx, |vim, ctx| vim.keypress(&keystroke, ctx));
+                    if self.vim_model.as_ref(ctx).state().mode != old_mode {
+                        ctx.emit(TuiInputViewEvent::VimModeChanged);
+                    }
                     return;
                 }
                 // Only open the conversation list from normal agent input; in
@@ -1199,8 +1248,12 @@ impl TuiInputView {
             // Drive the shared FSA via VimModel. VimSubscriber dispatches the
             // resulting VimEvent (Escape or ChangeMode) to our VimHandler impl.
             let escape = Keystroke::parse("escape").expect("escape key is valid");
+            let old_mode = vim_state.mode;
             self.vim_model
                 .update(ctx, |vim, ctx| vim.keypress(&escape, ctx));
+            if self.vim_model.as_ref(ctx).state().mode != old_mode {
+                ctx.emit(TuiInputViewEvent::VimModeChanged);
+            }
             ctx.notify();
             return true;
         }

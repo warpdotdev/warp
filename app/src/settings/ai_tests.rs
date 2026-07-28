@@ -43,6 +43,7 @@ fn tui_statusline_default_matches_figma() {
     assert_eq!(
         config.enabled,
         vec![
+            TuiStatuslineItem::VimModeIndicator,
             TuiStatuslineItem::Model,
             TuiStatuslineItem::WorkingDirectory,
             TuiStatuslineItem::GitBranch,
@@ -74,6 +75,7 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::Model,
             TuiStatuslineItem::AutoApprove,
             TuiStatuslineItem::AutoQueue,
+            TuiStatuslineItem::VimModeIndicator,
             TuiStatuslineItem::WorkingDirectory,
             TuiStatuslineItem::GitBranchStatus,
             TuiStatuslineItem::GitDiffStatus,
@@ -89,10 +91,28 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
     assert_eq!(
         config.enabled,
         vec![
+            TuiStatuslineItem::VimModeIndicator,
             TuiStatuslineItem::Model,
             TuiStatuslineItem::ContextWindowUsage,
         ]
     );
+}
+
+#[test]
+fn tui_statusline_normalization_preserves_explicitly_disabled_vim_indicator() {
+    let mut config = TuiStatuslineConfig::default();
+    config
+        .enabled
+        .retain(|item| *item != TuiStatuslineItem::VimModeIndicator);
+
+    let normalized = config.normalized();
+
+    assert!(
+        normalized
+            .order
+            .contains(&TuiStatuslineItem::VimModeIndicator)
+    );
+    assert!(!normalized.is_enabled(TuiStatuslineItem::VimModeIndicator));
 }
 // FocusedTerminalInfo Tests
 

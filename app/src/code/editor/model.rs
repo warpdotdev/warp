@@ -2145,6 +2145,51 @@ impl CodeEditorModel {
         &self.vim_visual_tails
     }
 
+    /// Return the ranges represented by the current Vim visual tails and
+    /// selection heads without consuming the tails.
+    pub fn vim_visual_selection_ranges(
+        &self,
+        motion_type: MotionType,
+        ctx: &AppContext,
+    ) -> Vec<Range<CharOffset>> {
+        let selection_model = self.selection_model.as_ref(ctx);
+        let buffer = self.content().as_ref(ctx);
+
+        selection_model
+            .selection_offsets()
+            .iter()
+            .zip(self.vim_visual_tails.iter())
+            .map(|(selection, visual_tail)| {
+                let mut start = *visual_tail;
+                let mut end = selection.head;
+                if start > end {
+                    mem::swap(&mut start, &mut end);
+                }
+
+                let max_offset = buffer.max_charoffset();
+                if end < max_offset
+                    && (motion_type != MotionType::Linewise
+                        || buffer.char_at(end).is_some_and(|c| c != '\n'))
+                {
+                    end += 1;
+                }
+
+                if motion_type == MotionType::Linewise {
+                    let start_point = start.to_buffer_point(buffer);
+                    start = Point::new(start_point.row, 0).to_buffer_char_offset(buffer);
+
+                    let end_point = end.to_buffer_point(buffer);
+                    if end_point.column != 0 {
+                        end = Point::new(end_point.row, buffer.line_len(end_point.row))
+                            .to_buffer_char_offset(buffer);
+                    }
+                }
+
+                start..end
+            })
+            .collect()
+    }
+
     /// Expand the current selection(s) for a visual-mode operation using stored visual tails.
     /// Charwise visual mode includes the character under the block cursor; linewise visual mode
     /// expands to the full line bounds.
@@ -2907,6 +2952,27 @@ impl CodeEditorModel {
         }
     }
 
+    pub fn vim_select_to_line(
+        &mut self,
+        line_number: u32,
+        motion_type: &MotionType,
+        operator: &VimOperator,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let buffer = self.content().as_ref(ctx);
+        let current_selections = self.selection_model.as_ref(ctx).selection_offsets();
+        let target_row = line_number.max(1).min(buffer.max_point().row);
+        let new_selections = current_selections.mapped(|selection| SelectionOffsets {
+            head: Point::new(target_row, 0).to_buffer_char_offset(buffer),
+            tail: selection.head,
+        });
+        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
+
+        if *motion_type == MotionType::Linewise {
+            self.vim_extend_selection_linewise(operator.includes_trailing_newline(), ctx);
+        }
+    }
+
     pub fn vim_select_for_word_motion(
         &mut self,
         word_motion: &WordMotion,
@@ -3120,11 +3186,19 @@ impl CodeEditorModel {
             let line_start = Point::new(start_point.row, 0).to_buffer_char_offset(buffer);
             let start_of_end_line = Point::new(end_point.row, 0).to_buffer_char_offset(buffer);
             let line_end = if include_newline {
-                buffer.containing_line_end(start_of_end_line)
+                buffer
+                    .containing_line_end(start_of_end_line)
+                    .min(buffer.max_charoffset())
             } else {
                 // Don't include newline (for change operations)
                 buffer.containing_line_end(start_of_end_line) - 1
             };
+            let line_start =
+                if include_newline && line_end == buffer.max_charoffset() && start_point.row > 1 {
+                    line_start.saturating_sub(&CharOffset::from(1))
+                } else {
+                    line_start
+                };
 
             SelectionOffsets {
                 head: line_end,

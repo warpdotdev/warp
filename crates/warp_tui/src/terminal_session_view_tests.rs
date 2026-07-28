@@ -3346,13 +3346,11 @@ fn vim_mode_slash_command_persists_toggle() {
     });
 }
 
-/// The vim mode indicator (NOR/VIS/REP) must appear in the footer only when
-/// vim mode is enabled and the current mode is non-Insert. In Insert mode
-/// (the default when vim is first enabled) no indicator is shown.
+/// The Vim mode indicator (INS/NOR/VIS/V-L/REP) must appear in the footer only
+/// while Vim mode is enabled.
 ///
-/// This test validates both the accessor and the full render path so that a
-/// missing `VimModeChanged` notification (which would leave the real UI footer
-/// stale) would also cause the rendered assertion to fail.
+/// This test validates the accessor and full render path. Notification
+/// delivery is covered directly by the input-view mode-change event test.
 #[test]
 fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
     App::test((), |mut app| async move {
@@ -3372,9 +3370,8 @@ fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
             );
         });
 
-        // Enable vim mode. The FSA starts in Insert mode — indicator shows
-        // "INS" (matching the GUI vim status indicator behaviour added in
-        // commit cdc763323).
+        // Enable vim mode. The FSA starts in Insert mode, so the indicator
+        // shows "INS", matching the GUI Vim status indicator.
         app.update(|ctx| {
             AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
                 settings
@@ -3408,14 +3405,30 @@ fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
                 "indicator must be NOR in Normal mode when vim mode is enabled"
             );
         });
-        // Verify via the full render path: the footer must contain the NOR
-        // label in place of the model name.  A missing VimModeChanged
-        // notification would leave the real session footer stale, and this
-        // assertion would fail when the session view was not re-rendered.
+        // Verify via the full render path: the footer must contain NOR.
         let rendered = render_session(&mut app, &view, 80, 24).join("\n");
         assert!(
             rendered.contains("NOR"),
             "rendered footer must contain 'NOR' after Insert\u{2192}Normal transition, got:\n{rendered}"
+        );
+        // Uppercase R enters continuous Replace mode and the footer reflects it.
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.handle_action(
+                    &crate::input::view::TuiInputAction::Editor(
+                        crate::editor_element::TuiEditorAction::InsertChar('R'),
+                    ),
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(view.as_ref(ctx).vim_mode_indicator(ctx), Some("REP"));
+        });
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(
+            rendered.contains("REP"),
+            "rendered footer must contain 'REP' in continuous Replace mode, got:\n{rendered}"
         );
 
         // Disable vim mode: indicator → None again.

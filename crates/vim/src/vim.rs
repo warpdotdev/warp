@@ -52,6 +52,7 @@ pub struct VimFSA {
     register: char,
     /// Holds the last [`VimEvent`] where [`VimEventType::for_dot_repeat`] returns `Some`.
     dot_repeat_event: Option<VimEvent>,
+    continuous_replace: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -567,7 +568,10 @@ impl From<VimEventType> for VimEvent {
 pub enum VimEventType {
     InsertChar(char),
     Navigate(VimMotion),
-    ReplaceChar(Option<char>),
+    ReplaceChar {
+        character: Option<char>,
+        advance: bool,
+    },
     ToggleCase,
     Search(Direction),
     CycleSearch(Direction),
@@ -633,7 +637,7 @@ impl VimEventType {
     /// text all at once.
     fn for_dot_repeat(&self) -> Option<Self> {
         match self {
-            VimEventType::ReplaceChar(_)
+            VimEventType::ReplaceChar { .. }
             | VimEventType::ToggleCase
             | VimEventType::Paste { .. }
             | VimEventType::InsertText { .. }
@@ -665,7 +669,10 @@ impl VimEventType {
                         ..
                     },
                 ..
-            } => Some(VimEventType::ReplaceChar(None)),
+            } => Some(VimEventType::ReplaceChar {
+                character: None,
+                advance: false,
+            }),
             VimEventType::Operation { .. }
             | VimEventType::ChangeMode { .. }
             | VimEventType::Navigate(_)
@@ -755,6 +762,7 @@ impl VimFSA {
             // is called ".
             register: '"',
             dot_repeat_event: None,
+            continuous_replace: false,
         }
     }
 
@@ -772,6 +780,7 @@ impl VimFSA {
         match self.mode {
             VimMode::Replace | VimMode::Visual(_) => {
                 self.mode = VimMode::Normal;
+                self.continuous_replace = false;
             }
             VimMode::Insert | VimMode::Normal => {}
         }
@@ -785,7 +794,7 @@ impl VimFSA {
     }
 
     /// For processing Vim keypresses that are represented by a single char.
-    pub fn typed_character(&mut self, c: char) -> Option<VimEvent> {
+    fn typed_character(&mut self, c: char) -> Option<VimEvent> {
         self.showcmd.push(c);
         let event_type = match self.mode {
             VimMode::Insert => self.handle_insert_char(c),
@@ -795,8 +804,14 @@ impl VimFSA {
             },
             VimMode::Visual(motion_type) => self.handle_visual_command(c, motion_type)?,
             VimMode::Replace => {
-                self.mode = VimMode::Normal;
-                VimEventType::ReplaceChar(Some(c))
+                let advance = self.continuous_replace;
+                if !advance {
+                    self.mode = VimMode::Normal;
+                }
+                VimEventType::ReplaceChar {
+                    character: Some(c),
+                    advance,
+                }
             }
         };
         let count = self.compute_event_count(c, &event_type);
@@ -811,7 +826,7 @@ impl VimFSA {
     }
 
     /// Like Self::typed_character, but for keypresses that aren't representable by a single char.
-    pub fn keypress(&mut self, keystroke: &str) -> Option<VimEvent> {
+    fn keypress(&mut self, keystroke: &str) -> Option<VimEvent> {
         let event = match keystroke {
             "escape" => match self.mode {
                 VimMode::Normal => {
@@ -886,7 +901,7 @@ impl VimFSA {
             //
             // Replace mode is another special case where we remember the count
             // that was entered when switching into replace mode.
-            ('.', _) | (_, VimEventType::ReplaceChar(_)) => {
+            ('.', _) | (_, VimEventType::ReplaceChar { .. }) => {
                 this_action_count.unwrap_or_else(|| {
                     self.dot_repeat_event
                         .as_ref()
@@ -990,7 +1005,14 @@ impl VimFSA {
                         motion_type: MotionType::Charwise,
                     },
                 ),
-                'r' => self.change_mode(VimMode::Replace.into()),
+                'r' => {
+                    self.continuous_replace = false;
+                    self.change_mode(VimMode::Replace.into())
+                }
+                'R' => {
+                    self.continuous_replace = true;
+                    self.change_mode(VimMode::Replace.into())
+                }
                 'g' | 'd' | 'c' | 'y' | 'z' | 'f' | 'F' | 't' | 'T' | '[' | ']' | '"' => {
                     self.pending_action = Some(PendingAction::from(c));
                     return None;
@@ -1688,6 +1710,9 @@ impl VimFSA {
     fn change_mode(&mut self, mode_trans: ModeTransition) -> VimEventType {
         let old_mode = self.mode;
         self.mode = mode_trans.mode;
+        if self.mode != VimMode::Replace {
+            self.continuous_replace = false;
+        }
         VimEventType::ChangeMode {
             new: mode_trans,
             old: old_mode,
@@ -1714,6 +1739,7 @@ impl VimFSA {
     fn force_insert_mode(&mut self) {
         self.clear();
         self.mode = VimMode::Insert;
+        self.continuous_replace = false;
     }
 
     fn create_operation(&self, operator: VimOperator, operand: VimOperand) -> VimEventType {
@@ -1957,8 +1983,13 @@ where
                 replacement_text.as_str(),
                 ctx,
             ),
-            VimEventType::ReplaceChar(Some(c)) => self.replace_char(*c, event.count, ctx),
-            VimEventType::ReplaceChar(_) => {}
+            VimEventType::ReplaceChar {
+                character: Some(c),
+                advance,
+            } => self.replace_char(*c, event.count, *advance, ctx),
+            VimEventType::ReplaceChar {
+                character: None, ..
+            } => {}
             VimEventType::Paste {
                 direction,
                 register_name,
@@ -2053,7 +2084,13 @@ pub trait VimHandler {
     /// Replace a character with another.
     /// If `char_count` is greater than the number of characters remaining in the current line,
     /// the replace operation is cancelled.
-    fn replace_char(&mut self, c: char, char_count: u32, ctx: &mut ViewContext<Self>);
+    fn replace_char(
+        &mut self,
+        c: char,
+        char_count: u32,
+        advance: bool,
+        ctx: &mut ViewContext<Self>,
+    );
     /// Switch between upper/lowercase for character on cursor.
     /// Even if `char_count` is greater than the number of characters remaining in the current line,
     /// only characters in the current line are toggled.

@@ -779,6 +779,7 @@ impl Default for TuiStatuslineConfig {
 impl TuiStatuslineConfig {
     /// Returns a complete, duplicate-free catalog and a valid enabled subset.
     pub fn normalized(&self) -> Self {
+        let is_legacy_config = !self.order.contains(&TuiStatuslineItem::VimModeIndicator);
         let mut order = Vec::with_capacity(TuiStatuslineItem::ALL.len());
         for item in self.order.iter().copied().chain(TuiStatuslineItem::ALL) {
             if !order.contains(&item) {
@@ -791,6 +792,9 @@ impl TuiStatuslineConfig {
             if order.contains(&item) && !enabled.contains(&item) {
                 enabled.push(item);
             }
+        }
+        if is_legacy_config {
+            enabled.insert(0, TuiStatuslineItem::VimModeIndicator);
         }
 
         Self { order, enabled }

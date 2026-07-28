@@ -112,6 +112,82 @@ fn assert_visual_operator(
     }
 }
 
+fn assert_replace_char(event: &VimEvent, expected_character: char, expected_advance: bool) {
+    match &event.event_type {
+        VimEventType::ReplaceChar { character, advance } => {
+            assert_eq!(*character, Some(expected_character));
+            assert_eq!(*advance, expected_advance);
+        }
+        other => panic!("expected ReplaceChar, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_normal_mode_r_replaces_once_and_returns_to_normal() {
+    let mut fsa = enter_normal_mode();
+    let mode_event = fsa
+        .typed_character('r')
+        .expect("r should enter Replace mode");
+    assert!(matches!(
+        mode_event.event_type,
+        VimEventType::ChangeMode {
+            new: ModeTransition {
+                mode: VimMode::Replace,
+                ..
+            },
+            old: VimMode::Normal,
+        }
+    ));
+    assert_eq!(fsa.mode, VimMode::Replace);
+
+    let replace_event = fsa
+        .typed_character('x')
+        .expect("the replacement character should emit an event");
+    assert_replace_char(&replace_event, 'x', false);
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_uppercase_r_replaces_continuously_until_escape() {
+    let mut fsa = enter_normal_mode();
+    let mode_event = fsa
+        .typed_character('R')
+        .expect("R should enter continuous Replace mode");
+    assert!(matches!(
+        mode_event.event_type,
+        VimEventType::ChangeMode {
+            new: ModeTransition {
+                mode: VimMode::Replace,
+                ..
+            },
+            old: VimMode::Normal,
+        }
+    ));
+    assert_eq!(fsa.mode, VimMode::Replace);
+
+    for character in ['x', 'y'] {
+        let replace_event = fsa
+            .typed_character(character)
+            .expect("each replacement character should emit an event");
+        assert_replace_char(&replace_event, character, true);
+        assert_eq!(fsa.mode, VimMode::Replace);
+    }
+
+    let escape_event = fsa
+        .keypress("escape")
+        .expect("Escape should leave continuous Replace mode");
+    assert!(matches!(
+        escape_event.event_type,
+        VimEventType::ChangeMode {
+            new: ModeTransition {
+                mode: VimMode::Normal,
+                ..
+            },
+            old: VimMode::Replace,
+        }
+    ));
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
 #[test]
 fn test_normal_mode_gg_jumps_to_first_line() {
     let mut fsa = enter_normal_mode();
