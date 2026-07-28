@@ -1033,6 +1033,149 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
         )
 }
 
+/// Mirrors `vtab_group_position_id`, which is crate-private.
+fn vtab_group_position_id(group_id: warp::workspace::tab_group::TabGroupId) -> String {
+    format!("vertical_tabs:group:{group_id:?}")
+}
+
+fn vertical_group_header_press_point(
+    app: &mut warpui_core::App,
+    window_id: WindowId,
+    group_id: warp::workspace::tab_group::TabGroupId,
+) -> Vector2F {
+    let presenter = app.presenter(window_id).expect("presenter should exist");
+    let bounds = presenter
+        .borrow()
+        .position_cache()
+        .get_position(vtab_group_position_id(group_id))
+        .unwrap_or_else(|| panic!("vertical group position should exist for {window_id:?}"));
+    // The header is the first row inside the group container, so aim near the
+    // top edge rather than the centre, which sits over a member row.
+    vec2f(bounds.center().x(), bounds.min_y() + 8.0)
+}
+
+pub fn test_detach_tab_group_to_new_window_in_vertical_tabs() -> Builder {
+    new_builder()
+        .set_should_run_test(drag_tabs_feature_enabled)
+        .with_step(enable_vertical_tabs(VerticalTabsDisplayGranularity::Tabs))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            execute_command_for_single_terminal_in_tab(
+                0,
+                "echo source-zero".to_string(),
+                ExpectedExitStatus::Success,
+                (),
+            )
+            .add_assertion(save_active_window_id(SOURCE_WINDOW_KEY)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Open a second tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(
+            new_step_with_default_assertions("Open a third tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(2))
+        .with_step(
+            TestStep::new("Group the second and third tabs").with_action(|app, window_id, _| {
+                let workspace = workspace_view(app, window_id);
+                workspace.update(app, |workspace, ctx| {
+                    workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
+                    let group_id = *workspace
+                        .tab_groups_for_test()
+                        .keys()
+                        .next()
+                        .expect("group should have been created");
+                    workspace.handle_action(
+                        &WorkspaceAction::MoveTabToGroup {
+                            tab_index: 2,
+                            group_id,
+                        },
+                        ctx,
+                    );
+                });
+            }),
+        )
+        .with_step(
+            TestStep::new("Drag the group out of the vertical panel")
+                .with_action(|app, window_id, _| {
+                    let group_id = only_group_id(app, window_id);
+                    let start = vertical_group_header_press_point(app, window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDown {
+                            position: start,
+                            modifiers: ModifiersState::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    let group_id = only_group_id(app, window_id);
+                    let start = vertical_group_header_press_point(app, window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(0.0, 12.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                // The vertical panel is tested on its X axis, so the detach
+                // happens by moving sideways out of the panel.
+                .with_action(|app, window_id, _| {
+                    let group_id = only_group_id(app, window_id);
+                    let start = vertical_group_header_press_point(app, window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(520.0, 180.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    let group_id = only_group_id(app, window_id);
+                    let start = vertical_group_header_press_point(app, window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseUp {
+                            position: start + vec2f(520.0, 180.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                }),
+        )
+        .with_step(
+            focus_other_window(DETACHED_WINDOW_KEY, SOURCE_WINDOW_KEY).with_action(
+                |app, _, data| {
+                    let detached = *data
+                        .get::<_, WindowId>(DETACHED_WINDOW_KEY)
+                        .expect("detached window id should exist");
+                    let source = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("source window id should exist");
+                    let detached_tabs = workspace_view(app, detached)
+                        .read(app, |workspace, _| workspace.tab_count());
+                    assert_eq!(
+                        detached_tabs, 2,
+                        "vertical drag should carry both group members"
+                    );
+                    let source_tabs =
+                        workspace_view(app, source).read(app, |workspace, _| workspace.tab_count());
+                    assert_eq!(source_tabs, 1, "source should keep only the ungrouped tab");
+                },
+            ),
+        )
+}
+
 pub fn test_tab_group_drag_back_to_source_cancels() -> Builder {
     new_builder()
         .set_should_run_test(drag_tabs_feature_enabled)
