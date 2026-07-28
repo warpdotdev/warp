@@ -486,7 +486,7 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 
 pub const CLEAR: StaticCommand = StaticCommand {
     name: "/clear",
-    description: "Start a new conversation (alias for /agent)",
+    description: "Clear the transcript and start a new conversation (alias for /agent)",
     kind: SlashCommandKind::Clear,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::NO_LRC_CONTROL
