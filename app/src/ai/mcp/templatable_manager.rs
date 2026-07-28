@@ -94,10 +94,9 @@ pub struct TemplatableMCPServerManager {
     /// The bearer credential the current built-in server spawn was created
     /// with. Compared on credential-rotation events so back-to-back auth
     /// events with the same token (common at startup) don't respawn the
-    /// server and open redundant server-side MCP sessions.
-    ///
-    /// Native-only like the spawn path that reads it; on wasm the built-in
-    /// server is never spawned, so the field would be dead code there.
+    /// server and open redundant server-side MCP sessions. Native-only like
+    /// the spawn path that reads it; on wasm the built-in server is never
+    /// spawned, so the field would be dead code there.
     #[cfg(not(target_family = "wasm"))]
     builtin_server_token: Option<String>,
 }
