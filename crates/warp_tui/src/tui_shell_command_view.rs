@@ -44,24 +44,16 @@ const SHELL_COMMAND_EDITING: &str = "TuiShellCommandEditing";
 
 pub(crate) fn init(app: &mut AppContext) {
     let predicate = id!(TuiShellCommandView::ui_name()) & id!(SHELL_COMMAND_EDITING);
-    app.register_fixed_bindings([
-        FixedBinding::new(
-            "escape",
-            // Esc while the command body editor is focused exits the editor
-            // and restores Yes as the highlighted option — it does NOT cancel
-            // the tool call. A subsequent Esc (with the list focused) cancels
-            // via the `PERMISSION_PROMPT_ACTIVE` → `CancelOrBack` path.
-            TuiShellCommandViewAction::SaveCommandEdit,
-            predicate.clone(),
-        )
-        .with_group(TUI_BINDING_GROUP),
-        FixedBinding::new(
-            "ctrl-e",
-            TuiShellCommandViewAction::SaveCommandEdit,
-            predicate.clone(),
-        )
-        .with_group(TUI_BINDING_GROUP),
-    ]);
+    app.register_fixed_bindings([FixedBinding::new(
+        "escape",
+        // Esc while the command body editor is focused exits the editor
+        // and restores Yes as the highlighted option — it does NOT cancel
+        // the tool call. A subsequent Esc (with the list focused) cancels
+        // via the `PERMISSION_PROMPT_ACTIVE` → `CancelOrBack` path.
+        TuiShellCommandViewAction::SaveCommandEdit,
+        predicate.clone(),
+    )
+    .with_group(TUI_BINDING_GROUP)]);
     app.register_editable_bindings([
         EditableBinding::new(
             "tui:shell-permission:save",

@@ -363,7 +363,7 @@ fn shell_command_views_keep_independent_collapse_state() {
 }
 
 #[test]
-fn escape_and_ctrl_e_while_editing_exit_editor_without_cancelling() {
+fn escape_while_editing_exits_editor_without_cancelling() {
     App::test((), |mut app| async move {
         app.update(super::init);
         let action = command_action("action-1", "echo original");
@@ -419,26 +419,6 @@ fn escape_and_ctrl_e_while_editing_exit_editor_without_cancelling() {
             // Edited text is retained (same as Save path).
             assert_eq!(view.command_editor.as_ref(ctx).text(ctx), "echo edited");
             // Tool call has NOT been cancelled.
-            assert!(
-                view.action_model
-                    .as_ref(ctx)
-                    .get_action_result(&view.action.id)
-                    .is_none()
-            );
-        });
-
-        prompt.update(&mut app, |prompt, ctx| {
-            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
-        });
-        present_shell_view(&mut app, &view);
-        assert!(dispatch_focused_key(&mut app, &view, "ctrl-e"));
-        app.read(|ctx| {
-            let view = view.as_ref(ctx);
-            assert!(!view.command_editor.as_ref(ctx).is_focused());
-            assert_eq!(
-                view.permission_prompt.as_ref(ctx).highlighted_index(ctx),
-                Some(0)
-            );
             assert!(
                 view.action_model
                     .as_ref(ctx)

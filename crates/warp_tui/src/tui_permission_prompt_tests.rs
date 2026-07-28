@@ -407,14 +407,14 @@ fn other_emits_guidance_without_requesting_rejection() {
 }
 
 #[test]
-fn editable_prompt_includes_the_edit_hint() {
+fn editable_prompt_uses_the_standard_footer() {
     App::test((), |mut app| async move {
         let prompt = add_prompt(&mut app, true);
 
         assert!(
             render_lines(&mut app, &prompt)
                 .iter()
-                .any(|line| line == "Esc to cancel  Ctrl+E to edit/save  Enter to run")
+                .any(|line| line == "Esc to cancel  Enter to run")
         );
     });
 }

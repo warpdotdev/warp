@@ -51,14 +51,6 @@ pub(crate) fn init(app: &mut AppContext) {
             "Edit the requested action",
             TuiPermissionPromptAction::EditBody,
         )
-        .with_context_predicate(editable_predicate.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("ctrl-e"),
-        EditableBinding::new(
-            "tui:permission-prompt:edit",
-            "Edit the requested action",
-            TuiPermissionPromptAction::EditBody,
-        )
         .with_context_predicate(editable_predicate)
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("e"),
@@ -264,20 +256,12 @@ impl TuiPermissionPrompt {
         } else {
             " to cancel  "
         };
-        let mut spans = vec![
+        let spans = vec![
             ("Esc".to_owned(), builder.primary_text_style()),
             (esc_hint.to_owned(), builder.muted_text_style()),
-        ];
-        if self.body_editor.is_some() {
-            spans.extend([
-                ("Ctrl+E".to_owned(), builder.primary_text_style()),
-                (" to edit/save  ".to_owned(), builder.muted_text_style()),
-            ]);
-        }
-        spans.extend([
             ("Enter".to_owned(), builder.primary_text_style()),
             (" to run".to_owned(), builder.muted_text_style()),
-        ]);
+        ];
         TuiText::from_spans(spans).truncate().finish()
     }
 }
