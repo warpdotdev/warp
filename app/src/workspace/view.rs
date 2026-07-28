@@ -20830,6 +20830,11 @@ impl Workspace {
             // `CrossWindowTabDrag::collapsed_source_placeholder_index`.
             let transferred_tab_index =
                 drag_model.collapsed_source_placeholder_index(self.window_id);
+            // Set only while THIS window is the source of a group drag, so the
+            // detached group's slot can be collapsed by identity below.
+            let dragged_group_id = (drag_model.source_window_id() == Some(self.window_id))
+                .then(|| drag_model.source_group_id())
+                .flatten();
             // Ghost state for cross-window drag hovering over this tab bar.
             let ghost = drag_model.ghost_state_for_window(self.window_id);
 
@@ -20866,7 +20871,16 @@ impl Workspace {
                         }
                         // Filtered above; the group must exist in `tab_groups`.
                         let group = self.tab_groups[group_id].clone();
-                        tab_bar.add_child(self.render_horizontal_tab_group(
+                        // A group detached into a preview window collapses to
+                        // zero width here, the same way a detached single tab
+                        // does. Without this the group renders at full width in
+                        // the source bar AND in the floating preview at once.
+                        // Matched by group identity rather than by the drag's
+                        // frozen first index, which stops pointing at this run
+                        // if the source tab list shifts mid-drag.
+                        let group_is_transferred = transferred_tab_index.is_some()
+                            && dragged_group_id == Some(*group_id);
+                        let rendered_group = self.render_horizontal_tab_group(
                             &group,
                             *first_index,
                             *run_len,
@@ -20874,7 +20888,14 @@ impl Workspace {
                             *first_index == 0,
                             appearance,
                             ctx,
-                        ));
+                        );
+                        if group_is_transferred {
+                            tab_bar.add_child(
+                                ConstrainedBox::new(rendered_group).with_width(0.).finish(),
+                            );
+                        } else {
+                            tab_bar.add_child(rendered_group);
+                        }
                     }
                     TabBarSlot::Single { index } => {
                         let i = *index;
