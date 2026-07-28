@@ -188,7 +188,7 @@ fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators(
             assert_eq!(
                 render_element(row, ctx, 160).to_lines(),
                 vec![
-                    "Auto-approve • Auto-queue | model /tmp/warp ⊢ main | ↑1 ↓2 | +31 -12 | 40 credits | 43% context used | July 20, 2026 • 1:08pm | ❢ 1/10 | Voice"
+                    "Auto-approve • Auto-queue | model /tmp/warp ⊢ main | ↑1 ↓2 | +31 -12 | 40 credits | 43% context used | July 20, 2026 • 1:08pm | ❒ 1/10 | Voice"
                         .to_owned()
                 ],
             );
