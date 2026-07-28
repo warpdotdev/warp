@@ -38,14 +38,6 @@ fn parse_ambient_task_id_preserves_error_prefix() {
     assert!(err.to_string().contains("Invalid run ID 'not-a-run-id'"));
 }
 
-// -- validate_agent_mode_base_model_id unavailable-vs-invalid error heuristics --
-//
-// Regression tests for the scenario where the server is unhealthy and returns
-// an empty/unavailable agent-mode model list. Previously both validators blamed
-// the user's model id ("Unknown model id ..." / "is not a valid agent mode
-// LLM"), hiding the real server-availability issue. The fix tracks the
-// fetch-failure / list-unavailable state and surfaces a distinct error.
-
 #[test]
 fn classify_returns_server_unavailable_error_when_list_unavailable() {
     // Simulates an unhealthy server: the authed model-list fetch failed, so the
@@ -98,15 +90,6 @@ fn classify_accepts_id_in_choices_even_when_list_unavailable() {
 
 // -- agent_mode_models_unavailable flag lifecycle (set on failed fetch,
 // cleared via the shared on_server_update path) --
-//
-// Regression test for the stuck-flag scenario: a failed authed fetch sets the
-// flag, and a later successful model-list update delivered through
-// `update_feature_model_choices(Ok(..))` — the login / workspace-metadata
-// path, which goes straight to `on_server_update` without touching
-// `refresh_authed_models` — must clear it. Before the fix the clear lived only
-// in `refresh_authed_models`'s Ok branch, so the flag stayed `true` and a
-// genuinely-invalid id was misreported as "model list unavailable" instead of
-// "Unknown model id".
 
 fn server_llm(id: &str) -> LLMInfo {
     LLMInfo {
