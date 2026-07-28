@@ -616,6 +616,21 @@ impl TuiOrchestrationModel {
         ctx.notify();
     }
 
+    /// Kills a child agent: tombstones so late events cannot resurrect it,
+    /// deletes the conversation from history, and removes the retained TUI
+    /// session. Equivalent to the GUI's `KillAgentConversation` path (minus
+    /// the in-flight stop, which callers handle before invoking this).
+    pub(crate) fn kill_child_agent(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
+            streamer.mark_conversation_killed(conversation_id, ctx);
+        });
+        self.cleanup_failed_child(&conversation_id, ctx);
+    }
+
     /// Resolves a child request as failed without creating a TUI session.
     fn fail_child_request(
         &mut self,

@@ -45,9 +45,10 @@ use super::{
     AUTO_APPROVE_DISABLED_HINT, AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION,
     AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource, COST_CONVERSATION_IN_PROGRESS_HINT,
     COST_EMPTY_CONVERSATION_HINT, COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT,
-    ConversationRestoreState, DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, FooterSegment,
-    FooterSegments, INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT,
-    LOG_BUNDLE_FAILED_HINT, RUNNING_COMMAND_DETACH_HINT,
+    CTRL_C_KILL_CHILD_HINT, ConversationRestoreState,
+    DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, FooterSegment, FooterSegments,
+    INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
+    RUNNING_COMMAND_DETACH_HINT,
     SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
     SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
     SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
@@ -71,7 +72,8 @@ use crate::keybindings::{
 use crate::orchestrated_agent_identity_styling::AgentIdentity;
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::orchestration_tab_bar::{
-    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon, render_orchestration_tab_footer,
+    ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon,
+    render_orchestration_child_selected_tab_footer, render_orchestration_tab_footer,
 };
 use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::root_view::RootTuiView;
@@ -3985,6 +3987,315 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
             assert!(
                 ctx.check_view_or_child_focused(fixture.window_id, &parent_view.id()),
                 "root session input should own focus after escape"
+            );
+        });
+    });
+}
+
+#[test]
+fn kill_child_hint_constant_matches_expected_text() {
+    assert_eq!(CTRL_C_KILL_CHILD_HINT, "ctrl-c again to kill child agent");
+}
+
+#[test]
+fn orchestration_child_selected_footer_shows_kill_hint() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let buffer = render_element(
+                render_orchestration_child_selected_tab_footer(&builder),
+                ctx,
+                120,
+            );
+            let footer = buffer.to_lines().join("\n");
+            assert!(
+                footer.contains("Ctrl+C"),
+                "child-selected footer should show Ctrl+C: {footer}"
+            );
+            assert!(
+                footer.contains("kill sub-agent"),
+                "child-selected footer should describe the kill action: {footer}"
+            );
+            assert!(
+                footer.contains('\u{2193}'),
+                "child-selected footer should still show the send-message \u{2193} hint: {footer}"
+            );
+        });
+    });
+}
+
+#[test]
+fn ctrl_c_on_child_tab_with_tabs_focused_kills_immediately() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (_parent_view, parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (child_view, child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // Focus the child session and point its selection at the child conversation so
+        // the orchestration snapshot resolves the parent as root and the child as selected.
+        app.update(|ctx| {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(child_session_id, ctx);
+            });
+        });
+        child_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    child_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+            view.orchestration_tabs_focused = true;
+            view.refresh_orchestration_tab_bar(ctx);
+        });
+
+        // Verify the snapshot sees the child tab as the selected non-root tab.
+        app.read(|ctx| {
+            assert!(
+                child_view
+                    .as_ref(ctx)
+                    .is_child_conversation_selected(ctx)
+                    .is_some(),
+                "child conversation should be detected as selected"
+            );
+        });
+
+        // Single ctrl-c should kill the child immediately (no double-press window).
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !child_view.as_ref(ctx).exit_confirmation.is_armed(),
+                "kill path must not arm the exit confirmation window"
+            );
+            assert_eq!(
+                child_view.as_ref(ctx).child_kill_armed_conversation,
+                None,
+                "kill path must not set child_kill_armed_conversation"
+            );
+            // The child conversation should be deleted from history.
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&child_conversation_id)
+                    .is_none(),
+                "child conversation should be deleted from history after kill"
+            );
+            // Focus should return to the parent session.
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(parent_session_id),
+                "focus should return to the root/main agent after kill"
+            );
+        });
+    });
+}
+
+#[test]
+fn ctrl_c_on_child_conversation_without_tab_focus_arms_kill_window() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (_parent_view, _parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (child_view, child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // Focus the child session but without tab-bar focus.
+        app.update(|ctx| {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(child_session_id, ctx);
+            });
+        });
+        child_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    child_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+            // orchestration_tabs_focused stays false (default)
+        });
+
+        // First ctrl-c should arm the kill window, not delete the conversation.
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                child_view.as_ref(ctx).exit_confirmation.is_armed(),
+                "first ctrl-c on a child conversation should arm the kill window"
+            );
+            assert_eq!(
+                child_view.as_ref(ctx).child_kill_armed_conversation,
+                Some(child_conversation_id),
+                "child_kill_armed_conversation should target the viewed child"
+            );
+            // Conversation should NOT be deleted yet.
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&child_conversation_id)
+                    .is_some(),
+                "child conversation must not be deleted after only one ctrl-c"
+            );
+        });
+    });
+}
+
+#[test]
+fn footer_shows_kill_hint_when_child_kill_window_is_armed() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (_parent_view, _parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (child_view, child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // Focus the child session (no tab-bar focus).
+        app.update(|ctx| {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(child_session_id, ctx);
+            });
+        });
+        child_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    child_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+        });
+
+        // Footer before any ctrl-c: should NOT show the kill hint.
+        let lines_before = render_footer_lines(&mut app, &child_view, 80);
+        assert!(
+            !lines_before.join("\n").contains(CTRL_C_KILL_CHILD_HINT),
+            "footer should not show kill hint before arming: {lines_before:?}"
+        );
+
+        // First ctrl-c: arm the kill window.
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        // Footer after first ctrl-c: must show the child-kill hint, not the exit hint.
+        let lines_after = render_footer_lines(&mut app, &child_view, 80);
+        assert_eq!(
+            lines_after,
+            vec![CTRL_C_KILL_CHILD_HINT],
+            "footer must show the kill-child hint when the kill window is armed"
+        );
+        let lines_str = lines_after.join("\n");
+        assert!(
+            !lines_str.contains(CTRL_C_EXIT_HINT),
+            "kill-armed footer must not show the exit hint: {lines_str:?}"
+        );
+    });
+}
+
+#[test]
+fn second_ctrl_c_within_window_kills_the_child_agent() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (_parent_view, parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (child_view, child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // Focus the child session (no tab-bar focus).
+        app.update(|ctx| {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(child_session_id, ctx);
+            });
+        });
+        child_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    child_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+        });
+
+        // First ctrl-c: arms the kill window.
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        // Confirm the kill window is armed.
+        assert!(
+            child_view.read(&app, |view, _| view.exit_confirmation.is_armed()),
+            "kill window must be armed after first ctrl-c"
+        );
+
+        // Second ctrl-c within the window: kills the child.
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                child_view.as_ref(ctx).child_kill_armed_conversation,
+                None,
+                "kill window should be cleared after the kill"
+            );
+            assert!(
+                !child_view.as_ref(ctx).exit_confirmation.is_armed(),
+                "exit window should be cleared after the kill"
+            );
+            // Child conversation should be gone from history.
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&child_conversation_id)
+                    .is_none(),
+                "child conversation should be deleted after double ctrl-c kill"
+            );
+            // Focus should return to the root/main session.
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(parent_session_id),
+                "focus should return to the root/main agent after kill"
+            );
+        });
+    });
+}
+
+#[test]
+fn ctrl_c_on_root_conversation_does_not_trigger_kill_path() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (parent_view, _parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (_child_view, _child_session_id, _child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // The parent session is focused and pointing at the root conversation.
+        // ctrl-c should follow the normal exit path, not the kill path.
+        parent_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                parent_view.as_ref(ctx).exit_confirmation.is_armed(),
+                "ctrl-c on root should arm the normal exit window"
+            );
+            assert_eq!(
+                parent_view.as_ref(ctx).child_kill_armed_conversation,
+                None,
+                "ctrl-c on root must not set child_kill_armed_conversation"
             );
         });
     });
