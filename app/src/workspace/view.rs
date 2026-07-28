@@ -28079,6 +28079,25 @@ impl Workspace {
     /// Cross-window drags carry ungrouped, unpinned tabs, so the insertion
     /// point — and the ghost slot drawn from it — must never land inside the
     /// pinned prefix.
+    /// Insertion index for a dragged GROUP under the cursor.
+    ///
+    /// Resolves through the same function the commit uses, so the ghost slot
+    /// and the landing position cannot diverge. Takes `group_pinned` as a
+    /// parameter rather than reading the drag model: this runs inside
+    /// `CrossWindowTabDrag::update`, and re-borrowing the singleton there
+    /// fails its downcast and panics.
+    pub(crate) fn group_insertion_index_for_cursor(
+        &self,
+        window_id: WindowId,
+        cursor_position_on_screen: Vector2F,
+        group_pinned: bool,
+        ctx: &AppContext,
+    ) -> usize {
+        let raw_index =
+            self.raw_tab_insertion_index_for_cursor(window_id, cursor_position_on_screen, ctx);
+        self.resolve_group_drop_index(raw_index, group_pinned)
+    }
+
     pub(crate) fn tab_insertion_index_for_cursor(
         &self,
         window_id: WindowId,
@@ -29374,6 +29393,7 @@ impl Workspace {
         };
 
         let member_pane_group_ids = transferred_group.member_pane_group_ids.clone();
+        let group_pinned = transferred_group.group.pinned;
         let takes_every_tab = last - first + 1 >= self.tabs.len();
 
         let source_window_origin = window_bounds.origin();
@@ -29413,6 +29433,7 @@ impl Workspace {
                     group_id,
                     first,
                     member_pane_group_ids,
+                    group_pinned,
                     None,
                     initial_drag_center_offset,
                     window_size,
@@ -29456,6 +29477,7 @@ impl Workspace {
                 group_id,
                 first,
                 member_pane_group_ids,
+                group_pinned,
                 Some(preview_window_id),
                 initial_drag_center_offset,
                 window_size,
@@ -29497,10 +29519,32 @@ impl Workspace {
             let window_id = ctx.window_id();
             let drag_result = CrossWindowTabDrag::handle(ctx)
                 .update(ctx, |drag, ctx| drag.on_drag(window_id, position, ctx));
-            if let DragResult::AdjustDraggable { adjustment } = drag_result
-                && let Some(group) = self.tab_groups.get(&group_id)
-            {
-                group.draggable_state.adjust_mouse_position(adjustment);
+            match drag_result {
+                DragResult::AdjustDraggable { adjustment } => {
+                    if let Some(group) = self.tab_groups.get(&group_id) {
+                        group.draggable_state.adjust_mouse_position(adjustment);
+                    }
+                }
+                DragResult::ReorderInSource => {
+                    // Cursor is back over this window's own tab bar. Reorder
+                    // the detached placeholder run in place, like an in-window
+                    // group drag, and report where it now starts so the drop
+                    // puts the group back at the position the user sees.
+                    let raw = self.raw_tab_insertion_index_for_cursor(
+                        ctx.window_id(),
+                        cursor_position,
+                        ctx,
+                    );
+                    let group_pinned = self.tab_groups.get(&group_id).is_some_and(|g| g.pinned);
+                    let target = self.resolve_group_drop_index(raw, group_pinned);
+                    self.move_group_block(group_id, target, ctx);
+                    if let Some((new_first, _)) = group_member_index_range(&self.tabs, group_id) {
+                        CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                            drag.set_source_placeholder_index(new_first);
+                        });
+                    }
+                }
+                DragResult::Handled => {}
             }
             ctx.notify();
             return;

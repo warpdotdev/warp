@@ -155,6 +155,10 @@ enum DragSource {
         source_group_id: TabGroupId,
         source_first_index: usize,
         member_pane_group_ids: Vec<EntityId>,
+        /// Whether the dragged group is pinned. Carried on the drag because
+        /// the TARGET window needs it to place the ghost slot, and the target
+        /// does not have the group in its own `tab_groups` until the drop.
+        source_group_pinned: bool,
         preview_window_id: Option<WindowId>,
     },
 }
@@ -254,6 +258,16 @@ impl ActiveDrag {
             DragSource::GroupWindow {
                 source_group_id, ..
             } => Some(*source_group_id),
+        }
+    }
+
+    fn source_group_pinned(&self) -> bool {
+        match &self.source {
+            DragSource::SingleTabWindow | DragSource::MultiTabWindow { .. } => false,
+            DragSource::GroupWindow {
+                source_group_pinned,
+                ..
+            } => *source_group_pinned,
         }
     }
 
@@ -679,6 +693,7 @@ impl CrossWindowTabDrag {
         source_group_id: TabGroupId,
         source_first_index: usize,
         member_pane_group_ids: Vec<EntityId>,
+        source_group_pinned: bool,
         preview_window_id: Option<WindowId>,
         initial_drag_center_offset: Vector2F,
         window_size: Vector2F,
@@ -697,6 +712,7 @@ impl CrossWindowTabDrag {
                 source_group_id,
                 source_first_index,
                 member_pane_group_ids,
+                source_group_pinned,
                 preview_window_id,
             },
             window_size,
@@ -765,12 +781,19 @@ impl CrossWindowTabDrag {
     /// `source_placeholder_tab_index` all operate on the placeholder's current
     /// position rather than its original one. No-op for single-tab drags.
     pub fn set_source_placeholder_index(&mut self, index: usize) {
-        if let Some(drag) = self.active_drag.as_mut()
-            && let DragSource::MultiTabWindow {
+        let Some(drag) = self.active_drag.as_mut() else {
+            return;
+        };
+        match &mut drag.source {
+            DragSource::MultiTabWindow {
                 source_tab_index, ..
-            } = &mut drag.source
-        {
-            *source_tab_index = index;
+            } => *source_tab_index = index,
+            // A group's placeholder run starts here; the run length comes from
+            // the member list, so only the start moves.
+            DragSource::GroupWindow {
+                source_first_index, ..
+            } => *source_first_index = index,
+            DragSource::SingleTabWindow => {}
         }
     }
 
@@ -1211,6 +1234,7 @@ impl CrossWindowTabDrag {
             drag.source_window_id,
             drag_center_on_screen,
             preview_window_id,
+            drag.source_group_id().map(|_| drag.source_group_pinned()),
             ctx,
         );
 
@@ -1396,12 +1420,15 @@ impl CrossWindowTabDrag {
                 let last_caller = drag.last_caller_window_id;
                 let source_window_id = drag.source_window_id;
                 let preview_window_id = drag.preview_window_id();
+                let dragged_group_pinned =
+                    drag.source_group_id().map(|_| drag.source_group_pinned());
                 if let (Some(cursor), Some(caller)) = (last_cursor, last_caller) {
                     let resolved = cross_window_attach_target(
                         caller,
                         source_window_id,
                         cursor,
                         preview_window_id,
+                        dragged_group_pinned,
                         ctx,
                     );
                     if let Some(target) = resolved {
@@ -2212,6 +2239,7 @@ fn cross_window_attach_target(
     source_window_id: WindowId,
     cursor_position_on_screen: Vector2F,
     preview_window_id: WindowId,
+    dragged_group_pinned: Option<bool>,
     ctx: &AppContext,
 ) -> Option<AttachTarget> {
     let ordered_windows = WindowManager::as_ref(ctx).ordered_window_ids();
@@ -2333,9 +2361,20 @@ fn cross_window_attach_target(
                 continue;
             }
 
-            let insertion_index = workspace.read(ctx, |workspace, ctx| {
-                workspace.tab_insertion_index_for_cursor(window_id, cursor_position_on_screen, ctx)
-            });
+            let insertion_index =
+                workspace.read(ctx, |workspace, ctx| match dragged_group_pinned {
+                    Some(group_pinned) => workspace.group_insertion_index_for_cursor(
+                        window_id,
+                        cursor_position_on_screen,
+                        group_pinned,
+                        ctx,
+                    ),
+                    None => workspace.tab_insertion_index_for_cursor(
+                        window_id,
+                        cursor_position_on_screen,
+                        ctx,
+                    ),
+                });
             update_best_target(window_id, insertion_index, tab_bar_position_on_screen);
         }
     }
