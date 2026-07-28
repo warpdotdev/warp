@@ -5,7 +5,6 @@ use warp_graphql::object_permissions::AccessLevel;
 use warp_util::path::EscapeChar;
 use warpui::{App, EntityId, SingletonEntity};
 
-use crate::LaunchMode;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -36,6 +35,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{LaunchMode, TuiEntryPoint};
 
 fn mock_server_metadata(uid: ServerId) -> ServerMetadata {
     ServerMetadata {
@@ -162,8 +162,10 @@ fn tui_missing_collection_seeds_agent_decides_for_execute_commands() {
         let profile_model = app.add_singleton_model(|ctx| {
             AIExecutionProfilesModel::new(
                 &LaunchMode::Tui {
-                    mount: Box::new(|_| {}),
-                    api_key: None,
+                    entrypoint: TuiEntryPoint::Interactive {
+                        mount: Box::new(|_| {}),
+                        api_key: None,
+                    },
                 },
                 ctx,
             )
@@ -197,8 +199,10 @@ fn tui_default_denylist_overrides_agent_decides_command_execution() {
         let profile_model = app.add_singleton_model(|ctx| {
             AIExecutionProfilesModel::new(
                 &LaunchMode::Tui {
-                    mount: Box::new(|_| {}),
-                    api_key: None,
+                    entrypoint: TuiEntryPoint::Interactive {
+                        mount: Box::new(|_| {}),
+                        api_key: None,
+                    },
                 },
                 ctx,
             )
@@ -266,8 +270,10 @@ fn tui_explicit_collection_preserves_execute_commands() {
         let profile_model = app.add_singleton_model(|ctx| {
             AIExecutionProfilesModel::new(
                 &LaunchMode::Tui {
-                    mount: Box::new(|_| {}),
-                    api_key: None,
+                    entrypoint: TuiEntryPoint::Interactive {
+                        mount: Box::new(|_| {}),
+                        api_key: None,
+                    },
                 },
                 ctx,
             )
@@ -1293,8 +1299,10 @@ fn profile_sources_preserve_state_across_migration_and_rollout() {
             app.add_model(|ctx| {
                 AIExecutionProfilesModel::new(
                     &LaunchMode::Tui {
-                        mount: Box::new(|_| {}),
-                        api_key: None,
+                        entrypoint: TuiEntryPoint::Interactive {
+                            mount: Box::new(|_| {}),
+                            api_key: None,
+                        },
                     },
                     ctx,
                 )

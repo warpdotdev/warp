@@ -7,6 +7,81 @@ fn make_manager(keys: ApiKeys) -> ApiKeyManager {
 }
 
 #[test]
+fn llm_provider_parses_supported_api_key_provider_names() {
+    assert_eq!(
+        LLMProvider::from_api_key_slug("anthropic"),
+        Ok(LLMProvider::Anthropic)
+    );
+    assert_eq!(
+        LLMProvider::from_api_key_slug("open-ai"),
+        Ok(LLMProvider::OpenAI)
+    );
+    assert_eq!(
+        LLMProvider::from_api_key_slug("google"),
+        Ok(LLMProvider::Google)
+    );
+}
+
+#[test]
+fn persisted_provider_api_key_updates_request_state() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_provider_key(
+                    LLMProvider::Anthropic,
+                    Some("sk-ant-test".to_owned()),
+                    ctx,
+                )
+            })
+            .expect("no-op secure storage should accept the provider key");
+
+        manager.read(&app, |manager, _| {
+            let request_keys = manager
+                .api_keys_for_request(true, false, None)
+                .expect("persisted provider key should be available to requests");
+            assert_eq!(request_keys.anthropic, "sk-ant-test");
+        });
+    });
+}
+
+#[test]
+fn persisted_provider_api_key_can_be_cleared() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_provider_key(
+                    LLMProvider::Anthropic,
+                    Some("sk-ant-test".to_owned()),
+                    ctx,
+                )?;
+                manager.persist_provider_key(LLMProvider::Anthropic, None, ctx)
+            })
+            .expect("no-op secure storage should clear the provider key");
+
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.keys().anthropic, None);
+        });
+    });
+}
+#[test]
+fn llm_provider_rejects_unsupported_api_key_provider() {
+    assert_eq!(
+        LLMProvider::from_api_key_slug("openrouter"),
+        Err("provider must be one of: anthropic, openai, google".to_owned())
+    );
+}
+
+#[test]
 fn custom_model_providers_preserves_configured_schema() {
     let mut endpoint = endpoint_with_keys(
         "Anthropic",

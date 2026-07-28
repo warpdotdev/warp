@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use ai::LLMProvider;
 use ai::api_keys::{ApiKeyManager, GrokTokens};
 use chrono::Duration;
 use warp_core::features::FeatureFlag;
@@ -708,7 +709,7 @@ fn test_has_any_ai_remaining_true_with_byok_enabled_and_key_provided() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.set_openai_key(Some("test-key".to_string()), ctx);
+            manager.set_provider_key(LLMProvider::OpenAI, Some("test-key".to_string()), ctx);
         });
 
         request_usage_model.update(&mut app, |model, ctx| {
@@ -826,7 +827,7 @@ fn test_has_any_ai_remaining_true_with_byo_key_and_no_workspace() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.set_openai_key(Some("test-key".to_string()), ctx);
+            manager.set_provider_key(LLMProvider::OpenAI, Some("test-key".to_string()), ctx);
         });
 
         request_usage_model.update(&mut app, |model, ctx| {
@@ -851,7 +852,7 @@ fn test_byo_api_key_disabled_for_anonymous_firebase_user() {
         let request_usage_model = add_request_usage_model_for_anonymous_users(&mut app);
 
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.set_openai_key(Some("test-key".to_string()), ctx);
+            manager.set_provider_key(LLMProvider::OpenAI, Some("test-key".to_string()), ctx);
         });
 
         app.read(|ctx| {

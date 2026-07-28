@@ -21,6 +21,17 @@ fn question(
     supports_other: bool,
     options: &[&str],
 ) -> AskUserQuestionItem {
+    question_with_recommended(id, text, is_multiselect, supports_other, options, &[])
+}
+
+fn question_with_recommended(
+    id: &str,
+    text: &str,
+    is_multiselect: bool,
+    supports_other: bool,
+    options: &[&str],
+    recommended_indices: &[usize],
+) -> AskUserQuestionItem {
     AskUserQuestionItem {
         question_id: id.to_owned(),
         question: text.to_owned(),
@@ -28,9 +39,10 @@ fn question(
             is_multiselect,
             options: options
                 .iter()
-                .map(|label| AskUserQuestionOption {
+                .enumerate()
+                .map(|(i, label)| AskUserQuestionOption {
                     label: (*label).to_owned(),
-                    recommended: false,
+                    recommended: recommended_indices.contains(&i),
                 })
                 .collect(),
             supports_other,
@@ -574,6 +586,45 @@ fn navigating_away_from_a_cleared_other_editor_removes_the_previous_answer() {
             assert_eq!(view.session.current_question_index(), 1);
             assert!(view.session.draft_for_question(0).is_none());
         });
+    });
+}
+
+#[test]
+fn recommended_option_renders_recommended_badge() {
+    App::test((), |mut app| async move {
+        let (_, view) = add_view(
+            &mut app,
+            vec![question_with_recommended(
+                "q1",
+                "Which shell?",
+                false,
+                false,
+                &["zsh", "fish", "bash"],
+                &[1], // fish is recommended
+            )],
+        );
+
+        let lines = render_active_lines(&mut app, &view);
+        // The recommended option should have "  (recommended)" appended.
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("fish") && line.contains("(recommended)")),
+            "expected a line with 'fish  (recommended)' but got: {lines:#?}"
+        );
+        // Non-recommended options must not show the badge.
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("zsh") || !line.contains("(recommended)")),
+            "expected zsh not to have (recommended) but got: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("bash") || !line.contains("(recommended)")),
+            "expected bash not to have (recommended) but got: {lines:#?}"
+        );
     });
 }
 

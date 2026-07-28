@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use ai::LLMProvider;
 use chrono::NaiveDate;
 use instant::Instant;
 use tempfile::TempDir;
@@ -19,6 +20,7 @@ use warp::tui_export::{
     UserTakeOverReason, export_conversation_markdown, register_tui_session_view_test_singletons,
     slash_commands,
 };
+use warp_core::channel::Channel;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -188,7 +190,7 @@ fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators(
             assert_eq!(
                 render_element(row, ctx, 160).to_lines(),
                 vec![
-                    "Auto-approve • Auto-queue | model /tmp/warp ↬ main | ↑1 ↓2 | +31 -12 | 40 credits | 43% context used | July 20, 2026 • 1:08pm | ❒ 1/10 | Voice"
+                    "Auto-approve • Auto-queue | model /tmp/warp ⊢ main | ↑1 ↓2 | +31 -12 | 40 credits | 43% context used | July 20, 2026 • 1:08pm | ❒ 1/10 | Voice"
                         .to_owned()
                 ],
             );
@@ -371,6 +373,62 @@ fn log_bundle_success_message_includes_the_absolute_path() {
     assert_eq!(
         log_bundle_success_message(path),
         "Log bundle saved to /tmp/warp-20260718-132640.zip"
+    );
+}
+
+#[test]
+fn tui_cli_shell_command_uses_channel_entry_points() {
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Local, "--version"),
+        "./script/run-tui -- --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Stable, "--version"),
+        "warp --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Dev, "--version"),
+        "warp-dev --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Preview, "--version"),
+        "warp-preview --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Oss, "--version"),
+        "warp-oss --version"
+    );
+    assert_eq!(
+        super::tui_cli_shell_command(Channel::Integration, "--version"),
+        "warp-integration --version"
+    );
+}
+
+#[test]
+fn provider_api_key_shell_command_uses_shared_tui_launcher() {
+    assert_eq!(
+        super::provider_api_key_shell_command(
+            Channel::Local,
+            LLMProvider::Anthropic,
+            super::ProviderApiKeyOperation::Set,
+        ),
+        Some("./script/run-tui -- --set-provider-api-key anthropic".to_owned())
+    );
+    assert_eq!(
+        super::provider_api_key_shell_command(
+            Channel::Local,
+            LLMProvider::Anthropic,
+            super::ProviderApiKeyOperation::Clear,
+        ),
+        Some("./script/run-tui -- --clear-provider-api-key anthropic".to_owned())
+    );
+    assert_eq!(
+        super::provider_api_key_shell_command(
+            Channel::Stable,
+            LLMProvider::Unknown,
+            super::ProviderApiKeyOperation::Set,
+        ),
+        None
     );
 }
 
@@ -2251,7 +2309,7 @@ fn assert_footer_segments_absent(lines: &[String]) {
         "a replacing hint should contain no statusline group dividers: {row}"
     );
     assert!(
-        !row.contains(" ↬ "),
+        !row.contains(" ⊢ "),
         "the cwd/branch section is absent: {row}"
     );
     assert!(
@@ -2381,7 +2439,7 @@ fn footer_renders_agent_sections_left_aligned() {
 
             assert_eq!(
                 lines,
-                vec!["TestModel /home/user/warp ↬ main | 2.5 credits | +3 -1"],
+                vec!["TestModel /home/user/warp ⊢ main | 2.5 credits | +3 -1"],
                 "agent footer is left-aligned in order model → cwd/branch → usage → diff"
             );
             assert!(
@@ -2446,7 +2504,7 @@ fn footer_renders_shell_mode_sections_without_model_or_usage() {
 
             assert_eq!(
                 lines,
-                vec![format!("{SHELL_MODE_HINT} /home/user/warp ↬ main | +3 -1")],
+                vec![format!("{SHELL_MODE_HINT} /home/user/warp ⊢ main | +3 -1")],
                 "shell footer leads with the shell-mode indicator and hides model/usage"
             );
             assert!(
@@ -3378,9 +3436,7 @@ fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
 }
 
 #[test]
-fn version_shell_command_uses_channel_cli_names() {
-    use warp_core::channel::Channel;
-
+fn version_and_resume_shell_commands_use_shared_tui_launcher() {
     assert_eq!(
         super::version_shell_command(Channel::Stable),
         "warp --version"
@@ -3391,7 +3447,7 @@ fn version_shell_command_uses_channel_cli_names() {
     );
     assert_eq!(
         super::version_shell_command(Channel::Local),
-        "warp-dev --version"
+        "./script/run-tui -- --version"
     );
     assert_eq!(
         super::version_shell_command(Channel::Preview),
@@ -3404,5 +3460,13 @@ fn version_shell_command_uses_channel_cli_names() {
     assert_eq!(
         super::version_shell_command(Channel::Integration),
         "warp-integration --version"
+    );
+    assert_eq!(
+        super::tui_resume_shell_command(Channel::Local, "conversation-token"),
+        "./script/run-tui -- --resume conversation-token"
+    );
+    assert_eq!(
+        super::tui_resume_shell_command(Channel::Preview, "conversation-token"),
+        "warp-preview --resume conversation-token"
     );
 }

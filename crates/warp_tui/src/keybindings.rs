@@ -96,6 +96,7 @@ pub(crate) fn init(app: &mut AppContext) {
     crate::statusline_config_view::init(app);
     crate::tui_permission_prompt::init(app);
     crate::tui_shell_command_view::init(app);
+    crate::tui_file_edits_view::init(app);
 
     register_binding_validators(app);
 }
