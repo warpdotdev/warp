@@ -1,5 +1,6 @@
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
+mod centered_toolbar;
 pub(crate) mod cloud_agent_capacity_modal;
 pub(crate) mod codex_modal;
 pub mod conversation_list;
@@ -115,6 +116,7 @@ use warpui::{
     UpdateModel, UpdateView, View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
 
+use self::centered_toolbar::CenteredToolbar;
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     SummaryPaneKind, SummaryPaneKindIcons, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
@@ -20710,49 +20712,50 @@ impl Workspace {
 
             let left_padding = self.compute_tab_bar_left_padding(ctx);
 
-            // The title bar search bar can be hidden via a user setting; when hidden,
-            // an empty flexible slot keeps the right-side controls aligned to the right.
-            let hide_search_bar =
-                *TabSettings::as_ref(ctx).hide_title_bar_search_bar_in_vertical_tabs;
-            let search_bar_slot = if hide_search_bar {
-                Expanded::new(1., Empty::new().finish()).finish()
-            } else {
-                Shrinkable::new(
-                    1.,
-                    Clipped::new(
-                        Container::new(
-                            Align::new(self.render_title_bar_search_bar(appearance)).finish(),
-                        )
-                        .with_padding_left(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
-                        .with_padding_right(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
-                        .finish(),
-                    )
-                    .finish(),
-                )
-                .finish()
-            };
-
-            let tab_bar = Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(tab_bar.finish())
-                .with_child(search_bar_slot)
-                .with_child(right_controls.finish())
+            // Keep the left/right padding with their respective controls so the centered toolbar
+            // spans the full title bar rather than the asymmetric padded content area.
+            let left_controls = Container::new(tab_bar.finish())
+                .with_padding_left(left_padding)
+                .finish();
+            let right_controls = Container::new(right_controls.finish())
+                .with_padding_right(TAB_BAR_PADDING_RIGHT)
                 .finish();
 
-            return EventHandler::new(
-                Container::new(tab_bar)
-                    .with_padding_left(left_padding)
-                    .with_padding_right(TAB_BAR_PADDING_RIGHT)
-                    .finish(),
+            // The title bar search bar can be hidden via a user setting.
+            let hide_search_bar =
+                *TabSettings::as_ref(ctx).hide_title_bar_search_bar_in_vertical_tabs;
+            let (search_bar_slot, search_bar_slot_min_width, search_bar_slot_max_width) =
+                if hide_search_bar {
+                    (Empty::new().finish(), 0., 0.)
+                } else {
+                    (
+                        // At the maximum slot width, Align leaves the same 8px of space on
+                        // either side of the 320px search bar. Unlike a padded Container, it
+                        // also honors narrower slot constraints so that the toolbar's allocation
+                        // remains authoritative.
+                        Align::new(self.render_title_bar_search_bar(appearance)).finish(),
+                        2. * TITLE_BAR_SEARCH_BAR_SLOT_PADDING,
+                        TITLE_BAR_SEARCH_BAR_MAX_WIDTH + 2. * TITLE_BAR_SEARCH_BAR_SLOT_PADDING,
+                    )
+                };
+
+            let tab_bar = CenteredToolbar::new(
+                left_controls,
+                search_bar_slot,
+                right_controls,
+                search_bar_slot_min_width,
+                search_bar_slot_max_width,
             )
-            .on_right_mouse_down(|ctx, _, position| {
-                ctx.dispatch_typed_action(WorkspaceAction::ShowHeaderToolbarContextMenu {
-                    position,
-                });
-                DispatchEventResult::StopPropagation
-            })
             .finish();
+
+            return EventHandler::new(tab_bar)
+                .on_right_mouse_down(|ctx, _, position| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ShowHeaderToolbarContextMenu {
+                        position,
+                    });
+                    DispatchEventResult::StopPropagation
+                })
+                .finish();
         } else {
             // Copy from our saved tab_bar_state to ensure all tabs get rendered with the same state
             let active_tab_index = if FeatureFlag::AgentManagementView.is_enabled()
