@@ -454,6 +454,15 @@ impl<T: EventLoopSender> PtyController<T> {
                     move |me, _, ctx| me.write_bytes(chunk, ctx),
                 );
             }
+        } else if shell_type == ShellType::Fish {
+            // A remote fish session cannot source a bootstrap file created on the local machine.
+            // Paste the script as one bracketed-paste command instead, then explicitly submit it.
+            // The leading space keeps the bootstrap out of fish history.
+            self.write_bytes(&b" "[..], ctx);
+            self.write_bytes(escape_sequences::BRACKETED_PASTE_START, ctx);
+            self.write_bytes(bootstrap, ctx);
+            self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
+            self.write_terminating_bootstrap_bytes(ctx);
         } else {
             self.write_bytes(bootstrap, ctx);
         }
