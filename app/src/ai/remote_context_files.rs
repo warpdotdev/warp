@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use futures::future::{BoxFuture, FutureExt as _};
 use remote_server::proto::{
-    file_context_proto, FileContextProto, ReadFileContextFile, ReadFileContextRequest,
+    FileContextProto, ReadFileContextFile, ReadFileContextRequest, file_context_proto,
 };
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;

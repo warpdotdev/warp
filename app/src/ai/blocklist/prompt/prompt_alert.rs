@@ -7,8 +7,8 @@ use warpui::elements::{
 };
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::ai::blocklist::error_color;
 use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::error_color;
 use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
 use crate::server::ids::ServerId;

@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 use serde::de::DeserializeOwned;
 use warp_core::channel::ChannelState;
-use warp_core::errors::{ErrorExt, register_error};
+use warp_errors::{ErrorExt, register_error};
 
 use crate::base_client::{AmbientHeaderPolicy, BaseClient};
 

@@ -10,7 +10,9 @@ use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
 mod package_installers;
 pub(crate) use history::UpArrowHistoryConfig;
-pub use history::{History, HistoryEntry, HistoryEvent, ShellHost};
+pub use history::{
+    History, HistoryEntry, HistoryEvent, ShellHost, prompt_history_for_terminal_view,
+};
 pub use view::{Event, TerminalView};
 pub use warp_terminal::shell::{self, ShellLaunchData};
 use warpui::geometry::vector::Vector2F;
@@ -19,7 +21,7 @@ use warpui::{AppContext, WindowId};
 mod block_list_settings;
 
 mod alias;
-mod alt_screen;
+pub(crate) mod alt_screen;
 pub mod alt_screen_reporting;
 mod audible_bell;
 pub use audible_bell::AudibleBell;
@@ -34,6 +36,7 @@ mod bootstrap;
 mod buy_credits_banner;
 pub mod color;
 mod command_corrections_denylist;
+pub mod conversation_restoration;
 pub mod dynamic_enum_suggestions;
 pub mod enable_auto_reload_modal;
 pub mod event;
@@ -230,6 +233,24 @@ pub struct SizeUpdate {
 }
 
 impl SizeUpdate {
+    /// Creates a size update for a layout measured directly in terminal cells.
+    pub fn from_cell_dimensions(last_size: SizeInfo, rows: usize, columns: usize) -> Self {
+        let new_size = SizeInfo::new_without_font_metrics(rows, columns);
+        Self {
+            update_reason: SizeUpdateReason::AfterLayout,
+            last_size,
+            new_size,
+            new_gap_height: None,
+            natural_rows: new_size.rows(),
+            natural_cols: new_size.columns(),
+        }
+    }
+
+    /// Returns the resulting terminal size.
+    pub fn new_size(&self) -> SizeInfo {
+        self.new_size
+    }
+
     /// Whether the reason for the update is a refresh.
     pub fn is_refresh(&self) -> bool {
         matches!(self.update_reason, SizeUpdateReason::Refresh)
@@ -496,3 +517,7 @@ impl BlockPadding {
 
 #[cfg(test)]
 mod ref_tests;
+
+#[cfg(test)]
+#[path = "size_update_tests.rs"]
+mod size_update_tests;

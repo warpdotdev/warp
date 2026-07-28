@@ -213,7 +213,7 @@ fn render_score_row(
                 .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(render_provider_label(label, appearance))
-                .with_child(manage_button)
+                .with_child(Container::new(manage_button).with_margin_left(8.).finish())
                 .finish(),
         )
         .finish(),

@@ -13,6 +13,7 @@ diesel::table! {
         conversation_id -> Text,
         conversation_data -> Text,
         last_modified_at -> Timestamp,
+        summary -> Nullable<Text>,
     }
 }
 

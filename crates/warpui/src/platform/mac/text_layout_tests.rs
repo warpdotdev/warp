@@ -3,7 +3,7 @@ use rand::random;
 
 use super::*;
 use crate::fonts::{
-    collect_glyph_indices, collect_line_caret_position_starts, init_fonts, Properties,
+    Properties, collect_glyph_indices, collect_line_caret_position_starts, init_fonts,
 };
 use crate::platform::FontDB as _;
 use crate::text_layout::DEFAULT_TOP_BOTTOM_RATIO;
@@ -61,7 +61,9 @@ fn test_char_indices_ligatures() -> Result<()> {
             .flat_map(|r| r.glyphs.iter())
             .map(|g| g.index)
             .collect::<Vec<_>>(),
-        vec![0, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 30, 31]
+        vec![
+            0, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 30, 31
+        ]
     );
     Ok(())
 }

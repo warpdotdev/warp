@@ -10,12 +10,12 @@ use std::sync::Arc;
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
 pub use convert_from::{
-    user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
+    MessageToAIAgentOutputMessageError, user_inputs_from_messages,
 };
 use futures_lite::Stream;
-use mcp::TemplatableMCPServerInfo;
 pub use r#impl::generate_multi_agent_output;
+use mcp::TemplatableMCPServerInfo;
 use serde::Serialize;
 use warp_core::channel::ChannelState;
 use warp_core::execution_mode::AppExecutionMode;
@@ -27,8 +27,8 @@ use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput, SessionContext};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::AIExecutionProfileAppExt;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::AIApiError;

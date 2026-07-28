@@ -10,6 +10,9 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
   user(requestContext: $requestContext) {
     ... on UserOutput {
       user {
+        profile {
+          uid
+        }
         workspaces {
           uid
           name
@@ -69,6 +72,9 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               byoEndpointPolicy {
                 enabled
               }
+              managedByokByoePolicy {
+                enabled
+              }
               usageVisibilityPolicy {
                 adminGranularity
                 maxPriorCycles
@@ -109,6 +115,29 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             isInviteLinkEnabled
             llmSettings {
               enabled
+            }
+            teamByo {
+              firstPartyEnabled
+              endpointsEnabled
+              allowUserKeys
+              allowUserEndpoints
+              firstPartyKeys {
+                provider
+                credentialUid
+              }
+              endpoints {
+                uid
+                name
+                enabled
+                credentialUid
+                models {
+                  configKey
+                  slug
+                  alias
+                  displayName
+                  enabled
+                }
+              }
             }
             telemetrySettings {
               forceEnabled
@@ -196,9 +225,16 @@ pub enum PricingInfoResult {
 
 #[derive(cynic::QueryFragment, Debug)]
 pub struct User {
+    pub profile: UserProfile,
     pub workspaces: Vec<Workspace>,
     pub experiments: Option<Vec<Experiment>>,
     pub discoverable_teams: Vec<DiscoverableTeamData>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "FirebaseProfile")]
+pub struct UserProfile {
+    pub uid: String,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

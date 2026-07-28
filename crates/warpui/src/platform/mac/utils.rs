@@ -7,11 +7,11 @@ use core_graphics::color::CGColor;
 use core_graphics::sys::CGColorRef;
 use objc::runtime::Object;
 use objc2_app_kit::{
-    NSDeleteFunctionKey, NSDownArrowFunctionKey, NSEndFunctionKey, NSF10FunctionKey,
-    NSF11FunctionKey, NSF12FunctionKey, NSF13FunctionKey, NSF14FunctionKey, NSF15FunctionKey,
-    NSF16FunctionKey, NSF17FunctionKey, NSF18FunctionKey, NSF19FunctionKey, NSF1FunctionKey,
-    NSF20FunctionKey, NSF2FunctionKey, NSF3FunctionKey, NSF4FunctionKey, NSF5FunctionKey,
-    NSF6FunctionKey, NSF7FunctionKey, NSF8FunctionKey, NSF9FunctionKey, NSHelpFunctionKey,
+    NSDeleteFunctionKey, NSDownArrowFunctionKey, NSEndFunctionKey, NSF1FunctionKey,
+    NSF2FunctionKey, NSF3FunctionKey, NSF4FunctionKey, NSF5FunctionKey, NSF6FunctionKey,
+    NSF7FunctionKey, NSF8FunctionKey, NSF9FunctionKey, NSF10FunctionKey, NSF11FunctionKey,
+    NSF12FunctionKey, NSF13FunctionKey, NSF14FunctionKey, NSF15FunctionKey, NSF16FunctionKey,
+    NSF17FunctionKey, NSF18FunctionKey, NSF19FunctionKey, NSF20FunctionKey, NSHelpFunctionKey,
     NSHomeFunctionKey, NSInsertFunctionKey, NSLeftArrowFunctionKey, NSPageDownFunctionKey,
     NSPageUpFunctionKey, NSRightArrowFunctionKey, NSUpArrowFunctionKey,
 };
@@ -59,7 +59,7 @@ const NUMPAD_ENTER_KEY: u16 = 0x03;
 const ESCAPE_KEY: u16 = 0x1b;
 const TAB_KEY: u16 = '\t' as u16;
 const SHIFTED_TAB_KEY: u16 = 0x19;
-extern "C" {
+unsafe extern "C" {
     fn CGColorGetComponents(color: CGColorRef) -> *const CGFloat;
 }
 
@@ -113,12 +113,14 @@ pub fn unicode_char_to_key(char: u16) -> Option<&'static str> {
 ///
 /// This code is only unsafe since it requires interfacing with platform code.
 pub unsafe fn nsstring_as_str<'a>(nsstring: *const Object) -> Result<&'a str, Utf8Error> {
-    // The caller guarantees `nsstring` points at a live Objective-C string, so
-    // reinterpret it as an `NSString` for typed access to its UTF-8 bytes.
-    let nsstring = &*nsstring.cast::<NSString>();
-    let cstr = nsstring.UTF8String();
-    let len = nsstring.lengthOfBytesUsingEncoding(NSUTF8StringEncoding);
-    std::str::from_utf8(slice::from_raw_parts(cstr.cast::<u8>(), len))
+    unsafe {
+        // The caller guarantees `nsstring` points at a live Objective-C string, so
+        // reinterpret it as an `NSString` for typed access to its UTF-8 bytes.
+        let nsstring = &*nsstring.cast::<NSString>();
+        let cstr = nsstring.UTF8String();
+        let len = nsstring.lengthOfBytesUsingEncoding(NSUTF8StringEncoding);
+        std::str::from_utf8(slice::from_raw_parts(cstr.cast::<u8>(), len))
+    }
 }
 
 pub fn color_u_to_cg_color(color: ColorU) -> CGColor {

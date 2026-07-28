@@ -1,8 +1,8 @@
 //! Provider command for linking third-party services.
 use comfy_table::Cell;
 use serde::Serialize;
-use warp_cli::provider::{ProviderCommand, ProviderType};
 use warp_cli::GlobalOptions;
+use warp_cli::provider::{ProviderCommand, ProviderType};
 use warp_core::channel::ChannelState;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};

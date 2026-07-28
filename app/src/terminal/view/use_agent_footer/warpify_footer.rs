@@ -8,7 +8,7 @@ use warpui::prelude::Empty;
 use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::{AgentFooterButtonTheme, USE_AGENT_KEYSTROKE};
-use crate::terminal::view::{TerminalModel, PADDING_LEFT};
+use crate::terminal::view::{PADDING_LEFT, TerminalModel};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, TooltipAlignment,
@@ -134,10 +134,10 @@ impl View for WarpifyFooterView {
             .with_horizontal_padding(*PADDING_LEFT)
             .with_vertical_padding(4.);
 
-        if terminal_model.is_alt_screen_active() {
-            if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
-                container = container.with_background(bg_color);
-            }
+        if terminal_model.is_alt_screen_active()
+            && let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color()
+        {
+            container = container.with_background(bg_color);
         }
 
         container.finish()

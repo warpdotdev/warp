@@ -2,7 +2,7 @@ use warp_core::safe_info;
 use warpui_core::keymap::Keystroke;
 use warpui_core::{Entity, ModelContext, ModelHandle, ViewContext};
 
-use crate::register::{valid_register_name, BLACK_HOLE_REGISTER};
+use crate::register::{BLACK_HOLE_REGISTER, valid_register_name};
 
 /// ASCII code for backspace.
 /// In Normal and Visual modes, Vim treats backspace as a leftward character motion.
@@ -271,6 +271,14 @@ impl From<char> for PendingAction {
                 operator: VimOperator::Yank,
                 pending_operand: None,
             },
+            '>' => Self::Operation {
+                operator: VimOperator::Indent,
+                pending_operand: None,
+            },
+            '<' => Self::Operation {
+                operator: VimOperator::Dedent,
+                pending_operand: None,
+            },
             'g' => Self::G,
             'z' => Self::Z,
             'f' => Self::FindChar {
@@ -308,7 +316,7 @@ pub enum VimMotion {
     FindChar(FindCharMotion),
     JumpToFirstLine,
     JumpToLastLine,
-    /// Jump to a specific line number. See ":help G" in Vim.
+    /// Jump to a specific line number. See ":help gg" and ":help G" in Vim.
     JumpToLine(u32),
     /// See ":help %" in Vim.
     JumpToMatchingBracket,
@@ -613,7 +621,10 @@ impl VimEventType {
             | VimEventType::JoinLine
             | VimEventType::DeleteForward => Some(self.clone()),
             VimEventType::Operation { operator, .. }
-                if *operator == VimOperator::Change || *operator == VimOperator::Delete =>
+                if *operator == VimOperator::Change
+                    || *operator == VimOperator::Delete
+                    || *operator == VimOperator::Indent
+                    || *operator == VimOperator::Dedent =>
             {
                 Some(self.clone())
             }
@@ -675,8 +686,15 @@ pub enum VimOperator {
     Uppercase,
     Lowercase,
     ToggleComment,
+    Indent,
+    Dedent,
 }
 
+impl VimOperator {
+    pub fn includes_trailing_newline(self) -> bool {
+        !matches!(self, Self::Change | Self::Indent | Self::Dedent)
+    }
+}
 impl From<char> for VimOperator {
     fn from(c: char) -> Self {
         match c {
@@ -686,6 +704,8 @@ impl From<char> for VimOperator {
             '~' => Self::ToggleCase,
             'u' => Self::Lowercase,
             'U' => Self::Uppercase,
+            '>' => Self::Indent,
+            '<' => Self::Dedent,
             _ => panic!("invalid char for VimOperator: {c}"),
         }
     }
@@ -787,7 +807,7 @@ impl VimFSA {
             "backspace" => match self.mode {
                 VimMode::Insert => self.handle_insert_mode_backspace().into(),
                 VimMode::Visual(_) | VimMode::Normal => {
-                    return self.typed_character(BACKSPACE_CHAR)
+                    return self.typed_character(BACKSPACE_CHAR);
                 }
                 VimMode::Replace => self.change_mode(VimMode::Normal.into()).into(),
             },
@@ -956,6 +976,10 @@ impl VimFSA {
                     self.pending_action = Some(PendingAction::from(c));
                     return None;
                 }
+                '<' | '>' => {
+                    self.pending_action = Some(PendingAction::from(c));
+                    return None;
+                }
                 'D' => self.create_operation(
                     VimOperator::Delete,
                     VimOperand::Motion {
@@ -1073,7 +1097,10 @@ impl VimFSA {
                     bound: WordBound::End,
                     word_type: WordType::from(c),
                 })),
-                'g' => VimEventType::Navigate(VimMotion::JumpToFirstLine),
+                'g' => match self.get_action_count() {
+                    Some(line_number) => VimEventType::Navigate(VimMotion::JumpToLine(line_number)),
+                    None => VimEventType::Navigate(VimMotion::JumpToFirstLine),
+                },
                 'd' => VimEventType::GotoDefinition,
                 'h' => VimEventType::ShowHover,
                 'r' => VimEventType::FindReferences,
@@ -1170,6 +1197,12 @@ impl VimFSA {
             }
             // Support gcc (toggle comment line)
             'c' if operator == VimOperator::ToggleComment => {
+                self.create_operation(operator, VimOperand::Line)
+            }
+            '>' if operator == VimOperator::Indent => {
+                self.create_operation(operator, VimOperand::Line)
+            }
+            '<' if operator == VimOperator::Dedent => {
                 self.create_operation(operator, VimOperand::Line)
             }
             'i' | 'a' | 'g' | 'f' | 'F' | 't' | 'T' | '[' | ']' => {
@@ -1331,7 +1364,10 @@ impl VimFSA {
                 'g' => self.create_operation(
                     operator,
                     VimOperand::Motion {
-                        motion: VimMotion::JumpToFirstLine,
+                        motion: match self.get_operand_count() {
+                            Some(line_number) => VimMotion::JumpToLine(line_number),
+                            None => VimMotion::JumpToFirstLine,
+                        },
                         motion_type: MotionType::Linewise,
                     },
                 ),
@@ -1491,6 +1527,11 @@ impl VimFSA {
                 self.mode = VimMode::Normal;
                 event_type
             }
+            '<' | '>' => {
+                let event_type = self.create_visual_operator(c, motion_type);
+                self.mode = VimMode::Normal;
+                event_type
+            }
             'c' | 'C' | 's' | 'S' => {
                 let event_type = self.create_visual_operator(c, motion_type);
                 self.mode = VimMode::Insert;
@@ -1557,7 +1598,10 @@ impl VimFSA {
                     bound: WordBound::End,
                     word_type: WordType::from(c),
                 })),
-                'g' => VimEventType::Navigate(VimMotion::JumpToFirstLine),
+                'g' => match self.get_action_count() {
+                    Some(line_number) => VimEventType::Navigate(VimMotion::JumpToLine(line_number)),
+                    None => VimEventType::Navigate(VimMotion::JumpToFirstLine),
+                },
                 'c' => {
                     let motion_type = match self.mode {
                         VimMode::Visual(mt) => mt,
@@ -1683,14 +1727,14 @@ impl VimFSA {
     fn dot_repeat_text_mut(&mut self) -> Option<&mut String> {
         match &mut self.dot_repeat_event {
             Some(VimEvent {
-                event_type: VimEventType::InsertText { ref mut text, .. },
+                event_type: VimEventType::InsertText { text, .. },
                 ..
             })
             | Some(VimEvent {
                 event_type:
                     VimEventType::Operation {
                         operator: VimOperator::Change,
-                        replacement_text: ref mut text,
+                        replacement_text: text,
                         ..
                     },
                 ..
@@ -2062,3 +2106,8 @@ pub trait VimHandler {
     /// Move the cursor up `count` half-pages and scroll the viewport (`<C-u>`).
     fn scroll_half_page_up(&mut self, _count: u32, _ctx: &mut ViewContext<Self>) {}
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+#[path = "vim_tests.rs"]
+mod tests;

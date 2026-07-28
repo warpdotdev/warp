@@ -7,29 +7,30 @@ use pathfinder_geometry::rect::RectF;
 use persistence::model::{
     AgentConversation, AgentConversationData, AgentConversationRecord, ConversationUsageMetadata,
 };
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_server_client::iap::IapManager;
 use warpui::platform::{WindowBounds, WindowStyle};
-use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::WindowManager;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::child_agent::hydration::{
-    decide_remote_child_hydration_action, RemoteChildHydrationAction,
+    RemoteChildHydrationAction, decide_remote_child_hydration_action,
 };
 use super::child_agent::{
-    create_hidden_child_agent_conversation, HiddenChildAgentConversationRequest,
-    HiddenChildAgentTaskContext,
+    HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
+    create_hidden_child_agent_conversation,
 };
 use super::*;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -49,6 +50,7 @@ use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStream
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -59,7 +61,6 @@ use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::user::TEST_USER_UID;
 use crate::changelog_model::ChangelogModel;
@@ -87,8 +88,8 @@ use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
-use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::local_tty::TerminalManager;
+use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
@@ -106,7 +107,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    experiments, AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
+    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, experiments,
 };
 
 fn initialize_app(app: &mut App) {
@@ -119,6 +120,7 @@ fn initialize_app(app: &mut App) {
         IapManager::new(
             None,
             Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+            None,
             ctx,
         )
     });
@@ -131,6 +133,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| SystemStats::new());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(CloudEnvironmentCatalog::new);
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);
@@ -206,7 +209,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| PersistedWorkspace::new(vec![], HashMap::new(), None, ctx));
     app.add_singleton_model(|_| ProjectContextModel::default());
     app.add_singleton_model(|ctx| crate::ai::agent_tips::AITipModel::new_for_agent_tips(ctx));
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::new_seeded(vec![]));
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(UndoCloseStack::new);
@@ -399,6 +402,7 @@ fn persisted_remote_child_conversation(
             })
             .expect("conversation data should serialize"),
             last_modified_at: Utc::now().naive_utc(),
+            summary: None,
         },
         tasks: vec![warp_multi_agent_api::Task {
             id: Uuid::new_v4().to_string(),
@@ -1081,7 +1085,7 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
 ///   * the hidden child pane must materialize in `child_agent_panes` keyed
 ///     by the placeholder conversation id after parent fullscreen.
 ///
-/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, &conversations)`
+/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, _, &conversations)`
 /// invoking `initialize_historical_conversations`) is covered by
 /// `test_initialize_historical_conversations_eagerly_hydrates_orchestration_children`
 /// in `app/src/ai/blocklist/history_model_tests.rs`. `agent_display_name_from_id`
@@ -1269,13 +1273,14 @@ fn test_create_missing_child_agent_panes_restores_remote_child_from_history_mode
                     .set_parent_for_conversation(child_conversation_id, parent_conversation_id);
             });
             RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
-                *store =
-                    RestoredAgentConversations::new(vec![persisted_remote_child_conversation(
+                *store = RestoredAgentConversations::new_seeded(vec![
+                    persisted_remote_child_conversation(
                         child_conversation_id,
                         Some(parent_conversation_id),
                         None,
                         task_id,
-                    )]);
+                    ),
+                ]);
             });
 
             panes.restore_missing_child_agent_panes_for_parent(
@@ -1538,9 +1543,11 @@ fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pan
             let initial_pane_count = panes.pane_count();
             let initial_visible_pane_count = panes.visible_pane_count();
 
-            assert!(!panes
-                .child_agent_panes
-                .contains_key(&local_child_conversation_id));
+            assert!(
+                !panes
+                    .child_agent_panes
+                    .contains_key(&local_child_conversation_id)
+            );
 
             enter_agent_view_for_conversation(
                 panes,
@@ -1618,9 +1625,11 @@ fn test_entering_remote_parent_agent_view_lazily_restores_remote_hidden_child_pa
             let initial_pane_count = panes.pane_count();
             let initial_visible_pane_count = panes.visible_pane_count();
 
-            assert!(!panes
-                .child_agent_panes
-                .contains_key(&remote_child_conversation_id));
+            assert!(
+                !panes
+                    .child_agent_panes
+                    .contains_key(&remote_child_conversation_id)
+            );
 
             enter_agent_view_for_conversation(
                 panes,
@@ -1868,8 +1877,8 @@ fn test_ensure_hidden_child_agent_pane_materializes_missing_child_pane() {
 }
 
 #[test]
-fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id(
-) {
+fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id()
+ {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -1900,13 +1909,14 @@ fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked
                     .set_parent_for_conversation(child_conversation_id, parent_conversation_id);
             });
             RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
-                *store =
-                    RestoredAgentConversations::new(vec![persisted_remote_child_conversation(
+                *store = RestoredAgentConversations::new_seeded(vec![
+                    persisted_remote_child_conversation(
                         child_conversation_id,
                         None,
                         Some(parent_run_id),
                         task_id,
-                    )]);
+                    ),
+                ]);
             });
 
             assert!(!panes.child_agent_panes.contains_key(&child_conversation_id));
@@ -2645,12 +2655,14 @@ fn test_start_shared_session_from_modal() {
             assert_eq!(shared_views[0].id(), terminal_view.id());
 
             let terminal_pane = pane_group.terminal_session_by_pane_index(0).unwrap();
-            assert!(terminal_pane
-                .pane_view()
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .has_shareable_object(ctx));
+            assert!(
+                terminal_pane
+                    .pane_view()
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .has_shareable_object(ctx)
+            );
         });
     });
 }
@@ -2726,12 +2738,14 @@ fn test_stop_shared_session() {
             let shared_views = manager.shared_views(ctx).collect_vec();
             assert!(shared_views.is_empty());
 
-            assert!(!terminal_pane
-                .pane_view()
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .has_shareable_object(ctx));
+            assert!(
+                !terminal_pane
+                    .pane_view()
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .has_shareable_object(ctx)
+            );
         });
     });
 }
@@ -2861,11 +2875,13 @@ fn test_terminal_pane_headers() {
 
             for terminal_pane in terminal_panes {
                 let pane_view = terminal_pane.pane_view();
-                assert!(pane_view
-                    .as_ref(ctx)
-                    .header()
-                    .as_ref(ctx)
-                    .is_visible_in_pane_group());
+                assert!(
+                    pane_view
+                        .as_ref(ctx)
+                        .header()
+                        .as_ref(ctx)
+                        .is_visible_in_pane_group()
+                );
             }
         });
 
@@ -2881,11 +2897,13 @@ fn test_terminal_pane_headers() {
             assert_eq!(terminal_panes.len(), 1);
 
             let pane_view = terminal_panes[0].pane_view();
-            assert!(pane_view
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .is_visible_in_pane_group());
+            assert!(
+                pane_view
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .is_visible_in_pane_group()
+            );
         });
 
         // Create a non-terminal split pane. Terminal pane header remains visible.
@@ -2905,11 +2923,13 @@ fn test_terminal_pane_headers() {
             assert_eq!(terminal_panes.len(), 1);
 
             let pane_view = terminal_panes[0].pane_view();
-            assert!(pane_view
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .is_visible_in_pane_group());
+            assert!(
+                pane_view
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .is_visible_in_pane_group()
+            );
         });
     });
 }

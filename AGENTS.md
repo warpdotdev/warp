@@ -5,18 +5,19 @@ This file provides guidance when working with code in this repository.
 ## Development Commands
 
 ### Build and Run
-- `cargo run` - Build and run Warp locally
-- `cargo bundle --bin warp` - Bundle the main app
+- `cargo run` / `./script/run` - Build and run the GUI desktop app locally
+- `./script/run-tui` - Build and run the headless TUI front-end (`crates/warp_tui`)
+- `cargo bundle --bin warp` - Bundle the main (GUI) app
 
 ### Running with local warp-server
 To connect Warp client to a local warp-server instance:
 
 ```bash
 # Connect to server on default port 8080
-cargo run --features with_local_server
+WITH_LOCAL_SERVER=1 ./script/run
 
 # Connect to server on custom port (e.g., 8082)
-SERVER_ROOT_URL=http://localhost:8082 WS_SERVER_URL=ws://localhost:8082/graphql/v2 cargo run --features with_local_server
+WITH_LOCAL_SERVER=1 SERVER_ROOT_URL=http://localhost:8082 WS_SERVER_URL=ws://localhost:8082/graphql/v2 ./script/run
 ```
 
 Environment variables:
@@ -54,20 +55,31 @@ Environment variables:
 
 ## Architecture Overview
 
-This is a Rust-based terminal emulator with a custom UI framework called **WarpUI**.
+This is a Rust-based terminal emulator with a custom UI framework called **WarpUI**. It has **two front-ends** that share a common core.
+
+### Front-ends: GUI and TUI
+
+Warp has two front-ends that share the `warp_core`/`warpui` Entity/model core (App/Entity/`AppContext`, actions, `Appearance`, `FeatureFlag`, telemetry, logging) but differ in UI framework, rendering, input, and verification:
+- **GUI desktop app** — the `app/` crate on the WarpUI pixel/GPU framework (`warpui`, `crates/warpui_core`): `Element`/`View` layout, GPU/WGSL rendering, mouse input, `.app` bundles. Run with `cargo run` / `./script/run`; verify visually with `computer_use` or the real-display integration framework (`crates/integration`).
+- **Headless TUI** — the `crates/warp_tui` crate: a console app (run with `./script/run-tui`; no `.app`/GPU) rendered with a parallel cell-grid element library at `crates/warpui_core/src/elements/tui` (the `TuiElement` trait), behind the `tui` cargo feature. Verify by running it in a real terminal and observing output; test with render-to-lines unit tests.
+
+**Skill convention:** a skill specific to one front-end says so in its name and/or description (e.g. `gui-ui-guidelines` / `gui-integration-test` are GUI-only; `tui-ui-guidelines`, `tui-testing`, and `tui-verify-change` are TUI-specific). Skills with no front-end call-out are surface-agnostic and apply to both. For TUI work prefer the `tui-*` skills and ignore GUI-only ones — and vice versa.
 
 ### Key Components
 
-**WarpUI Framework** (`ui/`):
-- Custom UI framework with Entity-Component-Handle pattern
-- Global `App` object owns all views/models (entities)
-- Views hold `ViewHandle<T>` references to other views
-- `AppContext` provides temporary access to handles during render/events
-- Elements describe visual layout (Flutter-inspired)
-- Actions system for event handling
-- MouseStateHandle must be created once during construction, and then referenced/cloned anywhere we're using mouse input to track mouse changes. Inline `MouseStateHandle::default()` while rendering will cause no mouse interactions to work.
+**Shared UI core** (`crates/warpui`, `crates/warpui_core`) — used by **both** front-ends:
+- Entity-Component-Handle pattern: a global `App` object owns all views/models (entities); views hold `ViewHandle<T>` references to other views; `AppContext` provides temporary access to handles during render/events.
+- Actions system for event handling.
+- `crates/warpui_core` also hosts the TUI cell-grid element library under `src/elements/tui` (behind the `tui` feature).
 
-**Main App** (`app/`):
+**GUI rendering** (WarpUI GUI elements — GUI-specific):
+- `Element`s describe visual layout (Flutter-inspired), rendered on the GPU (WGSL).
+- Mouse input uses `MouseStateHandle`: create it once during construction and reference/clone it wherever mouse input is tracked. An inline `MouseStateHandle::default()` while rendering means no mouse interactions work. (The TUI's hover/click elements — `TuiHoverable`, `tui_collapsible` — also build on `MouseStateHandle`, so the same ownership rule applies there.)
+
+**TUI rendering** (`crates/warp_tui` + `crates/warpui_core/src/elements/tui` — TUI-specific):
+- Headless console front-end. The `TuiElement` trait lays out and paints into a cell-grid `TuiBuffer`; crossterm input is converted to `TuiEvent`. No GPU/WGSL, pixel geometry, or `.app` bundle.
+
+**Main app / shared surfaces** (`app/`) — the GUI desktop app plus feature surfaces the TUI reuses:
 - Terminal emulation and shell management (`terminal/`)
 - AI integration including Agent Mode (`ai/`)
 - Cloud synchronization and Drive features (`drive/`)
@@ -76,9 +88,10 @@ This is a Rust-based terminal emulator with a custom UI framework called **WarpU
 - Workspace and session management (`workspace/`)
 
 **Core Libraries**:
-- `crates/warp_core/` - Core utilities and platform abstractions
+- `crates/warp_core/` - Core utilities and platform abstractions (shared)
+- `crates/warp_tui/` - Headless TUI front-end
 - `crates/editor/` - Text editing functionality
-- `crates/warpui/` and `crates/warpui_core/` - Custom UI framework
+- `crates/warpui/` and `crates/warpui_core/` - Custom UI framework (shared core plus the GUI and TUI element libraries)
 - `crates/ipc/` - Inter-process communication
 - `crates/graphql/` - GraphQL client and schema
 
@@ -118,7 +131,7 @@ This is a Rust-based terminal emulator with a custom UI framework called **WarpU
 
 **Testing**:
 - Use `cargo nextest` for parallel test execution
-- Integration tests use custom framework in `integration/`
+- Integration tests use the custom framework in `crates/integration/` — this is **GUI-only**. TUI elements/screens are covered by render-to-lines unit tests instead (see the `tui-testing` skill).
 - Tests should be run via presubmit script before submitting
 - Unit tests should be placed in separate files using the naming convention `${filename}_tests.rs` or `mod_test.rs`
 - Test files should be included at the end of their corresponding module with:

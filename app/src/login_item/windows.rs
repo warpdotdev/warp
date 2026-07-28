@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 
 use ::settings::Setting;
 use warp_core::channel::ChannelState;
+use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity};
-use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
 use winreg::RegKey;
+use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
 
-use crate::report_if_error;
 use crate::terminal::general_settings::GeneralSettings;
 
 /// The registry subkey Windows scans on sign-in to launch per-user startup apps.
@@ -65,9 +65,11 @@ pub(super) fn maybe_register_app_as_login_item(ctx: &mut AppContext) {
                 }
             },
             |settings, app_added_as_login_item, ctx| {
-                report_if_error!(settings
-                    .app_added_as_login_item
-                    .set_value(app_added_as_login_item, ctx));
+                report_if_error!(
+                    settings
+                        .app_added_as_login_item
+                        .set_value(app_added_as_login_item, ctx)
+                );
             },
         );
     });

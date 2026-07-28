@@ -14,8 +14,8 @@ use crate::ai::blocklist::inline_action::inline_action_header::HeaderConfig;
 use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
 };
-use crate::terminal::model::session::Sessions;
 use crate::terminal::TerminalModel;
+use crate::terminal::model::session::Sessions;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 

@@ -6,11 +6,11 @@ use warpui::elements::{
 use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Entity, View, ViewContext, ViewHandle};
 
+use super::SettingsSection;
 use super::settings_page::{
     MatchData, PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
     SettingsWidget,
 };
-use super::SettingsSection;
 use crate::appearance::Appearance;
 use crate::channel::ChannelState;
 use crate::themes::theme::ColorScheme;

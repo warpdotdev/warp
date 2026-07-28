@@ -33,7 +33,7 @@ use crate::menu::{MenuItem, MenuItemFields};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::dropdown::{
-    Dropdown, DropdownAction, DropdownEvent, DropdownStyle, DROPDOWN_PADDING,
+    DROPDOWN_PADDING, Dropdown, DropdownAction, DropdownEvent, DropdownStyle,
 };
 
 // ── Public API types ────────────────────────────────────────────────
@@ -461,21 +461,20 @@ pub(crate) fn build_menu_items(
         ));
         known_slugs.push(slug.to_string());
     }
-    if let Some(slug) = recent_host {
-        if !known_slugs
+    if let Some(slug) = recent_host
+        && !known_slugs
             .iter()
             .any(|known| known.eq_ignore_ascii_case(slug))
-        {
-            // Recent hosts render as plain slugs; only the workspace
-            // default carries a default badge. If the recent host is not in
-            // the connected set, keep it selectable but make the disconnected
-            // state explicit.
-            items.push(menu_item_for_known(
-                slug,
-                Some(DISCONNECTED_BADGE),
-                InternalAction::SelectKnown(slug.to_string()),
-            ));
-        }
+    {
+        // Recent hosts render as plain slugs; only the workspace
+        // default carries a default badge. If the recent host is not in
+        // the connected set, keep it selectable but make the disconnected
+        // state explicit.
+        items.push(menu_item_for_known(
+            slug,
+            Some(DISCONNECTED_BADGE),
+            InternalAction::SelectKnown(slug.to_string()),
+        ));
     }
     items.push(MenuItem::Item(
         MenuItemFields::new(CUSTOM_HOST_LABEL).with_on_select_action(

@@ -194,18 +194,22 @@ fn cancelling_conversation_aborts_pending_auto_resume() {
         terminal.update(&mut app, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
                 controller.schedule_auto_resume_after_error(conversation_id, ctx);
-                assert!(controller
-                    .pending_auto_resume_handles
-                    .contains_key(&conversation_id));
+                assert!(
+                    controller
+                        .pending_auto_resume_handles
+                        .contains_key(&conversation_id)
+                );
 
                 controller.cancel_conversation_progress(
                     conversation_id,
                     CancellationReason::ManuallyCancelled,
                     ctx,
                 );
-                assert!(!controller
-                    .pending_auto_resume_handles
-                    .contains_key(&conversation_id));
+                assert!(
+                    !controller
+                        .pending_auto_resume_handles
+                        .contains_key(&conversation_id)
+                );
             });
         });
     });

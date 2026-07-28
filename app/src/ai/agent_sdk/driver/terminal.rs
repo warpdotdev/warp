@@ -23,17 +23,17 @@ use super::AgentDriverError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::pane_group::NewTerminalOptions;
-use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
+use crate::terminal::TerminalView;
+use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::session::ExecuteCommandOptions;
-use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
-use crate::terminal::TerminalView;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Describes why a terminal session bootstrap failed.
@@ -467,8 +467,10 @@ impl TerminalDriver {
         &mut self,
         command: &str,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>>, AgentDriverError>
-    {
+    ) -> Result<
+        impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>,
+        AgentDriverError,
+    > {
         let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
         let (start_tx, start_rx) = oneshot::channel::<BlockId>();
 
@@ -507,7 +509,7 @@ impl TerminalDriver {
         &self,
         command: String,
         ctx: &ModelContext<Self>,
-    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> {
+    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> + use<> {
         let session = self.terminal_view.read(ctx, |terminal, app| {
             terminal
                 .active_block_session_id()
@@ -552,8 +554,10 @@ impl TerminalDriver {
         &mut self,
         target: &str,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>>, AgentDriverError>
-    {
+    ) -> Result<
+        impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>,
+        AgentDriverError,
+    > {
         let cd_command = self.build_cd_command(target, ctx);
         self.execute_command(&cd_command, ctx)
     }
@@ -570,7 +574,7 @@ impl TerminalDriver {
         &self,
         target: &str,
         ctx: &ModelContext<Self>,
-    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> {
+    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> + use<> {
         let cd_command = self.build_cd_command(target, ctx);
         self.execute_silent_command(cd_command, ctx)
     }
@@ -591,11 +595,11 @@ impl TerminalDriver {
     /// is `BootstrapError::TimedOut`.
     pub fn wait_for_session_bootstrapped(
         &mut self,
-    ) -> impl Future<Output = Result<(), BootstrapError>> {
+    ) -> impl Future<Output = Result<(), BootstrapError>> + use<> {
         let bootstrap_rx = self.bootstrap_rx.take();
 
         async move {
-            let result = if let Some(rx) = bootstrap_rx {
+            if let Some(rx) = bootstrap_rx {
                 // Map channel cancellation (sender dropped without sending)
                 // to InternalError — this shouldn't happen in practice.
                 let inner = async move { rx.await.unwrap_or(Err(BootstrapError::InternalError)) };
@@ -606,12 +610,7 @@ impl TerminalDriver {
             } else {
                 // bootstrap_rx already consumed — shouldn't happen in normal flow.
                 Err(BootstrapError::InternalError)
-            };
-
-            if let Err(ref e) = result {
-                log::error!("Terminal bootstrap failed: {e}");
             }
-            result
         }
     }
 
@@ -622,7 +621,7 @@ impl TerminalDriver {
     /// - wait for session sharing later (e.g. right before running visible commands)
     pub fn wait_for_session_shared(
         &mut self,
-    ) -> impl Future<Output = Result<(), AgentDriverError>> {
+    ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
         let rx = self.session_share_rx.take();
 
         async move {
@@ -633,25 +632,13 @@ impl TerminalDriver {
 
             match rx.with_timeout(TERMINAL_SESSION_SHARE_DELAY).await {
                 Ok(Ok(Ok(()))) => Ok(()),
-                Ok(Ok(Err(error))) => {
-                    log::error!("Session sharing failed: {error}");
-                    Err(AgentDriverError::ShareSessionFailed { error })
-                }
-                Ok(Err(_canceled)) => {
-                    log::error!("Session sharing channel dropped");
-                    Err(AgentDriverError::ShareSessionFailed {
-                        error: ShareSessionError::Interrupted,
-                    })
-                }
-                Err(_timeout) => {
-                    log::error!(
-                        "Timed out waiting for session sharing to start after {}s",
-                        TERMINAL_SESSION_SHARE_DELAY.as_secs()
-                    );
-                    Err(AgentDriverError::ShareSessionFailed {
-                        error: ShareSessionError::Timeout,
-                    })
-                }
+                Ok(Ok(Err(error))) => Err(AgentDriverError::ShareSessionFailed { error }),
+                Ok(Err(_canceled)) => Err(AgentDriverError::ShareSessionFailed {
+                    error: ShareSessionError::Interrupted,
+                }),
+                Err(_timeout) => Err(AgentDriverError::ShareSessionFailed {
+                    error: ShareSessionError::Timeout,
+                }),
             }
         }
     }

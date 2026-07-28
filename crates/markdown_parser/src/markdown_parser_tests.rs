@@ -1805,6 +1805,70 @@ fn test_parse_autolinks_with_emphasis() {
 }
 
 #[test]
+fn test_parse_emphasized_autolink_with_trailing_punctuation() {
+    assert_eq!(
+        parse_all("**https://example.com**.", parse_inline),
+        vec![
+            FormattedTextFragment {
+                text: "https://example.com".to_string(),
+                styles: FormattedTextStyles {
+                    weight: Some(CustomWeight::Bold),
+                    hyperlink: Some(Hyperlink::Url("https://example.com".to_string())),
+                    ..Default::default()
+                },
+            },
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+
+    assert_eq!(
+        parse_all("*https://example.com*!", parse_inline),
+        vec![
+            FormattedTextFragment {
+                text: "https://example.com".to_string(),
+                styles: FormattedTextStyles {
+                    italic: true,
+                    hyperlink: Some(Hyperlink::Url("https://example.com".to_string())),
+                    ..Default::default()
+                },
+            },
+            FormattedTextFragment::plain_text("!"),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_autolink_strips_trailing_sentence_punctuation() {
+    assert_eq!(
+        parse_all("See https://example.com.", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("See "),
+            FormattedTextFragment::hyperlink("https://example.com", "https://example.com"),
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_autolink_preserves_escaped_trailing_punctuation() {
+    assert_eq!(
+        parse_all("https://example.com\\.", parse_inline),
+        vec![FormattedTextFragment::hyperlink(
+            "https://example.com.",
+            "https://example.com."
+        )]
+    );
+
+    assert_eq!(
+        parse_all("https://example.com\\\\.", parse_inline),
+        vec![
+            FormattedTextFragment::hyperlink("https://example.com\\", "https://example.com\\"),
+            FormattedTextFragment::plain_text("."),
+        ]
+    );
+}
+
+#[test]
 fn test_parse_escapes_inline() {
     assert_eq!(
         parse_all("\\*not emphasized*", parse_inline),

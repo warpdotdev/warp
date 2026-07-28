@@ -9,6 +9,7 @@ fn eligibility() -> AutoCloudHandoffEligibility {
         can_handoff_to_cloud: true,
         already_attempted: false,
         has_local_orchestrated_children: false,
+        active_model_not_cloud_runnable: false,
     }
 }
 
@@ -105,5 +106,18 @@ fn auto_handoff_skips_conversations_that_cannot_handoff_to_cloud() {
     assert_eq!(
         eligibility.skip_reason(),
         Some(AutoCloudHandoffSkipReason::CloudHandoffUnavailable)
+    );
+}
+
+#[test]
+fn auto_handoff_skips_non_cloud_runnable_models() {
+    let eligibility = AutoCloudHandoffEligibility {
+        active_model_not_cloud_runnable: true,
+        ..eligibility()
+    };
+
+    assert_eq!(
+        eligibility.skip_reason(),
+        Some(AutoCloudHandoffSkipReason::ModelNotCloudRunnable)
     );
 }

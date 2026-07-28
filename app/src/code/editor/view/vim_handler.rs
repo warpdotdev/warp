@@ -198,15 +198,17 @@ impl VimHandler for CodeEditorView {
                             VimMotion::Paragraph(direction) => {
                                 model.vim_move_by_paragraph(operand_count, direction, true, ctx);
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = *operator != VimOperator::Change;
-                                    model.vim_extend_selection_linewise(include_newline, ctx);
+                                    model.vim_extend_selection_linewise(
+                                        operator.includes_trailing_newline(),
+                                        ctx,
+                                    );
                                 }
                             }
                             VimMotion::JumpToLastLine => {
                                 model.vim_select_to_buffer_end(ctx);
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
-                                        *operator != VimOperator::Change,
+                                        operator.includes_trailing_newline(),
                                         ctx,
                                     );
                                 }
@@ -215,7 +217,7 @@ impl VimHandler for CodeEditorView {
                                 model.vim_select_to_buffer_start(ctx);
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
-                                        *operator != VimOperator::Change,
+                                        operator.includes_trailing_newline(),
                                         ctx,
                                     );
                                 }
@@ -234,10 +236,13 @@ impl VimHandler for CodeEditorView {
                                 let selection_model = model.buffer_selection_model().as_ref(ctx);
                                 let current_selections = selection_model.selection_offsets();
 
+                                let max_row = buffer.max_point().row;
+                                let row = (*line_number).saturating_sub(1).min(max_row);
+
                                 let new_selections = current_selections.mapped(|selection| {
                                     let cursor_pos = selection.head;
                                     let target_pos =
-                                        Point::new(*line_number, 0).to_buffer_char_offset(buffer);
+                                        Point::new(row, 0).to_buffer_char_offset(buffer);
 
                                     SelectionOffsets {
                                         head: target_pos,
@@ -252,12 +257,15 @@ impl VimHandler for CodeEditorView {
                                 );
 
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = *operator != VimOperator::Change;
+                                    let include_newline = operator.includes_trailing_newline();
                                     model.vim_extend_selection_linewise(include_newline, ctx);
                                 }
                             }
-                            _ => {
-                                // TODO: Implement other motions (find char, brackets, etc.)
+                            VimMotion::JumpToMatchingBracket => {
+                                model.vim_select_for_matching_bracket(ctx);
+                            }
+                            VimMotion::JumpToUnmatchedBracket(bracket) => {
+                                model.vim_jump_to_unmatched_bracket(bracket, true, ctx);
                             }
                         }
                     }
@@ -272,8 +280,8 @@ impl VimHandler for CodeEditorView {
                             );
                         }
 
-                        let include_newline = operator != &VimOperator::Change
-                            && operator != &VimOperator::ToggleComment;
+                        let include_newline = operator.includes_trailing_newline()
+                            && *operator != VimOperator::ToggleComment;
                         model.vim_extend_selection_linewise(include_newline, ctx);
                     }
                     VimOperand::TextObject(text_object) => {
@@ -425,6 +433,14 @@ impl VimHandler for CodeEditorView {
                     }
                 });
             }
+            VimOperator::Indent | VimOperator::Dedent => {
+                self.model.update(ctx, |model, ctx| {
+                    selection_change(model, ctx);
+                    let shift = *operator == VimOperator::Dedent;
+                    model.indent(shift, ctx);
+                    model.vim_move_to_first_nonwhitespace(false, ctx);
+                });
+            }
         }
     }
 
@@ -485,20 +501,20 @@ impl VimHandler for CodeEditorView {
 
         let word_under_cursor = self.model.as_ref(ctx).word_under_cursor_for_search(ctx);
 
-        if let Some(word) = word_under_cursor {
-            if !word.trim().is_empty() {
-                find_bar.update(ctx, |find_bar, ctx| {
-                    find_bar.set_find_query(ctx, &word);
-                    find_bar.set_open(true);
-                    // Disable the find input; the search is already defined.
-                    find_bar.set_find_input_editable(ctx, false);
-                });
+        if let Some(word) = word_under_cursor
+            && !word.trim().is_empty()
+        {
+            find_bar.update(ctx, |find_bar, ctx| {
+                find_bar.set_find_query(ctx, &word);
+                find_bar.set_open(true);
+                // Disable the find input; the search is already defined.
+                find_bar.set_find_input_editable(ctx, false);
+            });
 
-                self.searcher
-                    .update(ctx, |searcher, _| searcher.set_auto_select(true));
-                self.run_find(&word, ctx);
-                ctx.notify();
-            }
+            self.searcher
+                .update(ctx, |searcher, _| searcher.set_auto_select(true));
+            self.run_find(&word, ctx);
+            ctx.notify();
         }
     }
 
@@ -512,8 +528,7 @@ impl VimHandler for CodeEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.model.update(ctx, |model, ctx| {
-            // Compute the visual selection
-            let include_newline = *operator != VimOperator::Change;
+            let include_newline = operator.includes_trailing_newline();
             model.vim_visual_selection_range(motion_type, include_newline, ctx);
 
             if matches!(
@@ -570,6 +585,11 @@ impl VimHandler for CodeEditorView {
                     } else {
                         model.vim_clear_selections(ctx);
                     }
+                }
+                VimOperator::Indent | VimOperator::Dedent => {
+                    let shift = *operator == VimOperator::Dedent;
+                    model.indent(shift, ctx);
+                    model.vim_move_to_first_nonwhitespace(false, ctx);
                 }
             }
         });
@@ -664,7 +684,10 @@ impl VimHandler for CodeEditorView {
 
     fn jump_to_line(&mut self, line_number: u32, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
-            model.jump_to_line_column(line_number as usize, None, ctx);
+            let buffer = model.content().as_ref(ctx);
+            let max_row = buffer.max_point().row;
+            let row = line_number.saturating_sub(1).min(max_row);
+            model.jump_to_line_column(row as usize, None, ctx);
         });
     }
 

@@ -1,6 +1,6 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::send_telemetry_from_ctx;
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};

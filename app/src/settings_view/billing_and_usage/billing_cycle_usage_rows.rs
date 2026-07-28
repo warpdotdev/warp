@@ -18,9 +18,9 @@ use warpui::{AppContext, Element, EventContext, SingletonEntity};
 use crate::ai::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
+    BarSegment, BillingUsageMouseStates, ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
     aggregate_segments, cost_type_color, format_cost_cents, format_credits,
-    render_breakdown_tooltip, render_section_subheader, BarSegment, BillingUsageMouseStates,
-    ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
+    render_breakdown_tooltip, render_section_subheader,
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;

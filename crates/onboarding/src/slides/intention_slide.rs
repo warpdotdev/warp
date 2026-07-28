@@ -1,9 +1,9 @@
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
 use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
     Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
@@ -24,7 +24,7 @@ use super::OnboardingSlide;
 use crate::model::{NoAiConfirmationSource, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
-use crate::{OnboardingIntention, AI_FEATURES};
+use crate::{AI_FEATURES, OnboardingIntention};
 
 #[derive(Debug, Clone)]
 pub enum IntentionSlideAction {
@@ -423,11 +423,7 @@ impl IntentionSlide {
 
         let is_terminal = selected_index == 1;
         let (step_index, step_count) = if new_settings_modes {
-            if is_terminal {
-                (0, 4)
-            } else {
-                (0, 5)
-            }
+            if is_terminal { (0, 4) } else { (0, 5) }
         } else {
             (1, 4)
         };

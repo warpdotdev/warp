@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Local};
 use instant::Instant;
 use parking_lot::RwLock;
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
 use warp_core::channel::ChannelState;
@@ -15,10 +16,11 @@ use warp_core::ui::color::coloru_with_opacity;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
 use warpui::elements::{
-    resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
-    SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Resizable, ResizableStateHandle, SelectableArea,
+    SelectionHandle, Shrinkable, Stack, Text, Wrap, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
@@ -43,7 +45,7 @@ use crate::ai::agent_management::details_action_buttons::{
 };
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, OpenedFrom};
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
-use crate::ai::ambient_agents::{cancel_task_with_toast, AmbientAgentTaskId};
+use crate::ai::ambient_agents::{AmbientAgentTaskId, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
@@ -64,13 +66,13 @@ use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::CustomAction;
 use crate::util::time_format::{format_approx_duration_from_now, human_readable_precise_duration};
+use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::action_button::PrimaryTheme;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::view_components::copyable_text_field::{
-    render_copyable_text_field, CopyableTextFieldConfig, COPY_FEEDBACK_DURATION,
+    COPY_FEEDBACK_DURATION, CopyableTextFieldConfig, render_copyable_text_field,
 };
-use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
@@ -82,8 +84,7 @@ const HARNESS_ICON_IN_CIRCLE: f32 = 9.0;
 const LABEL_VALUE_GAP: f32 = 4.0;
 const SECTION_HEADER_GAP: f32 = 8.0;
 const RUN_METADATA_ACCESS_DENIED_TITLE: &str = "Run metadata is not available";
-const RUN_METADATA_ACCESS_DENIED_DESCRIPTION: &str =
-    "You can view this shared session, but run metadata is only visible to users with access to this run.";
+const RUN_METADATA_ACCESS_DENIED_DESCRIPTION: &str = "You can view this shared session, but run metadata is only visible to users with access to this run.";
 
 /// Panel rendering mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +141,7 @@ struct PanelMouseStates {
     skill_link: MouseStateHandle,
     skill_source_link: MouseStateHandle,
     executor_agent_link: MouseStateHandle,
+    status_chip: MouseStateHandle,
 }
 
 /// Tracks which copy button action was last triggered (for checkmark feedback).
@@ -1302,9 +1304,15 @@ impl ConversationDetailsPanel {
             .with_height(STATUS_ICON_SIZE)
             .finish();
 
+        // When we have an Oz run URL, the whole chip becomes a clickable
+        // target that opens the run in the Oz web app. In that case the label
+        // is not selectable so a click navigates rather than starting a text
+        // selection.
+        let is_clickable = Self::oz_run_url(&self.data).is_some();
+
         let status_text = Text::new(display_text, appearance.ui_font_family(), ui_font_size)
             .with_color(color)
-            .with_selectable(true)
+            .with_selectable(!is_clickable)
             .finish();
 
         let status_badge = Container::new(
@@ -1319,6 +1327,38 @@ impl ConversationDetailsPanel {
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
         .finish();
 
+        // Make the chip clickable (with a tooltip and pointer cursor) only when
+        // a run view exists to navigate to.
+        let status_element: Box<dyn Element> = if is_clickable {
+            let ui_builder = appearance.ui_builder();
+            Hoverable::new(self.mouse_states.status_chip.clone(), move |state| {
+                let mut stack = Stack::new().with_child(status_badge);
+                if state.is_hovered() {
+                    let tooltip = ui_builder
+                        .tool_tip("View run in Oz web".to_string())
+                        .build()
+                        .finish();
+                    stack.add_positioned_overlay_child(
+                        tooltip,
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., -4.),
+                            ParentOffsetBounds::WindowByPosition,
+                            ParentAnchor::TopMiddle,
+                            ChildAnchor::BottomMiddle,
+                        ),
+                    );
+                }
+                stack.finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
+            })
+            .finish()
+        } else {
+            status_badge
+        };
+
         Some(
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -1327,7 +1367,7 @@ impl ConversationDetailsPanel {
                         .with_margin_bottom(SECTION_HEADER_GAP)
                         .finish(),
                 )
-                .with_child(status_badge)
+                .with_child(status_element)
                 .finish(),
         )
     }
@@ -1456,25 +1496,25 @@ impl ConversationDetailsPanel {
             .with_child(Shrinkable::new(1., oz_link).finish());
 
         // Add GitHub source link if we have enough info to construct it.
-        if let (Some(org), Some(repo)) = (&skill_spec.org, &skill_spec.repo) {
-            if skill_spec.is_full_path() {
-                let github_url = format!(
-                    "https://github.com/{}/{}/blob/-/{}",
-                    org, repo, skill_spec.skill_identifier
-                );
-                let source_link = appearance
-                    .ui_builder()
-                    .link(
-                        "Open in GitHub".to_string(),
-                        Some(github_url),
-                        None,
-                        self.mouse_states.skill_source_link.clone(),
-                    )
-                    .build()
-                    .finish();
-                row.add_child(separator());
-                row.add_child(Shrinkable::new(1., source_link).finish());
-            }
+        if let (Some(org), Some(repo)) = (&skill_spec.org, &skill_spec.repo)
+            && skill_spec.is_full_path()
+        {
+            let github_url = format!(
+                "https://github.com/{}/{}/blob/-/{}",
+                org, repo, skill_spec.skill_identifier
+            );
+            let source_link = appearance
+                .ui_builder()
+                .link(
+                    "Open in GitHub".to_string(),
+                    Some(github_url),
+                    None,
+                    self.mouse_states.skill_source_link.clone(),
+                )
+                .build()
+                .finish();
+            row.add_child(separator());
+            row.add_child(Shrinkable::new(1., source_link).finish());
         }
 
         Some(row.finish())
@@ -1594,7 +1634,7 @@ impl ConversationDetailsPanel {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let environment_name = &env_model.name;
-        let docker_image = env_model.base_image.to_string();
+        let docker_image = env_model.base_image_display();
 
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
@@ -2222,7 +2262,7 @@ impl TypedActionView for ConversationDetailsPanel {
                     if let Ok(server_id) = ServerId::try_from(env_id.as_str()) {
                         let sync_id = SyncId::ServerId(server_id);
                         if let Some(env) = CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx) {
-                            let docker_image = env.model().string_model.base_image.to_string();
+                            let docker_image = env.model().string_model.base_image_display();
                             ctx.clipboard()
                                 .write(ClipboardContent::plain_text(docker_image));
                             self.record_copy(CopyButtonKind::DockerImage, ctx);

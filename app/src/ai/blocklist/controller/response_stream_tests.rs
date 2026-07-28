@@ -1,4 +1,4 @@
-use super::{recovery_action, RecoveryAction};
+use super::{RecoveryAction, recovery_action};
 
 // Argument order: has_received_client_actions, is_recoverable, has_retry_budget,
 // can_attempt_resume_on_error, is_online.

@@ -8,6 +8,7 @@ use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
+use warp_errors::{report_error, report_if_error};
 #[cfg(not(target_family = "wasm"))]
 use warp_server_client::iap::{IapCredentialsState, IapManager, IapManagerEvent};
 use warpui::assets::asset_cache::AssetSource;
@@ -23,16 +24,16 @@ use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlign
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, id,
 };
 
 use super::settings_page::{
-    render_body_item, render_customer_type_badge, AdditionalInfo, LocalOnlyIconState, MatchData,
-    PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
-    HEADER_PADDING,
+    AdditionalInfo, HEADER_PADDING, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget, ToggleState, render_body_item,
+    render_customer_type_badge,
 };
-use super::{flags, SettingsAction, SettingsSection, ToggleSettingActionPair};
+use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
 use crate::auth::auth_state::AuthState;
@@ -45,7 +46,7 @@ use crate::workspace::WorkspaceAction;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
-use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const PHOTO_SIZE: f32 = 40.;
 const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";
@@ -201,9 +202,11 @@ impl TypedActionView for MainSettingsPageView {
             MainPageAction::ToggleSettingsSync => {
                 let new_value =
                     CloudPreferencesSettings::handle(ctx).update(ctx, |prefs_settings, ctx| {
-                        report_if_error!(prefs_settings
-                            .settings_sync_enabled
-                            .toggle_and_save_value(ctx));
+                        report_if_error!(
+                            prefs_settings
+                                .settings_sync_enabled
+                                .toggle_and_save_value(ctx)
+                        );
                         *prefs_settings.settings_sync_enabled
                     });
                 send_telemetry_from_ctx!(
@@ -422,7 +425,7 @@ impl AccountWidget {
         let mut user_info = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         if let Some(profile_image_source) = profile_image_source {
             // Only continue if profile_image_source is a source with a non empty url/path
-            if matches!(profile_image_source, AssetSource::Async { ref id, .. } if !id.key().is_empty())
+            if matches!(profile_image_source, AssetSource::Async { id, .. } if !id.key().is_empty())
                 || matches!(profile_image_source, AssetSource::Bundled { path, .. } if !path.is_empty())
                 || matches!(profile_image_source, AssetSource::LocalFile { path, .. } if !path.is_empty())
             {
@@ -1042,7 +1045,7 @@ impl SettingsWidget for VersionInfoWidget {
                 .with_margin_top(VERTICAL_MARGIN)
                 .finish()
         } else {
-            log::error!("Shouldn't render VersionInfoWidget without GIT_RELEASE_TAG");
+            report_error!("Shouldn't render VersionInfoWidget without GIT_RELEASE_TAG");
             Empty::new().finish()
         }
     }
@@ -1113,9 +1116,6 @@ impl SettingsWidget for IapCredentialsWidget {
                 (format!("Loaded (refreshes in ~{mins}m)"), active)
             }
             IapCredentialsState::Failed { message, .. } => (format!("Failed: {message}"), ansi_red),
-            IapCredentialsState::EnvInjected { .. } => {
-                ("Using injected token (WARP_IAP_TOKEN)".to_string(), active)
-            }
         };
 
         let is_refreshing = matches!(state, IapCredentialsState::Refreshing { .. });

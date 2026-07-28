@@ -1,15 +1,19 @@
 use std::time::{Duration, SystemTime};
 
+#[cfg(not(target_family = "wasm"))]
+use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
 
+use crate::LLMProvider;
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 pub use crate::geap_credentials::{
-    GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
-    LoadGeapCredentialsError, GEAP_REFRESH_LEAD_TIME,
+    GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
+    LoadGeapCredentialsError,
 };
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
@@ -46,6 +50,52 @@ pub struct CustomEndpoint {
     pub url: String,
     pub api_key: String,
     pub models: Vec<CustomEndpointModel>,
+    pub schema: CustomEndpointSchema,
+}
+
+/// The request/response protocol used by a custom inference endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomEndpointSchema {
+    /// OpenAI Chat Completions, retained as the legacy/default protocol.
+    #[default]
+    OpenaiChatCompletions,
+    /// OpenAI Responses.
+    OpenaiResponses,
+    /// Anthropic Messages.
+    AnthropicMessages,
+}
+
+impl CustomEndpointSchema {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::OpenaiChatCompletions => "OpenAI Chat Completions",
+            Self::OpenaiResponses => "OpenAI Responses",
+            Self::AnthropicMessages => "Anthropic Messages",
+        }
+    }
+
+    pub fn from_display_name(name: &str) -> Option<Self> {
+        match name {
+            "OpenAI Chat Completions" => Some(Self::OpenaiChatCompletions),
+            "OpenAI Responses" => Some(Self::OpenaiResponses),
+            "Anthropic Messages" => Some(Self::AnthropicMessages),
+            _ => None,
+        }
+    }
+    fn to_proto(self) -> api::request::settings::custom_model_providers::CustomEndpointSchema {
+        match self {
+            Self::OpenaiChatCompletions => {
+                api::request::settings::custom_model_providers::CustomEndpointSchema::OpenaiChatCompletions
+            }
+            Self::OpenaiResponses => {
+                api::request::settings::custom_model_providers::CustomEndpointSchema::OpenaiResponses
+            }
+            Self::AnthropicMessages => {
+                api::request::settings::custom_model_providers::CustomEndpointSchema::AnthropicMessages
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -141,6 +191,25 @@ impl GrokTokens {
             None => false,
         }
     }
+
+    /// Returns `true` when the token is known to be at or past its hard expiry.
+    /// Unlike [`Self::needs_refresh`] there is no lead time: a token expiring
+    /// soon but still valid reports `false`. Tokens with an unknown expiry are
+    /// never considered expired.
+    pub fn is_expired(&self) -> bool {
+        self.needs_refresh(Duration::ZERO)
+    }
+}
+
+/// Outcome of a Grok OAuth token refresh, delivered to each request blocked
+/// waiting on it so the request can either send with the freshly refreshed
+/// token or surface the failure instead of sending an expired one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrokRefreshOutcome {
+    /// The token was refreshed and the new value stored.
+    Refreshed,
+    /// The refresh failed; the stored token is unchanged (still expired).
+    Failed,
 }
 
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
@@ -171,17 +240,28 @@ pub struct ApiKeyManager {
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_allowed: bool,
-    /// Guards against overlapping Grok token refreshes: the proactive refresh
-    /// timer and the request-time safety net
-    /// (`ApiKeyManager::refresh_grok_tokens_if_needed`) can otherwise race.
+    /// Coordinates Grok token refreshes so only one runs at a time (shared by
+    /// the proactive refresh timer and the request-time blocking refresh in
+    /// `crate::grok_subscription`). `Some` means a refresh is in flight; the
+    /// vector holds the completion senders for any requests waiting on it (it
+    /// may be empty for a proactive refresh with no waiters). `None` means no
+    /// refresh is running. Always cleared when the refresh finishes.
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) grok_refresh_in_flight: bool,
+    pub(crate) grok_refresh_waiters: Option<Vec<oneshot::Sender<GrokRefreshOutcome>>>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     /// In-memory Gemini Enterprise (GEAP) credential state.
     pub(crate) geap_credentials_state: GeapCredentialsState,
     secure_storage_write_version: u64,
     grok_secure_storage_write_version: u64,
+}
+
+pub struct CustomEndpointParams {
+    pub name: String,
+    pub url: String,
+    pub api_key: String,
+    pub models: Vec<(String, Option<String>, Option<String>)>,
+    pub schema: CustomEndpointSchema,
 }
 
 impl ApiKeyManager {
@@ -194,7 +274,7 @@ impl ApiKeyManager {
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
-            grok_refresh_in_flight: false,
+            grok_refresh_waiters: None,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             geap_credentials_state: GeapCredentialsState::Missing,
@@ -205,6 +285,48 @@ impl ApiKeyManager {
 
     pub fn keys(&self) -> &ApiKeys {
         &self.keys
+    }
+
+    /// Reloads API keys after another process updates the active secure-storage namespace.
+    ///
+    /// GUI edits mutate this manager directly before persisting, so they do not
+    /// need to reload. TUI setup commands run in a separate process and notify
+    /// the live TUI to refresh its cached keys after a successful write.
+    pub fn reload_keys_from_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {
+        let keys = Self::load_keys_from_secure_storage(ctx);
+        if self.keys == keys {
+            return;
+        }
+        self.keys = keys;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    /// Persists a provider API key before publishing the updated in-memory value.
+    pub fn persist_provider_key(
+        &mut self,
+        provider: LLMProvider,
+        key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
+        let mut keys = self.keys.clone();
+        if !provider.set_api_key(&mut keys, key) {
+            return Err(anyhow::anyhow!(
+                "{} does not support pasted API keys",
+                provider.display_name()
+            ));
+        }
+        let json = serde_json::to_string(&keys)
+            .map_err(|error| anyhow::Error::new(error).context("Failed to serialize API keys"))?;
+        ctx.secure_storage()
+            .write_value(SECURE_STORAGE_KEY, &json)
+            .map_err(|error| {
+                anyhow::Error::new(error).context("Failed to write API keys to secure storage")
+            })?;
+        if self.keys != keys {
+            self.keys = keys;
+            ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        }
+        Ok(())
     }
 
     /// The currently stored xAI/Grok OAuth tokens, if the user has connected a
@@ -240,42 +362,36 @@ impl ApiKeyManager {
         self.write_grok_tokens_to_secure_storage(ctx);
     }
 
-    pub fn set_google_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.google = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_anthropic_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.anthropic = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_openai_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.openai = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_open_router_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.open_router = key;
+    pub fn set_provider_key(
+        &mut self,
+        provider: LLMProvider,
+        key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !provider.set_api_key(&mut self.keys, key) {
+            return;
+        }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
 
     pub fn add_custom_endpoint(
         &mut self,
-        name: String,
-        url: String,
-        api_key: String,
-        models: Vec<(String, Option<String>, Option<String>)>,
+        params: CustomEndpointParams,
         ctx: &mut ModelContext<Self>,
     ) {
+        let CustomEndpointParams {
+            name,
+            url,
+            api_key,
+            models,
+            schema,
+        } = params;
         self.keys.custom_endpoints.push(CustomEndpoint {
             name,
             url,
             api_key,
+            schema,
             models: models
                 .into_iter()
                 .map(|(name, alias, config_key)| CustomEndpointModel {
@@ -294,19 +410,24 @@ impl ApiKeyManager {
     pub fn save_custom_endpoint(
         &mut self,
         index: usize,
-        name: String,
-        url: String,
-        api_key: String,
-        models: Vec<(String, Option<String>, Option<String>)>,
+        params: CustomEndpointParams,
         ctx: &mut ModelContext<Self>,
     ) {
         if index >= self.keys.custom_endpoints.len() {
             return;
         }
+        let CustomEndpointParams {
+            name,
+            url,
+            api_key,
+            models,
+            schema,
+        } = params;
         self.keys.custom_endpoints[index] = CustomEndpoint {
             name,
             url,
             api_key,
+            schema,
             models: models
                 .into_iter()
                 .map(|(name, alias, config_key)| CustomEndpointModel {
@@ -406,6 +527,7 @@ impl ApiKeyManager {
                 |endpoint| api::request::settings::custom_model_providers::CustomModelProvider {
                     base_url: endpoint.url.clone(),
                     api_key: endpoint.api_key.clone(),
+                    schema: endpoint.schema.to_proto() as i32,
                     models: endpoint
                         .models
                         .iter()
@@ -534,7 +656,10 @@ impl ApiKeyManager {
             Ok(json) => json,
             Err(e) => {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    log::error!("Failed to read API keys from secure storage: {e:#}");
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to read API keys from secure storage")
+                    );
                 }
                 return ApiKeys::default();
             }
@@ -543,7 +668,7 @@ impl ApiKeyManager {
         match serde_json::from_str(&key_json) {
             Ok(keys) => keys,
             Err(e) => {
-                log::error!("Failed to deserialize API keys: {e:#}");
+                report_error!(anyhow::Error::new(e).context("Failed to deserialize API keys"));
                 ApiKeys::default()
             }
         }
@@ -553,7 +678,7 @@ impl ApiKeyManager {
         let json = match serde_json::to_string(&self.keys) {
             Ok(json) => json,
             Err(e) => {
-                log::error!("Failed to serialize API keys: {e:#}");
+                report_error!(anyhow::Error::new(e).context("Failed to serialize API keys"));
                 return;
             }
         };
@@ -571,7 +696,9 @@ impl ApiKeyManager {
                 return;
             }
             if let Err(e) = ctx.secure_storage().write_value(SECURE_STORAGE_KEY, &json) {
-                log::error!("Failed to write API keys to secure storage: {e:#}");
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to write API keys to secure storage")
+                );
             }
         });
     }
@@ -581,7 +708,10 @@ impl ApiKeyManager {
             Ok(json) => json,
             Err(e) => {
                 if !matches!(e, secure_storage::Error::NotFound) {
-                    log::error!("Failed to read Grok tokens from secure storage: {e:#}");
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to read Grok tokens from secure storage")
+                    );
                 }
                 return None;
             }
@@ -590,7 +720,7 @@ impl ApiKeyManager {
         match serde_json::from_str(&json) {
             Ok(tokens) => Some(tokens),
             Err(e) => {
-                log::error!("Failed to deserialize Grok tokens: {e:#}");
+                report_error!(anyhow::Error::new(e).context("Failed to deserialize Grok tokens"));
                 None
             }
         }
@@ -603,7 +733,7 @@ impl ApiKeyManager {
         let payload = match self.grok_tokens.as_ref().map(serde_json::to_string) {
             Some(Ok(json)) => Some(json),
             Some(Err(e)) => {
-                log::error!("Failed to serialize Grok tokens: {e:#}");
+                report_error!(anyhow::Error::new(e).context("Failed to serialize Grok tokens"));
                 return;
             }
             None => None,
@@ -623,10 +753,13 @@ impl ApiKeyManager {
                     .write_value(GROK_SECURE_STORAGE_KEY, json),
                 None => ctx.secure_storage().remove_value(GROK_SECURE_STORAGE_KEY),
             };
-            if let Err(e) = result {
-                if !matches!(e, secure_storage::Error::NotFound) {
-                    log::error!("Failed to persist Grok tokens to secure storage: {e:#}");
-                }
+            if let Err(e) = result
+                && !matches!(e, secure_storage::Error::NotFound)
+            {
+                report_error!(
+                    anyhow::Error::new(e)
+                        .context("Failed to persist Grok tokens to secure storage")
+                );
             }
         });
     }

@@ -12,14 +12,14 @@ use warp::integration_testing::type_getters::get_launch_config_ui_location;
 use warp::integration_testing::window::assert_num_windows_open;
 use warp::integration_testing::workspace::{assert_focused_tab_index, assert_tab_count};
 use warp::integration_testing::{self};
+use warp::search::SyncDataSource;
 use warp::search::command_palette::launch_config;
 use warp::search::data_source::Query;
-use warp::search::SyncDataSource;
 use warp::workspace::NEW_TAB_BUTTON_POSITION_ID;
 use warpui_core::integration::{AssertionOutcome, TestStep};
-use warpui_core::{async_assert, ModelHandle};
+use warpui_core::{ModelHandle, async_assert};
 
-use super::{assert_approx_eq, new_builder, TEST_ONLY_ASSETS};
+use super::{TEST_ONLY_ASSETS, assert_approx_eq, new_builder};
 use crate::Builder;
 
 /// Adds a launch config to the mocked out warp config directory and verifies that
@@ -182,6 +182,7 @@ pub fn test_launch_config_single_child_branch() -> Builder {
                             shell: None,
                         }],
                     },
+                    commands: Vec::new(),
                     color: None,
                 }],
             }],
@@ -311,6 +312,7 @@ pub fn test_with_launch_config_with_active_tab_index() -> Builder {
                                 shell: None,
                             }],
                         },
+                        commands: Vec::new(),
                         color: None,
                     };
                     3
@@ -390,6 +392,7 @@ pub fn test_with_launch_config_with_active_pane() -> Builder {
                             },
                         ],
                     },
+                    commands: Vec::new(),
                     color: None,
                 }],
             }],
@@ -468,6 +471,7 @@ pub fn test_with_launch_config_with_no_active_pane() -> Builder {
                             },
                         ],
                     },
+                    commands: Vec::new(),
                     color: None,
                 }],
             }],

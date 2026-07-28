@@ -10,9 +10,11 @@ fn test_parsed_subshell_commands_updated_via_self_subscription() {
         initialize_settings_for_tests(&mut app);
 
         app.read(|ctx| {
-            assert!(WarpifySettings::as_ref(ctx)
-                .parsed_added_subshell_commands
-                .is_empty());
+            assert!(
+                WarpifySettings::as_ref(ctx)
+                    .parsed_added_subshell_commands
+                    .is_empty()
+            );
         });
 
         WarpifySettings::handle(&app).update(&mut app, |settings, ctx| {

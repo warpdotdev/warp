@@ -19,15 +19,15 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{PassiveSuggestionTrigger, StaticQueryType};
+use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::blocklist::prompt::prompt_alert::{
     PromptAlertEvent, PromptAlertState, PromptAlertView,
 };
-use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
-use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::InteractionSource;
@@ -241,33 +241,34 @@ fn render_button(
         let mut stack = Stack::new();
         stack.add_child(container.finish());
 
-        if is_button_disabled && mouse_state.is_hovered() {
-            if let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state) {
-                let tooltip = appearance
-                    .ui_builder()
-                    .tool_tip(tooltip_text)
-                    .with_style(UiComponentStyles {
-                        font_size: Some(appearance.monospace_font_size() - 4.),
-                        padding: Some(Coords {
-                            top: 4.,
-                            bottom: 4.,
-                            left: 8.,
-                            right: 8.,
-                        }),
-                        background: Some(theme.tooltip_background().into()),
-                        font_color: Some(theme.background().into_solid()),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish();
-                let tooltip_offset = OffsetPositioning::offset_from_parent(
-                    vec2f(0., 4.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::BottomMiddle,
-                    ChildAnchor::TopMiddle,
-                );
-                stack.add_positioned_overlay_child(tooltip, tooltip_offset);
-            }
+        if is_button_disabled
+            && mouse_state.is_hovered()
+            && let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state)
+        {
+            let tooltip = appearance
+                .ui_builder()
+                .tool_tip(tooltip_text)
+                .with_style(UiComponentStyles {
+                    font_size: Some(appearance.monospace_font_size() - 4.),
+                    padding: Some(Coords {
+                        top: 4.,
+                        bottom: 4.,
+                        left: 8.,
+                        right: 8.,
+                    }),
+                    background: Some(theme.tooltip_background().into()),
+                    font_color: Some(theme.background().into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish();
+            let tooltip_offset = OffsetPositioning::offset_from_parent(
+                vec2f(0., 4.),
+                ParentOffsetBounds::WindowByPosition,
+                ParentAnchor::BottomMiddle,
+                ChildAnchor::TopMiddle,
+            );
+            stack.add_positioned_overlay_child(tooltip, tooltip_offset);
         }
 
         ConstrainedBox::new(stack.finish())

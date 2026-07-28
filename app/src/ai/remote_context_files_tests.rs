@@ -1,4 +1,4 @@
-use remote_server::proto::{file_context_proto, FileContextProto};
+use remote_server::proto::{FileContextProto, file_context_proto};
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;

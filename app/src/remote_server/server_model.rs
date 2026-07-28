@@ -15,14 +15,14 @@ use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use warp_core::channel::ChannelState;
-use warp_core::{safe_error, SessionId};
+use warp_core::{SessionId, safe_error};
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
+use warpui::platform::TerminationMode;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::codebase_index_status::{
@@ -34,17 +34,12 @@ use super::diff_state_tracker::{
     DiffModelKey, DiffStateUpdate, RemoteDiffStateManager, SubscribeOutcome,
 };
 use super::proto::{
-    client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    get_fragment_metadata_from_hash_response, git_commit_chain_response, git_create_pr_response,
-    git_generate_commit_message_response, git_get_committed_branch_files_response,
-    git_push_response, host_scoped_request, notification, remote_skill_proto,
-    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
-    session_scoped_request, write_file_response, Abort, Authenticate, BranchInfo, BufferEdit,
-    BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
-    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
-    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
-    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
-    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    Abort, Authenticate, BranchInfo, BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer,
+    CodebaseIndexLimits, CodebaseIndexStatus, CodebaseIndexStatusUpdated,
+    CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile, DeleteFileResponse,
+    DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse, DiscardFilesSuccess,
+    DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
+    FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
@@ -61,7 +56,12 @@ use super::proto::{
     RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
     SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
     TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo, UpdateGitStatus, UploadHandoffSnapshot,
-    WriteFile, WriteFileResponse, WriteFileSuccess,
+    WriteFile, WriteFileResponse, WriteFileSuccess, client_message, delete_file_response,
+    discard_files_response, get_diff_state_response, get_fragment_metadata_from_hash_response,
+    git_commit_chain_response, git_create_pr_response, git_generate_commit_message_response,
+    git_get_committed_branch_files_response, git_push_response, host_scoped_request, notification,
+    remote_skill_proto, resolve_conflict_response, run_command_response, save_buffer_response,
+    server_message, session_scoped_request, write_file_response,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use super::{diff_state_proto, ripgrep_search};
@@ -86,9 +86,9 @@ pub type ConnectionId = uuid::Uuid;
 use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
 use crate::ai::blocklist::handoff::snapshot::upload_result_to_proto;
-use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
+use crate::ai::blocklist::{ReadFileContextResult, read_local_file_context};
 use crate::ai::skills::{
-    bundled_skill_snapshot_protos, BundledSkill, SkillManager, SkillManagerEvent,
+    BundledSkill, SkillManager, SkillManagerEvent, bundled_skill_snapshot_protos,
 };
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::code_review::git_actions;
@@ -659,8 +659,8 @@ impl ServerModel {
                     // When a file-watcher update couldn't be applied because
                     // the buffer has unsaved client edits, forward the conflict
                     // to connected clients so they can show a resolution banner.
-                    if !success {
-                        if let Some(conns) = me.buffers.connections_for_buffer(file_id) {
+                    if !success
+                        && let Some(conns) = me.buffers.connections_for_buffer(file_id) {
                             // Collect to break the immutable borrow on `me.buffers`
                             // before calling `me.send_server_message(&mut self)`.
                             let conns: Vec<_> = conns.iter().copied().collect();
@@ -677,7 +677,6 @@ impl ServerModel {
                                 );
                             }
                         }
-                    }
                 }
                 GlobalBufferModelEvent::RemoteBufferConflict { .. } => {
                     // Not relevant for server-local buffers.
@@ -969,7 +968,7 @@ impl ServerModel {
                         self.handle_navigated_to_directory(m, &request_id, conn_id, ctx)
                     }
                     Some(session_scoped_request::Message::LoadRepoMetadataDirectory(m)) => {
-                        self.handle_load_repo_metadata_directory(m, &request_id, ctx)
+                        self.handle_load_repo_metadata_directory(m, &request_id, conn_id, ctx)
                     }
                     Some(session_scoped_request::Message::RunCommand(m)) => {
                         self.handle_run_command(m, &request_id, conn_id, ctx)
@@ -2133,13 +2132,12 @@ impl ServerModel {
                                 },
                             ),
                         );
-                        if is_git {
-                            if let Some(sent_roots) = me
+                        if is_git
+                            && let Some(sent_roots) = me
                                 .snapshot_sent_roots_by_connection
                                 .get_mut(&conn_id_for_response)
-                            {
-                                sent_roots.insert(root_path);
-                            }
+                        {
+                            sent_roots.insert(root_path);
                         }
                     }
                 }
@@ -2150,11 +2148,12 @@ impl ServerModel {
     }
 
     /// Handles `LoadRepoMetadataDirectory` by loading a subdirectory on the
-    /// server's local model and returning the children synchronously.
+    /// server's local model and returning the children after the async load completes.
     fn handle_load_repo_metadata_directory(
         &mut self,
         msg: super::proto::LoadRepoMetadataDirectory,
         request_id: &RequestId,
+        conn_id: ConnectionId,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
         log::info!(
@@ -2194,39 +2193,72 @@ impl ServerModel {
             }));
         }
 
-        // Load the directory on the server's local model.
-        let load_result = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
-            model.load_directory(&repo_path, &dir_path, ctx)
+        // Load the directory on the server's local model. The returned future resolves after the
+        // LocalRepoMetadataModel completion callback has applied or rejected the subtree.
+        let load_future = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
+            model.load_directory_with_completion(&repo_path, &dir_path, ctx)
         });
 
-        if let Err(e) = load_result {
-            log::warn!("LoadRepoMetadataDirectory failed: {e}");
-            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                code: ErrorCode::Internal.into(),
-                message: format!("Failed to load directory: {e}"),
-            }));
-        }
+        let load_future = match load_future {
+            Ok(load_future) => load_future,
+            Err(e) => {
+                log::warn!("LoadRepoMetadataDirectory failed: {e}");
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: format!("Failed to load directory: {e}"),
+                }));
+            }
+        };
 
-        // Read back the loaded children and serialize them.
-        let id = RepositoryIdentifier::local(repo_path.clone());
-        let entries = RepoMetadataModel::handle(ctx)
-            .as_ref(ctx)
-            .get_repository(&id, ctx)
-            .map(|state| {
-                super::repo_metadata_proto::file_tree_children_to_proto_entries(
-                    &state.entry,
-                    &dir_path,
-                )
-            })
-            .unwrap_or_default();
+        let request_id_for_response = request_id.clone();
+        let repo_path_for_response = msg.repo_path;
+        let dir_path_for_response = msg.dir_path;
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            load_future,
+            move |me, load_result, ctx| {
+                if let Err(e) = load_result {
+                    log::warn!("LoadRepoMetadataDirectory failed: {e}");
+                    me.send_server_message(
+                        Some(conn_id),
+                        Some(&request_id_for_response),
+                        server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::Internal.into(),
+                            message: format!("Failed to load directory: {e}"),
+                        }),
+                    );
+                    return;
+                }
 
-        HandlerOutcome::Sync(server_message::Message::LoadRepoMetadataDirectoryResponse(
-            super::proto::LoadRepoMetadataDirectoryResponse {
-                repo_path: msg.repo_path,
-                dir_path: msg.dir_path,
-                entries,
+                // Read back the loaded children and serialize them after the completion callback
+                // has inserted the subtree.
+                let id = RepositoryIdentifier::local(repo_path.clone());
+                let entries = RepoMetadataModel::handle(ctx)
+                    .as_ref(ctx)
+                    .get_repository(&id, ctx)
+                    .map(|state| {
+                        super::repo_metadata_proto::file_tree_children_to_proto_entries(
+                            &state.entry,
+                            &dir_path,
+                        )
+                    })
+                    .unwrap_or_default();
+
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::LoadRepoMetadataDirectoryResponse(
+                        super::proto::LoadRepoMetadataDirectoryResponse {
+                            repo_path: repo_path_for_response,
+                            dir_path: dir_path_for_response,
+                            entries,
+                        },
+                    ),
+                );
             },
-        ))
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
     }
 
     /// Handles `WriteFile` by registering the path and triggering an async
@@ -2404,36 +2436,33 @@ impl ServerModel {
         // For force_reload on an already-tracked buffer, skip open_server_local
         // to avoid a spurious BufferLoaded event that would consume the pending
         // request before ServerLocalBufferUpdated can use it for exclusion.
-        if msg.force_reload {
-            if let Some(file_id) = self.buffers.file_id_for_path(&msg.path) {
-                self.buffers.add_connection(file_id, conn_id);
-                let gbm = GlobalBufferModel::handle(ctx);
+        if msg.force_reload
+            && let Some(file_id) = self.buffers.file_id_for_path(&msg.path)
+        {
+            self.buffers.add_connection(file_id, conn_id);
+            let gbm = GlobalBufferModel::handle(ctx);
 
-                self.buffers.insert_pending(
-                    file_id,
-                    request_id.clone(),
-                    conn_id,
-                    PendingBufferRequestKind::OpenBuffer,
-                );
-                if let Err(e) =
-                    gbm.update(ctx, |gbm, ctx| gbm.force_reload_server_local(file_id, ctx))
-                {
-                    self.buffers
-                        .take_pending_by_kind(&file_id, PendingBufferRequestKind::OpenBuffer);
-                    return HandlerOutcome::Sync(server_message::Message::OpenBufferResponse(
-                        OpenBufferResponse {
-                            result: Some(
-                                remote_server::proto::open_buffer_response::Result::Error(
-                                    FileOperationError { message: e },
-                                ),
-                            ),
-                        },
-                    ));
-                }
-                return HandlerOutcome::Async(None);
+            self.buffers.insert_pending(
+                file_id,
+                request_id.clone(),
+                conn_id,
+                PendingBufferRequestKind::OpenBuffer,
+            );
+            if let Err(e) = gbm.update(ctx, |gbm, ctx| gbm.force_reload_server_local(file_id, ctx))
+            {
+                self.buffers
+                    .take_pending_by_kind(&file_id, PendingBufferRequestKind::OpenBuffer);
+                return HandlerOutcome::Sync(server_message::Message::OpenBufferResponse(
+                    OpenBufferResponse {
+                        result: Some(remote_server::proto::open_buffer_response::Result::Error(
+                            FileOperationError { message: e },
+                        )),
+                    },
+                ));
             }
-            // Buffer not yet tracked — fall through to open_server_local below.
+            return HandlerOutcome::Async(None);
         }
+        // Buffer not yet tracked — fall through to open_server_local below.
 
         let path = PathBuf::from(&msg.path);
         let gbm = GlobalBufferModel::handle(ctx);
@@ -3584,10 +3613,8 @@ impl ServerModel {
         };
         let already_tracked = self.github_repo_models.contains_key(&std_path);
         self.subscribe_to_github_info_updates(&std_path, ctx);
-        if already_tracked {
-            if let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
-                handle.update(ctx, |model, ctx| model.refresh_pr_info(ctx));
-            }
+        if already_tracked && let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+            handle.update(ctx, |model, ctx| model.refresh_pr_info(ctx));
         }
     }
 
@@ -3608,10 +3635,8 @@ impl ServerModel {
         };
         let already_tracked = self.github_repo_models.contains_key(&std_path);
         self.subscribe_to_github_info_updates(&std_path, ctx);
-        if already_tracked {
-            if let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
-                handle.update(ctx, |model, ctx| model.refresh_repository_info(ctx));
-            }
+        if already_tracked && let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+            handle.update(ctx, |model, ctx| model.refresh_repository_info(ctx));
         }
     }
 
@@ -3834,12 +3859,12 @@ fn file_context_result_to_proto(result: ReadFileContextResult) -> ReadFileContex
         .collect();
 
     let failed_files = result
-        .missing_files
+        .failed_files
         .into_iter()
-        .map(|path| FailedFileRead {
-            path,
+        .map(|failed_file| FailedFileRead {
+            path: failed_file.path,
             error: Some(FileOperationError {
-                message: "File not found or could not be read".to_string(),
+                message: failed_file.message,
             }),
         })
         .collect();

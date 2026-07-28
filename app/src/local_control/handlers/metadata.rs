@@ -10,19 +10,19 @@ use ::local_control::{
     Action, ActionKind, ActionMetadata, ControlError, ErrorCode, InstanceId, PROTOCOL_VERSION,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use settings::Setting as _;
 use warp_core::channel::ChannelState;
 use warpui::{AppContext, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
 use crate::drive::settings::WarpDriveSettings;
 use crate::features::FeatureFlag;
-use crate::local_control::resolver::{reject_target_families, require_active_window_id_for_action};
 use crate::local_control::LocalControlBridge;
+use crate::local_control::resolver::{reject_target_families, require_active_window_id_for_action};
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::settings::{AISettings, CodeSettings};
-use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::Workspace;
+use crate::workspace::tab_settings::TabSettings;
 
 #[derive(Serialize)]
 struct InstanceResponse<'a> {

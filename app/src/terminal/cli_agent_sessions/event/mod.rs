@@ -1,6 +1,7 @@
 mod v1;
 
 use serde::Deserialize;
+use warp_errors::report_error;
 
 use crate::terminal::CLIAgent;
 
@@ -18,6 +19,7 @@ pub enum CLIAgentEventType {
     PromptSubmit,
     ToolComplete,
     Stop,
+    StopFailure,
     PermissionRequest,
     PermissionReplied,
     QuestionAsked,
@@ -45,6 +47,9 @@ pub struct CLIAgentEventPayload {
     pub tool_name: Option<String>,
     pub tool_input_preview: Option<String>,
     pub plugin_version: Option<String>,
+    /// On Claude Code, this comes from the `StopFailure` hook (e.g. `"rate_limit"`).
+    /// Not implemented for Codex.
+    pub error_type: Option<String>,
 }
 
 /// A parsed event from a CLI agent plugin.
@@ -90,9 +95,9 @@ pub fn parse_event(title: Option<&str>, body: &str) -> Option<CLIAgentEvent> {
     match VERSIONED_PARSERS.get(index) {
         Some(parser) => parser(body),
         None => {
-            log::error!(
-                "Received CLI agent event with unsupported schema version \
-                 {version}. The CLI agent plugin or Warp may need to be updated."
+            report_error!(
+                "Received CLI agent event with unsupported schema version. The CLI agent plugin or Warp may need to be updated.",
+                extra: { "version" => %version }
             );
             None
         }

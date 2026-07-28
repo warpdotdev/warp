@@ -9,9 +9,9 @@ use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::Icon;
 use warpui::elements::{
-    get_rich_content_position_id, Border, Clipped, Container, CornerRadius, CrossAxisAlignment,
-    Flex, FormattedTextElement, MouseStateHandle, ParentElement, Radius, SavePosition,
-    SelectableArea, SelectionHandle,
+    Border, Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
+    MouseStateHandle, ParentElement, Radius, SavePosition, SelectableArea, SelectionHandle,
+    get_rich_content_position_id,
 };
 use warpui::keymap::{FixedBinding, Keystroke};
 use warpui::{
@@ -24,7 +24,7 @@ use crate::ai::blocklist::block::view_impl::{
     CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
 };
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HORIZONTAL_PADDING,
+    ExpandedConfig, HeaderConfig, INLINE_ACTION_HORIZONTAL_PADDING, InteractionMode,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self};
 use crate::appearance::Appearance;

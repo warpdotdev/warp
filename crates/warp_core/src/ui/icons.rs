@@ -281,6 +281,7 @@ pub enum Icon {
     OpenCodeLogo,
     CopilotLogo,
     PiLogo,
+    OhMyPiLogo,
     AuggieLogo,
     CursorLogo,
     GooseLogo,
@@ -325,6 +326,7 @@ pub enum Icon {
     Dataflow04,
     LayersThree01,
     Aws,
+    GeminiEnterpriseAgentPlatform,
     // Language-specific icons for the code block dropdown
     MermaidLang,
     GoLang,
@@ -618,6 +620,7 @@ impl From<Icon> for &'static str {
             Icon::OpenCodeLogo => "bundled/svg/opencode.svg",
             Icon::CopilotLogo => "bundled/svg/copilot.svg",
             Icon::PiLogo => "bundled/svg/pi.svg",
+            Icon::OhMyPiLogo => "bundled/svg/oh_my_pi.svg",
             Icon::AuggieLogo => "bundled/svg/auggie.svg",
             Icon::CursorLogo => "bundled/svg/cursor.svg",
             Icon::GooseLogo => "bundled/svg/goose.svg",
@@ -657,6 +660,9 @@ impl From<Icon> for &'static str {
             Icon::Dataflow04 => "bundled/svg/dataflow-04.svg",
             Icon::LayersThree01 => "bundled/svg/layers-three-01.svg",
             Icon::Aws => "bundled/svg/aws.svg",
+            Icon::GeminiEnterpriseAgentPlatform => {
+                "bundled/svg/gemini-enterprise-agent-platform.svg"
+            }
             Icon::MermaidLang => "bundled/svg/file_type/mermaid.svg",
             Icon::GoLang => "bundled/svg/file_type/go.svg",
             Icon::CppLang => "bundled/svg/file_type/cpp.svg",

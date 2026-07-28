@@ -18,7 +18,7 @@ use mockall::automock;
 use prost::Message;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::client::Operation;
 use warp_graphql::mutations::confirm_file_artifact_upload::{
@@ -111,21 +111,24 @@ use warp_graphql::queries::task_git_credentials::{
 };
 use warp_multi_agent_api::ConversationData;
 
+use super::ServerApi;
 #[cfg(not(target_family = "wasm"))]
 use super::download::write_response_body_to_path;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
-use super::ServerApi;
+#[cfg(not(feature = "agent_mode_evals"))]
+use crate::ai::BonusGrant;
+use crate::ai::RequestUsageInfo;
+pub use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentConversationFormat, AIAgentHarness, AIAgentSerializedBlockFormat,
     ServerAIConversationMetadata,
 };
-pub use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 // Re-export ambient agent types for backwards compatibility
 pub use crate::ai::ambient_agents::{
-    task::{AttachmentInput, TaskAttachment},
     AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+    task::{AttachmentInput, TaskAttachment},
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::generate_code_review_content::api::{
@@ -133,14 +136,11 @@ use crate::ai::generate_code_review_content::api::{
 };
 use crate::ai::harness_availability::HarnessAvailability;
 use crate::ai::llms::{
-    AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMSpec,
+    AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMSpec,
     LLMUsageMetadata, ModelsByFeature, RoutingHostConfig,
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
-#[cfg(not(feature = "agent_mode_evals"))]
-use crate::ai::BonusGrant;
-use crate::ai::RequestUsageInfo;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::requests::GenerateDialogueResult;
 use crate::ai_assistant::utils::TranscriptPart;
@@ -635,6 +635,8 @@ pub struct CreateFileArtifactUploadRequest {
     pub conversation_id: Option<String>,
     pub run_id: Option<String>,
     pub filepath: String,
+    /// Short badge-visible title for the artifact (e.g. a recording title).
+    pub title: Option<String>,
     pub description: Option<String>,
     pub mime_type: Option<String>,
     pub size_bytes: Option<i32>,
@@ -948,6 +950,9 @@ pub struct CreateAgentRequest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional base prompt for this agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretRef>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -959,12 +964,21 @@ pub struct CreateAgentRequest {
 }
 
 /// JSON payload sent to `PUT /agent/identities/{uid}`.
+///
+/// Each field uses the public API's PATCH semantics: `None` omits the field
+/// (leave unchanged), while `Some(String::new())` sends an empty value to clear
+/// it. See `CreateAgentRequest`/`UpdateAgentRequest` in
+/// `warp-server/public_api/openapi.yaml`.
 #[derive(Clone, Default, serde::Serialize, Debug, PartialEq, Eq)]
 pub struct UpdateAgentRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Replacement prompt. `None` leaves it unchanged; `Some(String::new())`
+    /// clears it via the public API's PATCH clear-via-empty semantics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<SecretRef>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -981,6 +995,9 @@ pub struct AgentResponse {
     pub uid: String,
     pub name: String,
     pub description: Option<String>,
+    /// Optional base prompt for this agent.
+    #[serde(default)]
+    pub prompt: Option<String>,
     pub available: bool,
     pub created_at: DateTime<Utc>,
     pub secrets: Vec<SecretRef>,
@@ -2659,6 +2676,7 @@ impl AIClient for ServerApi {
                 conversation_id: request.conversation_id.map(cynic::Id::new),
                 run_id: request.run_id.map(cynic::Id::new),
                 filepath: request.filepath,
+                title: request.title,
                 description: request.description,
                 mime_type: request.mime_type,
                 size_bytes: request.size_bytes,
@@ -3119,56 +3137,6 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
     }
 }
 
-impl From<warp_graphql::queries::get_feature_model_choices::LlmProvider> for LLMProvider {
-    fn from(value: warp_graphql::queries::get_feature_model_choices::LlmProvider) -> Self {
-        match value {
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Openai => {
-                LLMProvider::OpenAI
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Anthropic => {
-                LLMProvider::Anthropic
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Google => {
-                LLMProvider::Google
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Xai => LLMProvider::Xai,
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Unknown => {
-                LLMProvider::Unknown
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Other(value) => {
-                report_error!(
-                    anyhow!(
-                        "Invalid LlmProvider '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
-                );
-                LLMProvider::Unknown
-            }
-        }
-    }
-}
-
-impl From<warp_graphql::workspace::LlmProvider> for LLMProvider {
-    fn from(value: warp_graphql::workspace::LlmProvider) -> Self {
-        match value {
-            warp_graphql::workspace::LlmProvider::Openai => LLMProvider::OpenAI,
-            warp_graphql::workspace::LlmProvider::Anthropic => LLMProvider::Anthropic,
-            warp_graphql::workspace::LlmProvider::Google => LLMProvider::Google,
-            warp_graphql::workspace::LlmProvider::Xai => LLMProvider::Xai,
-            warp_graphql::workspace::LlmProvider::Unknown => LLMProvider::Unknown,
-            warp_graphql::workspace::LlmProvider::Other(value) => {
-                report_error!(
-                    anyhow!(
-                        "Invalid LlmProvider '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
-                );
-                LLMProvider::Unknown
-            }
-        }
-    }
-}
-
 impl From<warp_graphql::queries::get_feature_model_choices::LlmSpec> for LLMSpec {
     fn from(value: warp_graphql::queries::get_feature_model_choices::LlmSpec) -> Self {
         Self {
@@ -3253,10 +3221,9 @@ fn convert_harness(harness: warp_graphql::ai::AgentHarness) -> AIAgentHarness {
         warp_graphql::ai::AgentHarness::Codex => AIAgentHarness::Codex,
         warp_graphql::ai::AgentHarness::Other(value) => {
             report_error!(
-                anyhow!(
-                    "Invalid AgentHarness '{value}'. Make sure to update client GraphQL types!"
-                ),
-                warp_core::errors::ReportErrorLogMode::OncePerRun
+                "Invalid AgentHarness; update client GraphQL types",
+                extra: { "harness" => %value },
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
             AIAgentHarness::Unknown
         }
@@ -3280,37 +3247,14 @@ fn convert_conversation_format(
     }
 }
 
-// Helper function
-fn convert_usage_metadata(
-    summarized: bool,
-    context_window_usage: f64,
-    credits_spent: f64,
-    platform_credits_spent: f64,
-    context_window_segments: &[warp_graphql::ai::ContextWindowSegment],
-) -> ConversationUsageMetadata {
-    ConversationUsageMetadata {
-        was_summarized: summarized,
-        context_window_usage: context_window_usage as f32,
-        credits_spent: credits_spent as f32,
-        platform_credits_spent: platform_credits_spent as f32,
-        credits_spent_for_last_block: None,
-        token_usage: vec![],
-        tool_usage_metadata: Default::default(),
-        context_window_segments: context_window_segments.iter().map(Into::into).collect(),
-    }
-}
-
 impl TryFrom<warp_graphql::ai::AIConversation> for ServerAIConversationMetadata {
     type Error = anyhow::Error;
 
     fn try_from(value: warp_graphql::ai::AIConversation) -> Result<Self, Self::Error> {
-        let usage = convert_usage_metadata(
-            value.usage.usage_metadata.summarized,
-            value.usage.usage_metadata.context_window_usage,
-            value.usage.usage_metadata.credits_spent,
-            value.usage.usage_metadata.platform_credits_spent,
-            &value.usage.usage_metadata.context_window_segments,
-        );
+        // Full conversion including per-model token usage and tool usage
+        // stats, so restored conversations render the same usage details
+        // (e.g. the credits-expansion "Models" rows) as live ones.
+        let usage: ConversationUsageMetadata = (&value.usage.usage_metadata).into();
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
         let ambient_agent_task_id = value
@@ -3351,13 +3295,7 @@ impl TryFrom<warp_graphql::queries::list_ai_conversations::AIConversationMetadat
     fn try_from(
         value: warp_graphql::queries::list_ai_conversations::AIConversationMetadata,
     ) -> Result<Self, Self::Error> {
-        let usage = convert_usage_metadata(
-            value.usage.usage_metadata.summarized,
-            value.usage.usage_metadata.context_window_usage,
-            value.usage.usage_metadata.credits_spent,
-            value.usage.usage_metadata.platform_credits_spent,
-            &value.usage.usage_metadata.context_window_segments,
-        );
+        let usage: ConversationUsageMetadata = (&value.usage.usage_metadata).into();
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
         let ambient_agent_task_id = value

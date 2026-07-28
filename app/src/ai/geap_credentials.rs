@@ -1,14 +1,15 @@
 use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{
-    ApiKeyManager, GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
-    LoadGeapCredentialsError, GEAP_REFRESH_LEAD_TIME,
+    ApiKeyManager, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation,
+    GeapMintBinding, LoadGeapCredentialsError,
 };
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
-use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretManager;
+use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warpui::r#async::Timer;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
@@ -23,8 +24,7 @@ const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 const GEAP_MIN_TIMER_DELAY: Duration = Duration::from_secs(60);
 
 const STS_TOKEN_URL: &str = "https://sts.googleapis.com/v1/token";
-const IAM_GENERATE_ACCESS_TOKEN_URL: &str =
-    "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateAccessToken";
+const IAM_GENERATE_ACCESS_TOKEN_URL: &str = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateAccessToken";
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const ID_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id_token";
@@ -136,7 +136,6 @@ pub(crate) fn refresh_geap_credentials(
     refresh_geap_credentials_with_options(manager, false, ctx);
 }
 
-#[allow(dead_code)]
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
@@ -162,6 +161,7 @@ pub(crate) fn refresh_geap_credentials_if_needed(
             ..
         } => *minted_for != binding || credentials.needs_refresh(),
         GeapCredentialsState::Missing
+        | GeapCredentialsState::Unconfigured
         | GeapCredentialsState::Disabled
         | GeapCredentialsState::Failed { .. } => true,
     };
@@ -183,7 +183,7 @@ fn refresh_geap_credentials_with_options(
             return;
         }
         GeapPolicy::Unconfigured => {
-            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
@@ -194,17 +194,16 @@ fn refresh_geap_credentials_with_options(
     ) {
         return;
     }
-    if !force {
-        if let GeapCredentialsState::Loaded {
+    if !force
+        && let GeapCredentialsState::Loaded {
             credentials,
             minted_for: current_binding,
             ..
         } = manager.geap_credentials_state()
-        {
-            if *current_binding == minted_for && !credentials.needs_refresh() {
-                return;
-            }
-        }
+        && *current_binding == minted_for
+        && !credentials.needs_refresh()
+    {
+        return;
     }
     let previous = match manager.geap_credentials_state() {
         GeapCredentialsState::Loaded {
@@ -260,7 +259,7 @@ fn apply_geap_mint_result(
         }
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
-            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
@@ -316,7 +315,7 @@ fn apply_geap_mint_result(
             schedule_geap_token_refresh(manager, ctx);
         }
         Err(err) => {
-            log::error!("GEAP: credential mint failed: {err:?}");
+            report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
             match previous {
                 // A failed background re-mint keeps the previous token — even
                 // near/past expiry (Google remains the authority on validity;

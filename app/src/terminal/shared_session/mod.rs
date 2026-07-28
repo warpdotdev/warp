@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{Role, Scrollback, ScrollbackBlock, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::keymap::ContextPredicate;
-use warpui::{id, AppContext};
+use warpui::{AppContext, id};
 
 use super::model::block::SerializedBlock;
 use super::model::terminal_model::BlockIndex;
@@ -240,7 +240,7 @@ impl SharedSessionScrollbackType {
             .iter()
             .skip(first_block_index.into())
             .filter(|block| {
-                block.is_scrollback_block_for_shared_session(model.block_list().agent_view_state())
+                block.is_scrollback_block_for_shared_session(model.block_list().transcript_scope())
             })
             .filter_map(|block| {
                 let serialized_block: SerializedBlock = block.into();
@@ -268,7 +268,7 @@ impl SharedSessionScrollbackType {
                 .skip(block_index.into())
                 .find(|block| {
                     block.is_scrollback_block_for_shared_session(
-                        model.block_list().agent_view_state(),
+                        model.block_list().transcript_scope(),
                     )
                 })
                 .map_or(model.block_list().active_block_index(), |block| {

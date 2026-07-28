@@ -1,7 +1,7 @@
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warp_managed_secrets::client::SecretOwner;
 use warpui::elements::{
@@ -17,8 +17,8 @@ use warpui::{
 };
 
 use crate::ai::auth_secret_types::{
-    auth_secret_types_for_harness, build_managed_secret_value, learn_more_url_for_harness,
-    AuthSecretTypeInfo,
+    AuthSecretTypeInfo, auth_secret_types_for_harness, build_managed_secret_value,
+    learn_more_url_for_harness,
 };
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display;
@@ -456,18 +456,18 @@ impl AuthSecretFtuxView {
 
         let mut stack = Stack::new();
         stack.add_child(trigger);
-        if self.is_harness_menu_open {
-            if let Some(menu) = &self.harness_menu {
-                stack.add_positioned_overlay_child(
-                    ChildView::new(menu).finish(),
-                    OffsetPositioning::offset_from_parent(
-                        warpui::geometry::vector::vec2f(0., 4.),
-                        ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                );
-            }
+        if self.is_harness_menu_open
+            && let Some(menu) = &self.harness_menu
+        {
+            stack.add_positioned_overlay_child(
+                ChildView::new(menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    warpui::geometry::vector::vec2f(0., 4.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
         }
         stack.finish()
     }
@@ -683,12 +683,12 @@ impl AuthSecretFtuxView {
     }
 
     fn resolve_secret_owner(&self, ctx: &ViewContext<Self>) -> SecretOwner {
-        if self.share_with_team {
-            if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
-                return SecretOwner::Team {
-                    team_uid: team.uid.uid(),
-                };
-            }
+        if self.share_with_team
+            && let Some(team) = UserWorkspaces::as_ref(ctx).current_team()
+        {
+            return SecretOwner::Team {
+                team_uid: team.uid.uid(),
+            };
         }
         SecretOwner::CurrentUser
     }

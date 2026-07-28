@@ -108,6 +108,20 @@ fn test_keystroke_normalized() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_keystroke_displayed_expanded() -> anyhow::Result<()> {
+    assert_eq!(
+        Keystroke::parse("ctrl-shift-P")?.displayed_expanded(),
+        "Ctrl + Shift + P"
+    );
+    assert_eq!(Keystroke::parse("ctrl-p")?.displayed_expanded(), "Ctrl + P");
+    assert_eq!(
+        Keystroke::parse("alt-enter")?.displayed_expanded(),
+        "Alt + ⏎"
+    );
+
+    Ok(())
+}
+#[test]
 #[should_panic]
 fn test_keystroke_invalid_shift_lowercase() {
     let _ = Keystroke::parse("ctrl-shift-p");

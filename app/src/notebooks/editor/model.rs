@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::Duration;
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
+use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedText;
@@ -14,9 +14,9 @@ use num_traits::SaturatingSub;
 use regex::Regex;
 use string_offset::CharOffset;
 use url::Url;
-use vec1::{vec1, Vec1};
-use warp_core::features::FeatureFlag;
+use vec1::{Vec1, vec1};
 use warp_core::r#async::debounce;
+use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::content::buffer::{
     AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
@@ -33,6 +33,7 @@ use warp_editor::render::model::{
 };
 use warp_editor::search::Searcher;
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::ListIndentLevel;
@@ -41,10 +42,10 @@ use warpui::{
 };
 
 use super::super::telemetry::SelectionMode as TelemetrySelectionMode;
+use super::NotebookWorkflow;
 use super::embedding_model::NotebookEmbed;
 use super::interaction_state_model::InteractionStateModel;
 use super::notebook_command::NotebookCommand;
-use super::NotebookWorkflow;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::editor::InteractionState;
 use crate::notebooks::editor::interaction_state_model::InteractionStateModelEvent;
@@ -310,6 +311,10 @@ impl NotebooksEditorModel {
         <Self as RichTextEditorModel>::reset_with_markdown(self, markdown, ctx);
     }
 
+    pub fn reset_with_ipynb(&mut self, ipynb: &str, ctx: &mut ModelContext<Self>) {
+        <Self as RichTextEditorModel>::reset_with_ipynb(self, ipynb, ctx);
+    }
+
     pub fn update_to_new_markdown(&mut self, markdown: &str, ctx: &mut ModelContext<Self>) {
         <Self as RichTextEditorModel>::update_to_new_markdown(self, markdown, ctx);
     }
@@ -413,11 +418,11 @@ impl NotebooksEditorModel {
     }
 
     fn handle_content_model_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
-        if let Some(window_id) = self.rte_window_id {
-            if !ctx.is_window_open(window_id) {
-                log::debug!("Ignoring content event for closed window");
-                return;
-            }
+        if let Some(window_id) = self.rte_window_id
+            && !ctx.is_window_open(window_id)
+        {
+            log::debug!("Ignoring content event for closed window");
+            return;
         }
 
         let can_edit = matches!(self.interaction_state(ctx), InteractionState::Editable);
@@ -1419,7 +1424,10 @@ impl NotebooksEditorModel {
                 });
             }
             None => {
-                log::error!("Child model at {block_start} has end offset with value None");
+                report_error!(
+                    "Child model has end offset with value None",
+                    extra: { "block_start" => %block_start }
+                );
             }
         };
 

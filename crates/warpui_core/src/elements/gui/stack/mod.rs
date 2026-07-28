@@ -37,7 +37,7 @@ use log::warn;
 pub use offset_positioning::*;
 use overlay::Overlay;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use positioned::*;
 pub use save_position::*;
 
@@ -45,10 +45,10 @@ use super::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext, Point,
     SelectableElement, Selection, SelectionFragment, SizeConstraint,
 };
+use crate::ClipBounds;
 use crate::event::DispatchedEvent;
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{IsRect, SelectionDirection, SelectionType};
-use crate::ClipBounds;
 
 #[derive(Clone, Copy, Default)]
 pub enum EventDispatchMode {
@@ -351,12 +351,11 @@ impl SelectableElement for Stack {
     ) -> Option<Vec<SelectionFragment>> {
         let mut selection_fragments = Vec::new();
         for child in self.children.iter() {
-            if let Some(selectable_child) = child.element.as_selectable_element() {
-                if let Some(child_fragments) =
+            if let Some(selectable_child) = child.element.as_selectable_element()
+                && let Some(child_fragments) =
                     selectable_child.get_selection(selection_start, selection_end, is_rect)
-                {
-                    selection_fragments.extend(child_fragments);
-                }
+            {
+                selection_fragments.extend(child_fragments);
             }
         }
         if !selection_fragments.is_empty() {
@@ -373,15 +372,15 @@ impl SelectableElement for Stack {
         word_boundaries_policy: &WordBoundariesPolicy,
     ) -> Option<Vector2F> {
         for child in self.children.iter() {
-            if let Some(selectable_child) = child.element.as_selectable_element() {
-                if let Some(selection) = selectable_child.expand_selection(
+            if let Some(selectable_child) = child.element.as_selectable_element()
+                && let Some(selection) = selectable_child.expand_selection(
                     point,
                     direction,
                     unit,
                     word_boundaries_policy,
-                ) {
-                    return Some(selection);
-                }
+                )
+            {
+                return Some(selection);
             }
         }
         None
@@ -393,12 +392,11 @@ impl SelectableElement for Stack {
         absolute_point_other: Vector2F,
     ) -> Option<bool> {
         for child in self.children.iter() {
-            if let Some(selectable_child) = child.element.as_selectable_element() {
-                if let Some(is_point_semantically_before) = selectable_child
+            if let Some(selectable_child) = child.element.as_selectable_element()
+                && let Some(is_point_semantically_before) = selectable_child
                     .is_point_semantically_before(absolute_point, absolute_point_other)
-                {
-                    return Some(is_point_semantically_before);
-                }
+            {
+                return Some(is_point_semantically_before);
             }
         }
         None
@@ -410,12 +408,11 @@ impl SelectableElement for Stack {
         smart_select_fn: crate::elements::SmartSelectFn,
     ) -> Option<(Vector2F, Vector2F)> {
         for child in self.children.iter() {
-            if let Some(selectable_child) = child.element.as_selectable_element() {
-                if let Some(selection) =
+            if let Some(selectable_child) = child.element.as_selectable_element()
+                && let Some(selection) =
                     selectable_child.smart_select(absolute_point, smart_select_fn)
-                {
-                    return Some(selection);
-                }
+            {
+                return Some(selection);
             }
         }
         None

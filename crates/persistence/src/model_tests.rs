@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use warp_multi_agent_api as api;
 
-use super::{AgentConversation, AgentConversationData, ModelTokenUsage};
+use super::{AgentConversation, AgentConversationData, AgentConversationSummary, ModelTokenUsage};
 
 fn parentless_task(id: &str, message_count: usize) -> api::Task {
     api::Task {
@@ -100,6 +100,126 @@ fn is_restorable_accepts_single_root_plus_subtasks() {
 fn is_restorable_accepts_empty_and_single_task_conversations() {
     assert!(conversation_with_tasks(vec![]).is_restorable());
     assert!(conversation_with_tasks(vec![parentless_task("root", 0)]).is_restorable());
+}
+
+fn user_query_message(task_id: &str, query: &str, pwd: Option<&str>) -> api::Message {
+    let context = pwd.map(|pwd| api::InputContext {
+        directory: Some(api::input_context::Directory {
+            pwd: pwd.to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    api::Message {
+        id: format!("{task_id}-user-query"),
+        task_id: task_id.to_string(),
+        message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+            query: query.to_string(),
+            context,
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+fn auto_code_diff_message(task_id: &str) -> api::Message {
+    api::Message {
+        id: format!("{task_id}-auto-code-diff"),
+        task_id: task_id.to_string(),
+        message: Some(api::message::Message::SystemQuery(
+            api::message::SystemQuery {
+                context: None,
+                r#type: Some(api::message::system_query::Type::AutoCodeDiff(
+                    api::message::AutoCodeDiff {
+                        query: "diff".to_string(),
+                    },
+                )),
+            },
+        )),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn summary_from_tasks_derives_query_title_and_working_directory() {
+    let mut root = parentless_task("root", 0);
+    root.description = "Root title".to_string();
+    root.messages = vec![user_query_message(
+        "root",
+        "Initial query",
+        Some("/tmp/repo"),
+    )];
+
+    let summary = AgentConversationSummary::from_tasks([&root]);
+
+    assert_eq!(summary.initial_query, "Initial query");
+    assert_eq!(summary.title, "Root title");
+    assert_eq!(
+        summary.initial_working_directory.as_deref(),
+        Some("/tmp/repo")
+    );
+    assert!(summary.is_restorable);
+    assert!(!summary.is_unlisted_auto_code_diff);
+}
+
+#[test]
+fn summary_from_tasks_falls_back_to_initial_query_when_description_is_empty() {
+    let mut root = parentless_task("root", 0);
+    root.messages = vec![user_query_message("root", "Initial query", None)];
+
+    let summary = AgentConversationSummary::from_tasks([&root]);
+
+    assert_eq!(summary.title, "Initial query");
+    assert_eq!(summary.initial_working_directory, None);
+}
+
+#[test]
+fn summary_from_tasks_flags_auto_code_diff_only_conversations_as_unlisted() {
+    let mut root = parentless_task("root", 0);
+    root.messages = vec![auto_code_diff_message("root")];
+
+    let summary = AgentConversationSummary::from_tasks([&root]);
+    assert!(summary.is_unlisted_auto_code_diff);
+
+    // A user query alongside the passive diff keeps the conversation listed.
+    let mut interacted_root = parentless_task("root", 0);
+    interacted_root.messages = vec![
+        auto_code_diff_message("root"),
+        user_query_message("root", "Follow-up", None),
+    ];
+
+    let summary = AgentConversationSummary::from_tasks([&interacted_root]);
+    assert!(!summary.is_unlisted_auto_code_diff);
+}
+
+#[test]
+fn summary_from_tasks_mirrors_restorability() {
+    // Two real roots is the genuinely ambiguous, non-restorable shape.
+    let summary = AgentConversationSummary::from_tasks([
+        &parentless_task("root-a", 1),
+        &parentless_task("root-b", 1),
+    ]);
+    assert!(!summary.is_restorable);
+
+    let summary = AgentConversationSummary::from_tasks([&parentless_task("root", 1)]);
+    assert!(summary.is_restorable);
+}
+
+#[test]
+fn summary_roundtrips_through_json() {
+    let mut root = parentless_task("root", 0);
+    root.description = "Root title".to_string();
+    root.messages = vec![user_query_message(
+        "root",
+        "Initial query",
+        Some("/tmp/repo"),
+    )];
+
+    let summary = AgentConversationSummary::from_tasks([&root]);
+    let json = serde_json::to_string(&summary).expect("summary should serialize");
+    let roundtripped: AgentConversationSummary =
+        serde_json::from_str(&json).expect("summary should deserialize");
+    assert_eq!(roundtripped, summary);
 }
 
 #[test]

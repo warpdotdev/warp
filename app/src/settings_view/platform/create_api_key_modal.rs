@@ -2,6 +2,7 @@ use chrono::Utc;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_server_client::auth::AgentIdentity;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -294,7 +295,7 @@ impl CreateApiKeyModal {
                         me.populate_agent_dropdown(ctx);
                     }
                     Err(err) => {
-                        log::error!("Failed to load agent identities: {err}");
+                        report_error!(err.context("Failed to load agent identities"));
                         ctx.emit(CreateApiKeyModalEvent::Error {
                             message: "Failed to load agents. Please close and try again."
                                 .to_string(),

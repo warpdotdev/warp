@@ -1,7 +1,7 @@
 [package]
 name = "ai"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish.workspace = true
 license.workspace = true
 
@@ -54,6 +54,7 @@ futures.workspace = true
 generic-array = "0.14.7"
 derivative.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true
 warp_terminal.workspace = true
 warp_util.workspace = true
 chrono.workspace = true

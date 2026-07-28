@@ -13,7 +13,7 @@ use mockall::automock;
 pub use session::*;
 use thiserror::Error;
 pub use user_uid::{TEST_USER_EMAIL, TEST_USER_UID, UserUid};
-use warp_core::errors::{AnyhowErrorExt, ErrorExt, register_error};
+use warp_errors::{AnyhowErrorExt, ErrorExt, register_error};
 use warp_graphql::client::Operation;
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult, CreateAnonymousUserVariables,
@@ -480,6 +480,8 @@ pub enum UserAuthenticationError {
     InvalidStateParameter,
     #[error("Missing state parameter in auth redirect")]
     MissingStateParameter,
+    #[error("Timed out requesting a sign-in link after {attempts} attempts")]
+    DeviceCodeRequestTimedOut { attempts: usize },
     #[error("unexpected error occurred when fetching an ID token: {0:#}")]
     Unexpected(#[from] anyhow::Error),
 }
@@ -499,6 +501,7 @@ impl ErrorExt for UserAuthenticationError {
                 log::info!("ignoring user account disabled error: {error:#}");
                 false
             }
+            UserAuthenticationError::DeviceCodeRequestTimedOut { .. } => false,
             UserAuthenticationError::Unexpected(error) => error.is_actionable(),
             UserAuthenticationError::InvalidStateParameter
             | UserAuthenticationError::MissingStateParameter => {

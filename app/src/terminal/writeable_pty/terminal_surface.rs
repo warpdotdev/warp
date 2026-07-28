@@ -22,6 +22,8 @@ use crate::terminal::{ShellLaunchData, SizeUpdate};
 /// resizing, command execution, and native shell completions.
 pub enum PtyIntent {
     CtrlD,
+    #[cfg(not(target_family = "wasm"))]
+    Interrupt,
     ShutdownPty,
     WriteBytes(Cow<'static, [u8]>),
     WriteAgentInput {

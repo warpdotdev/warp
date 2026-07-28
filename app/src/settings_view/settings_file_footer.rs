@@ -19,10 +19,10 @@ use warpui::elements::{
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::platform::Cursor;
 
+use crate::WorkspaceAction;
 use crate::appearance::Appearance;
 use crate::settings::SettingsFileError;
 use crate::ui_components::icons::Icon;
-use crate::WorkspaceAction;
 
 /// Horizontal + vertical padding applied to the footer inside the sidebar.
 const FOOTER_PADDING: f32 = 12.;

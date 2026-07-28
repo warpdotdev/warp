@@ -20,16 +20,16 @@ use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Align, AnchorPair, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
-    ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    SavePosition, ScrollbarWidth, Stack, Text, XAxisAnchor, YAxisAnchor,
-    DEFAULT_UI_LINE_HEIGHT_RATIO,
+    CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Element, Empty,
+    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, OffsetType, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition, ScrollbarWidth, Stack,
+    Text, XAxisAnchor, YAxisAnchor,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::{Cursor, LineStyle};
 use warpui::text_layout::{
-    ClipConfig, ClipDirection, ClipStyle, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
+    ClipConfig, ClipDirection, ClipStyle, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextStyle,
 };
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -47,12 +47,10 @@ use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::{
     OrchestrationPillBarEvent, OrchestrationPillBarModel,
 };
-use crate::ai::blocklist::agent_view::{
-    agent_view_bg_color, AgentViewController, AgentViewControllerEvent,
-};
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::orchestration_topology::{
-    aggregated_orchestrator_status, descendant_conversation_ids_in_pill_order,
-    descendant_conversation_ids_in_spawn_order,
+    aggregated_orchestrator_status, descendant_conversation_ids_in_spawn_order,
+    descendant_conversations_in_pill_order,
 };
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
@@ -65,8 +63,8 @@ use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::icon_with_status::{
-    self, render_icon_with_status_with_badge_style, BadgeInnerShape, IconWithStatusVariant,
-    StatusBadgeStyle,
+    self, BadgeInnerShape, IconWithStatusVariant, StatusBadgeStyle,
+    render_icon_with_status_with_badge_style,
 };
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
@@ -615,9 +613,9 @@ impl OrchestrationPillBar {
 
         // Use the shared canonical pill ordering so the visible row and
         // keyboard navigation cannot drift.
-        let children: Vec<_> = descendant_conversation_ids_in_pill_order(history, orchestrator_id)
+        let children: Vec<_> = descendant_conversations_in_pill_order(history, orchestrator_id)
             .into_iter()
-            .filter_map(|id| history.conversation(&id))
+            .filter_map(|descendant| history.conversation(&descendant.conversation_id))
             .collect();
 
         // Nothing to show if the orchestrator has no children yet.
@@ -1740,12 +1738,14 @@ fn render_pill(
     let is_remote_child = spec.is_remote_child;
 
     // Per Figma: fg_overlay_2 at rest, fg_overlay_3 on hover, composed over
-    // the agent-view surface. Pre-blend to a solid so the avatar cutout ring
+    // the theme background. Pre-blend to a solid so the avatar cutout ring
     // matches the painted pill exactly.
-    let pill_rest_bg = Fill::from(agent_view_bg_color(app))
+    let pill_rest_bg = theme
+        .background()
         .blend(&internal_colors::fg_overlay_2(theme))
         .into_solid();
-    let pill_hover_bg = Fill::from(agent_view_bg_color(app))
+    let pill_hover_bg = theme
+        .background()
         .blend(&internal_colors::fg_overlay_3(theme))
         .into_solid();
     let pill_text_color = internal_colors::fg_overlay_6(theme).into_solid();

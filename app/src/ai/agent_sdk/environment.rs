@@ -5,10 +5,10 @@ use cynic::QueryBuilder;
 use inquire::error::InquireError;
 use inquire::{Confirm, Select};
 use serde::Serialize;
+use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::environment::{EnvironmentCommand, ImageCommand};
 use warp_cli::scope::ObjectScope;
-use warp_cli::GlobalOptions;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::list_warp_dev_images::{
     ListWarpDevImages, ListWarpDevImagesResult, ListWarpDevImagesVariables,
@@ -17,6 +17,7 @@ use warp_graphql::queries::user_repo_auth_status::UserRepoAuthStatusEnum;
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
+use crate::CloudObjectTypeAndId;
 use crate::ai::agent_sdk::driver::WARP_DRIVE_SYNC_TIMEOUT;
 use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
 use crate::ai::agent_sdk::output::{self, TableFormat};
@@ -34,7 +35,6 @@ use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_profiles::UserProfiles;
-use crate::CloudObjectTypeAndId;
 
 const WARP_DEV_ENVIRONMENTS_REPO: &str = "https://github.com/warpdotdev/warp-dev-environments";
 
@@ -301,8 +301,11 @@ impl EnvironmentCommandRunner {
             println!("Description: {desc}");
         }
         match &env.base_image {
-            BaseImage::DockerImage(img) => {
+            Some(BaseImage::DockerImage(img)) => {
                 println!("Docker image: {img}");
+            }
+            None => {
+                println!("Docker image: None");
             }
         }
         if env.github_repos.is_empty() {
@@ -755,15 +758,14 @@ impl EnvironmentCommandRunner {
         // for our environment to be assigned a ServerId. Environments are not
         // usable without first being synced.
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Create { .. })
-                    && matches!(result.success_type, OperationSuccessType::Success)
-                    && result.client_id == Some(client_id)
-                {
-                    let server_id = result.server_id.unwrap();
-                    println!("Environment created successfully with ID: {server_id}");
-                    ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
-                }
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Create { .. })
+                && matches!(result.success_type, OperationSuccessType::Success)
+                && result.client_id == Some(client_id)
+            {
+                let server_id = result.server_id.unwrap();
+                println!("Environment created successfully with ID: {server_id}");
+                ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
             }
         });
     }
@@ -952,7 +954,7 @@ impl EnvironmentCommandRunner {
         }
 
         if let Some(new_docker_image) = docker_image {
-            updated_env.base_image = BaseImage::DockerImage(new_docker_image);
+            updated_env.base_image = Some(BaseImage::DockerImage(new_docker_image));
         }
 
         for repo in add_repos {
@@ -1000,25 +1002,21 @@ impl EnvironmentCommandRunner {
 
         // Subscribe to UpdateManager to wait for the update to complete
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Update)
-                    && result.server_id == Some(server_id)
-                {
-                    match result.success_type {
-                        OperationSuccessType::Success => {
-                            println!("Environment updated successfully!\n");
-                            Self::print_environment_details(&updated_env);
-                            ctx.terminate_app(
-                                warpui::platform::TerminationMode::ForceTerminate,
-                                None,
-                            );
-                        }
-                        _ => {
-                            super::report_fatal_error(
-                                anyhow::anyhow!("Failed to update environment"),
-                                ctx,
-                            );
-                        }
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Update)
+                && result.server_id == Some(server_id)
+            {
+                match result.success_type {
+                    OperationSuccessType::Success => {
+                        println!("Environment updated successfully!\n");
+                        Self::print_environment_details(&updated_env);
+                        ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
+                    }
+                    _ => {
+                        super::report_fatal_error(
+                            anyhow::anyhow!("Failed to update environment"),
+                            ctx,
+                        );
                     }
                 }
             }
@@ -1086,22 +1084,19 @@ impl EnvironmentCommandRunner {
 
         // Listen to the UpdateManager for a completed object deletion
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Delete { .. }) {
-                    match result.success_type {
-                        OperationSuccessType::Success => {
-                            println!("Environment deleted successfully");
-                            ctx.terminate_app(
-                                warpui::platform::TerminationMode::ForceTerminate,
-                                None,
-                            );
-                        }
-                        _ => {
-                            super::report_fatal_error(
-                                anyhow::anyhow!("Failed to delete environment"),
-                                ctx,
-                            );
-                        }
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Delete { .. })
+            {
+                match result.success_type {
+                    OperationSuccessType::Success => {
+                        println!("Environment deleted successfully");
+                        ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
+                    }
+                    _ => {
+                        super::report_fatal_error(
+                            anyhow::anyhow!("Failed to delete environment"),
+                            ctx,
+                        );
                     }
                 }
             }
@@ -1121,7 +1116,8 @@ struct EnvironmentInfo {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
-    base_image: BaseImage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_image: Option<BaseImage>,
     github_repos: Vec<GithubRepo>,
     setup_commands: Vec<String>,
     creator_email: String,
@@ -1161,7 +1157,12 @@ impl TableFormat for EnvironmentInfo {
             Cell::new(&self.id),
             Cell::new(&self.name),
             Cell::new(description_display),
-            Cell::new(self.base_image.to_string()),
+            Cell::new(
+                self.base_image
+                    .as_ref()
+                    .map(|image| image.to_string())
+                    .unwrap_or_default(),
+            ),
             Cell::new(github_repos_display),
             Cell::new(setup_commands_display),
             Cell::new(&self.creator_email),

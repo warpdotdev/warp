@@ -15,6 +15,9 @@ Feature flags have two interacting layers:
 
 **Do not remove the flag immediately after promoting to Stable.** Keep it for at least 1–2 release cycles so a rollback is a one-line PR (remove the entry from `default`). Use the `remove-feature-flag` skill for the cleanup step later.
 
+## TUI note
+The per-channel arrays in `warp_core/src/features.rs` (`DOGFOOD_FLAGS`/`PREVIEW_FLAGS`/`RELEASE_FLAGS`) are shared and drive both the GUI desktop app (`app/`) and the headless TUI (`crates/warp_tui`) at runtime. The `app/Cargo.toml` `default` + `app/src/lib.rs` `enabled_features()` compile-time bridge is GUI-app-only. If a promoted feature should also reach the TUI, make sure it is enabled at runtime for the target channel (the shared arrays already do this) and, if the feature relies on a compile-time Cargo feature, that the TUI binary (`crates/warp_tui/Cargo.toml`) enables it too.
+
 ## Promote to Dogfood
 
 Add the flag to `DOGFOOD_FLAGS` in `warp_core/src/features.rs`:

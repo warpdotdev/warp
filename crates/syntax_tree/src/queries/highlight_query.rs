@@ -79,6 +79,13 @@ impl HighlightQuery {
 }
 
 fn convert_capture_name_to_color(name: &str, color_map: &ColorMap) -> Option<ColorU> {
+    match name {
+        "text.title" => return Some(color_map.keyword_color),
+        "text.literal" => return Some(color_map.string_color),
+        "text.uri" => return Some(color_map.function_color),
+        "text.reference" => return Some(color_map.property_color),
+        _ => {}
+    }
     match name.split('.').next() {
         Some("keyword") => Some(color_map.keyword_color),
         Some("function") => Some(color_map.function_color),
@@ -88,6 +95,7 @@ fn convert_capture_name_to_color(name: &str, color_map: &ColorMap) -> Option<Col
         Some("comment") => Some(color_map.comment_color),
         Some("property") => Some(color_map.property_color),
         Some("tag") => Some(color_map.tag_color),
+        Some("punctuation") => Some(color_map.comment_color),
         _ => None,
     }
 }
