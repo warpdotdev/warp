@@ -52,9 +52,9 @@ use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::{blended_colors, icons};
 use crate::util::bindings::keybinding_name_to_display_string;
-#[cfg(target_family = "wasm")]
-use crate::workspace::WorkspaceAction;
 use crate::workspace::tab_settings::TabSettings;
+#[cfg(target_arch = "wasm32")]
+use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
 
 /// Total size of the agent icon-with-status component rendered in the pane header.
 /// Sub-components (circle, badge, cloud) are derived inside `render_icon_with_status`.
@@ -409,9 +409,22 @@ impl TerminalView {
                 .ambient_agent_view_model
                 .as_ref()
                 .is_some_and(|model| model.as_ref(app).is_waiting_for_session());
+        // The gate and the render path are split by target: on WASM the details panel is
+        // workspace-level, so the button gate must match `Workspace::should_show_conversation_details_panel`;
+        // on desktop the panel is pane-level and `can_show_conversation_details_ui` is correct.
+        let show_details_button = {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.can_show_conversation_details_ui(app)
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                self.should_show_wasm_conversation_details_panel(app)
+            }
+        };
         let button_element = if is_waiting_for_session {
             Some(self.render_ambient_agent_cancel_button(app))
-        } else if self.can_show_conversation_details_ui(app) {
+        } else if show_details_button {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 Some(self.render_conversation_details_toggle_button(app))
@@ -827,14 +840,24 @@ impl TerminalView {
 
     /// Render the info button for toggling the workspace-level conversation details panel on WASM.
     /// Mirrors the desktop `(i) Show details` button in the pane header. On WASM the panel is
-    /// rendered at the workspace level (controlled by `is_transcript_details_panel_open`); the
-    /// `is_wasm_transcript_details_panel_open` field on this view tracks that state so the button
-    /// can show the correct active/inactive appearance without coupling TerminalView to Workspace.
+    /// rendered at the workspace level (controlled by `is_transcript_details_panel_open`). The
+    /// open state is derived at render time from the authoritative `WorkspaceState` so it stays
+    /// accurate across pane/tab focus changes without any per-view mirroring.
     #[cfg(target_arch = "wasm32")]
     fn render_wasm_conversation_details_toggle_button(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let is_open = self.is_wasm_transcript_details_panel_open;
+        // Derive open state from the authoritative workspace state at render time rather than
+        // mirroring it into a TerminalView field, which would become stale on focus changes.
+        let is_open = WorkspaceRegistry::as_ref(app)
+            .get(self.window_id, app)
+            .as_ref()
+            .map_or(false, |workspace| {
+                workspace
+                    .as_ref(app)
+                    .current_workspace_state
+                    .is_transcript_details_panel_open
+            });
         let ui_builder = appearance.ui_builder().clone();
 
         // Use main text color when panel is open (hover-like appearance), sub color when closed

@@ -2859,12 +2859,6 @@ pub struct TerminalView {
     /// On WASM this is used by the workspace-level transcript panel toggle; on desktop, it is used
     /// by the pane-level details panel toggle.
     conversation_details_panel_toggle_mouse_state: warpui::elements::MouseStateHandle,
-    /// Mouse state handle for the WASM pane-header conversation details toggle button.
-    /// On WASM, the panel is rendered at the workspace level; this mirrors the workspace
-    /// `is_transcript_details_panel_open` state so the pane-header button shows the correct
-    /// active/inactive appearance without coupling TerminalView to Workspace.
-    #[cfg(target_family = "wasm")]
-    pub(crate) is_wasm_transcript_details_panel_open: bool,
     /// Mouse state handle for the ambient agent cancel button in the pane header.
     ambient_agent_cancel_mouse_state: warpui::elements::MouseStateHandle,
 
@@ -4409,8 +4403,6 @@ impl TerminalView {
             conversation_details_panel_auto_open_policy: Default::default(),
             pending_cloud_followup_task_id: None,
             conversation_details_panel_toggle_mouse_state: Default::default(),
-            #[cfg(target_family = "wasm")]
-            is_wasm_transcript_details_panel_open: false,
             ambient_agent_cancel_mouse_state: Default::default(),
             active_init_project_model: None,
             is_pending_aws_login: false,
@@ -8056,6 +8048,34 @@ impl TerminalView {
     fn can_show_conversation_details_ui(&self, app: &AppContext) -> bool {
         let model = self.model.lock();
         self.can_show_conversation_details_ui_from_model(&model, app)
+    }
+
+    /// Whether the WASM workspace-level conversation details panel should be shown for this
+    /// terminal view. Mirrors `Workspace::should_show_conversation_details_panel` but takes
+    /// `&self` so it is callable without a `ViewHandle<TerminalView>`. The WASM render path
+    /// calls it at render time, and the same logic is exercised by host-target unit tests
+    /// (hence the `#[cfg(any(test, target_arch = "wasm32"))]` rather than a pure wasm32 gate).
+    ///
+    /// Returns `true` for:
+    /// - Restored ambient cloud tasks
+    /// - Conversation transcript viewers
+    /// - Shared sessions with an active conversation
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn should_show_wasm_conversation_details_panel(&self, app: &AppContext) -> bool {
+        if self.ambient_agent_task_id_for_details_panel(app).is_some() {
+            return true;
+        }
+        let model = self.model.lock();
+        if model.is_conversation_transcript_viewer() {
+            return true;
+        }
+        if model.shared_session_status().is_sharer_or_viewer() {
+            drop(model);
+            return BlocklistAIHistoryModel::as_ref(app)
+                .active_conversation(self.view_id)
+                .is_some();
+        }
+        false
     }
 
     /// Consume the one-shot conversation details panel auto-open for this

@@ -2570,22 +2570,37 @@ fn test_session_sharing_context_menu_copy_link_enabled_when_session_link_availab
 }
 
 #[test]
-fn test_pane_header_details_button_gate_shows_for_ambient_task() {
-    // REMOTE-2346: verify that `ambient_agent_task_id_for_details_panel` returns Some when
-    // a cloud task is wired, which is the gate condition for the pane-header (i) Show details
-    // button in `render_header_actions`. On desktop the button was already shown; this guards
-    // the shared gate so neither the desktop nor the WASM path regresses to hiding the button
-    // when a cloud task is active.
+fn test_wasm_details_panel_gate_shows_for_ambient_task() {
+    // REMOTE-2346: the WASM pane-header `(i)` button is gated on
+    // `should_show_wasm_conversation_details_panel`. That helper mirrors
+    // `Workspace::should_show_conversation_details_panel` and is not `cfg`-gated so it can be
+    // exercised on the host target even though the WASM render path itself is compiled out.
     App::test((), |mut app| async move {
         let terminal = terminal_view_for_viewer(&mut app);
         let task = create_cloud_mode_task_for_user(TEST_USER_UID);
-        let task_id = configure_ambient_details_panel_test(&mut app, &terminal, task);
+        configure_ambient_details_panel_test(&mut app, &terminal, task);
 
         terminal.read(&app, |view, ctx| {
-            assert_eq!(
-                view.ambient_agent_task_id_for_details_panel(ctx),
-                Some(task_id),
-                "ambient task must be known for the pane-header details button to be shown"
+            assert!(
+                view.should_show_wasm_conversation_details_panel(ctx),
+                "WASM details button gate must return true when an ambient cloud task is wired"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_wasm_details_panel_gate_hidden_for_plain_terminal() {
+    // REMOTE-2346: `should_show_wasm_conversation_details_panel` must return false for a
+    // terminal with no ambient task, no transcript viewer, and no active conversation, so
+    // the pane-header button does not appear when the workspace panel would render nothing.
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                !view.should_show_wasm_conversation_details_panel(ctx),
+                "WASM details button gate must return false for a plain terminal with no cloud task"
             );
         });
     });
