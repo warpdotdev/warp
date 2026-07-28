@@ -857,8 +857,14 @@ fn htab_group_position_id(group_id: warp::workspace::tab_group::TabGroupId) -> S
     format!("horizontal_tabs:group:{group_id:?}")
 }
 
-/// Position of the horizontal tab-group header container for `group_id`.
-fn group_header_center(
+/// A point inside the horizontal tab group's HEADER.
+///
+/// Only the whole group container has a save position, and the header is the
+/// first element inside it, so the container's centre sits over a member tab -
+/// pressing there lets the nested per-tab draggable claim the mouse-down
+/// (`with_defer_to_handled_child_mouse_down`) and starts a tab drag instead of
+/// a group drag. Aim just inside the container's leading edge.
+fn group_header_press_point(
     app: &mut warpui_core::App,
     window_id: WindowId,
     group_id: warp::workspace::tab_group::TabGroupId,
@@ -868,8 +874,8 @@ fn group_header_center(
         .borrow()
         .position_cache()
         .get_position(htab_group_position_id(group_id))
-        .unwrap_or_else(|| panic!("group header position should exist for {window_id:?}"));
-    bounds.center()
+        .unwrap_or_else(|| panic!("group container position should exist for {window_id:?}"));
+    vec2f(bounds.min_x() + 12.0, bounds.center().y())
 }
 
 /// Id of the single tab group in `window_id`.
@@ -936,7 +942,7 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
             TestStep::new("Drag the group out of the window by its header")
                 .with_action(|app, window_id, _| {
                     let group_id = only_group_id(app, window_id);
-                    let start = group_header_center(app, window_id, group_id);
+                    let start = group_header_press_point(app, window_id, group_id);
                     dispatch_mouse_event(
                         app,
                         window_id,
@@ -950,7 +956,7 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
                 })
                 .with_action(|app, window_id, _| {
                     let group_id = only_group_id(app, window_id);
-                    let start = group_header_center(app, window_id, group_id);
+                    let start = group_header_press_point(app, window_id, group_id);
                     dispatch_mouse_event(
                         app,
                         window_id,
@@ -985,8 +991,13 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
                     );
                 }),
         )
-        // The source window keeps only the ungrouped tab; both members left
-        // together and the group itself is gone from the source.
+        // The detached window holds BOTH members - the whole group moved as a
+        // unit, not just the tab under the cursor.
+        .with_step(
+            focus_other_window(DETACHED_WINDOW_KEY, SOURCE_WINDOW_KEY)
+                .add_assertion(assert_tab_count(2)),
+        )
+        // The source window keeps only the ungrouped tab.
         .with_step(
             focus_saved_window(SOURCE_WINDOW_KEY)
                 .add_assertion(assert_tab_count(1))

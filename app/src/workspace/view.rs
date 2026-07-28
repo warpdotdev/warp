@@ -27843,6 +27843,12 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let indices = self.tab_indices_for_pane_group_ids(member_pane_group_ids);
+        log::info!(
+            "tab_drag: remove_transferred_source_group members={} resolved={:?} tabs={}",
+            member_pane_group_ids.len(),
+            indices,
+            self.tabs.len()
+        );
         if indices.is_empty() {
             log::warn!(
                 "tab_drag: transferred group members are already gone from the source                  (skipping remove)"
@@ -27859,6 +27865,11 @@ impl Workspace {
         for &index in indices.iter().rev() {
             self.remove_tab_without_undo(index, ctx);
         }
+        log::info!(
+            "tab_drag: remove_transferred_source_group done wid={:?} tabs_now={}",
+            ctx.window_id(),
+            self.tabs.len()
+        );
     }
 
     /// Prepares this workspace for having a pane group transferred out by
