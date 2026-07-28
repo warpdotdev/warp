@@ -454,9 +454,10 @@ impl CharCellTemporaryBlock {
             wrapped_row_starts: RefCell::new(None),
         }
     }
+}
 
-    /// Converts a GUI-side [`TemporaryBlock`] into a char-cell ghost block.
-    fn from_block(block: TemporaryBlock) -> Self {
+impl From<TemporaryBlock> for CharCellTemporaryBlock {
+    fn from(block: TemporaryBlock) -> Self {
         let inline_decorations = block
             .inline_text_decorations
             .into_iter()
@@ -680,21 +681,9 @@ impl CharCellState {
 
     /// Replace the stored ghost lines. Replace-all semantics, mirroring the
     /// GUI path's `reset_temporary_block`, so stale ghosts never linger.
-    #[cfg(any(test, feature = "test-util"))]
     fn set_temporary_blocks(&self, mut blocks: Vec<CharCellTemporaryBlock>) {
         blocks.sort_by_key(|block| block.insert_before);
         *self.temporary_blocks.borrow_mut() = blocks;
-    }
-
-    /// Converts raw [`TemporaryBlock`]s into char-cell ghost blocks, then
-    /// stores them sorted by insertion line.
-    fn set_temporary_blocks_from_source(&self, blocks: impl IntoIterator<Item = TemporaryBlock>) {
-        let mut converted: Vec<CharCellTemporaryBlock> = blocks
-            .into_iter()
-            .map(CharCellTemporaryBlock::from_block)
-            .collect();
-        converted.sort_by_key(|block| block.insert_before);
-        *self.temporary_blocks.borrow_mut() = converted;
     }
 
     /// The terminal width (in cells) used for char-cell wrapping.
@@ -3187,7 +3176,12 @@ impl RenderState {
                 // No early return: the outstanding-layouts bookkeeping below the
                 // match must run for every action.
                 if let LayoutMode::CharCell(char_cell) = &self.layout_mode {
-                    char_cell.set_temporary_blocks_from_source(blocks);
+                    char_cell.set_temporary_blocks(
+                        blocks
+                            .into_iter()
+                            .map(CharCellTemporaryBlock::from)
+                            .collect(),
+                    );
                 } else if self.lazy_layout {
                     // If we are performing layout lazily, push the temporary
                     // blocks to the pending edits queue which is flushed at
@@ -5687,6 +5681,7 @@ fn append_char_cell_display_widths(
         } else {
             grapheme.width().min(usize::from(u8::MAX)) as u8
         };
+
         let is_newline = grapheme == "\n";
         for (index, ch) in grapheme.chars().enumerate() {
             widths.push(if index == 0 { width } else { 0 });
