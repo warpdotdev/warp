@@ -851,6 +851,152 @@ pub fn test_detach_tab_to_new_window_with_drag() -> Builder {
         .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
 }
 
+/// Mirrors `warp::workspace::view::vertical_tabs::htab_group_position_id`,
+/// which is crate-private. Same shape as the local `tab_position_id` helper.
+fn htab_group_position_id(group_id: warp::workspace::tab_group::TabGroupId) -> String {
+    format!("horizontal_tabs:group:{group_id:?}")
+}
+
+/// Position of the horizontal tab-group header container for `group_id`.
+fn group_header_center(
+    app: &mut warpui_core::App,
+    window_id: WindowId,
+    group_id: warp::workspace::tab_group::TabGroupId,
+) -> Vector2F {
+    let presenter = app.presenter(window_id).expect("presenter should exist");
+    let bounds = presenter
+        .borrow()
+        .position_cache()
+        .get_position(htab_group_position_id(group_id))
+        .unwrap_or_else(|| panic!("group header position should exist for {window_id:?}"));
+    bounds.center()
+}
+
+/// Id of the single tab group in `window_id`.
+fn only_group_id(
+    app: &mut warpui_core::App,
+    window_id: WindowId,
+) -> warp::workspace::tab_group::TabGroupId {
+    let workspace = workspace_view(app, window_id);
+    workspace.read(app, |workspace, _| {
+        *workspace
+            .tab_groups_for_test()
+            .keys()
+            .next()
+            .expect("a tab group should exist")
+    })
+}
+
+pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
+    new_builder()
+        .set_should_run_test(drag_tabs_feature_enabled)
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            execute_command_for_single_terminal_in_tab(
+                0,
+                "echo source-zero".to_string(),
+                ExpectedExitStatus::Success,
+                (),
+            )
+            .add_assertion(save_active_window_id(SOURCE_WINDOW_KEY)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Open a second tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(
+            new_step_with_default_assertions("Open a third tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(2))
+        // Group tabs 1 and 2, leaving tab 0 ungrouped so the source window
+        // survives the detach and we can assert what it keeps.
+        .with_step(
+            TestStep::new("Group the second and third tabs").with_action(|app, window_id, _| {
+                let workspace = workspace_view(app, window_id);
+                workspace.update(app, |workspace, ctx| {
+                    workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
+                    let group_id = *workspace
+                        .tab_groups_for_test()
+                        .keys()
+                        .next()
+                        .expect("group should have been created");
+                    workspace.handle_action(
+                        &WorkspaceAction::MoveTabToGroup {
+                            tab_index: 2,
+                            group_id,
+                        },
+                        ctx,
+                    );
+                });
+            }),
+        )
+        .with_step(
+            TestStep::new("Drag the group out of the window by its header")
+                .with_action(|app, window_id, _| {
+                    let group_id = only_group_id(app, window_id);
+                    let start = group_header_center(app, window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDown {
+                            position: start,
+                            modifiers: ModifiersState::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    let group_id = only_group_id(app, window_id);
+                    let start = group_header_center(app, window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(12.0, 0.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    let start = tab_center(app, window_id, 0);
+                    // Well clear of the tab bar on the perpendicular axis, so
+                    // the detach hit-test fires.
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(220.0, 240.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    let start = tab_center(app, window_id, 0);
+                    dispatch_mouse_event(
+                        app,
+                        window_id,
+                        Event::LeftMouseUp {
+                            position: start + vec2f(220.0, 240.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                }),
+        )
+        // The source window keeps only the ungrouped tab; both members left
+        // together and the group itself is gone from the source.
+        .with_step(
+            focus_saved_window(SOURCE_WINDOW_KEY)
+                .add_assertion(assert_tab_count(1))
+                .add_assertion(assert_command_executed_for_single_terminal_in_tab(
+                    0,
+                    "echo source-zero".to_string(),
+                )),
+        )
+}
+
 pub fn test_attach_tab_to_other_window_and_continue_drag() -> Builder {
     new_builder()
         .set_should_run_test(drag_tabs_feature_enabled)

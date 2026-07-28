@@ -28744,6 +28744,11 @@ impl Workspace {
     /// source tab list can shift while a drag is in flight, so a drag-start
     /// index no longer identifies the tab it was captured for. Ids that are no
     /// longer present are simply absent from the result.
+    /// Read access to this window's tab groups, for integration tests.
+    pub fn tab_groups_for_test(&self) -> &HashMap<TabGroupId, TabGroup> {
+        &self.tab_groups
+    }
+
     /// Index of the tab whose pane group is `pane_group_id`, if still present.
     pub(crate) fn tab_index_for_pane_group_id(&self, pane_group_id: EntityId) -> Option<usize> {
         self.tabs
