@@ -78,6 +78,9 @@ fn toggle_and_reorder_are_reflected_in_saved_config() {
             [
                 TuiStatuslineItem::AutoQueue,
                 TuiStatuslineItem::AutoApprove,
+                // VimModeIndicator was added as a default-on item in commit cdc763323;
+                // it now appears at position 2 in TuiStatuslineItem::ALL.
+                TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,
@@ -96,6 +99,7 @@ fn toggle_and_reorder_are_reflected_in_saved_config() {
             saved.enabled,
             [
                 TuiStatuslineItem::AutoApprove,
+                TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,
