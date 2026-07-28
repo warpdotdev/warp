@@ -667,6 +667,51 @@ impl CrossWindowTabDrag {
         });
     }
 
+    /// Arms the model for a whole-group drag.
+    ///
+    /// `preview_window_id` is `None` when the group took every tab in the
+    /// source window, so the source window itself is the floating preview.
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_group_drag(
+        &mut self,
+        source_window_id: WindowId,
+        source_group_id: TabGroupId,
+        source_first_index: usize,
+        member_pane_group_ids: Vec<EntityId>,
+        preview_window_id: Option<WindowId>,
+        initial_drag_center_offset: Vector2F,
+        window_size: Vector2F,
+        last_known_target_tab_origin_in_window: Vector2F,
+        was_vertical_layout: bool,
+        source_element_size: Vector2F,
+    ) {
+        log::info!(
+            "tab_drag: begin_group_drag source_wid={source_window_id} group={source_group_id:?} \
+             members={} preview_wid={preview_window_id:?}",
+            member_pane_group_ids.len()
+        );
+        self.active_drag = Some(ActiveDrag {
+            source_window_id,
+            source: DragSource::GroupWindow {
+                source_group_id,
+                source_first_index,
+                member_pane_group_ids,
+                preview_window_id,
+            },
+            window_size,
+            initial_drag_center_offset,
+            last_known_target_tab_origin_in_window,
+            last_drag_center_on_screen: None,
+            last_caller_window_id: None,
+            drop_resolution_attempted: false,
+            source_placeholder_consumed: false,
+            was_vertical_layout,
+            source_element_size,
+            reordering_in_source: false,
+            phase: DragPhase::Floating,
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn begin_multi_tab_drag(
         &mut self,

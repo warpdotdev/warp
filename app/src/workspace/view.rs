@@ -29099,6 +29099,162 @@ impl Workspace {
     /// group's center. The split also gives swap/un-swap hysteresis that prevents
     /// constantly swapping back and forth. A collapsed group is one tab wide, so
     /// both directions use its center instead.
+    /// True when a group drag has left the tab bar on its perpendicular axis
+    /// far enough to mean "detach", using the same rects and sensitivity as
+    /// the per-tab path so both gestures feel identical.
+    fn is_group_drag_outside_tab_bar(&self, position: RectF, ctx: &ViewContext<Self>) -> bool {
+        const DETACH_SENSITIVITY: f32 = 10.0;
+        let drag_center = position.center();
+        let rects = tab_bar_rects_for_window(ctx.window_id(), ctx);
+        if rects.is_empty() {
+            let drag_y = position.min_y();
+            return !(-DETACH_SENSITIVITY..=TAB_BAR_HEIGHT + DETACH_SENSITIVITY).contains(&drag_y);
+        }
+        rects.into_iter().all(|rect| {
+            let is_vertical = rect.height() > rect.width();
+            if is_vertical {
+                drag_center.x() < rect.min_x() - DETACH_SENSITIVITY
+                    || drag_center.x() > rect.max_x() + DETACH_SENSITIVITY
+            } else {
+                drag_center.y() < rect.min_y() - DETACH_SENSITIVITY
+                    || drag_center.y() > rect.max_y() + DETACH_SENSITIVITY
+            }
+        })
+    }
+
+    /// Moves a whole group out of this window into a floating preview and arms
+    /// the cross-window drag model.
+    ///
+    /// Ordering is load-bearing. The payload is captured first, while it is
+    /// still only a read; the members are marked detached; the preview window
+    /// is created and every member's view tree moved into it in one update
+    /// with no repaint in between, so no render can observe the group split
+    /// across two windows. The source tab list is deliberately NOT mutated
+    /// here - the members stay as detached placeholders and are removed at
+    /// drop time, which keeps the list consistent with view ownership at every
+    /// render boundary during the drag.
+    fn detach_tab_group_to_preview_window(
+        &mut self,
+        group_id: TabGroupId,
+        position: RectF,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
+            return;
+        };
+        let Some(transferred_group) = self.get_tab_group_transfer_info_for_attach(group_id, ctx)
+        else {
+            return;
+        };
+        let Some(window_bounds) = ctx.window_bounds(&ctx.window_id()) else {
+            return;
+        };
+
+        let member_pane_group_ids = transferred_group.member_pane_group_ids.clone();
+        let takes_every_tab = last - first + 1 >= self.tabs.len();
+
+        let source_window_origin = window_bounds.origin();
+        let drag_origin_in_window = vec2f(position.min_x(), position.min_y());
+        let drag_origin_on_screen = vec2f(
+            source_window_origin.x() + drag_origin_in_window.x(),
+            source_window_origin.y() + drag_origin_in_window.y(),
+        );
+        let last_known_target_tab_origin_in_window = ctx
+            .element_position_by_id(tab_position_id(0))
+            .map(|rect| vec2f(rect.min_x(), rect.min_y()))
+            .unwrap_or_else(|| vec2f(0.0, 0.0));
+        let window_position = drag_origin_on_screen - last_known_target_tab_origin_in_window;
+        let window_size = window_bounds.size();
+        let initial_drag_center_offset =
+            position.center() - vec2f(position.min_x(), position.min_y());
+        let source_window_id = ctx.window_id();
+        let was_vertical_layout = uses_vertical_tabs(ctx);
+        let source_element_size = position.size();
+
+        if takes_every_tab {
+            // Nothing would be left behind, so the source window is itself the
+            // floating preview and no view transfer happens - the same shape
+            // as dragging a single-tab window.
+            let new_bounds = RectF::new(window_position, window_size);
+            ctx.set_and_cache_window_bounds(source_window_id, new_bounds);
+            ctx.windows().cancel_synthetic_drag(source_window_id);
+            if let Some(group) = self.tab_groups.get(&group_id) {
+                group.draggable_state.set_suppress_overlay_paint(true);
+                group
+                    .draggable_state
+                    .adjust_mouse_position(source_window_origin - window_position);
+            }
+            CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _ctx| {
+                drag.begin_group_drag(
+                    source_window_id,
+                    group_id,
+                    first,
+                    member_pane_group_ids,
+                    None,
+                    initial_drag_center_offset,
+                    window_size,
+                    last_known_target_tab_origin_in_window,
+                    was_vertical_layout,
+                    source_element_size,
+                );
+            });
+            ctx.notify();
+            return;
+        }
+
+        for index in first..=last {
+            if let Some(tab_data) = self.tabs.get_mut(index) {
+                tab_data.detached = true;
+            }
+        }
+
+        let Some(preview_window_id) = crate::root_view::create_transferred_group_window(
+            transferred_group,
+            source_window_id,
+            window_size,
+            window_position,
+            ctx,
+        ) else {
+            // Nothing was armed, so undo the placeholder marking or those tabs
+            // stay undraggable for the rest of the session.
+            for index in first..=last {
+                if let Some(tab_data) = self.tabs.get_mut(index) {
+                    tab_data.detached = false;
+                }
+            }
+            ctx.notify();
+            return;
+        };
+        ctx.set_suppress_focus_for_window(Some(preview_window_id));
+
+        CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _ctx| {
+            drag.begin_group_drag(
+                source_window_id,
+                group_id,
+                first,
+                member_pane_group_ids,
+                Some(preview_window_id),
+                initial_drag_center_offset,
+                window_size,
+                last_known_target_tab_origin_in_window,
+                was_vertical_layout,
+                source_element_size,
+            );
+        });
+
+        // The active tab went with the group; move focus to a survivor.
+        if (first..=last).contains(&self.active_tab_index) {
+            let adjacent = if last + 1 < self.tabs.len() {
+                last + 1
+            } else {
+                first.saturating_sub(1)
+            };
+            self.set_active_tab_index(adjacent, ctx);
+        }
+
+        ctx.notify();
+    }
+
     pub(crate) fn on_group_drag(
         &mut self,
         group_id: TabGroupId,
@@ -29109,6 +29265,33 @@ impl Workspace {
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
             return;
         };
+
+        // A cross-window drag is already in flight: forward to the drag model
+        // and let it drive, exactly as `on_tab_drag` does. Without this the
+        // in-window reorder below would keep churning the source list while
+        // the group floats in its preview window.
+        if CrossWindowTabDrag::as_ref(ctx).is_active() {
+            let window_id = ctx.window_id();
+            let drag_result = CrossWindowTabDrag::handle(ctx)
+                .update(ctx, |drag, ctx| drag.on_drag(window_id, position, ctx));
+            if let DragResult::AdjustDraggable { adjustment } = drag_result
+                && let Some(group) = self.tab_groups.get(&group_id)
+            {
+                group.draggable_state.adjust_mouse_position(adjustment);
+            }
+            ctx.notify();
+            return;
+        }
+
+        // Detach the whole group into its own window once the drag leaves the
+        // tab bar on the perpendicular axis, mirroring `on_tab_drag`.
+        if FeatureFlag::DragTabsToWindows.is_enabled()
+            && self.is_group_drag_outside_tab_bar(position, ctx)
+        {
+            self.detach_tab_group_to_preview_window(group_id, position, ctx);
+            return;
+        }
+
         // Reorders that would carry the block across the pinned/unpinned
         // boundary are skipped below: a pinned group must stay in the pinned
         // prefix and an unpinned group must stay out of it.
