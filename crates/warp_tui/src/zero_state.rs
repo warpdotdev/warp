@@ -14,7 +14,7 @@ use std::time::Duration;
 use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use warp::tui_export::{
     ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
-    SkillManager, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
+    SkillManager, SkillManagerEvent, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
 };
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -84,6 +84,10 @@ impl TuiZeroStateView {
                     ctx.notify();
                 }
             },
+        );
+        ctx.subscribe_to_model(
+            &SkillManager::handle(ctx),
+            |_, _, SkillManagerEvent::SkillsChanged { .. }, ctx| ctx.notify(),
         );
         ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&active_session, |_, _, event, ctx| {

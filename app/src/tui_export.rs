@@ -140,7 +140,7 @@ pub use crate::ai::orchestration::{
 };
 #[cfg(feature = "voice_input")]
 pub use crate::ai::request_usage_model::AIRequestUsageModel;
-pub use crate::ai::skills::{SkillManager, SkillReference};
+pub use crate::ai::skills::{SkillManager, SkillManagerEvent, SkillReference};
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::tui_api_keys::notify_tui_api_keys_changed;
 pub use crate::appearance::Appearance;
