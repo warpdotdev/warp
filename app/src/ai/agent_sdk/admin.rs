@@ -132,10 +132,8 @@ impl WhoamiOutput {
 
         self.team_uids = teams.iter().map(|team| team.uid.to_string()).collect();
         self.team_names = teams.iter().map(|team| team.name.clone()).collect();
-        if teams.len() > 1 {
-            self.workspace_uid = Some(workspace.uid.into());
-            self.workspace_name = (!workspace.name.is_empty()).then(|| workspace.name.clone());
-        }
+        self.workspace_uid = Some(workspace.uid.into());
+        self.workspace_name = (!workspace.name.is_empty()).then(|| workspace.name.clone());
     }
 
     fn pretty(&self, principal_type: PrincipalType) -> String {
@@ -151,13 +149,13 @@ impl WhoamiOutput {
             lines.push(format!("Email: {email}"));
         }
 
+        if let Some(workspace_uid) = &self.workspace_uid {
+            lines.push(format!("Workspace UID: {workspace_uid}"));
+        }
+        if let Some(workspace_name) = &self.workspace_name {
+            lines.push(format!("Workspace Name: {workspace_name}"));
+        }
         if self.team_uids.len() > 1 {
-            if let Some(workspace_uid) = &self.workspace_uid {
-                lines.push(format!("Workspace UID: {workspace_uid}"));
-            }
-            if let Some(workspace_name) = &self.workspace_name {
-                lines.push(format!("Workspace Name: {workspace_name}"));
-            }
             lines.push("Teams:".to_string());
         }
 

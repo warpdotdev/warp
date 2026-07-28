@@ -64,11 +64,13 @@ fn single_team_omits_admin_visible_non_member_teams() {
             "email": "ada@example.com",
             "team_uids": ["test_uid00000000000001"],
             "team_names": ["Platform"],
+            "workspace_uid": "workspace_uid123456789",
+            "workspace_name": "Acme",
         })
     );
     assert_eq!(
         output.pretty(PrincipalType::User),
-        "User ID: user-1\nDisplay Name: Ada\nEmail: ada@example.com\nTeam ID: test_uid00000000000001\nTeam Name: Platform"
+        "User ID: user-1\nDisplay Name: Ada\nEmail: ada@example.com\nWorkspace UID: workspace_uid123456789\nWorkspace Name: Acme\nTeam ID: test_uid00000000000001\nTeam Name: Platform"
     );
 }
 
