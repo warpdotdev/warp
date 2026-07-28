@@ -123,7 +123,7 @@ impl StartRecordingExecutor {
                     );
                     let controller = RecordingController::handle(ctx);
                     controller.update(ctx, |controller, _| {
-                    controller.finish_start(
+                        controller.finish_start(
                             recording_id.clone(),
                             conversation_id,
                             handle,

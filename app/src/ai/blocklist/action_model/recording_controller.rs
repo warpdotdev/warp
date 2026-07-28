@@ -218,6 +218,7 @@ impl RecordingController {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_start(
         &mut self,
         recording_id: String,

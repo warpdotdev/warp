@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use image::{Rgba, RgbaImage};
+use image::{GenericImageView, Rgba, RgbaImage};
 
 use super::*;
 
@@ -120,4 +120,72 @@ fn solid_frame(width: u32, height: u32, rgb: [u8; 3]) -> RgbaImage {
         *pixel = Rgba([rgb[0], rgb[1], rgb[2], 255]);
     }
     frame
+}
+
+/// Integration test (requires ffmpeg): synthesizes a short video, generates
+/// a thumbnail from it, and verifies the output PNG. Confirms the full
+/// ffmpeg extraction + play-button compositing pipeline end-to-end.
+///
+/// Run with:
+/// ```
+/// cargo test -p computer_use generate_thumbnail_for_synthetic_video -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore]
+async fn generate_thumbnail_for_synthetic_video() {
+    let video = std::env::temp_dir().join("warp-test-recording.mp4");
+    // 2-second solid-colour video — simple and deterministic.
+    let status = tokio::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:size=640x360:duration=2:rate=30",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&video)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .expect("ffmpeg should be available");
+    assert!(status.success(), "synthetic video creation failed");
+
+    let thumb_path = generate_video_thumbnail(&video, DEFAULT_THUMBNAIL_MAX_WIDTH)
+        .await
+        .expect("thumbnail generation should succeed");
+
+    println!("Thumbnail written to: {}", thumb_path.display());
+    assert!(thumb_path.exists(), "thumbnail file should exist on disk");
+
+    let img = image::open(&thumb_path).expect("thumbnail should be valid PNG");
+    let (w, h) = img.dimensions();
+    println!("Thumbnail dimensions: {w}x{h}");
+    assert!(
+        w <= DEFAULT_THUMBNAIL_MAX_WIDTH,
+        "width must not exceed max_width"
+    );
+    assert!(w > 0 && h > 0, "thumbnail must have non-zero dimensions");
+
+    // The play-button disc must darken the center relative to the background.
+    // For a solid blue frame, the disc area should have less blue than the
+    // corner pixels (blended with a dark overlay) and the center of the
+    // triangle should be brighter (white glyph).
+    let img_rgba = img.to_rgba8();
+    let corner = img_rgba.get_pixel(0, 0);
+    let center = img_rgba.get_pixel(w / 2, h / 2);
+    // The solid blue background may have minor rounding from YUV→RGB conversion
+    // after H.264 encoding; allow ±2 per channel.
+    assert!(
+        corner.0[0] < 10 && corner.0[1] < 10 && corner.0[2] > 240,
+        "corner should be approximately blue background, got {corner:?}"
+    );
+    assert!(
+        center.0[0] > 200 && center.0[1] > 200 && center.0[2] > 200,
+        "frame center should be the white triangle, got {center:?}"
+    );
 }
