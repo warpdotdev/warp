@@ -8051,10 +8051,13 @@ impl TerminalView {
     }
 
     /// Whether the WASM workspace-level conversation details panel should be shown for this
-    /// terminal view. Mirrors `Workspace::should_show_conversation_details_panel` but takes
-    /// `&self` so it is callable without a `ViewHandle<TerminalView>`. The WASM render path
-    /// calls it at render time, and the same logic is exercised by host-target unit tests
-    /// (hence the `#[cfg(any(test, target_arch = "wasm32"))]` rather than a pure wasm32 gate).
+    /// terminal view. This is the authoritative predicate: `Workspace::should_show_conversation_details_panel`
+    /// delegates here. The `#[cfg(any(test, target_arch = "wasm32"))]` gate allows this logic
+    /// to be exercised by host-target unit tests even though the WASM render path is compiled out.
+    ///
+    /// Note: the pane-header `(i)` button uses a narrower gate (ambient task present AND
+    /// `!is_sharer_or_viewer()`) so it only appears on surfaces without a tab-bar affordance.
+    /// This predicate is intentionally broader so the panel renders for all three surfaces.
     ///
     /// Returns `true` for:
     /// - Restored ambient cloud tasks

@@ -2571,10 +2571,10 @@ fn test_session_sharing_context_menu_copy_link_enabled_when_session_link_availab
 
 #[test]
 fn test_wasm_details_panel_gate_shows_for_ambient_task() {
-    // REMOTE-2346: the WASM pane-header `(i)` button is gated on
-    // `should_show_wasm_conversation_details_panel`. That helper mirrors
-    // `Workspace::should_show_conversation_details_panel` and is not `cfg`-gated so it can be
-    // exercised on the host target even though the WASM render path itself is compiled out.
+    // REMOTE-2346: the workspace-level transcript details panel is gated on
+    // `Workspace::should_show_conversation_details_panel`. It is gated on
+    // `cfg(any(test, target_arch = "wasm32"))`, so it can be exercised on the host target even
+    // though the WASM render path itself is compiled out.
     App::test((), |mut app| async move {
         let terminal = terminal_view_for_viewer(&mut app);
         let task = create_cloud_mode_task_for_user(TEST_USER_UID);

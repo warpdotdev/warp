@@ -409,9 +409,13 @@ impl TerminalView {
                 .ambient_agent_view_model
                 .as_ref()
                 .is_some_and(|model| model.as_ref(app).is_waiting_for_session());
-        // The gate and the render path are split by target: on WASM the details panel is
-        // workspace-level, so the button gate must match `Workspace::should_show_conversation_details_panel`;
-        // on desktop the panel is pane-level and `can_show_conversation_details_ui` is correct.
+        // The gate and the render path are split by target: on desktop the panel is pane-level
+        // and `can_show_conversation_details_ui` is correct. On WASM the panel is
+        // workspace-level; the pane-header button is shown only for surfaces that lack a tab-bar
+        // affordance — i.e. ambient cloud tasks where `get_simplified_wasm_tab_bar_content`
+        // returns `None`. Transcript viewers and shared sessions already show the simplified WASM
+        // tab-bar `(i)` button via `should_show_conversation_details_panel`, so the pane header
+        // must not add a second identical button on those pages.
         let show_details_button = {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -419,7 +423,12 @@ impl TerminalView {
             }
             #[cfg(target_arch = "wasm32")]
             {
-                self.should_show_wasm_conversation_details_panel(app)
+                // Gate: ambient task present AND not a shared session (shared sessions already
+                // have the tab-bar info button via `get_simplified_wasm_tab_bar_content`).
+                let model = self.model.lock();
+                self.ambient_agent_task_id_for_details_panel_from_model(&model, app)
+                    .is_some()
+                    && !model.shared_session_status().is_sharer_or_viewer()
             }
         };
         let button_element = if is_waiting_for_session {
@@ -839,9 +848,8 @@ impl TerminalView {
     }
 
     /// Render the info button for toggling the workspace-level conversation details panel on WASM.
-    /// Mirrors the desktop `(i) Show details` button in the pane header. On WASM the panel is
-    /// rendered at the workspace level (controlled by `is_transcript_details_panel_open`). The
-    /// open state is derived at render time from the authoritative `WorkspaceState` so it stays
+    /// Shown only for ambient cloud tasks without a tab-bar affordance. Like the desktop `(i)` button,
+    /// it derives open state from the authoritative `WorkspaceState` at render time so it stays
     /// accurate across pane/tab focus changes without any per-view mirroring.
     #[cfg(target_arch = "wasm32")]
     fn render_wasm_conversation_details_toggle_button(&self, app: &AppContext) -> Box<dyn Element> {
@@ -852,7 +860,7 @@ impl TerminalView {
         let is_open = WorkspaceRegistry::as_ref(app)
             .get(self.window_id, app)
             .as_ref()
-            .map_or(false, |workspace| {
+            .is_some_and(|workspace| {
                 workspace
                     .as_ref(app)
                     .current_workspace_state
@@ -867,29 +875,38 @@ impl TerminalView {
             blended_colors::text_sub(theme, theme.background()).into()
         };
 
-        icon_button_with_color(
+        let button = icon_button_with_color(
             appearance,
             icons::Icon::Info,
             is_open, // show active background when panel is open
             self.conversation_details_panel_toggle_mouse_state.clone(),
             icon_color,
-        )
-        .with_tooltip(move || {
-            let tooltip_text = if is_open {
-                "Hide details"
-            } else {
-                "Show details"
-            };
-            ui_builder
-                .tool_tip(tooltip_text.to_string())
-                .build()
-                .finish()
-        })
-        .build()
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::ToggleConversationTranscriptDetailsPanel);
-        })
-        .finish()
+        );
+        // Add explicit surface_2 background when panel is open, matching the desktop button.
+        let button = if is_open {
+            button.with_style(UiComponentStyles::default().set_background(theme.surface_2().into()))
+        } else {
+            button
+        };
+        button
+            .with_tooltip(move || {
+                let tooltip_text = if is_open {
+                    "Hide details"
+                } else {
+                    "Show details"
+                };
+                ui_builder
+                    .tool_tip(tooltip_text.to_string())
+                    .build()
+                    .finish()
+            })
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(
+                    WorkspaceAction::ToggleConversationTranscriptDetailsPanel,
+                );
+            })
+            .finish()
     }
 
     /// Render the indicator for terminal mode (no conversation selected).
