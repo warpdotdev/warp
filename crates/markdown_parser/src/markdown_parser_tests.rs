@@ -37,6 +37,281 @@ fn test_parse_line_endings() {
 }
 
 #[test]
+fn test_list_item_hard_wrap_bold_spans_continuation() {
+    // The reporter's exact example: a soft-wrapped unordered list item whose continuation line is
+    // indented to the content column. It must render as a single list item with bold spanning the
+    // source hard-wrap (including the inline code span), and the trailing text after the closing
+    // `**` staying plain.
+    let source = "- **W2.4 Sandbox-creation idempotency inside `Worker.Process` (investigate, then fix or\n  document).** The offer activity's idempotency guard covers \"claim recorded but activity result lost\".";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::UnorderedList(
+            FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![
+                    FormattedTextFragment::bold("W2.4 Sandbox-creation idempotency inside "),
+                    FormattedTextFragment {
+                        text: "Worker.Process".to_string(),
+                        styles: FormattedTextStyles {
+                            weight: Some(CustomWeight::Bold),
+                            inline_code: true,
+                            ..Default::default()
+                        },
+                    },
+                    FormattedTextFragment::bold(" (investigate, then fix or document)."),
+                    FormattedTextFragment::plain_text(
+                        " The offer activity's idempotency guard covers \"claim recorded but activity result lost\"."
+                    ),
+                ],
+            }
+        )]
+    );
+}
+
+#[test]
+fn test_ordered_list_item_soft_wrap() {
+    // An ordered list item continuation indented to the content column (3 = "1. ") joins into one
+    // item, and emphasis spans the wrap.
+    assert_eq!(
+        test_parse_markdown("1. **alpha\n   beta**"),
+        vec![FormattedTextLine::OrderedList(
+            OrderedFormattedIndentTextInline {
+                number: Some(1),
+                indented_text: FormattedIndentTextInline {
+                    indent_level: 0,
+                    text: vec![FormattedTextFragment::bold("alpha beta")],
+                },
+            }
+        )]
+    );
+}
+
+#[test]
+fn test_task_list_item_soft_wrap() {
+    // A task list item continuation indented to the content column (6 = "- [ ] ") joins into one
+    // item, and emphasis spans the wrap.
+    assert_eq!(
+        test_parse_markdown("- [ ] **alpha\n      beta**"),
+        vec![FormattedTextLine::TaskList(FormattedTaskList {
+            complete: false,
+            indent_level: 0,
+            text: vec![FormattedTextFragment::bold("alpha beta")],
+        })]
+    );
+}
+
+#[test]
+fn test_list_item_continuation_stops_at_blank_line() {
+    // A blank line ends the list item; following text is a separate paragraph.
+    assert_eq!(
+        test_parse_markdown("- alpha\n\nbeta"),
+        vec![
+            FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("alpha")],
+            }),
+            FormattedTextLine::LineBreak,
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("beta")]),
+        ]
+    );
+}
+
+#[test]
+fn test_list_item_continuation_stops_at_heading() {
+    // A heading after a list item starts a new block; it is not folded into the item.
+    assert_eq!(
+        test_parse_markdown("- alpha\n# Heading"),
+        vec![
+            FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("alpha")],
+            }),
+            FormattedTextLine::Heading(FormattedTextHeader {
+                heading_size: 1,
+                text: vec![FormattedTextFragment::plain_text("Heading")],
+            }),
+        ]
+    );
+}
+
+#[test]
+fn test_list_item_continuation_stops_at_code_fence() {
+    // A fenced code block after a list item starts a new block; it is not folded into the item
+    // and the code contents are preserved verbatim.
+    let result = test_parse_markdown("- alpha\n```\ncode line\n```");
+    assert_eq!(result.len(), 2);
+    assert_eq!(
+        result[0],
+        FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+            indent_level: 0,
+            text: vec![FormattedTextFragment::plain_text("alpha")],
+        })
+    );
+    match &result[1] {
+        FormattedTextLine::CodeBlock(block) => assert_eq!(block.code, "code line\n"),
+        other => panic!("expected CodeBlock, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_list_item_continuation_stops_at_horizontal_rule() {
+    // A horizontal rule after a list item starts a new block; it is not folded into the item.
+    assert_eq!(
+        test_parse_markdown("- alpha\n---\n"),
+        vec![
+            FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("alpha")],
+            }),
+            FormattedTextLine::HorizontalRule,
+        ]
+    );
+}
+
+#[test]
+fn test_list_item_continuation_stops_at_table() {
+    // With GFM tables enabled, a table row after a list item starts a new block.
+    let result =
+        test_parse_markdown_with_gfm_tables("- alpha\n| a | b |\n| --- | --- |\n| 1 | 2 |\n");
+    assert_eq!(
+        result[0],
+        FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+            indent_level: 0,
+            text: vec![FormattedTextFragment::plain_text("alpha")],
+        })
+    );
+    assert!(
+        matches!(result[1], FormattedTextLine::Table(_)),
+        "expected a Table after the list item, got {:?}",
+        result[1]
+    );
+}
+
+#[test]
+fn test_nested_list_preserved() {
+    // A more-indented list marker on the next line is a nested list item, not a soft-wrap
+    // continuation of the parent item.
+    assert_eq!(
+        test_parse_markdown("- alpha\n  - beta"),
+        vec![
+            FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("alpha")],
+            }),
+            FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+                indent_level: 1,
+                text: vec![FormattedTextFragment::plain_text("beta")],
+            }),
+        ]
+    );
+}
+
+#[test]
+fn test_ordered_numbering_preserved_with_wrapped_items() {
+    // Soft-wrapped items still start new list blocks, so the ordered-list numbering reset logic is
+    // unaffected: only the first item keeps its number.
+    let result = test_parse_markdown("1. alpha\n   wrapped\n2. beta\n   wrapped");
+    assert_eq!(
+        result,
+        vec![
+            FormattedTextLine::OrderedList(OrderedFormattedIndentTextInline {
+                number: Some(1),
+                indented_text: FormattedIndentTextInline {
+                    indent_level: 0,
+                    text: vec![FormattedTextFragment::plain_text("alpha wrapped")],
+                },
+            }),
+            FormattedTextLine::OrderedList(OrderedFormattedIndentTextInline {
+                number: None,
+                indented_text: FormattedIndentTextInline {
+                    indent_level: 0,
+                    text: vec![FormattedTextFragment::plain_text("beta wrapped")],
+                },
+            }),
+        ]
+    );
+}
+
+#[test]
+fn test_lazy_continuation_deferred() {
+    // Documented v1 deviation: lazy continuation is not supported. A non-indented line after a
+    // list item does NOT continue the item; it starts a new paragraph.
+    assert_eq!(
+        test_parse_markdown("- alpha\nbeta"),
+        vec![
+            FormattedTextLine::UnorderedList(FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("alpha")],
+            }),
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("beta")]),
+        ]
+    );
+}
+
+#[test]
+fn test_paragraph_soft_wrap_deferred() {
+    // Documented v1 deviation: general (non-list) paragraph soft-wrap reflow is NOT applied. Each
+    // plain source line stays its own rendered line (unchanged from before this change). Only
+    // list-item continuations are grouped in this version.
+    assert_eq!(
+        test_parse_markdown("alpha\nbeta"),
+        vec![
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("alpha")]),
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("beta")]),
+        ]
+    );
+}
+
+#[test]
+fn test_list_item_hard_break_collapses_to_space_v1() {
+    // Documented v1 deviation: hard line breaks (two trailing spaces or a trailing backslash) are
+    // NOT preserved as forced breaks yet; within a joined list item they collapse to a space like
+    // a soft break. This is not a regression because hard breaks were unsupported before.
+    assert_eq!(
+        test_parse_markdown("- alpha  \n  beta"),
+        vec![FormattedTextLine::UnorderedList(
+            FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("alpha beta")],
+            }
+        )]
+    );
+}
+
+#[test]
+fn test_list_item_hard_break_backslash_collapses_to_space_v1() {
+    // Documented v1 deviation: a trailing backslash (a CommonMark hard break) is not preserved as
+    // a forced break; within a joined list item it collapses to a space, and the backslash must
+    // NOT survive as a literal character in the joined text. Not a regression (hard breaks were
+    // unsupported before this change).
+    assert_eq!(
+        test_parse_markdown("- alpha\\\n  beta"),
+        vec![FormattedTextLine::UnorderedList(
+            FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::plain_text("alpha beta")],
+            }
+        )]
+    );
+}
+
+#[test]
+fn test_list_item_continuation_not_broken_by_pipe_line() {
+    // A pipe-starting continuation line that is not a real GFM table (there is no delimiter row)
+    // must NOT end the list item, even with GFM tables enabled — emphasis still spans the wrap.
+    // Regression test for an over-eager table-boundary check that broke on any leading `|`.
+    assert_eq!(
+        test_parse_markdown_with_gfm_tables("- **alpha\n  | beta**"),
+        vec![FormattedTextLine::UnorderedList(
+            FormattedIndentTextInline {
+                indent_level: 0,
+                text: vec![FormattedTextFragment::bold("alpha | beta")],
+            }
+        )]
+    );
+}
+
+#[test]
 fn test_parse_single_line() {
     // Ensure we can parse without a trailing newline.
     assert_eq!(
@@ -270,7 +545,7 @@ fn test_parse_task_list() {
     let source = "- [ ] This is a list";
     let ctx = std::cell::RefCell::new(ListIndentationContext::new());
     assert_eq!(
-        parse_all(source, |input| parse_task_list(input, &ctx)),
+        parse_all(source, |input| parse_task_list(input, &ctx, false)),
         FormattedTaskList {
             complete: false,
             indent_level: 0,
