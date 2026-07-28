@@ -4400,9 +4400,9 @@ impl TuiView for TuiTerminalSessionView {
                     .and_then(|exchange| exchange.time_since_start());
                 if let Some(elapsed) = warping_elapsed {
                     let label = if conversation.is_summarizing() {
-                        "Summarizing conversation..."
+                        "Summarizing conversation"
                     } else {
-                        "Warping..."
+                        "Warping"
                     };
                     content = content.child(
                         TuiContainer::new(self.render_warping_indicator(
