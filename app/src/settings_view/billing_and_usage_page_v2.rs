@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Local;
 use itertools::Itertools;
@@ -12,6 +13,7 @@ use thousands::Separable;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_graphql::billing::AddonCreditsOption;
+use warpui::r#async::Timer;
 use warpui::elements::{
     Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment, MainAxisSize,
@@ -43,7 +45,7 @@ use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
-use crate::pricing::PricingInfoModel;
+use crate::pricing::{PricingInfoModel, format_usd_cents};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::ai::AISettings;
@@ -139,6 +141,15 @@ struct AddonCreditsState {
     options: Vec<AddonCreditsOption>,
     denomination_buttons: Vec<ViewHandle<ActionButton>>,
     purchase_loading: bool,
+    /// Server-returned `teamUid` from a Free-plan `PurchaseAddonCreditsCheckoutRequired`
+    /// response. Retained until the workspace refresh confirms the credit grant
+    /// (`bonus_grants_purchased_this_month.cents_spent` exceeds the baseline captured
+    /// at checkout time) or the bounded poll times out after 2.5 minutes.
+    pending_checkout: Option<ServerId>,
+    /// `bonus_grants_purchased_this_month.cents_spent` at the moment the Free-plan
+    /// Stripe Checkout URL was opened.  Used to detect the credit grant on each
+    /// `TeamsChanged` refresh without relying on an explicit server event.
+    checkout_cents_spent_baseline: i32,
 }
 enum AddonCreditsPanelState {
     IneligiblePlan(AddonCreditsRestriction),
@@ -163,10 +174,18 @@ struct AddonCreditsPurchaseState {
     auto_reload_enabled: bool,
     has_admin_permissions: bool,
     purchase_disabled: bool,
+    /// Whether to show the auto-reload row. False for Free users with a plan
+    /// markup — per spec Behavior 9, one-time Free purchases must not expose
+    /// auto-reload controls. Keyed on whether any available option has markup
+    /// rather than the selected option, so the row doesn't flicker on selection.
+    show_auto_reload: bool,
     auto_reload_switch_disabled: bool,
     price_label: String,
     auto_reload_tooltip_text: String,
     warning_text: Option<&'static str>,
+    /// True when a Free-plan Stripe Checkout URL has been opened and Warp is
+    /// waiting for the user to complete or cancel it in the browser.
+    is_browser_pending: bool,
 }
 
 struct UsageHistoryState {
@@ -353,6 +372,8 @@ impl BillingAndUsagePageV2View {
                 options: Default::default(),
                 denomination_buttons: Default::default(),
                 purchase_loading: false,
+                pending_checkout: None,
+                checkout_cents_spent_baseline: 0,
             },
             pending_auto_reload_toast: None,
             tab_mouse_states: Default::default(),
@@ -405,6 +426,31 @@ impl BillingAndUsagePageV2View {
         match event {
             UserWorkspacesEvent::TeamsChanged => {
                 self.update_addon_credit_modal(ctx);
+                // If a Free-plan Checkout was pending, check whether this workspace
+                // refresh reflects the completed credit grant by comparing
+                // cents_spent against the baseline captured at checkout time.
+                // Only clear pending when a real grant is observed — the poll
+                // itself triggers TeamsChanged on every tick, so we must not
+                // clear unconditionally (spec Behavior 15).
+                if self.addon_credits.pending_checkout.is_some() {
+                    let current_cents = UserWorkspaces::as_ref(ctx)
+                        .current_workspace()
+                        .map(|ws| ws.bonus_grants_purchased_this_month.cents_spent)
+                        .unwrap_or(0);
+                    if current_cents > self.addon_credits.checkout_cents_spent_baseline {
+                        // Grant observed — purchase completed in Stripe Checkout.
+                        self.addon_credits.pending_checkout = None;
+                        self.addon_credits.checkout_cents_spent_baseline = 0;
+                        self.show_toast(
+                            "Successfully purchased add-on credits",
+                            ToastFlavor::Success,
+                            ctx,
+                        );
+                        AIRequestUsageModel::handle(ctx)
+                            .update(ctx, |m, ctx| m.refresh_request_usage_async(ctx));
+                    }
+                    // No grant yet — leave pending set so the poll continues.
+                }
             }
             UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => {
                 self.update_addon_credit_modal(ctx);
@@ -427,6 +473,7 @@ impl BillingAndUsagePageV2View {
             }
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 self.addon_credits.purchase_loading = false;
+                self.addon_credits.pending_checkout = None;
                 self.show_toast(
                     "Successfully purchased add-on credits",
                     ToastFlavor::Success,
@@ -435,12 +482,61 @@ impl BillingAndUsagePageV2View {
                 AIRequestUsageModel::handle(ctx)
                     .update(ctx, |m, ctx| m.refresh_request_usage_async(ctx));
             }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { url, team_uid } => {
+                // Free-plan purchase: the server created a one-time Stripe Checkout
+                // session. Open the URL in the browser, capture the current spend
+                // baseline for grant-detection, retain team_uid for reconciliation,
+                // and start a short-interval bounded refresh loop so the pending
+                // state clears within seconds of the user returning
+                // (spec Behaviors 14-15). Success is confirmed only after a workspace
+                // refresh shows the granted credits; the redirect alone is not success.
+                self.addon_credits.purchase_loading = false;
+                self.addon_credits.pending_checkout = Some(*team_uid);
+                self.addon_credits.checkout_cents_spent_baseline = UserWorkspaces::as_ref(ctx)
+                    .current_workspace()
+                    .map(|ws| ws.bonus_grants_purchased_this_month.cents_spent)
+                    .unwrap_or(0);
+                self.schedule_checkout_reconciliation_poll(ctx, 0);
+                ctx.open_url(url);
+                ctx.notify();
+            }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(err) => {
                 self.addon_credits.purchase_loading = false;
+                self.addon_credits.pending_checkout = None;
                 self.show_toast(&err.to_string(), ToastFlavor::Error, ctx);
             }
             _ => {}
         }
+    }
+
+    /// Schedules a workspace-metadata refresh on a fixed interval, re-scheduling itself
+    /// until the grant is observed or the attempt cap is reached (spec Behavior 15).
+    /// Each refresh fires `TeamsChanged`; the handler clears `pending_checkout` only
+    /// when `bonus_grants_purchased_this_month.cents_spent` exceeds the baseline —
+    /// ensuring the button stays disabled while the user is in the browser.
+    fn schedule_checkout_reconciliation_poll(&mut self, ctx: &mut ViewContext<Self>, attempts: u8) {
+        // Poll every 5 seconds for up to 2.5 minutes (30 × 5 s).
+        const MAX_ATTEMPTS: u8 = 30;
+        const POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+        if attempts >= MAX_ATTEMPTS {
+            // Timed out without observing a grant.  Clear pending so the buy
+            // button re-enables and the user can try again.
+            if self.addon_credits.pending_checkout.take().is_some() {
+                self.addon_credits.checkout_cents_spent_baseline = 0;
+                ctx.notify();
+            }
+            return;
+        }
+
+        let _ = ctx.spawn(Timer::after(POLL_INTERVAL), move |view, _, ctx| {
+            if view.addon_credits.pending_checkout.is_some() {
+                TeamUpdateManager::handle(ctx).update(ctx, |mgr, ctx| {
+                    std::mem::drop(mgr.refresh_workspace_metadata(ctx))
+                });
+                view.schedule_checkout_reconciliation_poll(ctx, attempts + 1);
+            }
+        });
     }
 
     fn show_toast(&self, message: &str, flavor: ToastFlavor, ctx: &mut ViewContext<Self>) {
@@ -1031,7 +1127,7 @@ impl BillingAndUsagePageV2View {
     fn render_addon_credits_panel(
         &self,
         workspace: &Workspace,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         has_admin_permissions: bool,
         delinquent: bool,
         app: &AppContext,
@@ -1064,27 +1160,48 @@ impl BillingAndUsagePageV2View {
     fn addon_credits_panel_state(
         &self,
         workspace: &Workspace,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         has_admin_permissions: bool,
         delinquent: bool,
         app: &AppContext,
     ) -> AddonCreditsPanelState {
+        // Check purchase eligibility from the team first, then fall back to the
+        // workspace billing metadata only for teamless Free users (spec "Settings v2 #2").
+        // When a team exists, team entitlement stays authoritative; the workspace
+        // fallback must not widen eligibility for users who do have a team.
         let team_can_purchase = UserWorkspaces::as_ref(app)
             .current_team()
             .and_then(|t| t.billing_metadata.tier.purchase_add_on_credits_policy)
             .is_some_and(|p| p.enabled);
+        let workspace_can_purchase = UserWorkspaces::as_ref(app).current_team().is_none()
+            && workspace
+                .billing_metadata
+                .tier
+                .purchase_add_on_credits_policy
+                .is_some_and(|p| p.enabled);
+        let can_purchase = team_can_purchase || workspace_can_purchase;
         let can_upgrade = workspace.billing_metadata.can_upgrade_to_build_plan();
 
-        if !team_can_purchase {
+        if !can_purchase {
             if !has_admin_permissions {
                 return AddonCreditsPanelState::IneligiblePlan(
                     AddonCreditsRestriction::ContactTeamAdmin,
                 );
             } else if can_upgrade {
+                let url = team_uid
+                    .map(UserWorkspaces::upgrade_link_for_team)
+                    .unwrap_or_else(|| {
+                        // Teamless users upgrade via user-level link.
+                        AuthStateProvider::as_ref(app)
+                            .get()
+                            .user_id()
+                            .map(UserWorkspaces::upgrade_link)
+                            .unwrap_or_default()
+                    });
                 return AddonCreditsPanelState::IneligiblePlan(
                     AddonCreditsRestriction::UpgradeToBuild {
                         link_text: "Upgrade to Build",
-                        url: UserWorkspaces::upgrade_link_for_team(team_uid),
+                        url,
                     },
                 );
             }
@@ -1118,27 +1235,36 @@ impl BillingAndUsagePageV2View {
                 .addon_credits_settings
                 .max_monthly_spend_cents
                 .unwrap_or(DEFAULT_MAX_MONTHLY_SPEND_CENTS);
-            (workspace.bonus_grants_purchased_this_month.cents_spent + opt.price_usd_cents) > limit
+            would_exceed_monthly_limit(
+                opt,
+                workspace.bonus_grants_purchased_this_month.cents_spent,
+                limit,
+            )
         });
+        // Also disable purchase when the server returned invalid price data (Behavior 18).
+        let price_invalid = selected_credit_option.is_some_and(|opt| !opt.is_price_valid());
+        let is_browser_pending = self.addon_credits.pending_checkout.is_some();
         let purchase_disabled = self.addon_credits.purchase_loading
+            || is_browser_pending
             || would_exceed
+            || price_invalid
             || delinquent
             || auto_reload_enabled;
+        // Auto-reload switch is shown only for plans without Free markup.
+        // For markup plans, the entire auto-reload row is hidden (spec Behavior 9).
+        let show_auto_reload =
+            show_auto_reload_for_options(has_admin_permissions, &self.addon_credits.options);
         let auto_reload_switch_disabled = !has_admin_permissions
             || delinquent
             || (!auto_reload_enabled && selected_credit_option.is_none());
         let price_label = selected_credit_option
-            .map(|opt| {
-                let credits = opt.credits.separate_with_commas();
-                let dollars = format!("${:.2}", opt.price_usd_cents as f64 / 100.0);
-                format!("{credits} credits / {dollars}")
-            })
+            .map(price_label_for_option)
             .unwrap_or_default();
         let auto_reload_credit_amount = selected_credit_option
             .map(|o| format!("{} credits", o.credits.separate_with_commas()))
             .unwrap_or_else(|| "selected credit amount".to_string());
         let auto_reload_tooltip_text = format!(
-            "When any member on your team’s credit balance reaches 100 credits remaining, \
+            "When any member on your team's credit balance reaches 100 credits remaining, \
             automatically purchase {auto_reload_credit_amount}."
         );
         let warning_text = if delinquent && has_admin_permissions {
@@ -1188,7 +1314,7 @@ impl BillingAndUsagePageV2View {
             let description_text = match configured_auto_reload_option {
                 Some(option) => {
                     let credits = option.credits.separate_with_commas();
-                    let price = format!("${:.2}", option.price_usd_cents as f64 / 100.0);
+                    let price = format_usd_cents(option.total_price_cents());
                     format!(
                         "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your balance."
                     )
@@ -1208,10 +1334,12 @@ impl BillingAndUsagePageV2View {
             auto_reload_enabled,
             has_admin_permissions,
             purchase_disabled,
+            show_auto_reload,
             auto_reload_switch_disabled,
             price_label,
             auto_reload_tooltip_text,
             warning_text,
+            is_browser_pending,
         })
     }
 
@@ -1334,7 +1462,7 @@ impl BillingAndUsagePageV2View {
     fn render_addon_credits_purchase_card(
         &self,
         workspace: &Workspace,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         state: AddonCreditsPurchaseState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -1511,15 +1639,19 @@ impl BillingAndUsagePageV2View {
 
     fn render_addon_credits_lower_section(
         &self,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         state: &AddonCreditsPurchaseState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let fg = theme.foreground();
         let auto_reload_enabled = state.auto_reload_enabled;
+        // When a Free-plan Stripe Checkout is open in the browser, keep the
+        // button visible but labeled to reflect the pending state (spec Behavior 14).
         let purchase_button_label = if self.addon_credits.purchase_loading {
             "Buying\u{2026}"
+        } else if state.is_browser_pending {
+            "Complete purchase in your browser"
         } else {
             "One-time purchase"
         };
@@ -1566,54 +1698,60 @@ impl BillingAndUsagePageV2View {
             );
 
         let mut right_group = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        if state.has_admin_permissions {
-            let auto_reload_switch_element = {
-                let switch_builder = appearance
-                    .ui_builder()
-                    .switch(self.buy_credits_mouse_states.auto_reload_switch.clone())
-                    .check(auto_reload_enabled);
-                if state.auto_reload_switch_disabled {
-                    switch_builder.disable().build().finish()
-                } else {
-                    switch_builder
-                        .build()
-                        .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(
-                                BillingAndUsagePageAction::UpdateAutoReloadEnabled {
-                                    team_uid,
-                                    enabled: !auto_reload_enabled,
-                                },
-                            );
-                        })
-                        .finish()
-                }
-            };
-            let auto_reload_info_icon = render_info_icon(
-                appearance,
-                AdditionalInfo::<BillingAndUsagePageAction> {
-                    mouse_state: self.buy_credits_mouse_states.auto_reload_info.clone(),
-                    on_click_action: None,
-                    secondary_text: None,
-                    tooltip_override_text: Some(state.auto_reload_tooltip_text.clone()),
-                },
-            );
+        // Auto-reload controls are hidden entirely for Free-plan marked-up purchases
+        // (spec Behavior 9). `show_auto_reload` is false for those users.
+        if state.show_auto_reload {
+            // Auto-reload requires a concrete team_uid; teamless users never have markup
+            // so this branch is only reached when a team exists.
+            if let Some(team_uid) = team_uid {
+                let auto_reload_switch_element = {
+                    let switch_builder = appearance
+                        .ui_builder()
+                        .switch(self.buy_credits_mouse_states.auto_reload_switch.clone())
+                        .check(auto_reload_enabled);
+                    if state.auto_reload_switch_disabled {
+                        switch_builder.disable().build().finish()
+                    } else {
+                        switch_builder
+                            .build()
+                            .on_click(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(
+                                    BillingAndUsagePageAction::UpdateAutoReloadEnabled {
+                                        team_uid,
+                                        enabled: !auto_reload_enabled,
+                                    },
+                                );
+                            })
+                            .finish()
+                    }
+                };
+                let auto_reload_info_icon = render_info_icon(
+                    appearance,
+                    AdditionalInfo::<BillingAndUsagePageAction> {
+                        mouse_state: self.buy_credits_mouse_states.auto_reload_info.clone(),
+                        on_click_action: None,
+                        secondary_text: None,
+                        tooltip_override_text: Some(state.auto_reload_tooltip_text.clone()),
+                    },
+                );
 
-            right_group.add_children([
-                Text::new_inline("Auto-reload", appearance.ui_font_family(), 14.)
-                    .with_color(fg.into())
-                    .with_style(Properties::default().weight(Weight::Semibold))
-                    .finish(),
-                Container::new(auto_reload_info_icon)
-                    .with_margin_left(4.)
-                    .finish(),
-                Container::new(auto_reload_switch_element)
-                    .with_margin_left(8.)
-                    .finish(),
-            ]);
+                right_group.add_children([
+                    Text::new_inline("Auto-reload", appearance.ui_font_family(), 14.)
+                        .with_color(fg.into())
+                        .with_style(Properties::default().weight(Weight::Semibold))
+                        .finish(),
+                    Container::new(auto_reload_info_icon)
+                        .with_margin_left(4.)
+                        .finish(),
+                    Container::new(auto_reload_switch_element)
+                        .with_margin_left(8.)
+                        .finish(),
+                ]);
+            }
         }
         right_group.add_child(
             Container::new(purchase_button)
-                .with_margin_left(if state.has_admin_permissions { 16. } else { 0. })
+                .with_margin_left(if state.show_auto_reload { 16. } else { 0. })
                 .finish(),
         );
         let lower_row = Flex::row()
@@ -1680,25 +1818,27 @@ impl BillingAndUsagePageV2View {
             .map(|t| t.billing_metadata.is_delinquent_due_to_payment_issue())
             .unwrap_or_default();
 
-        if let (Some(ws), Some(team)) = (
-            UserWorkspaces::as_ref(app).current_workspace(),
-            UserWorkspaces::as_ref(app).current_team(),
-        ) {
+        if let Some(ws) = UserWorkspaces::as_ref(app).current_workspace() {
+            let team = UserWorkspaces::as_ref(app).current_team();
             let workspace_bonus_credits = ai_model.total_workspace_bonus_credits_remaining(ws.uid);
             let is_payg_zero = ws.billing_metadata.is_enterprise_pay_as_you_go_enabled()
                 && workspace_bonus_credits == 0;
 
             if !is_payg_zero {
-                let current_user_is_admin = {
-                    let email = AuthStateProvider::as_ref(app)
-                        .get()
-                        .user_email()
-                        .unwrap_or_default();
-                    team.has_admin_permissions(&email)
-                };
+                let email = AuthStateProvider::as_ref(app)
+                    .get()
+                    .user_email()
+                    .unwrap_or_default();
+                // Teamless users are admins of their own personal workspace.
+                let current_user_is_admin = team
+                    .map(|t| t.has_admin_permissions(&email))
+                    .unwrap_or(true);
+                // Pass None for teamless users so the purchase mutation omits teamUid,
+                // letting the server create the non-discoverable workspace (spec Behavior 4).
+                let team_uid = team.map(|t| t.uid);
                 content.add_child(self.render_addon_credits_panel(
                     ws,
-                    team.uid,
+                    team_uid,
                     current_user_is_admin,
                     delinquent,
                     app,
@@ -2150,6 +2290,40 @@ impl TypedActionView for BillingAndUsagePageV2View {
     }
 }
 
+/// Computes the price label for a Settings v2 add-on credits option.
+/// Returns `"Pricing unavailable"` when server price data is invalid (Behavior 18),
+/// otherwise formats as `"{credits} credits / {dollars}"`.
+pub(super) fn price_label_for_option(opt: &AddonCreditsOption) -> String {
+    if !opt.is_price_valid() {
+        // Behavior 18: surface a safe error rather than showing a blank or bad amount.
+        return "Pricing unavailable".to_string();
+    }
+    let credits = opt.credits.separate_with_commas();
+    let dollars = format_usd_cents(opt.total_price_cents());
+    format!("{credits} credits / {dollars}")
+}
+
+/// Returns `true` when the auto-reload row should be shown in the Settings v2
+/// add-on credits panel (spec Behavior 9).
+pub(super) fn show_auto_reload_for_options(
+    has_admin_permissions: bool,
+    options: &[AddonCreditsOption],
+) -> bool {
+    let any_markup = options.iter().any(|o| o.has_markup());
+    has_admin_permissions && !any_markup
+}
+
+/// Returns `true` when adding the selected option's total charge to the amount
+/// already spent this month would exceed the configured spend limit.
+pub(super) fn would_exceed_monthly_limit(
+    opt: &AddonCreditsOption,
+    cents_spent_this_month: i32,
+    limit_cents: i32,
+) -> bool {
+    // Use the total charge amount (base + any markup) for spend-limit checks.
+    (cents_spent_this_month + opt.total_price_cents()) > limit_cents
+}
+
 fn render_balance_card(
     appearance: &Appearance,
     dot_color: ColorU,
@@ -2238,3 +2412,7 @@ fn render_balance_card(
     .with_vertical_padding(12.)
     .finish()
 }
+
+#[cfg(test)]
+#[path = "billing_and_usage_page_v2_tests.rs"]
+mod tests;

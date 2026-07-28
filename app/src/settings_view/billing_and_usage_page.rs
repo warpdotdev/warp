@@ -462,6 +462,14 @@ impl BillingAndUsagePageView {
                     ai_request_usage_model.refresh_request_usage_async(ctx)
                 });
             }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { url, .. } => {
+                // Free-plan purchase: a one-time Stripe Checkout session was created.
+                // Open the Stripe Checkout URL; the legacy page does not track the
+                // pending team — users are expected to use Settings v2 for Free purchases.
+                self.purchase_addon_credits_loading = false;
+                ctx.open_url(url);
+                ctx.notify();
+            }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(err) => {
                 self.purchase_addon_credits_loading = false;
                 self.show_toast(&err.to_string(), ToastFlavor::Error, ctx);
@@ -1040,7 +1048,9 @@ pub enum BillingAndUsagePageAction {
     RenderMoreUsageEntries,
     SelectTopupDenomination(usize),
     PurchaseAddonCredits {
-        team_uid: ServerId,
+        /// The team to purchase credits for. `None` for teamless Free users —
+        /// the server will create the standard non-discoverable workspace.
+        team_uid: Option<ServerId>,
     },
     ShowAddOnCreditModal,
     UpdateAutoReloadEnabled {
@@ -1945,7 +1955,8 @@ impl BillingAndUsagePageView {
 
         let (rendered_price, discount_badge) = match selected_option {
             Some(option) => {
-                let price_dollars = option.price_usd_cents as f64 / 100.0;
+                // Display the total charge amount (base + any plan markup).
+                let price_dollars = option.total_price_cents() as f64 / 100.0;
                 let rendered_price = Container::new(
                     Text::new_inline(
                         format!("${price_dollars:.2}"),
@@ -1958,8 +1969,10 @@ impl BillingAndUsagePageView {
                 .with_margin_right(16.)
                 .finish();
 
+                // Volume-discount badges use the base-price rate so the markup
+                // does not distort the advertised per-credit discount.
                 let discount_percent = if base_rate > 0.0 {
-                    let actual_rate = option.rate();
+                    let actual_rate = option.rate(); // rate() uses base_price_usd_cents
                     ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
                 } else {
                     0
@@ -1981,7 +1994,8 @@ impl BillingAndUsagePageView {
         };
 
         let would_exceed_limit = selected_option.is_some_and(|option| {
-            let purchase_cost_cents = option.price_usd_cents;
+            // Use total_price_cents() (includes any plan markup) for the limit check.
+            let purchase_cost_cents = option.total_price_cents();
             let monthly_limit_cents = workspace
                 .settings
                 .addon_credits_settings
@@ -2019,7 +2033,7 @@ impl BillingAndUsagePageView {
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(BillingAndUsagePageAction::PurchaseAddonCredits {
-                    team_uid,
+                    team_uid: Some(team_uid),
                 });
             });
 

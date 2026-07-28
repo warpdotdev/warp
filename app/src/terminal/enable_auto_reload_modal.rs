@@ -153,9 +153,12 @@ impl EnableAutoReloadModalBody {
             .iter()
             .enumerate()
             .map(|(index, option)| {
+                // Display the total charge amount (base + any plan markup).
+                // Use format_usd_cents so non-round marked-up amounts are not
+                // truncated to the nearest dollar.
                 let primary_text = format!(
-                    "${:.0} / {} credits",
-                    option.price_usd_cents as f32 / 100.,
+                    "{} / {} credits",
+                    crate::pricing::format_usd_cents(option.total_price_cents()),
                     option.credits
                 );
                 let discount_percent = if base_rate > 0.0 {

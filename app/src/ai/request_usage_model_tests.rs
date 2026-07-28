@@ -84,6 +84,9 @@ fn set_addon_credits_pricing_info(app: &mut App) {
                 addon_credits_options: vec![AddonCreditsOption {
                     credits: 1000,
                     price_usd_cents: 1000,
+                    base_price_usd_cents: Some(1000),
+                    markup_usd_cents: Some(0),
+                    total_price_usd_cents: Some(1000),
                 }],
             },
             ctx,

@@ -6,7 +6,7 @@ use crate::schema;
 #[derive(cynic::InputObject, Debug)]
 pub struct PurchaseAddonCreditsInput {
     pub credits: i32,
-    pub team_uid: cynic::Id,
+    pub team_uid: Option<cynic::Id>,
 }
 
 #[derive(cynic::QueryVariables, Debug)]
@@ -31,6 +31,7 @@ crate::client::define_operation! {
 #[derive(cynic::InlineFragments, Debug)]
 pub enum PurchaseAddonCreditsResult {
     PurchaseAddonCreditsOutput(PurchaseAddonCreditsOutput),
+    PurchaseAddonCreditsCheckoutRequired(PurchaseAddonCreditsCheckoutRequired),
     UserFacingError(UserFacingError),
     #[cynic(fallback)]
     Unknown,
@@ -39,5 +40,16 @@ pub enum PurchaseAddonCreditsResult {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct PurchaseAddonCreditsOutput {
     pub success: bool,
+    pub response_context: ResponseContext,
+}
+
+/// Returned for Free-plan users: complete the purchase through the
+/// server-provided one-time Stripe Checkout URL in the browser.
+#[derive(cynic::QueryFragment, Debug)]
+pub struct PurchaseAddonCreditsCheckoutRequired {
+    /// The one-time Stripe Checkout URL to open in the browser.
+    pub url: String,
+    /// The server-resolved team UID to use when reconciling the grant on return.
+    pub team_uid: cynic::Id,
     pub response_context: ResponseContext,
 }

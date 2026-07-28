@@ -22,7 +22,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
+use crate::pricing::{PricingInfoModel, PricingInfoModelEvent, format_usd_cents};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::ui_components::blended_colors;
 use crate::view_components::{Dropdown, DropdownEvent, DropdownItem, ToastFlavor};
@@ -224,8 +224,9 @@ impl BuildPlanMigrationModal {
                         .map(|(i, option)| {
                             DropdownItem::new(
                                 format!(
-                                    "${} / {} credits",
-                                    option.price_usd_cents / 100,
+                                    "{} / {} credits",
+                                    // Display the total charge amount (base + any plan markup).
+                                    format_usd_cents(option.total_price_cents()),
                                     option.credits.separate_with_commas(),
                                 ),
                                 BuildPlanMigrationModalViewAction::SelectReloadDenomination(i),
@@ -821,7 +822,8 @@ impl TypedActionView for BuildPlanMigrationModal {
                     self.addon_credits_options
                         .get(self.selected_addon_credits_option)
                         .and_then(|option| {
-                            let selected_price = option.price_usd_cents;
+                            // Use total_price_cents() for limit comparison (includes markup).
+                            let selected_price = option.total_price_cents();
                             match current_monthly_spend_limit {
                                 Some(current_limit) if selected_price > current_limit => {
                                     Some(selected_price)

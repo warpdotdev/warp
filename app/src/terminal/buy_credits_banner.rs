@@ -50,6 +50,10 @@ pub struct BuyCreditsBanner {
     addon_credits_options: Vec<AddonCreditsOption>,
     selected_denomination_index: usize,
     purchase_addon_credits_loading: bool,
+    /// True while a Free-plan Stripe Checkout URL is open in the browser.
+    /// The Buy button stays disabled until this is cleared (preventing a
+    /// second click from creating a second Checkout session).
+    checkout_pending: bool,
     should_display_banner: bool,
     billing_settings_hyperlink: HighlightedHyperlink,
     is_denomination_dropdown_open: bool,
@@ -109,6 +113,7 @@ impl BuyCreditsBanner {
             addon_credits_options: Default::default(),
             selected_denomination_index: 0,
             purchase_addon_credits_loading: false,
+            checkout_pending: false,
             should_display_banner: false,
             billing_settings_hyperlink: HighlightedHyperlink::default(),
             is_denomination_dropdown_open: false,
@@ -127,6 +132,7 @@ impl BuyCreditsBanner {
         match event {
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 self.purchase_addon_credits_loading = false;
+                self.checkout_pending = false;
 
                 let banner_toggle_flag_enabled =
                     FeatureFlag::BuildPlanAutoReloadBannerToggle.is_enabled();
@@ -194,8 +200,19 @@ impl BuyCreditsBanner {
 
                 ctx.notify();
             }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { url, .. } => {
+                // A Free-plan Stripe Checkout session was created. Open the URL
+                // in the browser and set checkout_pending so the Buy button stays
+                // disabled while the user is on the Stripe page — preventing a
+                // second click from creating a second Checkout session (Behavior 13).
+                self.purchase_addon_credits_loading = false;
+                self.checkout_pending = true;
+                ctx.open_url(url);
+                ctx.notify();
+            }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(err) => {
                 self.purchase_addon_credits_loading = false;
+                self.checkout_pending = false;
                 self.banner_auto_reload_update_in_flight = false;
 
                 if err.downcast_ref::<BudgetExceededError>().is_some() {
@@ -219,6 +236,16 @@ impl BuyCreditsBanner {
                     ctx.emit(BuyCreditsBannerEvent::ShowAutoReloadError {
                         error_message: "Failed to enable auto-reload for your team. Please try again in Settings > Billing and Usage.",
                     });
+                    ctx.notify();
+                }
+            }
+            UserWorkspacesEvent::TeamsChanged => {
+                // A workspace refresh arrived. If a Stripe Checkout was pending,
+                // clear it so the Buy button re-enables (either the purchase
+                // completed and the banner will auto-dismiss, or the user
+                // cancelled and needs to be able to try again).
+                if self.checkout_pending {
+                    self.checkout_pending = false;
                     ctx.notify();
                 }
             }
@@ -327,17 +354,13 @@ impl BuyCreditsBanner {
             .iter()
             .enumerate()
             .map(|(index, option)| {
-                let primary_text = format!(
-                    "${:.0} / {} credits",
-                    option.price_usd_cents as f32 / 100.,
-                    option.credits
-                );
-                let discount_percent = if base_rate > 0.0 {
-                    let actual_rate = option.rate();
-                    ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
-                } else {
-                    0
-                };
+                // Display the total charge amount (base + any plan markup).
+                // Use format_usd_cents so non-round marked-up amounts
+                // (e.g. $27.50 for a 10% markup on $25) are not truncated
+                // to the nearest dollar (spec risk #1: displayed price ≠ charged price).
+                // Behavior 18: show "Pricing unavailable" for invalid server totals.
+                let primary_text = dropdown_label_for_option(option);
+                let discount_percent = discount_percent_for_option(base_rate, option);
                 if discount_percent > 0 {
                     MenuItemFields::new_with_custom_label(
                         Arc::new(enclose!((primary_text) move |is_selected, is_hovered, appearance, _| {
@@ -532,18 +555,32 @@ impl BuyCreditsBanner {
 
         let auth_state = AuthStateProvider::as_ref(app).get();
         let current_team = UserWorkspaces::as_ref(app).current_team();
-        let has_admin_permissions = auth_state
+        let has_team_admin_permissions = auth_state
             .user_email()
             .zip(current_team)
             .map(|(email, team)| team.has_admin_permissions(&email))
             .unwrap_or_default();
+        // Teamless Free users are eligible to purchase on their own workspace.
+        // Gate the buy controls on either team-admin or teamless-purchase eligibility
+        // (spec "Proposed changes → Out-of-credits banner").
+        let current_workspace = UserWorkspaces::as_ref(app).current_workspace();
+        let teamless_can_purchase = current_team.is_none()
+            && current_workspace.is_some_and(|ws| {
+                ws.billing_metadata
+                    .tier
+                    .purchase_add_on_credits_policy
+                    .is_some_and(|p| p.enabled)
+            });
+        let has_admin_permissions = has_team_admin_permissions || teamless_can_purchase;
         let delinquent_due_to_payment_issue = current_team
             .is_some_and(|team| team.billing_metadata.is_delinquent_due_to_payment_issue());
         let auto_reload_banner_toggle_ff =
             FeatureFlag::BuildPlanAutoReloadBannerToggle.is_enabled();
+        // Free users (markup > 0) must not see auto-reload experiment controls
+        // (spec Behavior 9, proposed changes → out-of-credits banner #4).
+        let any_option_has_markup = self.addon_credits_options.iter().any(|o| o.has_markup());
 
         // Check if user has reached their monthly addon credits limit
-        let current_workspace = UserWorkspaces::as_ref(app).current_workspace();
         let is_at_monthly_limit = current_workspace
             .map(|workspace| workspace.is_at_addon_credits_monthly_limit())
             .unwrap_or(false);
@@ -555,7 +592,8 @@ impl BuyCreditsBanner {
         let would_purchase_exceed_limit = current_workspace
             .zip(selected_option)
             .map(|(workspace, option)| {
-                workspace.would_addon_purchase_reach_limit(option.price_usd_cents)
+                // Use total_price_cents() for limit checks (includes any Free-plan markup).
+                workspace.would_addon_purchase_reach_limit(option.total_price_cents())
             })
             .unwrap_or(false);
 
@@ -643,7 +681,15 @@ impl BuyCreditsBanner {
         let make_buy_button = || {
             let team_uid = current_team.map(|team| team.uid);
 
+            // Behavior 18: disable Buy when the server returned an invalid price.
+            let price_invalid = self
+                .addon_credits_options
+                .get(self.selected_denomination_index)
+                .is_some_and(|opt| !opt.is_price_valid());
+
             let buy_button_disabled = self.purchase_addon_credits_loading
+                || self.checkout_pending
+                || price_invalid
                 || delinquent_due_to_payment_issue
                 || is_at_monthly_limit
                 || would_purchase_exceed_limit;
@@ -683,9 +729,7 @@ impl BuyCreditsBanner {
                 .with_text_label(button_text)
                 .build()
                 .on_click(move |ctx, _, _| {
-                    if let Some(team_uid) = team_uid {
-                        ctx.dispatch_typed_action(Action::PurchaseAddonCredits { team_uid });
-                    }
+                    ctx.dispatch_typed_action(Action::PurchaseAddonCredits { team_uid });
                 });
 
             if buy_button_disabled {
@@ -714,7 +758,7 @@ impl BuyCreditsBanner {
 
             let mut children = Vec::new();
 
-            if auto_reload_banner_toggle_ff {
+            if auto_reload_banner_toggle_ff && !any_option_has_markup {
                 children.push(
                     Container::new(self.render_auto_reload_checkbox(appearance))
                         .with_margin_right(8.)
@@ -770,7 +814,7 @@ impl BuyCreditsBanner {
         };
 
         let content = if has_admin_permissions {
-            let stacked_breakpoint = if auto_reload_banner_toggle_ff {
+            let stacked_breakpoint = if auto_reload_banner_toggle_ff && !any_option_has_markup {
                 STACKED_LAYOUT_MAX_WIDTH_WITH_AUTO_RELOAD
             } else {
                 STACKED_LAYOUT_MAX_WIDTH_WITHOUT_AUTO_RELOAD
@@ -801,6 +845,22 @@ impl BuyCreditsBanner {
             .with_drop_shadow(DropShadow::default())
             .finish()
     }
+}
+
+/// Formats the dropdown label for a banner add-on credits option.
+/// Delegates to `crate::pricing::addon_credits_dropdown_label`.
+/// Shows `"Pricing unavailable / {credits} credits"` for invalid server totals
+/// (Behavior 18) instead of fabricating a bad amount.
+pub(crate) fn dropdown_label_for_option(opt: &AddonCreditsOption) -> String {
+    crate::pricing::addon_credits_dropdown_label(opt)
+}
+
+/// Computes the volume-discount percentage for a banner option relative to
+/// `base_rate` (the cheapest pack's rate). A non-zero result means the option
+/// should display a discount badge (Behavior 7).
+/// Delegates to `crate::pricing::addon_credits_discount_percent`.
+pub(crate) fn discount_percent_for_option(base_rate: f32, opt: &AddonCreditsOption) -> u32 {
+    crate::pricing::addon_credits_discount_percent(base_rate, opt)
 }
 
 #[derive(Clone, Debug)]
@@ -849,7 +909,11 @@ impl View for BuyCreditsBanner {
 pub enum Action {
     SelectDenomination(usize),
     Close,
-    PurchaseAddonCredits { team_uid: ServerId },
+    /// Purchase add-on credits. `team_uid` is `None` for teamless Free users;
+    /// the server will create the standard non-discoverable workspace.
+    PurchaseAddonCredits {
+        team_uid: Option<ServerId>,
+    },
     ManageBilling,
     ToggleAutoReload,
 }

@@ -5,8 +5,8 @@ use cynic::{MutationBuilder, QueryBuilder};
 use mockall::{automock, predicate::*};
 use warp_graphql::error::UserFacingErrorInterface;
 use warp_graphql::mutations::purchase_addon_credits::{
-    PurchaseAddonCredits, PurchaseAddonCreditsInput, PurchaseAddonCreditsResult,
-    PurchaseAddonCreditsVariables,
+    PurchaseAddonCredits, PurchaseAddonCreditsCheckoutRequired, PurchaseAddonCreditsInput,
+    PurchaseAddonCreditsResult, PurchaseAddonCreditsVariables,
 };
 use warp_graphql::mutations::stripe_billing_portal::{
     StripeBillingPortal, StripeBillingPortalInput, StripeBillingPortalResult,
@@ -28,6 +28,21 @@ use crate::server::ids::ServerId;
 use crate::workspaces::user_workspaces::WorkspacesMetadataResponse;
 use crate::workspaces::workspace::AiOverages;
 
+/// The outcome of a purchase-addon-credits mutation.
+///
+/// Paid-plan purchases succeed immediately; Free-plan purchases require the user
+/// to complete a one-time Stripe Checkout session in the browser.
+#[allow(clippy::large_enum_variant)]
+pub enum PurchaseOutcome {
+    /// Purchase was processed immediately (paid plan). The workspace metadata
+    /// has already been refreshed.
+    ImmediateSuccess(WorkspacesMetadataResponse),
+    /// The server created a one-time Stripe Checkout session for this Free-plan
+    /// user. Open `url` in the default browser and use `team_uid` to reconcile
+    /// the grant when Warp regains focus.
+    CheckoutRequired { url: String, team_uid: ServerId },
+}
+
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -43,11 +58,15 @@ pub trait WorkspaceClient: 'static + Send + Sync {
 
     async fn refresh_ai_overages(&self) -> Result<AiOverages>;
 
+    /// Purchase add-on credits for the given workspace.
+    ///
+    /// `team_uid` is optional — omit it for teamless Free users so the server
+    /// can idempotently create the standard non-discoverable workspace.
     async fn purchase_addon_credits(
         &self,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         credits: i32,
-    ) -> Result<WorkspacesMetadataResponse>;
+    ) -> Result<PurchaseOutcome>;
 
     async fn update_addon_credits_settings(
         &self,
@@ -151,12 +170,12 @@ impl WorkspaceClient for ServerApi {
 
     async fn purchase_addon_credits(
         &self,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         credits: i32,
-    ) -> Result<WorkspacesMetadataResponse> {
+    ) -> Result<PurchaseOutcome> {
         let variables = PurchaseAddonCreditsVariables {
             input: PurchaseAddonCreditsInput {
-                team_uid: team_uid.into(),
+                team_uid: team_uid.map(Into::into),
                 credits,
             },
             request_context: get_request_context(),
@@ -168,10 +187,17 @@ impl WorkspaceClient for ServerApi {
             Err(_) => Err(anyhow!("Failed to purchase add-on credits")),
             Ok(response) => match response.purchase_addon_credits {
                 PurchaseAddonCreditsResult::PurchaseAddonCreditsOutput(_) => {
-                    TeamClient::workspaces_metadata(self)
+                    let metadata = TeamClient::workspaces_metadata(self)
                         .await
-                        .map(|w| w.metadata)
+                        .map(|w| w.metadata)?;
+                    Ok(PurchaseOutcome::ImmediateSuccess(metadata))
                 }
+                PurchaseAddonCreditsResult::PurchaseAddonCreditsCheckoutRequired(
+                    PurchaseAddonCreditsCheckoutRequired { url, team_uid, .. },
+                ) => Ok(PurchaseOutcome::CheckoutRequired {
+                    url,
+                    team_uid: ServerId::from_string_lossy(team_uid.inner()),
+                }),
                 PurchaseAddonCreditsResult::UserFacingError(error) => match error.error {
                     UserFacingErrorInterface::BudgetExceededError(budget_error) => {
                         Err(budget_error.into())

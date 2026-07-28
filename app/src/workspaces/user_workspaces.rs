@@ -24,7 +24,7 @@ use crate::pricing::PricingInfoModel;
 use crate::server::experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent};
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::TeamClient;
-use crate::server::server_api::workspace::WorkspaceClient;
+use crate::server::server_api::workspace::{PurchaseOutcome, WorkspaceClient};
 #[cfg(test)]
 use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient};
 use crate::settings::{
@@ -73,6 +73,12 @@ pub enum UserWorkspacesEvent {
     AiOveragesUpdated,
     PurchaseAddonCreditsSuccess,
     PurchaseAddonCreditsRejected(anyhow::Error),
+    /// A Free-plan purchase returned a Stripe Checkout URL. Open `url` in the
+    /// browser and use `team_uid` to reconcile the grant on return.
+    PurchaseAddonCreditsCheckoutRequired {
+        url: String,
+        team_uid: ServerId,
+    },
     /// Fired whenever the set of teams the user is on changes.
     TeamsChanged,
     CodebaseContextEnablementChanged,
@@ -1373,9 +1379,13 @@ impl UserWorkspaces {
         ctx.notify();
     }
 
+    /// Purchase add-on credits.
+    ///
+    /// `team_uid` is `None` for teamless Free users — the server will
+    /// idempotently create the standard non-discoverable workspace.
     pub fn purchase_addon_credits(
         &mut self,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         credits: i32,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1392,17 +1402,23 @@ impl UserWorkspaces {
 
     fn on_purchase_addon_credits(
         &mut self,
-        result: Result<WorkspacesMetadataResponse>,
+        result: Result<PurchaseOutcome>,
         ctx: &mut ModelContext<Self>,
     ) {
         match result {
-            Ok(result) => {
+            Ok(PurchaseOutcome::ImmediateSuccess(metadata)) => {
                 let wrapped = WorkspacesMetadataWithPricing {
-                    metadata: result,
+                    metadata,
                     pricing_info: None,
                 };
                 self.on_workspaces_updated(Ok(wrapped), ctx);
                 ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsSuccess);
+            }
+            Ok(PurchaseOutcome::CheckoutRequired { url, team_uid }) => {
+                ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired {
+                    url,
+                    team_uid,
+                });
             }
             Err(err) => {
                 ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsRejected(

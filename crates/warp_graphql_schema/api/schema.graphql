@@ -215,6 +215,13 @@ enum AddonCreditAutoReloadStatus {
 type AddonCreditsOption {
   credits: Int!
   priceUsdCents: Int!
+  """
+  Nullable to allow safe rollout: the client can be deployed before the server
+  adds these fields. Old servers return null here; fall back to priceUsdCents.
+  """
+  basePriceUsdCents: Int
+  markupUsdCents: Int
+  totalPriceUsdCents: Int
 }
 
 type AddonCreditsSettings {
@@ -2707,7 +2714,7 @@ type PurchaseAddOnCreditsPolicy {
 
 input PurchaseAddonCreditsInput {
   credits: Int!
-  teamUid: ID!
+  teamUid: ID
 }
 
 type PurchaseAddonCreditsOutput implements Response {
@@ -2715,7 +2722,13 @@ type PurchaseAddonCreditsOutput implements Response {
   success: Boolean!
 }
 
-union PurchaseAddonCreditsResult = PurchaseAddonCreditsOutput | UserFacingError
+type PurchaseAddonCreditsCheckoutRequired implements Response {
+  responseContext: ResponseContext!
+  teamUid: ID!
+  url: String!
+}
+
+union PurchaseAddonCreditsResult = PurchaseAddonCreditsOutput | PurchaseAddonCreditsCheckoutRequired | UserFacingError
 
 """
 The request contains a UTC timestamp of when the action occurred. The JSON data
