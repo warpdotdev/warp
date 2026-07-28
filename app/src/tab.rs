@@ -36,6 +36,7 @@ use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
 use crate::terminal::view::TerminalViewState;
 use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
@@ -363,12 +364,9 @@ impl TabData {
             .unwrap_or(false);
 
         if is_shared_or_viewed {
-            let has_session_link = focused_session_view.as_ref().is_some_and(|view| {
-                let manager = crate::terminal::shared_session::manager::Manager::as_ref(ctx);
-                let view_id = view.id();
-                manager.session_id(&view_id).is_some()
-                    || manager.ended_session_id(&view_id).is_some()
-            });
+            let has_session_link = focused_session_view
+                .as_ref()
+                .is_some_and(|view| Manager::as_ref(ctx).has_session_link(&view.id()));
             menu_items.push(
                 MenuItemFields::new("Copy link")
                     .with_on_select_action(WorkspaceAction::CopySharedSessionLinkFromTab {

@@ -457,6 +457,7 @@ use crate::terminal::session_settings::{
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
+use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeOpenSource,
 };
@@ -16701,13 +16702,7 @@ impl TerminalView {
                             .block_at(tail_block_index)
                             .is_none_or(|b| b.is_restored());
 
-                    let view_id = ctx.view_id();
-                    let has_session_link = {
-                        let manager =
-                            crate::terminal::shared_session::manager::Manager::as_ref(ctx);
-                        manager.session_id(&view_id).is_some()
-                            || manager.ended_session_id(&view_id).is_some()
-                    };
+                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
                     items.extend(self.session_sharing_context_menu_items(
                         &model,
                         is_share_session_disabled,
@@ -16920,13 +16915,7 @@ impl TerminalView {
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
                 {
-                    let view_id = ctx.view_id();
-                    let has_session_link = {
-                        let manager =
-                            crate::terminal::shared_session::manager::Manager::as_ref(ctx);
-                        manager.session_id(&view_id).is_some()
-                            || manager.ended_session_id(&view_id).is_some()
-                    };
+                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
                     items.extend(self.session_sharing_context_menu_items(
                         &model,
                         false,
@@ -17402,12 +17391,7 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            let view_id = ctx.view_id();
-            let has_session_link = {
-                let manager = crate::terminal::shared_session::manager::Manager::as_ref(ctx);
-                manager.session_id(&view_id).is_some()
-                    || manager.ended_session_id(&view_id).is_some()
-            };
+            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
             items.extend(self.session_sharing_context_menu_items(&model, false, has_session_link));
         }
 
@@ -17646,12 +17630,7 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            let view_id = ctx.view_id();
-            let has_session_link = {
-                let manager = crate::terminal::shared_session::manager::Manager::as_ref(ctx);
-                manager.session_id(&view_id).is_some()
-                    || manager.ended_session_id(&view_id).is_some()
-            };
+            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
             menu_items.extend(self.session_sharing_context_menu_items(
                 &model,
                 false,
