@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use line_ending::LineEnding;
+use markdown_parser::weight::CustomWeight;
 use markdown_parser::{
     FormattedIndentTextInline, FormattedText, FormattedTextFragment, FormattedTextLine, parse_html,
     parse_markdown,
@@ -36,7 +37,6 @@ use crate::content::text::{
     BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, BufferTextStyle, CodeBlockType,
     IndentBehavior, IndentUnit, TABLE_BLOCK_MARKDOWN_LANG, TextStyles, TextStylesWithMetadata,
 };
-use markdown_parser::weight::CustomWeight;
 use crate::content::undo::{
     NonAtomicType, ReversibleEditorActions, ReversibleSelectionState, UndoActionType, UndoArg,
 };
