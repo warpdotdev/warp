@@ -3579,7 +3579,7 @@ impl TuiTerminalSessionView {
         }
 
         match command.kind {
-            SlashCommandKind::Agent | SlashCommandKind::New => {
+            SlashCommandKind::Agent | SlashCommandKind::New | SlashCommandKind::Clear => {
                 if self.start_new_conversation(argument, ctx) {
                     record_static_slash_command_accepted(command.name, true, ctx);
                 }

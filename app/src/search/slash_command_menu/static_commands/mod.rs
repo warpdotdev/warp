@@ -88,6 +88,7 @@ pub enum SlashCommandKind {
     OpenRepo,
     OpenRules,
     New,
+    Clear,
     Model,
     Host,
     Harness,
