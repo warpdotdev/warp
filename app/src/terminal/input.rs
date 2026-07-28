@@ -1134,6 +1134,9 @@ pub enum InputAction {
     CtrlR,
     CtrlD,
     Up,
+    /// Defers `Up` until the current view update completes, avoiding re-entrant updates from
+    /// synchronous platform menu callbacks.
+    DeferredUp,
     PageUp,
     PageDown,
     ClearScreen,
@@ -1835,7 +1838,7 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::new("ctrl-d", InputAction::CtrlD, id!("Input")),
         FixedBinding::custom(
             CustomAction::History,
-            InputAction::Up,
+            InputAction::DeferredUp,
             "Show History",
             // We need to ensure the workflow info box is not open as the "up" arrow
             // key is used to navigate the environment variables dropdown.
@@ -15846,6 +15849,7 @@ impl TypedActionView for Input {
         match action {
             InputAction::FocusInputBox => self.focus_input_box(ctx),
             InputAction::Up => self.editor_up(ctx),
+            InputAction::DeferredUp => ctx.dispatch_typed_action_deferred(InputAction::Up),
             InputAction::PageUp => self.editor_page_up(ctx),
             InputAction::PageDown => self.editor_page_down(ctx),
             InputAction::CtrlD => self.ctrl_d(ctx),
