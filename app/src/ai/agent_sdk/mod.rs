@@ -920,6 +920,10 @@ impl AgentDriverRunner {
             }
             Err(err) => {
                 log::warn!("Failed to fetch git credentials before skill resolution: {err:#}");
+                tracing::warn!(
+                    error = ?err,
+                    "Failed to fetch git credentials before skill resolution"
+                );
                 return Err(AgentDriverError::SkillResolutionFailed(format!(
                     "Failed to fetch git credentials before skill resolution: {err:#}"
                 )));
@@ -932,6 +936,10 @@ impl AgentDriverRunner {
 
         driver::git_credentials::configure_git_credentials(&credentials).map_err(|err| {
             log::warn!("Failed to write git credentials before skill resolution: {err:#}");
+            tracing::warn!(
+                error = ?err,
+                "Failed to write git credentials before skill resolution"
+            );
             AgentDriverError::SkillResolutionFailed(format!(
                 "Failed to write git credentials before skill resolution: {err:#}"
             ))
