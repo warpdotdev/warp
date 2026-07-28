@@ -684,8 +684,8 @@ fn tab_indented_rows_with_line_number_gutter() {
 ///
 /// The layout lattice charges the tab 3 columns.  Paint must write 3 spaces
 /// so 'X' is at display column 3 on row 1, matching the selection highlight.
-/// Before the fix, `expand_tabs` restarted from column 0 on the continuation
-/// row, producing 4 spaces and shifting 'X' to column 4.
+/// Paint consumes the retained width for the tab rather than recomputing a
+/// tab stop from the continuation row's local column.
 #[test]
 fn tab_on_continuation_row_paint_and_selection_agree() {
     App::test((), |mut app| async move {
@@ -734,33 +734,4 @@ fn tab_on_continuation_row_paint_and_selection_agree() {
             );
         });
     });
-}
-
-// ── Unit tests for the expand_tabs helper ────────────────────────────────────
-
-#[test]
-fn expand_tabs_no_tab_returns_identical_string() {
-    assert_eq!(super::expand_tabs("hello", 0, 4), "hello");
-}
-
-#[test]
-fn expand_tabs_single_leading_tab_becomes_four_spaces() {
-    assert_eq!(super::expand_tabs("\tfoo", 0, 4), "    foo");
-}
-
-#[test]
-fn expand_tabs_at_column_two_advances_to_next_stop() {
-    // Column 2; next stop at 4 → 2 spaces inserted.
-    assert_eq!(super::expand_tabs("\tfoo", 2, 4), "  foo");
-}
-
-#[test]
-fn expand_tabs_multiple_tabs_cumulate_correctly() {
-    // Two tabs from column 0: first → col 4, second → col 8.
-    assert_eq!(super::expand_tabs("\t\tcode", 0, 4), "        code");
-}
-
-#[test]
-fn expand_tabs_empty_string_is_unchanged() {
-    assert_eq!(super::expand_tabs("", 0, 4), "");
 }

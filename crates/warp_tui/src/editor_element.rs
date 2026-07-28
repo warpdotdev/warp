@@ -4,8 +4,8 @@
 //! The element *paints and interacts*; it does not compute row structure.
 //! Rows come from the render state's single display-row implementation
 //! (`CharCellState::display_lattice`), which interleaves ghost rows and
-//! elides hidden line ranges; the element slices its text snapshot by each
-//! row's char range, applies consumer-supplied styles, prefixes gutter cells,
+//! elides hidden line ranges; the element obtains each row's paint-ready text
+//! from the lattice, applies consumer-supplied styles, prefixes gutter cells,
 //! and windows by scroll. Interaction geometry (cursor placement, mouse
 //! hit-testing) queries the same lattice, so what is painted and what a click
 //! resolves to can never disagree.
@@ -25,9 +25,7 @@ use std::rc::Rc;
 use string_offset::CharOffset;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
-use warp_editor::render::model::{
-    CharCellTemporaryBlock, DisplayLattice, DisplayRow, DisplayRowKind,
-};
+use warp_editor::render::model::{DisplayLattice, DisplayRow, DisplayRowKind};
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex, TuiGridPoint, TuiLayoutContext,
     TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiScreenPoint,
@@ -42,12 +40,6 @@ const GUTTER_GAP: u16 = 2;
 
 /// Logical rows scrolled per mouse-wheel notch (matches `TuiScrollable`).
 const WHEEL_STEP: isize = 2;
-
-/// Fallback tab-stop size when the model's char-cell state is not available.
-/// In practice this code path is never hit for char-cell (TUI) editors, which
-/// always have a `CharCellState`; the constant exists only as a type-safe
-/// sentinel to avoid an `.unwrap_or(4)` magic literal scattered in the code.
-const DEFAULT_TAB_SIZE: u8 = 4;
 
 /// Editor-generic actions the element emits from its event handling. The
 /// owning view translates them into its own typed actions and applies them to
@@ -117,10 +109,6 @@ pub(crate) struct TuiEditorElement {
     /// extras are folded in via [`Self::effective_hidden_ranges`], which is
     /// also what the event path uses over fresh model state.
     hidden_line_ranges: Vec<Range<usize>>,
-    /// Tab stop size in display columns, snapshotted from the model's
-    /// [`CharCellState::tab_size`] at construction. Shared between layout
-    /// (char-widths / wrapping) and paint (`expand_tabs`) so they agree.
-    tab_size: u8,
 
     // ── Config ──────────────────────────────────────────────────────────────
     editable: bool,
@@ -199,10 +187,6 @@ impl TuiEditorElement {
             .char_cell()
             .map(|char_cell| char_cell.hidden_line_ranges(app))
             .unwrap_or_default();
-        let tab_size = render_state
-            .char_cell()
-            .map(|cc| cc.tab_size())
-            .unwrap_or(DEFAULT_TAB_SIZE);
 
         Self {
             model: model.clone(),
@@ -210,7 +194,6 @@ impl TuiEditorElement {
             cursor_offset,
             sel_char_range,
             hidden_line_ranges,
-            tab_size,
             editable: false,
             is_focused: false,
             viewport_rows: None,
@@ -443,7 +426,7 @@ impl TuiEditorElement {
             let mut styled_spans = Vec::new();
             let mut column = TuiFlex::column();
             for (vis_idx, row) in visible_slice.iter().enumerate() {
-                column.add_child(self.render_row(row, &chars, lattice.ghosts()));
+                column.add_child(self.render_row(row, &chars, &lattice));
                 if let Some((start_col, end_col)) = self.selection_span_in_row(row, &lattice) {
                     selected_spans.push((
                         vis_idx as u16,
@@ -513,20 +496,13 @@ impl TuiEditorElement {
         &self,
         row: &DisplayRow,
         chars: &[char],
-        ghosts: &[CharCellTemporaryBlock],
+        lattice: &DisplayLattice<'_>,
     ) -> Box<dyn TuiElement> {
         let (content, style) = match &row.kind {
             DisplayRowKind::Buffer { line_index } => {
-                let raw = slice_chars(chars, &row.char_range);
-                // Tabs are expanded using `row.row_start_col` as the baseline
-                // so that the column counter matches what `char_widths` used
-                // at layout time.  For the first row of a logical line this is
-                // 0; for soft-wrapped continuation rows it is the accumulated
-                // width of all chars that precede this row in the same logical
-                // line.  Passing the correct baseline keeps paint, cursor, and
-                // selection highlight aligned on every wrapped row, including
-                // those that start with a tab character.
-                let content = expand_tabs(&raw, row.row_start_col, usize::from(self.tab_size));
+                let content = lattice
+                    .row_text(row, chars)
+                    .expect("buffer display rows have source text");
                 let style = self
                     .styles
                     .line_overrides
@@ -536,13 +512,10 @@ impl TuiEditorElement {
                     .unwrap_or(self.styles.text);
                 (content, style)
             }
-            DisplayRowKind::Ghost { ghost_index } => {
-                let ghost_chars: Vec<char> = ghosts[*ghost_index].content.chars().collect();
-                let raw = slice_chars(&ghost_chars, &row.char_range);
-                // Mirror the buffer-row logic: use the ghost row's accumulated
-                // starting column so soft-wrapped ghost continuation rows also
-                // expand tabs consistently with the ghost's `char_widths`.
-                let content = expand_tabs(&raw, row.row_start_col, usize::from(self.tab_size));
+            DisplayRowKind::Ghost { .. } => {
+                let content = lattice
+                    .row_text(row, chars)
+                    .expect("ghost display rows have source text");
                 (content, self.styles.ghost)
             }
             DisplayRowKind::Gap { line_range } => {
@@ -898,42 +871,6 @@ impl TuiElement for TuiEditorElement {
 
         false
     }
-}
-
-/// The chars in `range`, collected into the row's paint text.
-fn slice_chars(chars: &[char], range: &Range<CharOffset>) -> String {
-    let start = range.start.as_usize().min(chars.len());
-    let end = range.end.as_usize().min(chars.len());
-    chars[start..end].iter().collect()
-}
-
-/// Expands tab characters in `text` to spaces, advancing to the next multiple
-/// of `tab_size` display columns from a `starting_col` baseline.  Pass `0`
-/// for `starting_col` when `text` begins at the logical start of a line.
-/// Non-tab characters are assumed to occupy one display column each (sufficient
-/// for ASCII/Latin content; CJK wide chars mid-line before a tab are rare in
-/// diff context and are accepted as a minor display approximation).
-/// Returns the input unchanged when no tab is present.
-fn expand_tabs(text: &str, starting_col: usize, tab_size: usize) -> String {
-    if !text.contains('\t') {
-        return text.to_owned();
-    }
-    let tab_size = tab_size.max(1);
-    let mut out = String::with_capacity(text.len() + 16);
-    let mut col = starting_col;
-    for ch in text.chars() {
-        if ch == '\t' {
-            let spaces = tab_size - (col % tab_size);
-            for _ in 0..spaces {
-                out.push(' ');
-            }
-            col += spaces;
-        } else {
-            out.push(ch);
-            col += 1;
-        }
-    }
-    out
 }
 
 /// The number of decimal digits in `n` (minimum 1), sizing the gutter's

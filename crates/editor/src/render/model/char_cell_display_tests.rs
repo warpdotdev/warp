@@ -70,6 +70,58 @@ fn char_range(range: Range<usize>) -> Range<CharOffset> {
 }
 
 #[test]
+fn row_text_expands_tabs_from_retained_layout_widths() {
+    let text = "\tfoo\n你\tbar";
+    let chars: Vec<char> = text.chars().collect();
+    let state = state(text, 20);
+    let lattice = state.display_lattice(&[]);
+
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[0], &chars).as_deref(),
+        Some("    foo")
+    );
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[1], &chars).as_deref(),
+        Some("你  bar")
+    );
+}
+
+#[test]
+fn continuation_row_text_uses_the_tabs_retained_logical_width() {
+    let text = "abcde\tXY";
+    let chars: Vec<char> = text.chars().collect();
+    let state = state(text, 6);
+    let lattice = state.display_lattice(&[]);
+
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[0], &chars).as_deref(),
+        Some("abcde")
+    );
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[1], &chars).as_deref(),
+        Some("   XY")
+    );
+}
+
+#[test]
+fn ghost_row_text_expands_tabs_from_the_ghosts_retained_widths() {
+    let text = "context";
+    let chars: Vec<char> = text.chars().collect();
+    let state = state(text, 20);
+    state.set_temporary_blocks(vec![ghost("\tremoved\n", 0)]);
+    let lattice = state.display_lattice(&[]);
+
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[0], &chars).as_deref(),
+        Some("    removed")
+    );
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[1], &chars).as_deref(),
+        Some("context")
+    );
+}
+
+#[test]
 fn plain_text_wraps_with_char_ranges() {
     // Width 4: "abcdef" wraps into chars 0..4 + 4..6; "gh" starts at char 7.
     let state = state("abcdef\ngh", 4);

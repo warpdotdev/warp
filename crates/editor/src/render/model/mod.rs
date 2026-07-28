@@ -669,9 +669,9 @@ pub struct CharCellState {
     /// how the GUI keeps scroll state on `RenderState` rather than in views.
     scroll_offset: Cell<u32>,
     /// Tab stop size in display columns. Applied when computing per-character
-    /// display widths for both the buffer text index and ghost blocks, so
-    /// layout (wrap, cursor, selection) and paint always use the same tab
-    /// expansion. Defaults to 4; set from the editor's
+    /// display widths for both the buffer text index and ghost blocks; layout
+    /// uses those widths for geometry and paint consumes them when projecting
+    /// row text. Defaults to 4; set from the editor's
     /// `ParagraphStyles::fixed_width_tab_size` when available.
     tab_size: u8,
 }
@@ -695,11 +695,6 @@ impl CharCellState {
     #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test(terminal_width: u16) -> Self {
         Self::new(terminal_width, 4, None)
-    }
-
-    /// The tab stop size used when computing char-cell display widths.
-    pub fn tab_size(&self) -> u8 {
-        self.tab_size
     }
 
     /// Replace the stored ghost lines. Replace-all semantics, mirroring the

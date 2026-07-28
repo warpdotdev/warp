@@ -13,10 +13,11 @@
 //!   leading/trailing hidden runs produce no rows).
 //!
 //! Rows are style- and text-free: they carry char *ranges* (into the buffer
-//! text or a ghost's content), never strings or colors. Both consumers — the
-//! TUI editor element's painting and interaction geometry (cursor placement,
-//! mouse hit-testing) — are projections of this one computation, so what is
-//! painted on row N and what a click on row N resolves to can never disagree.
+//! text or a ghost's content), never strings or colors. [`DisplayLattice`]
+//! projects those ranges to paint-ready text using the same retained widths
+//! that drive interaction geometry (cursor placement and mouse hit-testing),
+//! so what is painted on row N and what a click on row N resolves to cannot
+//! disagree.
 //!
 //! Display-row space vs buffer visual-row space: the softwrap functions
 //! ([`char_cell_offset_to_softwrap_point`](super::char_cell_offset_to_softwrap_point)
@@ -68,16 +69,6 @@ pub struct DisplayRow {
     pub char_range: Range<CharOffset>,
     /// Whether this is a soft-wrap continuation of the previous row.
     pub is_continuation: bool,
-    /// The accumulated display-column width of all characters on the same
-    /// logical line (or ghost content) that precede this display row. Always
-    /// 0 for the first row of a logical line; positive for soft-wrapped
-    /// continuation rows.
-    ///
-    /// Used as `starting_col` when expanding tab characters in the paint path
-    /// so that `expand_tabs` charges the same width as the layout layer's
-    /// `char_widths` entry, keeping cursor, selection, and painted glyphs
-    /// aligned on soft-wrapped continuation rows.
-    pub row_start_col: usize,
 }
 
 /// The display-row projection at one snapshot of wrap tables, ghosts, and
@@ -121,6 +112,32 @@ impl<'a> DisplayLattice<'a> {
     /// The ghost blocks that `Ghost` rows' `ghost_index` values index into.
     pub fn ghosts(&self) -> &[CharCellTemporaryBlock] {
         &self.ghosts
+    }
+
+    /// Paint-ready text for a buffer or ghost `row`.
+    ///
+    /// Tabs expand to the exact width retained by the layout index for their
+    /// source character. Paint therefore consumes layout's tab geometry
+    /// directly instead of independently recalculating tab stops. Gap rows
+    /// have no source text and return `None`.
+    pub fn row_text(&self, row: &DisplayRow, buffer_chars: &[char]) -> Option<String> {
+        match &row.kind {
+            DisplayRowKind::Buffer { .. } => Some(display_text_for_range(
+                buffer_chars,
+                &self.text_index.char_widths,
+                &row.char_range,
+            )),
+            DisplayRowKind::Ghost { ghost_index } => {
+                let ghost = self.ghosts.get(*ghost_index)?;
+                let ghost_chars: Vec<char> = ghost.content.chars().collect();
+                Some(display_text_for_range(
+                    &ghost_chars,
+                    &ghost.char_widths,
+                    &row.char_range,
+                ))
+            }
+            DisplayRowKind::Gap { .. } => None,
+        }
     }
 
     /// The display columns occupied by the clamped buffer character `range`.
@@ -232,6 +249,31 @@ impl<'a> DisplayLattice<'a> {
     }
 }
 
+fn display_text_for_range(chars: &[char], char_widths: &[u8], range: &Range<CharOffset>) -> String {
+    let start = range
+        .start
+        .as_usize()
+        .min(chars.len())
+        .min(char_widths.len());
+    let end = range
+        .end
+        .as_usize()
+        .min(chars.len())
+        .min(char_widths.len())
+        .max(start);
+    let mut text = String::with_capacity(end - start);
+    for (&ch, &width) in chars[start..end].iter().zip(&char_widths[start..end]) {
+        if ch == '\t' {
+            for _ in 0..width {
+                text.push(' ');
+            }
+        } else {
+            text.push(ch);
+        }
+    }
+    text
+}
+
 fn normalize_hidden_line_ranges(ranges: &[Range<usize>]) -> Vec<Range<usize>> {
     let mut ranges: Vec<_> = ranges
         .iter()
@@ -289,7 +331,6 @@ fn display_rows(
                     kind: DisplayRowKind::Gap { line_range },
                     char_range: CharOffset::zero().empty_range(),
                     is_continuation: false,
-                    row_start_col: 0,
                 });
             }
         };
@@ -351,29 +392,12 @@ fn push_buffer_line_rows(
     text_index: &CharCellTextIndex,
 ) {
     let line_rows = text_index.logical_line_visual_rows(line_index);
-    let line_char_start = text_index.line_starts[line_index].as_usize();
     for (row, visual_row) in line_rows.enumerate() {
         let range = text_index.visual_row_char_range(line_index, visual_row);
-        // The accumulated display-column width of all chars on this logical
-        // line that precede this display row's start.  The first row always
-        // starts at column 0; continuation rows accumulate the widths of
-        // every character from the line's first char up to — but not
-        // including — this row's first char.  Passed to `expand_tabs` in the
-        // paint path so tab width agrees with what `char_widths` recorded
-        // at layout time.
-        let row_start_col = if row == 0 {
-            0
-        } else {
-            text_index.char_widths[line_char_start..range.start]
-                .iter()
-                .map(|&w| w as usize)
-                .sum()
-        };
         rows.push(DisplayRow {
             kind: DisplayRowKind::Buffer { line_index },
             char_range: CharOffset::range(range),
             is_continuation: row > 0,
-            row_start_col,
         });
     }
 }
@@ -412,19 +436,10 @@ fn push_ghost_rows(
             .get(row + 1)
             .copied()
             .unwrap_or(ghost.char_widths.len());
-        // Mirror the buffer-row logic: the first row starts at col 0;
-        // continuation rows inherit the accumulated width of all preceding
-        // chars in the ghost's content.
-        let row_start_col = if row == 0 {
-            0
-        } else {
-            ghost.char_widths[..start].iter().map(|&w| w as usize).sum()
-        };
         rows.push(DisplayRow {
             kind: DisplayRowKind::Ghost { ghost_index },
             char_range: CharOffset::range(start..end),
             is_continuation: row > 0,
-            row_start_col,
         });
     }
 }
