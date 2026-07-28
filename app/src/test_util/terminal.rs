@@ -120,6 +120,9 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(BlocklistAIPermissions::new);
     app.add_singleton_model(AgentNotificationsModel::new);
+    // Polls only when its feature flag is on, so tests get an inert model.
+    #[cfg(not(target_family = "wasm"))]
+    app.add_singleton_model(crate::ai::claude_code_usage::ClaudeCodeUsageModel::new);
     app.add_singleton_model(UndoCloseStack::new);
 
     app.add_singleton_model(|ctx| {

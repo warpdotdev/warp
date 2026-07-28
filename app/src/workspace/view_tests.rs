@@ -4689,3 +4689,25 @@ fn test_tools_panel_warp_drive_toggle_updates_available_views() {
         });
     });
 }
+
+/// The chomp cycle has to return to the closed mouth so the Pac-Man doesn't
+/// freeze mid-bite when the animation stops on an arbitrary frame.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn test_claude_usage_pacman_cycles_through_the_chomp_frames() {
+    assert_eq!(CLAUDE_USAGE_PACMAN_CLOSED, claude_usage_pacman_frame(None));
+
+    let cycle: Vec<&str> = (0..6).map(|i| claude_usage_pacman_frame(Some(i))).collect();
+    assert_eq!(
+        vec![
+            CLAUDE_USAGE_PACMAN_CLOSED,
+            CLAUDE_USAGE_PACMAN_OPEN,
+            CLAUDE_USAGE_PACMAN_WIDE,
+            CLAUDE_USAGE_PACMAN_OPEN,
+            // The cycle repeats from the closed mouth.
+            CLAUDE_USAGE_PACMAN_CLOSED,
+            CLAUDE_USAGE_PACMAN_OPEN,
+        ],
+        cycle
+    );
+}
