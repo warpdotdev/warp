@@ -45,7 +45,11 @@ pub(crate) fn init(app: &mut AppContext) {
     app.register_fixed_bindings([
         FixedBinding::new(
             "escape",
-            TuiShellCommandViewAction::CancelPermission,
+            // Esc while the command body editor is focused exits the editor
+            // and restores Yes as the highlighted option — it does NOT cancel
+            // the tool call. A subsequent Esc (with the list focused) cancels
+            // via the `PERMISSION_PROMPT_ACTIVE` → `CancelOrBack` path.
+            TuiShellCommandViewAction::SaveCommandEdit,
             predicate.clone(),
         )
         .with_group(TUI_BINDING_GROUP),
@@ -136,7 +140,6 @@ pub(super) enum TuiShellCommandViewEvent {
 /// User interactions handled by the shell-command view.
 #[derive(Clone, Debug)]
 pub(super) enum TuiShellCommandViewAction {
-    CancelPermission,
     SaveCommandEdit,
     ToggleExpanded,
 }
@@ -283,6 +286,7 @@ impl TuiShellCommandView {
         render_permission_card(
             &self.permission_prompt,
             "Is it OK if I run this command and read the output?",
+            None,
             None,
             app,
         )
@@ -490,7 +494,6 @@ impl TypedActionView for TuiShellCommandView {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            TuiShellCommandViewAction::CancelPermission => self.reject(ctx),
             TuiShellCommandViewAction::SaveCommandEdit => self.save_command_edit(ctx),
             TuiShellCommandViewAction::ToggleExpanded => {
                 if self.user_controls_command() {

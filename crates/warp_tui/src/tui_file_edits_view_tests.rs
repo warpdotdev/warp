@@ -21,18 +21,85 @@ fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
     }
 }
 
+/// Section state uses `default_collapsed` when no explicit toggle exists.
+/// Non-blocked rendering (default_collapsed=true) → collapsed; blocked
+/// rendering (default_collapsed=false) → expanded; toggling stores an
+/// explicit entry that overrides the default.
 #[test]
-fn all_file_edit_sections_start_collapsed_and_toggle_independently() {
+fn section_states_respect_default_collapsed_and_toggle_independently() {
     let states = SectionStates::default();
 
-    assert!(states.is_collapsed(SectionKey::Summary));
-    assert!(states.is_collapsed(SectionKey::File(0)));
-    assert!(states.is_collapsed(SectionKey::File(1)));
+    // Non-blocked: sections collapse by default.
+    assert!(states.is_collapsed(SectionKey::Summary, true));
+    assert!(states.is_collapsed(SectionKey::File(0), true));
+    assert!(states.is_collapsed(SectionKey::File(1), true));
 
-    states.toggle_collapsed(SectionKey::File(0));
-    assert!(states.is_collapsed(SectionKey::Summary));
-    assert!(!states.is_collapsed(SectionKey::File(0)));
-    assert!(states.is_collapsed(SectionKey::File(1)));
+    // Blocked: sections expand by default (no explicit entry yet).
+    assert!(!states.is_collapsed(SectionKey::Summary, false));
+    assert!(!states.is_collapsed(SectionKey::File(0), false));
+    assert!(!states.is_collapsed(SectionKey::File(1), false));
+
+    // Toggle File(0) while blocked (default_collapsed=false → was expanded →
+    // explicit entry records collapsed=true).
+    states.toggle_collapsed(SectionKey::File(0), false);
+    assert!(!states.is_collapsed(SectionKey::Summary, false)); // unchanged
+    assert!(states.is_collapsed(SectionKey::File(0), false)); // now explicitly collapsed
+    assert!(!states.is_collapsed(SectionKey::File(1), false)); // still default expanded
+}
+
+/// reset_states clears explicit entries so sections revert to their
+/// context-dependent default on the next render.
+#[test]
+fn reset_states_clears_explicit_toggles() {
+    let states = SectionStates::default();
+    // Record an explicit collapsed entry.
+    states.toggle_collapsed(SectionKey::File(0), true);
+    assert!(!states.is_collapsed(SectionKey::File(0), true)); // was collapsed, now expanded
+    // After reset, reverts to default.
+    states.reset_states();
+    assert!(states.is_collapsed(SectionKey::File(0), true));
+    assert!(!states.is_collapsed(SectionKey::File(0), false));
+}
+
+/// toggle_expand_all collapses all when any are expanded, and expands all
+/// when all are collapsed.
+#[test]
+fn toggle_expand_all_collapses_then_expands() {
+    let states = SectionStates::default();
+    let keys = [
+        SectionKey::Summary,
+        SectionKey::File(0),
+        SectionKey::File(1),
+    ];
+
+    // Default blocked (default_collapsed=false): all expanded.
+    // First toggle → collapse all.
+    states.toggle_expand_all(&keys, false);
+    for &key in &keys {
+        assert!(
+            states.is_collapsed(key, false),
+            "{key:?} should be collapsed after first toggle"
+        );
+    }
+
+    // Second toggle → expand all.
+    states.toggle_expand_all(&keys, false);
+    for &key in &keys {
+        assert!(
+            !states.is_collapsed(key, false),
+            "{key:?} should be expanded after second toggle"
+        );
+    }
+
+    // Mixed state (one collapsed) → collapse all.
+    states.toggle_collapsed(SectionKey::File(0), false); // File(0) → collapsed
+    states.toggle_expand_all(&keys, false);
+    for &key in &keys {
+        assert!(
+            states.is_collapsed(key, false),
+            "{key:?} should be collapsed after mixed toggle"
+        );
+    }
 }
 #[test]
 fn blocked_file_edit_headers_use_in_progress_wording() {

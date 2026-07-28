@@ -337,6 +337,71 @@ fn shell_command_views_keep_independent_collapse_state() {
 }
 
 #[test]
+fn escape_while_editing_exits_editor_without_cancelling() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        let action = command_action("action-1", "echo original");
+        let view = add_shell_view(
+            &mut app,
+            action.clone(),
+            Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+        );
+        let (action_model, conversation_id, prompt) = app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            (
+                view.action_model.clone(),
+                view.conversation_id,
+                view.permission_prompt.clone(),
+            )
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+
+        // Enter command body editing mode.
+        prompt.update(&mut app, |prompt, ctx| {
+            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
+        });
+        app.read(|ctx| {
+            assert!(view.as_ref(ctx).command_editor.as_ref(ctx).is_focused());
+        });
+
+        // Edit the command text.
+        let command_editor = app.read(|ctx| view.as_ref(ctx).command_editor.clone());
+        command_editor.update(&mut app, |editor, ctx| {
+            editor.set_text("echo edited", ctx);
+        });
+
+        // Present so that key dispatch can build the responder chain.
+        present_shell_view(&mut app, &view);
+
+        // Esc from the editor: should exit editing (focus list, select yes)
+        // but NOT cancel the tool call.
+        assert!(dispatch_focused_key(&mut app, &view, "escape"));
+
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            // Editor is no longer focused.
+            assert!(!view.command_editor.as_ref(ctx).is_focused());
+            // Yes (index 0) is now highlighted.
+            assert_eq!(
+                view.permission_prompt.as_ref(ctx).highlighted_index(ctx),
+                Some(0)
+            );
+            // Edited text is retained (same as Save path).
+            assert_eq!(view.command_editor.as_ref(ctx).text(ctx), "echo edited");
+            // Tool call has NOT been cancelled.
+            assert!(
+                view.action_model
+                    .as_ref(ctx)
+                    .get_action_result(&view.action.id)
+                    .is_none()
+            );
+        });
+    });
+}
+
+#[test]
 fn manual_collapse_override_wins_over_auto_expansion() {
     let mut state = ShellCommandViewState::new_collapsed();
 

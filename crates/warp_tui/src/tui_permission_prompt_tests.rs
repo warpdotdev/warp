@@ -96,6 +96,7 @@ fn render_lines(app: &mut App, prompt: &ViewHandle<TuiPermissionPrompt>) -> Vec<
                     prompt,
                     "Permission",
                     Some(TuiText::new("details").finish()),
+                    None,
                     ctx,
                 ),
                 TuiRect::new(0, 0, 80, 12),

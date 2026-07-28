@@ -38,17 +38,39 @@ use warpui_core::elements::tui::{
     Modifier, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiStyle, TuiText,
     tui_collapsible,
 };
+use warpui_core::keymap::EditableBinding;
+use warpui_core::keymap::macros::*;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
+use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
 use crate::tool_call_labels::{ToolCallDisplayState, tool_call_display_state};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorageHandle};
 use crate::tui_permission_prompt::{
     TuiPermissionPrompt, TuiPermissionPromptEvent, render_permission_card,
 };
+
+/// Keymap context set on `TuiFileEditsView` while a file-edits permission card
+/// is active and the option list (yes/no/Other) owns focus, gating the `e`
+/// expand/collapse-all binding.
+const FILE_EDITS_PERMISSION_ACTIVE: &str = "TuiFileEditsPermissionActive";
+
+/// Registers `TuiFileEditsView`-specific keybindings.
+pub(crate) fn init(app: &mut AppContext) {
+    let predicate = id!(TuiFileEditsView::ui_name()) & id!(FILE_EDITS_PERMISSION_ACTIVE);
+    app.register_editable_bindings([EditableBinding::new(
+        "tui:file-edits-permission:toggle-expand-all",
+        "Expand or collapse all diffs",
+        TuiFileEditsViewAction::ToggleExpandAll,
+    )
+    .with_context_predicate(predicate)
+    .with_group(TUI_BINDING_GROUP)
+    .with_key_binding("e")]);
+    app.register_tui_binding_validator::<TuiFileEditsView>(is_tui_owned_binding);
+}
 
 /// Unchanged context lines rendered on each side of a hunk.
 const CONTEXT_LINES: usize = 3;
@@ -84,6 +106,8 @@ pub(super) enum TuiFileEditsViewEvent {
 #[derive(Clone, Debug)]
 pub(super) enum TuiFileEditsViewAction {
     ToggleSection(SectionKey),
+    /// Toggles all diff sections between expanded and collapsed together.
+    ToggleExpandAll,
 }
 
 /// One edited file's diff: header facts plus the char-cell editor whose
@@ -150,20 +174,49 @@ impl Default for SectionUiState {
 }
 
 impl SectionStates {
-    /// Whether the keyed section is collapsed (default: collapsed).
-    fn is_collapsed(&self, key: SectionKey) -> bool {
+    /// Whether the keyed section is collapsed.
+    /// `default_collapsed` is used when no explicit user toggle has been
+    /// recorded (i.e. the section key has no entry in the state map yet).
+    fn is_collapsed(&self, key: SectionKey, default_collapsed: bool) -> bool {
         self.states
             .borrow()
             .get(&key)
             .map(|state| state.collapsed)
-            .unwrap_or(true)
+            .unwrap_or(default_collapsed)
     }
 
-    /// Flips the collapse state of the keyed section.
-    fn toggle_collapsed(&self, key: SectionKey) {
+    /// Flips the collapse state of the keyed section, using `default_collapsed`
+    /// as the implicit current state when no explicit toggle exists yet.
+    fn toggle_collapsed(&self, key: SectionKey, default_collapsed: bool) {
         let mut states = self.states.borrow_mut();
+        let current_collapsed = states
+            .get(&key)
+            .map(|s| s.collapsed)
+            .unwrap_or(default_collapsed);
         let state = states.entry(key).or_default();
-        state.collapsed = !state.collapsed;
+        state.collapsed = !current_collapsed;
+    }
+
+    /// Clears all explicit toggle state so every section reverts to its
+    /// context-dependent default on the next render.
+    fn reset_states(&self) {
+        self.states.borrow_mut().clear();
+    }
+
+    /// Toggles all sections between fully expanded and fully collapsed:
+    /// if any section is currently expanded, collapse all; otherwise expand
+    /// all. `default_collapsed` is used for sections without an explicit entry.
+    fn toggle_expand_all(&self, keys: &[SectionKey], default_collapsed: bool) {
+        let any_expanded = keys
+            .iter()
+            .any(|key| !self.is_collapsed(*key, default_collapsed));
+        // Collapse all when any are expanded; expand all when all are collapsed.
+        let target_collapsed = any_expanded;
+        let mut states = self.states.borrow_mut();
+        for key in keys {
+            let state = states.entry(*key).or_default();
+            state.collapsed = target_collapsed;
+        }
     }
 
     /// The persistent hover state handle for the keyed section.
@@ -230,6 +283,9 @@ impl TuiFileEditsView {
             if let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event
                 && *action_id == me.action_id
             {
+                // Reset explicit section toggle state so the transcript chrome
+                // renders collapsed (the non-blocked default) after accept.
+                me.section_states.reset_states();
                 ctx.notify();
             }
         });
@@ -395,11 +451,17 @@ impl TuiFileEditsView {
     /// Renders one collapsible section: the keyed header over `body`. The
     /// body is built lazily, only when the section is expanded; sections
     /// without a body (`None`) render no chevron.
+    ///
+    /// `default_collapsed` determines the initial state for sections that have
+    /// never been explicitly toggled: `false` (expanded) while the permission
+    /// card is active (Blocked), `true` (collapsed) in the transcript chrome.
+    #[allow(clippy::too_many_arguments)]
     fn render_section(
         &self,
         key: SectionKey,
         label: &str,
         line_stats: Option<(usize, usize)>,
+        default_collapsed: bool,
         builder: &TuiUiBuilder,
         app: &AppContext,
         body: Option<impl FnOnce() -> Box<dyn TuiElement>>,
@@ -409,7 +471,7 @@ impl TuiFileEditsView {
             return TuiText::from_spans(header_spans).truncate().finish();
         };
 
-        let collapsed = self.section_states.is_collapsed(key);
+        let collapsed = self.section_states.is_collapsed(key, default_collapsed);
         let hover_state = self.section_states.hover_state(key);
         let hovered = hover_state.lock().unwrap().is_hovered();
         let (mut header_spans, chevron_style) =
@@ -469,8 +531,12 @@ impl TuiFileEditsView {
 
     /// Renders the per-file sections as a column of collapsible sections with
     /// a blank row between files.
+    ///
+    /// `default_collapsed` is forwarded to each section's `render_section`
+    /// call; see that method's doc for the blocked vs. transcript semantics.
     fn render_file_sections(
         &self,
+        default_collapsed: bool,
         builder: &TuiUiBuilder,
         app: &AppContext,
     ) -> Box<dyn TuiElement> {
@@ -486,6 +552,7 @@ impl TuiFileEditsView {
                 SectionKey::File(index),
                 &label,
                 line_stats,
+                default_collapsed,
                 builder,
                 app,
                 has_body.then_some(|| self.render_body(section, builder, app)),
@@ -632,6 +699,22 @@ impl TuiView for TuiFileEditsView {
         vec![self.permission_prompt.id()]
     }
 
+    fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        // Activate the `e` expand/collapse-all binding only when the
+        // permission card is active and the option list (yes/no/Other) owns
+        // focus — not while the user is typing in the Other custom-text editor.
+        let is_blocked = self
+            .action_model
+            .as_ref(app)
+            .get_action_status(&self.action_id)
+            .is_some_and(|s| s.is_blocked());
+        if is_blocked && self.permission_prompt.as_ref(app).list_is_focused(app) {
+            context.set.insert(FILE_EDITS_PERMISSION_ACTIVE);
+        }
+        context
+    }
+
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let content = self.render_diff_content(app);
         let status = self
@@ -642,10 +725,19 @@ impl TuiView for TuiFileEditsView {
             return content;
         }
 
+        let builder = TuiUiBuilder::from_app(app);
+        let expand_collapse_hint = TuiText::from_spans([
+            ("e".to_owned(), builder.primary_text_style()),
+            (" to expand/collapse".to_owned(), builder.muted_text_style()),
+        ])
+        .truncate()
+        .finish();
+
         render_permission_card(
             &self.permission_prompt,
             "Is it OK if I make these file edits?",
             Some(content),
+            Some(expand_collapse_hint),
             app,
         )
     }
@@ -654,6 +746,16 @@ impl TuiView for TuiFileEditsView {
 impl TuiFileEditsView {
     fn render_diff_content(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
+
+        // Sections default to expanded while awaiting approval (Blocked) so
+        // the user can review diffs without extra clicks, and to collapsed
+        // in the transcript chrome after accept (non-Blocked).
+        let is_blocked = self
+            .action_model
+            .as_ref(app)
+            .get_action_status(&self.action_id)
+            .is_some_and(|s| s.is_blocked());
+        let default_collapsed = !is_blocked;
 
         if self.sections.is_empty() {
             let label = self.fallback_label(app);
@@ -666,7 +768,7 @@ impl TuiFileEditsView {
         // Single-file edits render the file section alone; multi-file edits
         // nest the sections, indented, under one collapsible summary header.
         if self.sections.len() == 1 {
-            return self.render_file_sections(&builder, app);
+            return self.render_file_sections(default_collapsed, &builder, app);
         }
 
         self.render_section(
@@ -677,10 +779,11 @@ impl TuiFileEditsView {
                 &format!("{} files", self.sections.len()),
             ),
             self.aggregate_stats(app),
+            default_collapsed,
             &builder,
             app,
             Some(|| {
-                TuiContainer::new(self.render_file_sections(&builder, app))
+                TuiContainer::new(self.render_file_sections(default_collapsed, &builder, app))
                     .with_padding_left(2)
                     .finish()
             }),
@@ -692,9 +795,29 @@ impl TypedActionView for TuiFileEditsView {
     type Action = TuiFileEditsViewAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        let is_blocked = self
+            .action_model
+            .as_ref(ctx)
+            .get_action_status(&self.action_id)
+            .is_some_and(|s| s.is_blocked());
+        let default_collapsed = !is_blocked;
         match action {
             TuiFileEditsViewAction::ToggleSection(key) => {
-                self.section_states.toggle_collapsed(*key);
+                self.section_states
+                    .toggle_collapsed(*key, default_collapsed);
+                ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
+                ctx.notify();
+            }
+            TuiFileEditsViewAction::ToggleExpandAll => {
+                let mut keys = Vec::new();
+                if self.sections.len() > 1 {
+                    keys.push(SectionKey::Summary);
+                }
+                for i in 0..self.sections.len() {
+                    keys.push(SectionKey::File(i));
+                }
+                self.section_states
+                    .toggle_expand_all(&keys, default_collapsed);
                 ctx.emit(TuiFileEditsViewEvent::LayoutChanged);
                 ctx.notify();
             }

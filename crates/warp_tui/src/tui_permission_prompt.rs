@@ -191,6 +191,12 @@ impl TuiPermissionPrompt {
         self.selector.as_ref(app).leading_editor_is_focused(app)
     }
 
+    /// Whether the option list (yes/no/Other) currently owns focus, as
+    /// opposed to a body editor or the custom-text editor.
+    pub(crate) fn list_is_focused(&self, app: &AppContext) -> bool {
+        self.selector.as_ref(app).list_is_focused(app)
+    }
+
     /// Focuses the option selector.
     pub(crate) fn focus(&self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.selector);
@@ -270,10 +276,15 @@ impl TuiPermissionPrompt {
 }
 
 /// Renders a full-width permission card around a tool-specific body.
+///
+/// `header_trailing` is an optional element rendered in the top-right of the
+/// card header (after the title). When `None` and the prompt has a body
+/// editor, the card automatically shows the `e to edit command` affordance.
 pub(crate) fn render_permission_card(
     prompt: &ViewHandle<TuiPermissionPrompt>,
     title: impl Into<String>,
     body: Option<Box<dyn TuiElement>>,
+    header_trailing: Option<Box<dyn TuiElement>>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
@@ -286,18 +297,20 @@ pub(crate) fn render_permission_card(
     ])
     .truncate()
     .finish();
-    let header_content = if prompt.as_ref(app).body_editor.is_some() {
-        TuiFlex::row()
-            .flex_child(title)
-            .child(
-                TuiText::from_spans([
-                    ("e".to_owned(), builder.primary_text_style()),
-                    (" to edit command".to_owned(), builder.muted_text_style()),
-                ])
-                .truncate()
-                .finish(),
-            )
+    // Fall back to showing the edit-command affordance when no explicit
+    // trailing element is provided and the prompt has a body editor.
+    let trailing = header_trailing.or_else(|| {
+        prompt.as_ref(app).body_editor.is_some().then(|| {
+            TuiText::from_spans([
+                ("e".to_owned(), builder.primary_text_style()),
+                (" to edit command".to_owned(), builder.muted_text_style()),
+            ])
+            .truncate()
             .finish()
+        })
+    });
+    let header_content = if let Some(trailing) = trailing {
+        TuiFlex::row().flex_child(title).child(trailing).finish()
     } else {
         title
     };
