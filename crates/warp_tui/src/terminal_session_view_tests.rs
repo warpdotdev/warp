@@ -3291,6 +3291,10 @@ fn vim_mode_slash_command_persists_toggle() {
 /// The vim mode indicator (NOR/VIS/REP) must appear in the footer only when
 /// vim mode is enabled and the current mode is non-Insert. In Insert mode
 /// (the default when vim is first enabled) no indicator is shown.
+///
+/// This test validates both the accessor and the full render path so that a
+/// missing `VimModeChanged` notification (which would leave the real UI footer
+/// stale) would also cause the rendered assertion to fail.
 #[test]
 fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
     App::test((), |mut app| async move {
@@ -3335,6 +3339,7 @@ fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
                 input.handle_action(&crate::input::view::TuiInputAction::HandleEscape, ctx);
             });
         });
+        // Verify via accessor that the mode state is correct.
         app.read(|ctx| {
             let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
             assert_eq!(
@@ -3343,6 +3348,15 @@ fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
                 "indicator must be NOR in Normal mode when vim mode is enabled"
             );
         });
+        // Verify via the full render path: the footer must contain the NOR
+        // label in place of the model name.  A missing VimModeChanged
+        // notification would leave the real session footer stale, and this
+        // assertion would fail when the session view was not re-rendered.
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(
+            rendered.contains("NOR"),
+            "rendered footer must contain 'NOR' after Insert\u{2192}Normal transition, got:\n{rendered}"
+        );
 
         // Disable vim mode: indicator → None again.
         app.update(|ctx| {

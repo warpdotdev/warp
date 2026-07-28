@@ -175,8 +175,9 @@ impl TuiVimInputModel {
 
     /// Map a `VimEventType` (wrapped in `VimEvent`) to a [`TuiVimAction`].
     fn map_event(&mut self, event: vim::vim::VimEvent) -> TuiVimAction {
-        let count = event.count.max(1) as usize;
-        match event.event_type {
+        let (event_type, count) = event.into_parts();
+        let count = count.max(1) as usize;
+        match event_type {
             // ── Insert mode pass-throughs ──────────────────────────────────
             VimEventType::InsertChar(c) => TuiVimAction::InsertChar(c),
 

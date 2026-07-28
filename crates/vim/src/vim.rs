@@ -530,8 +530,27 @@ impl From<VimMode> for ModeTransition {
 /// Representation of a single, atomic Vim operation.
 #[derive(Clone, Debug)]
 pub struct VimEvent {
-    pub event_type: VimEventType,
-    pub count: u32,
+    event_type: VimEventType,
+    count: u32,
+}
+
+impl VimEvent {
+    /// Borrow the event type.
+    pub fn event_type(&self) -> &VimEventType {
+        &self.event_type
+    }
+
+    /// The repeat count for this event (always at least 1).
+    pub fn count(&self) -> u32 {
+        self.count
+    }
+
+    /// Consume the event, returning its type and count as separate values.
+    /// Prefer this over field access when the event type needs to be matched
+    /// by value (avoiding a clone of the event type).
+    pub fn into_parts(self) -> (VimEventType, u32) {
+        (self.event_type, self.count)
+    }
 }
 
 impl From<VimEventType> for VimEvent {

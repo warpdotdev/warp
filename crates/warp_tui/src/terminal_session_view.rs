@@ -2854,41 +2854,50 @@ impl TuiTerminalSessionView {
                 .then_some(FooterSegment::ActiveIndicator("Auto-approve")),
                 TuiStatuslineItem::AutoQueue => (!shell_mode && self.is_auto_queue_enabled(ctx))
                     .then_some(FooterSegment::ActiveIndicator("Auto-queue")),
-                TuiStatuslineItem::Model => (!shell_mode).then(|| {
-                    // When vim mode is in a non-Insert state (Normal/Visual/Replace),
-                    // show the vim indicator in the model position so the current
-                    // vim mode (NOR/VIS/REP) is immediately visible.
+                TuiStatuslineItem::Model => {
+                    // The vim mode indicator (NOR/VIS/REP) takes priority over
+                    // the model name and is shown unconditionally — including in
+                    // shell mode — so the current mode is always visible whenever
+                    // vim is active.  Shell mode suppression only applies to the
+                    // model label that follows.
                     if let Some(vim_label) = self.vim_mode_indicator(ctx) {
-                        return FooterSegment::VimIndicator(vim_label);
-                    }
-                    let model_name = LLMPreferences::as_ref(ctx)
-                        .get_active_base_model(ctx, Some(self.terminal_surface_id))
-                        .display_name
-                        .clone();
-                    let model_label_hovered = self
-                        .model_label_hover
-                        .lock()
-                        .is_ok_and(|state| state.is_hovered());
-                    let model_label_style = if model_label_hovered {
-                        builder.primary_text_style()
+                        Some(FooterSegment::VimIndicator(vim_label))
                     } else {
-                        builder.muted_text_style()
-                    };
-                    FooterSegment::Model(
-                        TuiHoverable::new(
-                            self.model_label_hover.clone(),
-                            TuiText::new(model_name)
-                                .with_style(model_label_style)
-                                .truncate()
+                        // The model label is suppressed in shell mode (the
+                        // shell-mode badge is already shown at the start of the
+                        // footer row).
+                        (!shell_mode).then(|| {
+                            let model_name = LLMPreferences::as_ref(ctx)
+                                .get_active_base_model(ctx, Some(self.terminal_surface_id))
+                                .display_name
+                                .clone();
+                            let model_label_hovered = self
+                                .model_label_hover
+                                .lock()
+                                .is_ok_and(|state| state.is_hovered());
+                            let model_label_style = if model_label_hovered {
+                                builder.primary_text_style()
+                            } else {
+                                builder.muted_text_style()
+                            };
+                            FooterSegment::Model(
+                                TuiHoverable::new(
+                                    self.model_label_hover.clone(),
+                                    TuiText::new(model_name)
+                                        .with_style(model_label_style)
+                                        .truncate()
+                                        .finish(),
+                                )
+                                .on_click(|event_ctx, _| {
+                                    event_ctx.dispatch_typed_action(
+                                        TuiTerminalSessionAction::ToggleModelMenu,
+                                    );
+                                })
                                 .finish(),
-                        )
-                        .on_click(|event_ctx, _| {
-                            event_ctx
-                                .dispatch_typed_action(TuiTerminalSessionAction::ToggleModelMenu);
+                            )
                         })
-                        .finish(),
-                    )
-                }),
+                    }
+                }
                 TuiStatuslineItem::WorkingDirectory => self
                     .current_working_directory(ctx)
                     .map(|cwd| FooterSegment::WorkingDirectory(compact_footer_path(&cwd))),

@@ -678,8 +678,11 @@ impl TypedActionView for TuiInputView {
                     && self.vim_mode_enabled(ctx)
                     && !matches!(self.vim.mode(), VimMode::Insert)
                 {
+                    // Capture mode BEFORE the FSA advances so apply_vim_action can
+                    // detect a mode transition and emit VimModeChanged.
+                    let prev_mode = self.vim.mode();
                     let vim_action = self.vim.process_char(c);
-                    return self.apply_vim_action(vim_action, ctx);
+                    return self.apply_vim_action(vim_action, prev_mode, ctx);
                 }
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
@@ -727,8 +730,9 @@ impl TypedActionView for TuiInputView {
                     && self.vim_mode_enabled(ctx)
                     && !matches!(self.vim.mode(), VimMode::Insert)
                 {
+                    let prev_mode = self.vim.mode();
                     let vim_action = self.vim.process_special_key("backspace");
-                    return self.apply_vim_action(vim_action, ctx);
+                    return self.apply_vim_action(vim_action, prev_mode, ctx);
                 }
                 // Only open the conversation list from normal agent input; in
                 // `!` shell mode the `!` prefix is not part of `plain_text`, so
@@ -1173,8 +1177,11 @@ impl TuiInputView {
                 self.exit_shell_mode(ctx);
                 return true;
             }
+            // Capture mode BEFORE the FSA advances so apply_vim_action can
+            // detect the transition and emit VimModeChanged.
+            let prev_mode = self.vim.mode();
             let vim_action = self.vim.process_special_key("escape");
-            self.apply_vim_action(vim_action, ctx);
+            self.apply_vim_action(vim_action, prev_mode, ctx);
             ctx.notify();
             return true;
         }
@@ -1188,8 +1195,18 @@ impl TuiInputView {
 
     /// Applies a [`TuiVimAction`] — returned by the vim FSA — to the backing
     /// editor model and re-renders.
-    fn apply_vim_action(&mut self, action: TuiVimAction, ctx: &mut ViewContext<Self>) {
-        let prev_vim_mode = self.vim.mode();
+    ///
+    /// `prev_vim_mode` must be captured by the caller **before** it calls the
+    /// FSA (`process_char`/`process_special_key`), because the FSA advances its
+    /// internal mode as part of that call.  Comparing `self.vim.mode()` inside
+    /// this function would always see the post-transition mode and would never
+    /// detect a change.
+    fn apply_vim_action(
+        &mut self,
+        action: TuiVimAction,
+        prev_vim_mode: VimMode,
+        ctx: &mut ViewContext<Self>,
+    ) {
         match action {
             TuiVimAction::InsertChar(c) => {
                 // Normal character insert (insert mode or insert-mode char from FSA).
@@ -1447,6 +1464,8 @@ impl TuiInputView {
             }
             TuiVimAction::DeleteVisualSelection => {
                 // `d`/`c` in visual mode: delete from anchor to current cursor.
+                // Vim charwise visual selection is inclusive on both ends, so
+                // the character under the cursor is included in the deletion.
                 if let Some(anchor) = self.visual_selection_anchor.take() {
                     let cursor = self.cursor_offset(ctx);
                     let (sel_start, sel_end) = if anchor <= cursor {
@@ -1454,28 +1473,26 @@ impl TuiInputView {
                     } else {
                         (cursor, anchor)
                     };
-                    // Capture the text in [sel_start, sel_end) for the yank buffer before
-                    // deleting. Read directly from the buffer so no trait import is needed.
+                    // Yank [sel_start, sel_end] inclusive — convert 1-based gap
+                    // offsets to 0-based char indices and include the cursor char.
                     let yank_text = {
                         let inner = self.model.as_ref(ctx);
                         let buffer = inner.content().as_ref(ctx);
                         let buffer_text = buffer.text().into_string();
                         let start_char = sel_start.as_usize().saturating_sub(1);
                         let end_char = sel_end.as_usize().saturating_sub(1);
-                        if end_char > start_char {
-                            buffer_text
-                                .chars()
-                                .skip(start_char)
-                                .take(end_char - start_char)
-                                .collect::<String>()
-                        } else {
-                            String::new()
-                        }
+                        // Include the character at end_char (inclusive range).
+                        buffer_text
+                            .chars()
+                            .skip(start_char)
+                            .take(end_char - start_char + 1)
+                            .collect::<String>()
                     };
-                    // Establish the selection in the model so backspace deletes it.
+                    // Establish the inclusive selection in the model: sel_end + 1
+                    // because the model selection head is exclusive.
                     self.model.update(ctx, |m, ctx| {
                         m.select_at(sel_start, false, ctx);
-                        m.set_last_selection_head(sel_end, ctx);
+                        m.set_last_selection_head(sel_end + 1usize, ctx);
                     });
                     // Delete the selection.
                     self.model.update(ctx, |m, ctx| m.backspace(ctx));
@@ -1487,6 +1504,7 @@ impl TuiInputView {
             }
             TuiVimAction::YankVisualSelection => {
                 // `y` in visual mode: yank from anchor to cursor, non-destructively.
+                // Vim charwise visual selection is inclusive on both ends.
                 if let Some(anchor) = self.visual_selection_anchor.take() {
                     let cursor = self.cursor_offset(ctx);
                     let (sel_start, sel_end) = if anchor <= cursor {
@@ -1502,27 +1520,29 @@ impl TuiInputView {
                     };
                     let start_char = sel_start.as_usize().saturating_sub(1);
                     let end_char = sel_end.as_usize().saturating_sub(1);
-                    if end_char > start_char {
-                        let yank_text: String = buffer_text
-                            .chars()
-                            .skip(start_char)
-                            .take(end_char - start_char)
-                            .collect();
-                        if !yank_text.is_empty() {
-                            self.vim.set_yank_buffer(yank_text);
-                        }
+                    // Include the character at end_char (inclusive range).
+                    let yank_text: String = buffer_text
+                        .chars()
+                        .skip(start_char)
+                        .take(end_char - start_char + 1)
+                        .collect();
+                    if !yank_text.is_empty() {
+                        self.vim.set_yank_buffer(yank_text);
                     }
                     // Non-destructive: no buffer mutation.
                 }
             }
             TuiVimAction::RepeatCount { inner, count } => {
-                // Execute the inner action `count` times.
+                // Execute the inner action `count` times, passing the same
+                // `prev_vim_mode` so that a mode-changing inner action (e.g. a
+                // count-prefixed `v` entering visual mode) is detected by the
+                // shared emit check at the bottom of this function.
                 for _ in 0..count {
-                    self.apply_vim_action(*inner.clone(), ctx);
+                    self.apply_vim_action(*inner.clone(), prev_vim_mode, ctx);
                 }
-                // Skip the ctx.notify() at the bottom since the recursive calls
-                // already handled notification; return early.
-                return;
+                // Fall through to the shared mode-change emit and ctx.notify()
+                // so a mode transition inside a count-prefixed command is never
+                // silently skipped.
             }
             // Pending / unhandled — no buffer edit needed.
             TuiVimAction::Pending | TuiVimAction::Unhandled => {}
