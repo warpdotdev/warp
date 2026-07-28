@@ -2170,6 +2170,9 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
             lines.join("\n")
         );
         view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("unsent agent prompt", ctx);
+            });
             view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
             assert!(
                 !view.exit_confirmation.is_armed(),
@@ -2197,6 +2200,11 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
             );
         });
         assert_eq!(
+            app.read(|ctx| input_text(&view, ctx)),
+            "",
+            "detaching must discard an unsent agent prompt"
+        );
+        assert_eq!(
             *interrupt_count.borrow(),
             0,
             "leaving the tagged composer must not send ctrl-c to the running command"
@@ -2213,6 +2221,21 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
             lines.iter().any(|line| line.contains("to use agent")),
             "detaching should restore the attach hint:\n{}",
             lines.join("\n")
+        );
+        view.update(&mut app, |view, ctx| {
+            let block_id = {
+                let mut terminal_model = view.terminal_model.lock();
+                let block_id = terminal_model.block_list().active_block().id().clone();
+                terminal_model.finish_block();
+                block_id
+            };
+            view.handle_block_completed(&block_id, ctx);
+            assert!(view.input_target().agent_editor_owns_input());
+        });
+        assert_eq!(
+            app.read(|ctx| input_text(&view, ctx)),
+            "",
+            "the discarded prompt must not reappear after command completion"
         );
     });
 }

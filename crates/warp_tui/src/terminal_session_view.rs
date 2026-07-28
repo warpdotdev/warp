@@ -1305,7 +1305,8 @@ impl TuiTerminalSessionView {
 
     /// Attempts to return input to the active manually tagged LRC.
     ///
-    /// Returns false when no active block has a manually attached agent.
+    /// Discards any unsent agent prompt. Returns false when no active block has
+    /// a manually attached agent.
     fn try_detach_agent_from_running_command(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let did_detach = {
             let mut terminal_model = self.terminal_model.lock();
@@ -1321,7 +1322,7 @@ impl TuiTerminalSessionView {
             return false;
         }
         self.input_view.update(ctx, |input, ctx| {
-            input.reset_after_agent_control(ctx);
+            input.clear(ctx);
         });
         self.refresh_input_focus(ctx);
         ctx.notify();
