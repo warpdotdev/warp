@@ -31,6 +31,7 @@ pub enum HeaderToolbarItemKind {
     AgentManagement,
     CodeReview,
     NotificationsMailbox,
+    ClaudeCodeUsage,
 }
 
 impl HeaderToolbarItemKind {
@@ -41,6 +42,7 @@ impl HeaderToolbarItemKind {
             Self::AgentManagement => "Agent Management",
             Self::CodeReview => "Code Review",
             Self::NotificationsMailbox => "Notifications",
+            Self::ClaudeCodeUsage => "Claude Usage",
         }
     }
 
@@ -51,6 +53,7 @@ impl HeaderToolbarItemKind {
             Self::AgentManagement => Icon::Grid,
             Self::CodeReview => Icon::Diff,
             Self::NotificationsMailbox => Icon::Inbox,
+            Self::ClaudeCodeUsage => Icon::PiratePacman,
         }
     }
 
@@ -75,6 +78,12 @@ impl HeaderToolbarItemKind {
             }
             Self::CodeReview => cfg!(feature = "local_fs"),
             Self::NotificationsMailbox => FeatureFlag::HOANotifications.is_enabled(),
+            // The indicator reads the Claude Code session from local storage,
+            // which the web build has no access to.
+            Self::ClaudeCodeUsage => {
+                cfg!(not(target_family = "wasm"))
+                    && FeatureFlag::ClaudeCodeUsageIndicator.is_enabled()
+            }
         }
     }
 
@@ -102,7 +111,11 @@ impl HeaderToolbarItemKind {
     }
 
     pub fn default_right() -> Vec<Self> {
-        vec![Self::CodeReview, Self::NotificationsMailbox]
+        vec![
+            Self::ClaudeCodeUsage,
+            Self::CodeReview,
+            Self::NotificationsMailbox,
+        ]
     }
 
     /// All toolbar item variants (availability filtering is done at the call site).
@@ -113,6 +126,7 @@ impl HeaderToolbarItemKind {
             Self::AgentManagement,
             Self::CodeReview,
             Self::NotificationsMailbox,
+            Self::ClaudeCodeUsage,
         ]
     }
 }

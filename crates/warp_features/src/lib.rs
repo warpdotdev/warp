@@ -926,6 +926,11 @@ pub enum FeatureFlag {
     /// `warp_id` values in MCP configs and as bare identifiers in CLI
     /// `--mcp` arguments, resolved server-side at run setup.
     WellKnownMcpIds,
+
+    /// Enables the Claude Code usage indicator in the header toolbar: a
+    /// Pac-Man chip showing how much of the current Claude session limit has
+    /// been used, read from the local Claude Code OAuth session.
+    ClaudeCodeUsageIndicator,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1002,6 +1007,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::WellKnownMcpIds,
+    FeatureFlag::ClaudeCodeUsageIndicator,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
