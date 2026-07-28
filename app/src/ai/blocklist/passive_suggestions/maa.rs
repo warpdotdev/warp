@@ -853,13 +853,30 @@ fn is_prompt_suggestions_enabled(ctx: &ModelContext<PassiveSuggestionsModel>) ->
         && UserWorkspaces::as_ref(ctx).is_prompt_suggestions_toggleable()
 }
 
+/// Maximum byte length of block text to scan for file paths when building passive code-diff
+/// context. Caps CPU and memory usage for large shell outputs (e.g. a Rails console session
+/// that emits thousands of lines). File paths relevant to code suggestions almost always
+/// appear near the beginning of output (error messages, stack traces, compiler output), so
+/// truncating here has negligible impact on suggestion quality while avoiding an expensive
+/// O(n) token scan + filesystem-stat loop on megabyte-sized outputs.
+const MAX_BLOCK_CONTENTS_BYTES_FOR_PATH_DETECTION: usize = 100_000;
+
 #[cfg(feature = "local_fs")]
 fn detect_relevant_file_paths_for_block(
     block_contents: &str,
     current_working_directory: &str,
     shell: Option<&ShellLaunchData>,
 ) -> Vec<PathBuf> {
-    // TODO (suraj): use line num hint to limit the line range to read.
+    // Truncate to a UTF-8-safe boundary to avoid an expensive scan of huge outputs.
+    let block_contents = if block_contents.len() > MAX_BLOCK_CONTENTS_BYTES_FOR_PATH_DETECTION {
+        let boundary = (0..=MAX_BLOCK_CONTENTS_BYTES_FOR_PATH_DETECTION)
+            .rev()
+            .find(|&i| block_contents.is_char_boundary(i))
+            .unwrap_or(0);
+        &block_contents[..boundary]
+    } else {
+        block_contents
+    };
     detect_file_paths(current_working_directory, block_contents, shell)
         .into_values()
         .filter_map(|link| match link {
