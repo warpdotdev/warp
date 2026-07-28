@@ -17,20 +17,20 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use warp::tui_export::{
-    AIConversationId, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudAgentStartupIssue,
-    ConversationStatus, Harness, OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
-    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, RenderableAIError, ServerApiProvider,
-    StartAgentExecutionMode, StartAgentRequest, apply_child_agent_model_override,
-    classify_cloud_agent_startup_error, descendant_conversations_in_pill_order,
-    inherit_child_agent_settings, orchestration_root_conversation_id, oz_run_url,
-    prepare_local_oz_child_launch, prepare_remote_child_launch, register_agent_event_consumer,
-    unregister_agent_event_consumer,
+    AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    CloudAgentStartupIssue, ConversationStatus, Harness, OrchestrationEventStreamer,
+    OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,
+    RenderableAIError, ServerApiProvider, StartAgentExecutionMode, StartAgentRequest,
+    apply_child_agent_model_override, classify_cloud_agent_startup_error,
+    descendant_conversations_in_pill_order, inherit_child_agent_settings,
+    orchestration_root_conversation_id, oz_run_url, prepare_local_oz_child_launch,
+    prepare_remote_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
 use crate::cloud_run::TuiCloudRunState;
-use crate::session_registry::{RemoteChildSession, TuiSessionId, TuiSessions};
+use crate::session_registry::{RemoteChildSession, TuiSessionId, TuiSessionView, TuiSessions};
 use crate::tab_bar::TuiTabBarPagingState;
 use crate::terminal_session_view::TuiTerminalSessionView;
 
@@ -616,18 +616,68 @@ impl TuiOrchestrationModel {
         ctx.notify();
     }
 
-    /// Kills a child agent: tombstones so late events cannot resurrect it,
-    /// deletes the conversation from history, and removes the retained TUI
-    /// session. Equivalent to the GUI's `KillAgentConversation` path (minus
-    /// the in-flight stop, which callers handle before invoking this).
+    /// Kills a child agent: tombstones late events, cancels any in-flight
+    /// execution (cloud task or local controller), deletes the conversation
+    /// from history, and removes the retained TUI session. Equivalent to the
+    /// GUI's `KillAgentConversation` path.
     pub(crate) fn kill_child_agent(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
+        // 1. Tombstone so late SSE events cannot resurrect the killed child.
         OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
             streamer.mark_conversation_killed(conversation_id, ctx);
         });
+
+        // 2. Cancel in-flight execution BEFORE deletion (AC 6).
+        //    Read what we need up front to avoid borrow-checker issues with the
+        //    subsequent mutable operations.
+        let is_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|c| c.status().is_in_progress() || c.status().is_blocked());
+        let is_remote = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|c| c.is_remote_child());
+        let task_id: Option<AmbientAgentTaskId> = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|c| c.task_id());
+        let child_session_id = self
+            .child_session_by_conversation
+            .get(&conversation_id)
+            .copied();
+
+        if is_in_progress {
+            if is_remote {
+                // Remote (cloud) child: best-effort cancel the server-side task.
+                // This is async and fire-and-forget; the tombstone above ensures
+                // late events cannot resurrect the child regardless.
+                if let Some(task_id) = task_id {
+                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+                    ctx.spawn(
+                        async move { ai_client.cancel_ambient_agent_task(&task_id).await },
+                        |_, result, _| {
+                            if let Err(e) = result {
+                                log::warn!("kill_child_agent: failed to cancel cloud task: {e:#}");
+                            }
+                        },
+                    );
+                }
+            } else if let Some(session_id) = child_session_id {
+                // Local child: cancel the in-flight conversation through the
+                // child session's view so the controller and PTY see the stop.
+                let child_view = TuiSessions::as_ref(ctx)
+                    .session(session_id)
+                    .map(|s| s.view().clone());
+                if let Some(TuiSessionView::Terminal(terminal_view)) = child_view {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.cancel_active_conversation(ctx);
+                    });
+                }
+            }
+        }
+
+        // 3. Delete conversation and remove session.
         self.cleanup_failed_child(&conversation_id, ctx);
     }
 

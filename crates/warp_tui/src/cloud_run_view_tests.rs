@@ -6,10 +6,11 @@ use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity as _};
 use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, TuiView as _};
+use warpui_core::{App, TuiView as _, TypedActionView as _};
 
-use super::TuiCloudRunView;
+use super::{TuiCloudRunAction, TuiCloudRunView};
 use crate::cloud_run::TuiCloudRunState;
+use crate::terminal_session_view::CTRL_C_KILL_CHILD_HINT;
 use crate::test_fixtures::TestHostView;
 use crate::tui_builder::TuiUiBuilder;
 
@@ -214,5 +215,95 @@ fn spawned_cloud_view_matches_figma_in_progress_and_succeeded_states() {
                 TuiUiBuilder::from_app(ctx).success_glyph_style().fg
             );
         });
+    });
+}
+
+#[test]
+fn cloud_child_first_interrupt_arms_kill_window_not_exit_window() {
+    // AC 9 / cloud child path: when the cloud run view has a conversation_id
+    // (i.e. it is a spawned child), the first Ctrl+C must arm the kill window
+    // (child_kill_armed = true) and show the kill hint — not arm the normal
+    // double-Ctrl+C TUI-exit window.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+        let window_id = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| TestHostView,
+            )
+            .0
+        });
+        let state = app.add_model(|_| TuiCloudRunState::new());
+        let view = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(window_id, |ctx| TuiCloudRunView::new(state.clone(), ctx))
+        });
+        // Set a conversation_id so the view knows it is a spawned child.
+        let conversation_id = app.update(|ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    let conversation_id =
+                        history.start_new_conversation(view.id(), false, false, false, ctx);
+                    history.set_active_conversation_id(conversation_id, view.id(), ctx);
+                    conversation_id
+                });
+            state.update(ctx, |state, ctx| {
+                state.set_conversation_id(conversation_id, ctx);
+                state.set_spawned(
+                    TASK_ID
+                        .parse::<AmbientAgentTaskId>()
+                        .expect("hardcoded task id parses"),
+                    "019f71ef-6285-7480-90f6-3ad84d8e0d1e".to_string(),
+                    RUN_URL.to_string(),
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        // First Ctrl+C on a spawned cloud view.
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiCloudRunAction::Interrupt, ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(
+                view.child_kill_armed,
+                "first interrupt on a spawned cloud view must arm child_kill_armed"
+            );
+            assert!(
+                view.exit_confirmation.is_armed(),
+                "the kill timing window must be armed"
+            );
+        });
+
+        // The footer (where tabs are absent) should show the kill hint.
+        // Re-render and check the last visible line.
+        app.read(|ctx| {
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                view.as_ref(ctx).render(ctx),
+                TuiRect::new(0, 0, 80, 24),
+                ctx,
+            );
+            let visible = frame
+                .buffer
+                .to_lines()
+                .into_iter()
+                .filter(|l| !l.trim().is_empty())
+                .collect::<Vec<_>>();
+            // At least one line should contain the kill hint.
+            let hint_visible = visible.iter().any(|l| l.contains(CTRL_C_KILL_CHILD_HINT));
+            assert!(
+                hint_visible,
+                "kill-child hint must be visible in the footer after first interrupt; \n\
+                 rendered: {}",
+                visible.join("\n")
+            );
+        });
+        let _ = conversation_id; // suppress unused warning
     });
 }

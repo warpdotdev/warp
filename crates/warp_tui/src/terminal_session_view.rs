@@ -159,7 +159,7 @@ const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
 const RUNNING_COMMAND_DETACH_HINT: &str = "ctrl-c to return to command";
 /// The footer hint shown when the ctrl-c kill-child window is armed.
 /// Replaces the exit hint when viewing a child agent conversation.
-const CTRL_C_KILL_CHILD_HINT: &str = "ctrl-c again to kill child agent";
+pub(crate) const CTRL_C_KILL_CHILD_HINT: &str = "ctrl-c again to kill child agent";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
 
 /// Fallback strings for the /status status menu.
@@ -3078,7 +3078,7 @@ impl TuiTerminalSessionView {
 
     /// Cancels the surface's running conversation (in-flight stream or pending
     /// tool actions), returning whether there was one to cancel.
-    fn cancel_active_conversation(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+    pub(crate) fn cancel_active_conversation(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let terminal_surface_id = ctx.view_id();
         self.ai_controller.update(ctx, |controller, ctx| {
             let conversation_id = BlocklistAIHistoryModel::as_ref(ctx)

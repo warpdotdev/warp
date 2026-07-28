@@ -566,6 +566,18 @@ impl TuiView for TuiCloudRunView {
                 .child(TuiChildView::new(&self.orchestration_tab_bar).finish())
                 .flex_child(session)
                 .finish()
+        } else if self.child_kill_armed && self.exit_confirmation.is_armed() {
+            // Even when this run has no sub-agents, show the kill-child hint
+            // so the user can see the confirmation before the second ctrl-c.
+            let hint = TuiContainer::new(
+                TuiText::new(CTRL_C_KILL_CHILD_HINT)
+                    .with_style(builder.muted_text_style())
+                    .truncate()
+                    .finish(),
+            )
+            .with_padding_x(2)
+            .finish();
+            TuiFlex::column().flex_child(body).child(hint).finish()
         } else {
             body
         }

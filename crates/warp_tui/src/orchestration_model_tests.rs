@@ -583,6 +583,90 @@ fn remote_child_session_is_navigable_and_projects_lifecycle() {
 }
 
 #[test]
+fn kill_child_agent_removes_session_and_conversation_from_map() {
+    // AC 6 / TuiSessions removal: `kill_child_agent` must delete the child
+    // conversation from history and remove the retained TUI session from the
+    // session registry.
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = app.read(|ctx| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(parent_session_id.surface_id())
+                .unwrap()
+                .id()
+        });
+        let request = remote_request(parent_conversation_id);
+        // Register a remote child with full orchestration-model wiring so the
+        // child is in `child_session_by_conversation` and its session is in
+        // `TuiSessions`.
+        let (child_conversation_id, child_surface_id, _cloud_run_state) = add_remote_child_session(
+            &mut app,
+            &fixture,
+            parent_session_id,
+            &request,
+            "researcher".to_string(),
+            Harness::Oz,
+        );
+
+        // Confirm the child is registered before the kill.
+        let initial_session_count = app.read_model(&fixture.sessions, |sessions, _| sessions.len());
+        assert_eq!(
+            initial_session_count, 2,
+            "parent + child sessions before kill"
+        );
+        app.read(|ctx| {
+            assert!(
+                TuiSessions::as_ref(ctx)
+                    .session_id_for_surface(child_surface_id)
+                    .is_some(),
+                "child session must be registered before kill"
+            );
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&child_conversation_id)
+                    .is_some(),
+                "child conversation must exist before kill"
+            );
+        });
+
+        // Kill the child through the orchestration model.
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.kill_child_agent(child_conversation_id, ctx);
+            });
+        });
+
+        // After kill: conversation is gone from history, session is removed.
+        app.read(|ctx| {
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&child_conversation_id)
+                    .is_none(),
+                "child conversation must be deleted from history after kill"
+            );
+            assert!(
+                TuiSessions::as_ref(ctx)
+                    .session_id_for_surface(child_surface_id)
+                    .is_none(),
+                "child session must be removed from TuiSessions after kill"
+            );
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&parent_conversation_id)
+                    .is_some(),
+                "parent conversation must survive child kill"
+            );
+        });
+        assert_eq!(
+            app.read_model(&fixture.sessions, |sessions, _| sessions.len()),
+            1,
+            "only the parent session should remain after kill"
+        );
+    });
+}
+
+#[test]
 fn failed_launch_cleanup_preserves_other_sessions() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);

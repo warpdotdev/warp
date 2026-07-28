@@ -48,8 +48,7 @@ use super::{
     CTRL_C_KILL_CHILD_HINT, ConversationRestoreState,
     DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, FooterSegment, FooterSegments,
     INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
-    RUNNING_COMMAND_DETACH_HINT,
-    SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
+    RUNNING_COMMAND_DETACH_HINT, SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
     SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
     SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
     SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
@@ -4296,6 +4295,144 @@ fn ctrl_c_on_root_conversation_does_not_trigger_kill_path() {
                 parent_view.as_ref(ctx).child_kill_armed_conversation,
                 None,
                 "ctrl-c on root must not set child_kill_armed_conversation"
+            );
+        });
+    });
+}
+
+#[test]
+fn lapsed_kill_window_does_not_kill_child_on_next_ctrl_c() {
+    // If the 1-second kill window lapses without a second press, the next
+    // ctrl-c is a fresh first press and must arm a new window, NOT kill the child.
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (_parent_view, _parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (child_view, child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // Focus the child session (no tab-bar focus).
+        app.update(|ctx| {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(child_session_id, ctx);
+            });
+        });
+        child_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    child_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+        });
+
+        // First ctrl-c: arms the kill window.
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+        assert!(
+            child_view.read(&app, |view, _| view.exit_confirmation.is_armed()),
+            "kill window must be armed after first ctrl-c"
+        );
+
+        // Simulate window lapse: disarm + clear the armed conversation (as the
+        // timer callback does), without triggering the kill.
+        child_view.update(&mut app, |view, _| {
+            view.exit_confirmation.disarm();
+            view.child_kill_armed_conversation = None;
+        });
+
+        // Next ctrl-c: armed = None, should arm a new kill window rather than kill.
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        app.read(|ctx| {
+            // Child conversation must still exist — lapse prevented the kill.
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&child_conversation_id)
+                    .is_some(),
+                "child conversation must survive a ctrl-c after the window lapsed"
+            );
+            // A new kill window should now be armed, not executed.
+            assert!(
+                child_view.as_ref(ctx).exit_confirmation.is_armed(),
+                "a new kill window should be armed by the post-lapse ctrl-c"
+            );
+            assert_eq!(
+                child_view.as_ref(ctx).child_kill_armed_conversation,
+                Some(child_conversation_id),
+                "post-lapse ctrl-c should re-arm for the same child"
+            );
+        });
+    });
+}
+
+#[test]
+fn killing_child_does_not_exit_tui_parent_session_remains_alive() {
+    // Killing a child agent must never cause the whole TUI to exit.
+    // The parent session must remain focused and its conversation intact.
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (parent_view, parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (child_view, child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+
+        // Kill via the tab-bar-focused single-press path.
+        app.update(|ctx| {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(child_session_id, ctx);
+            });
+        });
+        child_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    child_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+            view.orchestration_tabs_focused = true;
+            view.refresh_orchestration_tab_bar(ctx);
+        });
+        // Single ctrl-c kills the child.
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        // TUI must still be alive: the singleton models exist, the parent
+        // session is focused, and the parent's conversation is untouched.
+        app.read(|ctx| {
+            assert!(
+                ctx.has_singleton_model::<TuiSessions>(),
+                "TuiSessions singleton must survive the child kill"
+            );
+            assert!(
+                ctx.has_singleton_model::<TuiOrchestrationModel>(),
+                "TuiOrchestrationModel singleton must survive the child kill"
+            );
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(parent_session_id),
+                "parent session must be focused after child kill"
+            );
+            assert!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&parent_conversation_id)
+                    .is_some(),
+                "parent conversation must survive child kill"
+            );
+            assert!(
+                parent_view
+                    .as_ref(ctx)
+                    .child_kill_armed_conversation
+                    .is_none(),
+                "parent view must not have a stale kill window after kill"
             );
         });
     });
