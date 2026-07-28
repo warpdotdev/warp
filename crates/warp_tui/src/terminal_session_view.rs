@@ -68,7 +68,7 @@ use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
     TuiAttachmentPasteDisposition,
 };
-use crate::cli_agent_osc_event_publisher::TuiCliAgentOscEventPublisher;
+use crate::cli_agent_osc_event_publisher::CliAgentOscEventPublisher;
 use crate::clipboard::copy_to_clipboard;
 use crate::completion_menu::TuiCompletionMenuModel;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
@@ -771,7 +771,7 @@ pub(crate) struct TuiTerminalSessionView {
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
-    cli_agent_osc_event_publisher: ModelHandle<TuiCliAgentOscEventPublisher>,
+    cli_agent_osc_event_publisher: ModelHandle<CliAgentOscEventPublisher>,
     ai_controller: ModelHandle<BlocklistAIController>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     cli_subagent_views: HashMap<BlockId, ViewHandle<TuiCLISubagentView>>,
@@ -1492,7 +1492,7 @@ impl TuiTerminalSessionView {
         });
 
         let cli_agent_osc_event_publisher = ctx.add_model(|ctx| {
-            TuiCliAgentOscEventPublisher::new(
+            CliAgentOscEventPublisher::new(
                 terminal_surface_id,
                 active_session.clone(),
                 conversation_selection.clone(),

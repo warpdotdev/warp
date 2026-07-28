@@ -20,17 +20,17 @@ struct StatusOscEvent {
 }
 
 /// Publishes this TUI session's agent lifecycle through the CLI-agent OSC protocol.
-pub(crate) struct TuiCliAgentOscEventPublisher {
+pub(crate) struct CliAgentOscEventPublisher {
     terminal_surface_id: EntityId,
     active_session: ModelHandle<ActiveSession>,
     conversation_selection: ConversationSelectionHandle,
 }
 
-impl Entity for TuiCliAgentOscEventPublisher {
+impl Entity for CliAgentOscEventPublisher {
     type Event = ();
 }
 
-impl TuiCliAgentOscEventPublisher {
+impl CliAgentOscEventPublisher {
     pub(crate) fn new(
         terminal_surface_id: EntityId,
         active_session: ModelHandle<ActiveSession>,
