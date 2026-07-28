@@ -1846,8 +1846,6 @@ async fn upload_pending_attachments_to_task(
     task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
     pending_attachments: Vec<PendingAttachment>,
 ) -> anyhow::Result<Vec<TaskAttachmentUploadOutcome>> {
-    use base64::Engine as _;
-
     let n = pending_attachments.len();
     // Reserve a slot for each input attachment; filled below in original order.
     let mut outcomes: Vec<Option<TaskAttachmentUploadOutcome>> =
