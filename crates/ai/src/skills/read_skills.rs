@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+
 use super::parse_skill::{ParsedSkill, parse_skill, parse_skill_content_at_location};
 use super::skill_provider::{SkillProvider, SkillScope, get_provider_for_path};
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 /// The environment variable that specifies extra skill directories to index at
 /// personal (home) precedence. Value is a comma-separated list of paths; each
