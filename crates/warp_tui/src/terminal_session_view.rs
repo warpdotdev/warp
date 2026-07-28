@@ -162,6 +162,7 @@ const STATUS_UNAVAILABLE: &str = "\u{2014}"; // em dash
 const STATUS_UNTITLED_SESSION: &str = "Untitled";
 const STATUS_DEV_BUILD: &str = "dev build";
 const STATUS_NOT_SIGNED_IN: &str = "Not signed in";
+const STATUS_SIGNED_IN: &str = "Signed in";
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 const SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG: &str =
@@ -2228,9 +2229,21 @@ impl TuiTerminalSessionView {
         let org = user_info
             .org
             .unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned());
+        // Mirror render_login_line's fallback chain: email → username →
+        // "Signed in" (logged in but no identifier) → "Not signed in".
+        let is_logged_in = user_info.is_logged_in;
+        let username = user_info.username;
         let email = user_info
             .email
-            .unwrap_or_else(|| STATUS_NOT_SIGNED_IN.to_owned());
+            .filter(|e| !e.is_empty())
+            .or_else(|| username.filter(|u| !u.is_empty()))
+            .unwrap_or_else(|| {
+                if is_logged_in {
+                    STATUS_SIGNED_IN.to_owned()
+                } else {
+                    STATUS_NOT_SIGNED_IN.to_owned()
+                }
+            });
         shortcuts::TuiStatusInfo {
             version,
             session: session_name,

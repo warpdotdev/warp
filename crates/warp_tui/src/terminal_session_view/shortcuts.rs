@@ -40,7 +40,7 @@ fn render_entry(shortcut: &TuiShortcut, builder: &TuiUiBuilder) -> Box<dyn TuiEl
 
 fn render_status_entry(label: &str, value: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
     TuiText::from_spans([
-        (format!("{label}  "), builder.dim_text_style()),
+        (format!("{label:<19}"), builder.dim_text_style()),
         (value.to_owned(), builder.primary_text_style()),
     ])
     .truncate()
