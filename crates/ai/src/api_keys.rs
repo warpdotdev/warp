@@ -318,7 +318,7 @@ impl ApiKeyManager {
         let json = serde_json::to_string(&keys)
             .map_err(|error| anyhow::Error::new(error).context("Failed to serialize API keys"))?;
         ctx.secure_storage()
-            .write_value_with_owner_only_fallback(SECURE_STORAGE_KEY, &json)
+            .write_value(SECURE_STORAGE_KEY, &json)
             .map_err(|error| {
                 anyhow::Error::new(error).context("Failed to write API keys to secure storage")
             })?;
@@ -695,10 +695,7 @@ impl ApiKeyManager {
             if write_version != me.secure_storage_write_version {
                 return;
             }
-            if let Err(e) = ctx
-                .secure_storage()
-                .write_value_with_owner_only_fallback(SECURE_STORAGE_KEY, &json)
-            {
+            if let Err(e) = ctx.secure_storage().write_value(SECURE_STORAGE_KEY, &json) {
                 report_error!(
                     anyhow::Error::new(e).context("Failed to write API keys to secure storage")
                 );

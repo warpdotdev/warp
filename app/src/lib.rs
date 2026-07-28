@@ -260,6 +260,7 @@ use crate::ai::mcp::{MCPGalleryManager, TemplatableMCPServerManager};
 use crate::ai::outline::RepoOutlines;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::tui_api_keys::TuiApiKeyRefresher;
 use crate::antivirus::AntivirusInfo;
 use crate::app_state::AppState;
@@ -1647,6 +1648,7 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|ctx| {
         #[cfg_attr(target_family = "wasm", allow(unused_mut))]
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
+        #[cfg(not(target_family = "wasm"))]
         if matches!(launch_mode, LaunchMode::Tui { .. }) {
             manager.subscribe_to_tui_api_key_changes(ctx);
         }
