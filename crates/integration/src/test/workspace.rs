@@ -1033,6 +1033,198 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
         )
 }
 
+pub fn test_attach_tab_group_to_other_window() -> Builder {
+    new_builder()
+        .set_should_run_test(drag_tabs_feature_enabled)
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            execute_command_for_single_terminal_in_tab(
+                0,
+                "echo source-zero".to_string(),
+                ExpectedExitStatus::Success,
+                (),
+            )
+            .add_assertion(save_active_window_id(SOURCE_WINDOW_KEY)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Open a second tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(
+            new_step_with_default_assertions("Open a third tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(2))
+        .with_step(
+            TestStep::new("Group the second and third tabs").with_action(|app, window_id, _| {
+                let workspace = workspace_view(app, window_id);
+                workspace.update(app, |workspace, ctx| {
+                    workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
+                    let group_id = *workspace
+                        .tab_groups_for_test()
+                        .keys()
+                        .next()
+                        .expect("group should have been created");
+                    workspace.handle_action(
+                        &WorkspaceAction::MoveTabToGroup {
+                            tab_index: 2,
+                            group_id,
+                        },
+                        ctx,
+                    );
+                });
+            }),
+        )
+        .with_step(add_and_save_window(TARGET_WINDOW_KEY))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        // Separated vertically as well as horizontally. With both tab bars at
+        // the same y, the point that maps onto the target's tab bar can still
+        // fall inside the source window's own tab-bar rect, and the drag then
+        // resolves to ReorderInSource and puts the group back.
+        .with_step(set_saved_window_origin(
+            SOURCE_WINDOW_KEY,
+            vec2f(100.0, 700.0),
+        ))
+        .with_step(set_saved_window_origin(
+            TARGET_WINDOW_KEY,
+            vec2f(900.0, 100.0),
+        ))
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY))
+        .with_step(
+            TestStep::new("Drag the group onto the other window's tab bar")
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let group_id = only_group_id(app, source_window_id);
+                    let start = group_header_press_point(app, source_window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDown {
+                            position: start,
+                            modifiers: ModifiersState::default(),
+                            click_count: 1,
+                            is_first_mouse: false,
+                        },
+                    );
+                })
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let group_id = only_group_id(app, source_window_id);
+                    let start = group_header_press_point(app, source_window_id, group_id);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(12.0, 0.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                // Out of the source tab bar so the group detaches.
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let start = tab_center(app, source_window_id, 0);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDragged {
+                            position: start + vec2f(0.0, 200.0),
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                // Over the target window's tab bar.
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let target_window_id = *data
+                        .get::<_, WindowId>(TARGET_WINDOW_KEY)
+                        .expect("saved target window id should exist");
+                    let target_tab_bounds = tab_bounds(app, target_window_id, 0);
+                    let attach_before = tab_screen_point(
+                        app,
+                        target_window_id,
+                        0,
+                        8.0,
+                        target_tab_bounds.height() / 2.0,
+                    );
+                    let source_local_target =
+                        source_local_point_for_screen_point(app, source_window_id, attach_before);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseDragged {
+                            position: source_local_target,
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                })
+                .with_action(|app, _, data| {
+                    let source_window_id = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("saved source window id should exist");
+                    let target_window_id = *data
+                        .get::<_, WindowId>(TARGET_WINDOW_KEY)
+                        .expect("saved target window id should exist");
+                    let target_tab_bounds = tab_bounds(app, target_window_id, 0);
+                    let attach_before = tab_screen_point(
+                        app,
+                        target_window_id,
+                        0,
+                        8.0,
+                        target_tab_bounds.height() / 2.0,
+                    );
+                    let source_local_target =
+                        source_local_point_for_screen_point(app, source_window_id, attach_before);
+                    dispatch_mouse_event(
+                        app,
+                        source_window_id,
+                        Event::LeftMouseUp {
+                            position: source_local_target,
+                            modifiers: ModifiersState::default(),
+                        },
+                    );
+                }),
+        )
+        .with_step(
+            TestStep::new("The group landed in the target window").with_action(|app, _, data| {
+                let source = *data
+                    .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                    .expect("source window id should exist");
+                let target = *data
+                    .get::<_, WindowId>(TARGET_WINDOW_KEY)
+                    .expect("target window id should exist");
+
+                // Target had one tab and gains both members as one group.
+                let (target_tabs, target_groups) = workspace_view(app, target)
+                    .read(app, |workspace, _| {
+                        (workspace.tab_count(), workspace.tab_groups_for_test().len())
+                    });
+                assert_eq!(
+                    target_tabs, 3,
+                    "target should hold its own tab plus both group members"
+                );
+                assert_eq!(target_groups, 1, "the group should exist in the target");
+
+                // Source keeps only the ungrouped tab and loses the group.
+                let (source_tabs, source_groups) = workspace_view(app, source)
+                    .read(app, |workspace, _| {
+                        (workspace.tab_count(), workspace.tab_groups_for_test().len())
+                    });
+                assert_eq!(source_tabs, 1, "source should keep only the ungrouped tab");
+                assert_eq!(source_groups, 0, "the group should be gone from the source");
+            }),
+        )
+}
+
 pub fn test_attach_tab_to_other_window_and_continue_drag() -> Builder {
     new_builder()
         .set_should_run_test(drag_tabs_feature_enabled)
