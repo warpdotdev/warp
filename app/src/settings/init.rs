@@ -19,7 +19,8 @@ use super::{
     FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
     InputSettings, LocalControlSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
     SelectionSettings, SharedObjectLimitBannerSettings, SshSettings, ThemeSettings,
-    TuiAutoupdateSettings, TuiZeroStateSettings, VimBannerSettings, WarpDrivePrivacySettings,
+    TuiAutoupdateSettings, TuiThemeSettings, TuiZeroStateSettings, VimBannerSettings,
+    WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::appearance;
@@ -80,6 +81,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     InputModeSettings::register(ctx);
     ThemeSettings::register(ctx);
     TuiAutoupdateSettings::register(ctx);
+    TuiThemeSettings::register(ctx);
     TuiZeroStateSettings::register(ctx);
     AccessibilitySettings::register(ctx);
     NativePreferenceSettings::register(ctx);

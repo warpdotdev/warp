@@ -378,7 +378,7 @@ impl ModelSearchItem {
             (!is_using_cloud_host && byo_key_source.is_some()).then_some(Icon::Key);
         Self {
             id: llm.id.clone(),
-            provider: llm.provider.clone(),
+            provider: llm.provider,
             spec: llm.spec.clone(),
             leading_icon,
             credential_icon,

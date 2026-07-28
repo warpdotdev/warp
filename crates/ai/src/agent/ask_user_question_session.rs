@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use itertools::Itertools;
 
@@ -63,13 +63,6 @@ struct AskUserQuestionEditingState {
 }
 
 impl AskUserQuestionEditingState {
-    fn new(draft_count: usize) -> Self {
-        Self {
-            current_question_index: 0,
-            drafts: vec![QuestionDraftState::Unanswered; draft_count],
-        }
-    }
-
     fn current_question_index(&self) -> usize {
         self.current_question_index
     }
@@ -159,12 +152,32 @@ pub struct AskUserQuestionSession {
 }
 
 impl AskUserQuestionSession {
-    pub fn new(mut questions: Vec<AskUserQuestionItem>) -> Self {
+    pub fn new(questions: Vec<AskUserQuestionItem>) -> Self {
+        Self::new_with_drafts(questions, HashMap::new())
+    }
+
+    pub fn new_with_drafts(
+        mut questions: Vec<AskUserQuestionItem>,
+        mut drafts_by_question_id: HashMap<String, QuestionDraft>,
+    ) -> Self {
         // Put multi-select questions before single-select so the last question
         // can auto-submit after a single option toggle.
         questions.sort_by_key(|question| !question.is_multiselect());
+        let drafts = questions
+            .iter()
+            .map(|question| {
+                drafts_by_question_id
+                    .remove(&question.question_id)
+                    .filter(|draft| !draft.is_empty())
+                    .map(QuestionDraftState::Answered)
+                    .unwrap_or(QuestionDraftState::Unanswered)
+            })
+            .collect();
         Self {
-            state: AskUserQuestionState::Editing(AskUserQuestionEditingState::new(questions.len())),
+            state: AskUserQuestionState::Editing(AskUserQuestionEditingState {
+                current_question_index: 0,
+                drafts,
+            }),
             questions,
         }
     }

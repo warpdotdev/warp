@@ -136,7 +136,7 @@ use crate::ai::generate_code_review_content::api::{
 };
 use crate::ai::harness_availability::HarnessAvailability;
 use crate::ai::llms::{
-    AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMSpec,
+    AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMSpec,
     LLMUsageMetadata, ModelsByFeature, RoutingHostConfig,
 };
 #[cfg(feature = "agent_mode_evals")]
@@ -950,6 +950,9 @@ pub struct CreateAgentRequest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional base prompt for this agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretRef>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -961,12 +964,21 @@ pub struct CreateAgentRequest {
 }
 
 /// JSON payload sent to `PUT /agent/identities/{uid}`.
+///
+/// Each field uses the public API's PATCH semantics: `None` omits the field
+/// (leave unchanged), while `Some(String::new())` sends an empty value to clear
+/// it. See `CreateAgentRequest`/`UpdateAgentRequest` in
+/// `warp-server/public_api/openapi.yaml`.
 #[derive(Clone, Default, serde::Serialize, Debug, PartialEq, Eq)]
 pub struct UpdateAgentRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Replacement prompt. `None` leaves it unchanged; `Some(String::new())`
+    /// clears it via the public API's PATCH clear-via-empty semantics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<SecretRef>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -983,6 +995,9 @@ pub struct AgentResponse {
     pub uid: String,
     pub name: String,
     pub description: Option<String>,
+    /// Optional base prompt for this agent.
+    #[serde(default)]
+    pub prompt: Option<String>,
     pub available: bool,
     pub created_at: DateTime<Utc>,
     pub secrets: Vec<SecretRef>,
@@ -3117,54 +3132,6 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
                     "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
                 );
                 LLMModelHost::Unknown
-            }
-        }
-    }
-}
-
-impl From<warp_graphql::queries::get_feature_model_choices::LlmProvider> for LLMProvider {
-    fn from(value: warp_graphql::queries::get_feature_model_choices::LlmProvider) -> Self {
-        match value {
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Openai => {
-                LLMProvider::OpenAI
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Anthropic => {
-                LLMProvider::Anthropic
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Google => {
-                LLMProvider::Google
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Xai => LLMProvider::Xai,
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Unknown => {
-                LLMProvider::Unknown
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Other(value) => {
-                report_error!(
-                    "Invalid LlmProvider; update client GraphQL types",
-                    extra: { "provider" => %value },
-                    warp_errors::ReportErrorLogMode::OncePerRun
-                );
-                LLMProvider::Unknown
-            }
-        }
-    }
-}
-
-impl From<warp_graphql::workspace::LlmProvider> for LLMProvider {
-    fn from(value: warp_graphql::workspace::LlmProvider) -> Self {
-        match value {
-            warp_graphql::workspace::LlmProvider::Openai => LLMProvider::OpenAI,
-            warp_graphql::workspace::LlmProvider::Anthropic => LLMProvider::Anthropic,
-            warp_graphql::workspace::LlmProvider::Google => LLMProvider::Google,
-            warp_graphql::workspace::LlmProvider::Xai => LLMProvider::Xai,
-            warp_graphql::workspace::LlmProvider::Unknown => LLMProvider::Unknown,
-            warp_graphql::workspace::LlmProvider::Other(value) => {
-                report_error!(
-                    "Invalid LlmProvider; update client GraphQL types",
-                    extra: { "provider" => %value },
-                    warp_errors::ReportErrorLogMode::OncePerRun
-                );
-                LLMProvider::Unknown
             }
         }
     }

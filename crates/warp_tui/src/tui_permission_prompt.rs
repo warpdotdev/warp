@@ -11,7 +11,8 @@ use warpui_core::elements::tui::{
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
 use warpui_core::{
-    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelHandle, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 
 use crate::editor_view::TuiEditorView;
@@ -45,14 +46,6 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_context_predicate(predicate.clone())
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("enter"),
-        EditableBinding::new(
-            "tui:permission-prompt:edit",
-            "Edit the requested action",
-            TuiPermissionPromptAction::EditBody,
-        )
-        .with_context_predicate(editable_predicate.clone())
-        .with_group(TUI_BINDING_GROUP)
-        .with_key_binding("ctrl-e"),
         EditableBinding::new(
             "tui:permission-prompt:edit",
             "Edit the requested action",
@@ -158,7 +151,14 @@ impl TuiPermissionPrompt {
             ) {
                 prompt.focus(ctx);
             }
-            ctx.emit(TuiPermissionPromptEvent::BlockingStateChanged);
+            if matches!(
+                event,
+                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                    | BlocklistAIActionEvent::ExecutingAction(_)
+                    | BlocklistAIActionEvent::FinishedAction { .. }
+            ) {
+                ctx.emit(TuiPermissionPromptEvent::BlockingStateChanged);
+            }
             prompt.invalidate_layout(ctx);
         });
 
@@ -181,6 +181,12 @@ impl TuiPermissionPrompt {
     /// Whether the optional action body currently owns focus.
     pub(crate) fn body_editor_is_focused(&self, app: &AppContext) -> bool {
         self.selector.as_ref(app).leading_editor_is_focused(app)
+    }
+
+    /// Whether the option list (yes/no/Other) currently owns focus, as
+    /// opposed to a body editor or the custom-text editor.
+    pub(crate) fn list_is_focused(&self, app: &AppContext) -> bool {
+        self.selector.as_ref(app).list_is_focused(app)
     }
 
     /// Focuses the option selector.
@@ -230,6 +236,7 @@ impl TuiPermissionPrompt {
             | TuiOptionSelectorEvent::CustomTextCleared
             | TuiOptionSelectorEvent::CustomTextOpened
             | TuiOptionSelectorEvent::CustomTextClosed => self.invalidate_layout(ctx),
+            TuiOptionSelectorEvent::RowsReordered { .. } => {}
             TuiOptionSelectorEvent::Confirmed { .. } | TuiOptionSelectorEvent::RetryRequested => {}
         }
     }
@@ -242,29 +249,32 @@ impl TuiPermissionPrompt {
     /// Renders the context-sensitive interaction hints beneath the options.
     pub(crate) fn render_footer(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
-        let mut spans = vec![
+        // When the body editor owns focus, Esc exits the editor rather than
+        // cancelling the whole tool call — reflect that in the visible hint.
+        let esc_hint = if self.body_editor_is_focused(app) {
+            " to exit editor  "
+        } else {
+            " to cancel  "
+        };
+        let spans = vec![
             ("Esc".to_owned(), builder.primary_text_style()),
-            (" to cancel  ".to_owned(), builder.muted_text_style()),
-        ];
-        if self.body_editor.is_some() {
-            spans.extend([
-                ("Ctrl+E".to_owned(), builder.primary_text_style()),
-                (" to edit/save  ".to_owned(), builder.muted_text_style()),
-            ]);
-        }
-        spans.extend([
+            (esc_hint.to_owned(), builder.muted_text_style()),
             ("Enter".to_owned(), builder.primary_text_style()),
             (" to run".to_owned(), builder.muted_text_style()),
-        ]);
+        ];
         TuiText::from_spans(spans).truncate().finish()
     }
 }
 
 /// Renders a full-width permission card around a tool-specific body.
+///
+/// `header_trailing` is an optional element rendered in the top-right of the
+/// card header (after the title).
 pub(crate) fn render_permission_card(
     prompt: &ViewHandle<TuiPermissionPrompt>,
     title: impl Into<String>,
     body: Option<Box<dyn TuiElement>>,
+    header_trailing: Option<Box<dyn TuiElement>>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
@@ -277,18 +287,8 @@ pub(crate) fn render_permission_card(
     ])
     .truncate()
     .finish();
-    let header_content = if prompt.as_ref(app).body_editor.is_some() {
-        TuiFlex::row()
-            .flex_child(title)
-            .child(
-                TuiText::from_spans([
-                    ("e".to_owned(), builder.primary_text_style()),
-                    (" to edit command".to_owned(), builder.muted_text_style()),
-                ])
-                .truncate()
-                .finish(),
-            )
-            .finish()
+    let header_content = if let Some(trailing) = header_trailing {
+        TuiFlex::row().flex_child(title).child(trailing).finish()
     } else {
         title
     };
@@ -330,6 +330,14 @@ impl TuiView for TuiPermissionPrompt {
 
     fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
         vec![self.selector.id()]
+    }
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if self.is_active(ctx) {
+            if focus_ctx.is_self_focused() {
+                self.focus(ctx);
+            }
+            self.invalidate_layout(ctx);
+        }
     }
 
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {

@@ -7,8 +7,8 @@ use warp::tui_export::{
     AIActionStatus, AIAgentActionId, AIAgentActionResultType, AIConversationId,
     AskUserQuestionAction, AskUserQuestionAnswerItem, AskUserQuestionEffect, AskUserQuestionItem,
     AskUserQuestionPhase, AskUserQuestionResult, AskUserQuestionSession, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIHistoryModel, OptionFooter, OptionRow, OptionSnapshot,
-    OptionSourceStatus,
+    BlocklistAIActionModel, BlocklistAIHistoryModel, OptionBadge, OptionFooter, OptionRow,
+    OptionSnapshot, OptionSourceStatus,
 };
 use warpui::SingletonEntity;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
@@ -18,7 +18,8 @@ use warpui_core::elements::tui::{
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
 use warpui_core::{
-    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelHandle, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 
 use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
@@ -59,7 +60,7 @@ pub(crate) fn init(app: &mut AppContext) {
         EditableBinding::new(
             "tui:ask-question:previous",
             "Show the previous question",
-            TuiAskQuestionViewAction::Previous,
+            TuiAskQuestionViewAction::Navigate(PageNavigationDirection::Previous),
         )
         .with_context_predicate(predicate.clone())
         .with_group(TUI_BINDING_GROUP)
@@ -67,7 +68,7 @@ pub(crate) fn init(app: &mut AppContext) {
         EditableBinding::new(
             "tui:ask-question:next",
             "Show the next question",
-            TuiAskQuestionViewAction::Next,
+            TuiAskQuestionViewAction::Navigate(PageNavigationDirection::Next),
         )
         .with_context_predicate(predicate.clone())
         .with_group(TUI_BINDING_GROUP)
@@ -75,7 +76,7 @@ pub(crate) fn init(app: &mut AppContext) {
         EditableBinding::new(
             "tui:ask-question:next",
             "Show the next question",
-            TuiAskQuestionViewAction::Next,
+            TuiAskQuestionViewAction::Navigate(PageNavigationDirection::Next),
         )
         .with_context_predicate(predicate)
         .with_group(TUI_BINDING_GROUP)
@@ -84,12 +85,18 @@ pub(crate) fn init(app: &mut AppContext) {
     app.register_tui_binding_validator::<TuiAskQuestionView>(is_tui_owned_binding);
 }
 
+/// Direction through a sequence of interactive card pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageNavigationDirection {
+    Previous,
+    Next,
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum TuiAskQuestionViewAction {
     Enter,
     AdvanceMultiselect,
-    Previous,
-    Next,
+    Navigate(PageNavigationDirection),
     SkipAll,
 }
 
@@ -165,10 +172,6 @@ impl TuiAskQuestionView {
         self.session.is_editing() && self.is_waiting_on_answers(app)
     }
 
-    pub(super) fn focus(&self, ctx: &mut ViewContext<Self>) {
-        ctx.focus(&self.selector);
-    }
-
     pub(super) fn matches_action(
         &self,
         action_id: &AIAgentActionId,
@@ -204,7 +207,7 @@ impl TuiAskQuestionView {
                 id: index.to_string(),
                 label: option.label.clone(),
                 harness: None,
-                badge: None,
+                badge: option.recommended.then_some(OptionBadge::Recommended),
                 disabled_reason: None,
             })
             .collect();
@@ -335,7 +338,9 @@ impl TuiAskQuestionView {
                 self.handle_effect(effect, ctx);
             }
             TuiOptionSelectorEvent::LayoutInvalidated => self.invalidate_layout(ctx),
-            TuiOptionSelectorEvent::RetryRequested | TuiOptionSelectorEvent::Dismissed => {}
+            TuiOptionSelectorEvent::RetryRequested
+            | TuiOptionSelectorEvent::Dismissed
+            | TuiOptionSelectorEvent::RowsReordered { .. } => {}
         }
     }
 
@@ -613,6 +618,12 @@ impl TuiView for TuiAskQuestionView {
         vec![self.selector.id()]
     }
 
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() && self.is_awaiting_answers(ctx) {
+            ctx.focus(&self.selector);
+        }
+    }
+
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
         let mut context = Self::default_keymap_context();
         if self.session.is_editing()
@@ -706,14 +717,13 @@ impl TypedActionView for TuiAskQuestionView {
                 let effect = self.session.apply(AskUserQuestionAction::Confirm);
                 self.handle_effect(effect, ctx);
             }
-            TuiAskQuestionViewAction::Previous => {
+            TuiAskQuestionViewAction::Navigate(direction) => {
                 self.commit_active_other_text(ctx);
-                let effect = self.session.apply(AskUserQuestionAction::NavigatePrev);
-                self.handle_effect(effect, ctx);
-            }
-            TuiAskQuestionViewAction::Next => {
-                self.commit_active_other_text(ctx);
-                let effect = self.session.apply(AskUserQuestionAction::NavigateNext);
+                let action = match direction {
+                    PageNavigationDirection::Previous => AskUserQuestionAction::NavigatePrev,
+                    PageNavigationDirection::Next => AskUserQuestionAction::NavigateNext,
+                };
+                let effect = self.session.apply(action);
                 self.handle_effect(effect, ctx);
             }
             TuiAskQuestionViewAction::SkipAll => {

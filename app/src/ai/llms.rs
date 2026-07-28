@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-pub use ai::LLMId;
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
+pub use ai::{LLMId, LLMProvider};
 use anyhow::Context as _;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize, de};
 use warp_core::features::FeatureFlag;
-use warp_core::ui::icons::Icon;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
@@ -171,6 +170,7 @@ pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
 /// but was migrated to store a full [`ModelsByFeature`].
 pub const MODELS_BY_FEATURE_CACHE_KEY: &str = "AvailableLLMs";
 const CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL: &str = "Custom endpoint";
+const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LLMUsageMetadata {
@@ -234,39 +234,6 @@ pub struct LLMSpec {
     pub cost: f32,
     pub quality: f32,
     pub speed: f32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum LLMProvider {
-    OpenAI,
-    Anthropic,
-    Google,
-    Xai,
-    Unknown,
-}
-
-impl LLMProvider {
-    /// Maps an LLMProvider to its corresponding icon.
-    pub fn icon(&self) -> Option<Icon> {
-        match self {
-            LLMProvider::OpenAI => Some(Icon::OpenAILogo),
-            LLMProvider::Anthropic => Some(Icon::ClaudeLogo),
-            LLMProvider::Google => Some(Icon::GeminiLogo),
-            LLMProvider::Xai => None,
-            LLMProvider::Unknown => None,
-        }
-    }
-
-    /// Human-readable provider name for user-facing copy.
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            LLMProvider::OpenAI => "OpenAI",
-            LLMProvider::Anthropic => "Anthropic",
-            LLMProvider::Google => "Google",
-            LLMProvider::Xai => "xAI",
-            LLMProvider::Unknown => "this provider",
-        }
-    }
 }
 
 /// The host where an LLM can be routed to.
@@ -1098,6 +1065,16 @@ impl LLMPreferences {
     pub fn is_cloud_runnable_oz_model_id(&self, id: &LLMId) -> bool {
         !(self.custom_llm_info_for_id(id).is_some()
             || custom_model_routers::is_local_custom_router_id(id.as_str()))
+    }
+
+    /// Returns a cloud-runnable Oz model id, falling back to server-side
+    /// automatic model selection when the requested model is local-only.
+    pub(crate) fn cloud_runnable_oz_model_id_or_fallback(&self, id: &LLMId) -> String {
+        if self.is_cloud_runnable_oz_model_id(id) {
+            id.to_string()
+        } else {
+            CLOUD_FALLBACK_OZ_MODEL_ID.to_owned()
+        }
     }
 
     /// True when the pane's active Agent Mode model can run in a Warp cloud

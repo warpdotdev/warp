@@ -130,13 +130,14 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::Gemini
         | CLIAgent::Auggie
         | CLIAgent::CursorCli => RichInputSubmitStrategy::DelayedEnter,
+        CLIAgent::Hermes => RichInputSubmitStrategy::BracketedPaste,
         CLIAgent::Amp
         | CLIAgent::Droid
         | CLIAgent::Pi
         | CLIAgent::Goose
-        | CLIAgent::Hermes
         | CLIAgent::Vibe
         | CLIAgent::Antigravity
+        | CLIAgent::WarpTui
         | CLIAgent::Unknown => RichInputSubmitStrategy::Inline,
     }
 }
@@ -222,6 +223,9 @@ impl TerminalView {
                 // emitting a local PTY write event.
                 self.write_user_bytes_to_pty(text.as_bytes().to_vec(), ctx);
             }
+            UseAgentToolbarEvent::InsertIntoCLIPty(text) => {
+                self.insert_text_into_cli_agent_pty(text, ctx);
+            }
             UseAgentToolbarEvent::InsertIntoRichInput(text) => {
                 self.input.update(ctx, |input, ctx| {
                     input.insert_into_cli_agent_rich_input(text, ctx);
@@ -305,8 +309,11 @@ impl TerminalView {
             .session(self.view_id)
             .map(|s| s.agent);
 
-        // Check the appropriate setting based on whether this is a CLI agent command
-        if cli_agent.is_some() {
+        // Check the appropriate setting based on whether this is a CLI agent command.
+        if let Some(cli_agent) = cli_agent {
+            if !cli_agent.supports_cli_agent_footer() {
+                return false;
+            }
             // For CLI agent commands, only check the CLI agent footer setting.
             // This is independent of the global AI toggle so that users who
             // disable Warp AI still get the footer for third-party coding agents.
@@ -389,12 +396,7 @@ impl TerminalView {
     }
 
     /// Returns whether the active long-running command in this terminal is
-    /// Warp's own headless TUI (`warp_tui`). Uses the same command-based
-    /// detection as [`Self::detect_cli_agent_from_model`] (which decides when to
-    /// show the CLI agent footer), but callers use it to *hide* the "Use agent"
-    /// footer and the outer agent input bar, since the Warp TUI is itself an
-    /// agent surface. This is the single source of truth for "is the Warp TUI
-    /// running here".
+    /// Warp's own headless TUI (`warp_tui`).
     pub(super) fn is_running_warp_tui(&self, model: &TerminalModel, ctx: &AppContext) -> bool {
         let active_block = model.block_list().active_block();
         if !active_block.is_active_and_long_running() {
@@ -409,7 +411,7 @@ impl TerminalView {
                     .map(|session| session.shell_family().escape_char())
             })
         });
-        CLIAgent::command_is_warp_tui(&command, escape_char)
+        CLIAgent::WarpTui.matches_command(&command, escape_char)
     }
 
     /// Updates the UI during a long running command to agent "tagged-in state".
@@ -755,6 +757,49 @@ impl TerminalView {
         self.write_cli_agent_text_then_submit(text_bytes, strategy, ctx);
     }
 
+    /// Inserts `text` into the active CLI agent's input without submitting it.
+    ///
+    /// Voice transcription uses this when rich input is closed. Agents that
+    /// require bracketed paste receive one complete paste payload so embedded
+    /// newlines are inserted rather than interpreted as separate submissions.
+    fn insert_text_into_cli_agent_pty(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        let Some(agent) = CLIAgentSessionsModel::as_ref(ctx)
+            .session(self.view_id)
+            .map(|s| s.agent)
+        else {
+            return;
+        };
+
+        if text.is_empty() {
+            return;
+        }
+
+        self.write_cli_agent_text(text.as_bytes(), rich_input_submit_strategy(agent), ctx);
+    }
+
+    fn write_cli_agent_text(
+        &mut self,
+        text_bytes: &[u8],
+        strategy: RichInputSubmitStrategy,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let bytes = match strategy {
+            RichInputSubmitStrategy::BracketedPaste
+            | RichInputSubmitStrategy::BracketedPasteDelayedEnter => {
+                let mut bytes = Vec::with_capacity(
+                    BRACKETED_PASTE_START.len() + text_bytes.len() + BRACKETED_PASTE_END.len(),
+                );
+                bytes.extend_from_slice(BRACKETED_PASTE_START);
+                bytes.extend_from_slice(text_bytes);
+                bytes.extend_from_slice(BRACKETED_PASTE_END);
+                bytes
+            }
+            RichInputSubmitStrategy::Inline | RichInputSubmitStrategy::DelayedEnter => {
+                text_bytes.to_vec()
+            }
+        };
+        self.write_user_bytes_to_pty(bytes, ctx);
+    }
     /// Simulates clipboard image paste for each pending image attachment by
     /// writing the image to the system clipboard and sending Ctrl+V to the PTY.
     /// After all images are pasted, the text prompt is sent via the normal
@@ -967,13 +1012,7 @@ impl TerminalView {
                 self.maybe_close_rich_input_after_submit(ctx);
             }
             RichInputSubmitStrategy::BracketedPaste => {
-                let mut bytes = Vec::with_capacity(
-                    BRACKETED_PASTE_START.len() + text_bytes.len() + BRACKETED_PASTE_END.len(),
-                );
-                bytes.extend_from_slice(BRACKETED_PASTE_START);
-                bytes.extend_from_slice(&text_bytes);
-                bytes.extend_from_slice(BRACKETED_PASTE_END);
-                self.write_user_bytes_to_pty(bytes, ctx);
+                self.write_cli_agent_text(&text_bytes, strategy, ctx);
                 self.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
                 self.maybe_close_rich_input_after_submit(ctx);
             }
@@ -988,13 +1027,7 @@ impl TerminalView {
                 );
             }
             RichInputSubmitStrategy::BracketedPasteDelayedEnter => {
-                let mut bytes = Vec::with_capacity(
-                    BRACKETED_PASTE_START.len() + text_bytes.len() + BRACKETED_PASTE_END.len(),
-                );
-                bytes.extend_from_slice(BRACKETED_PASTE_START);
-                bytes.extend_from_slice(&text_bytes);
-                bytes.extend_from_slice(BRACKETED_PASTE_END);
-                self.write_user_bytes_to_pty(bytes, ctx);
+                self.write_cli_agent_text(&text_bytes, strategy, ctx);
                 ctx.spawn(
                     Timer::after(CLI_AGENT_BRACKETED_PASTE_ENTER_DELAY),
                     move |me, _, ctx| {
@@ -1196,6 +1229,9 @@ impl UseAgentToolbar {
             AgentInputFooterEvent::WriteToPty(text) => {
                 ctx.emit(UseAgentToolbarEvent::WriteToPty(text.clone()));
             }
+            AgentInputFooterEvent::InsertIntoCLIPty(text) => {
+                ctx.emit(UseAgentToolbarEvent::InsertIntoCLIPty(text.clone()));
+            }
             AgentInputFooterEvent::InsertIntoCLIRichInput(text) => {
                 ctx.emit(UseAgentToolbarEvent::InsertIntoRichInput(text.clone()));
             }
@@ -1303,6 +1339,8 @@ pub enum UseAgentToolbarEvent {
     Dismiss,
     /// Write text to the PTY (from CLI agent view).
     WriteToPty(String),
+    /// Insert text into the CLI agent's PTY input using its paste strategy.
+    InsertIntoCLIPty(String),
     /// Insert text into CLI agent rich input.
     InsertIntoRichInput(String),
     /// Toggle the code review pane (from CLI agent view).
@@ -1349,7 +1387,10 @@ impl View for UseAgentToolbar {
         // If a CLI agent is detected, delegate rendering to the CLI agent footer view.
         // Wrap with horizontal padding matching the terminal view padding so the footer
         // aligns consistently with the input context (which inherits terminal padding).
-        if self.cli_agent(app).is_some() {
+        if let Some(cli_agent) = self.cli_agent(app) {
+            if !cli_agent.supports_cli_agent_footer() {
+                return Empty::new().finish();
+            }
             let mut container = Container::new(ChildView::new(&self.agent_input_footer).finish())
                 .with_horizontal_padding(*super::PADDING_LEFT);
 

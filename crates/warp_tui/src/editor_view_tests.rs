@@ -15,7 +15,8 @@ use warpui_core::{App, TuiView as _, TypedActionView as _};
 use super::{TuiEditorView, TuiEditorViewAction};
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::{
-    TuiEditorClipboardAction, TuiEditorCommand, apply_editor_clipboard_action_for_test,
+    TuiEditorBehavior, TuiEditorClipboardAction, TuiEditorCommand, TuiEditorInteractionOutcome,
+    apply_editor_action, apply_editor_clipboard_action_for_test,
 };
 use crate::test_fixtures::TestHostView;
 
@@ -482,6 +483,113 @@ fn mouse_selection_action_focuses_the_editor() {
             );
         });
         assert!(editor.read(&app, |editor, _| editor.is_focused()));
+    });
+}
+
+#[test]
+fn copy_on_mouse_highlight_returns_clipboard_copy_on_selection_end() {
+    // Regression test: when `with_copy_on_mouse_highlight` is enabled, completing a
+    // selection via SelectionEnd should return a Clipboard(Copy) outcome and
+    // the selected text must be readable for the subsequent clipboard write.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_text("hello world", ctx);
+            // Select "world" via keyboard commands (head != tail establishes a range).
+            for _ in 0..5 {
+                editor.handle_action(
+                    &TuiEditorViewAction::Command(TuiEditorCommand::SelectLeft),
+                    ctx,
+                );
+            }
+
+            // With copy_on_mouse_highlight enabled, SelectionEnd should trigger a copy.
+            let outcome = apply_editor_action(
+                &editor.model,
+                &TuiEditorAction::SelectionEnd,
+                TuiEditorBehavior::single_line().with_copy_on_mouse_highlight(),
+                ctx,
+            );
+            assert_eq!(
+                outcome,
+                TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Copy),
+                "copy_on_mouse_highlight must produce a Clipboard(Copy) outcome"
+            );
+
+            // Confirm the selected text is still available for the clipboard write.
+            let mut copied = None;
+            assert!(
+                apply_editor_clipboard_action_for_test(
+                    &editor.model,
+                    TuiEditorClipboardAction::Copy,
+                    |text| {
+                        copied = Some(text.to_owned());
+                        Ok(())
+                    },
+                    ctx,
+                )
+                .expect("copy succeeds"),
+                "there must be a non-empty selection to copy"
+            );
+            assert_eq!(
+                copied.as_deref(),
+                Some("world"),
+                "the correct selected text must be copied"
+            );
+            // Text is unmodified (Copy never deletes).
+            assert_eq!(editor.text(ctx), "hello world");
+        });
+    });
+}
+
+#[test]
+fn selection_end_without_copy_on_mouse_highlight_is_not_copied() {
+    // Regression test: without the `with_copy_on_mouse_highlight` opt-in, SelectionEnd
+    // must not trigger an auto-copy (backward-compatibility guarantee).
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_text("hello world", ctx);
+            for _ in 0..5 {
+                editor.handle_action(
+                    &TuiEditorViewAction::Command(TuiEditorCommand::SelectLeft),
+                    ctx,
+                );
+            }
+
+            // Without copy_on_mouse_highlight, SelectionEnd must return FollowCursor.
+            let outcome = apply_editor_action(
+                &editor.model,
+                &TuiEditorAction::SelectionEnd,
+                TuiEditorBehavior::single_line(), // default: copy_on_mouse_highlight disabled
+                ctx,
+            );
+            assert_eq!(
+                outcome,
+                TuiEditorInteractionOutcome::FollowCursor,
+                "default behavior must not auto-copy on selection end"
+            );
+        });
     });
 }
 

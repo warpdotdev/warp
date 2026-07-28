@@ -828,7 +828,7 @@ impl CodebaseIndex {
                             ctx,
                         ),
                         Err(e) => {
-                            report_error!(anyhow::anyhow!("{e}").context("Failed to build tree"));
+                            report_error!(&e);
                             send_telemetry_from_ctx!(
                                 AITelemetryEvent::BuildTreeFailed {
                                     error: e.to_string(),

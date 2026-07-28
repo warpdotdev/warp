@@ -69,7 +69,7 @@ impl ConfigPage {
 
     /// Whether this page opts into the selector's pinned search editor.
     pub(super) fn is_searchable(self) -> bool {
-        matches!(self, Self::Model)
+        matches!(self, Self::Environment | Self::Model)
     }
 }
 

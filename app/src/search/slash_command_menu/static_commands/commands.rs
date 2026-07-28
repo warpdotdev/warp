@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use ai::LLMProvider;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
@@ -42,6 +43,15 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
         icon_path: "bundled/svg/dataflow.svg",
     },
     availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+pub const STATUSLINE: StaticCommand = StaticCommand {
+    name: "/statusline",
+    description: "Configure the statusline",
+    kind: SlashCommandKind::Statusline,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: None,
 };
@@ -98,6 +108,45 @@ pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
     argument: None,
+};
+pub const ADD_API_KEY: StaticCommand = StaticCommand {
+    name: "/add-api-key",
+    description: "Securely store a model-provider API key",
+    kind: SlashCommandKind::AddApiKey,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME),
+        is_optional: false,
+        should_execute_on_selection: false,
+    }),
+};
+pub const CLEAR_API_KEY: StaticCommand = StaticCommand {
+    name: "/clear-provider-api-key",
+    description: "Remove a stored model-provider API key",
+    kind: SlashCommandKind::ClearApiKey,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME),
+        is_optional: false,
+        should_execute_on_selection: false,
+    }),
+};
+pub const THEME: StaticCommand = StaticCommand {
+    name: "/theme",
+    description: "Set color theme",
+    kind: SlashCommandKind::Theme,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: Some("<auto|light|dark>"),
+        is_optional: false,
+        should_execute_on_selection: false,
+    }),
 };
 
 pub const EXIT: StaticCommand = StaticCommand {
@@ -306,7 +355,7 @@ pub static MOVE_TO_CLOUD: LazyLock<StaticCommand> = LazyLock::new(|| StaticComma
     name: "/handoff",
     description: "Hand off this conversation to a cloud agent",
     kind: SlashCommandKind::MoveToCloud,
-    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
         icon_path: "bundled/svg/upload-cloud-01.svg",
     },
     availability: Availability::AGENT_VIEW
@@ -844,6 +893,8 @@ impl Registry {
 fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
     let mut commands = vec![
         ADD_MCP,
+        ADD_API_KEY,
+        CLEAR_API_KEY,
         ADD_PROMPT.clone(),
         ADD_RULE,
         AUTO_APPROVE,
@@ -863,7 +914,9 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
+        STATUSLINE,
         NATURAL_LANGUAGE_DETECTION,
+        THEME,
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,

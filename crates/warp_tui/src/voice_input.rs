@@ -26,6 +26,7 @@ pub(crate) enum TuiVoiceInputEvent {
 pub(crate) enum VoiceInputStartSource {
     SlashCommand,
     Keybinding,
+    Button,
 }
 
 impl VoiceInputStartSource {
@@ -35,7 +36,7 @@ impl VoiceInputStartSource {
 
     fn toggled_from(self) -> VoiceInputToggledFrom {
         match self {
-            Self::SlashCommand => VoiceInputToggledFrom::Button,
+            Self::SlashCommand | Self::Button => VoiceInputToggledFrom::Button,
             Self::Keybinding => VoiceInputToggledFrom::Key {
                 state: KeyState::Pressed,
             },

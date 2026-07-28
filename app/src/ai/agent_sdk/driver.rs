@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
@@ -32,7 +32,7 @@ use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::r#async::{FutureExt, TimeoutError};
+use warpui::r#async::{FutureExt, TimeoutError, Timer};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -889,9 +889,9 @@ impl AgentDriver {
                         )
                         .await
                         .context("Failed to update agent task state to InProgress")
-                    {
-                        report_error!(e);
-                    }
+                {
+                    report_error!(e);
+                }
                 // Primary: WARP_SANDBOX_DEADLINE client-side timer.
                 //
                 // The server injects WARP_SANDBOX_DEADLINE (Unix timestamp, seconds since
@@ -915,9 +915,6 @@ impl AgentDriver {
                 // When WARP_SANDBOX_DEADLINE is absent and no SIGTERM arrives, run_internal
                 // runs to completion as before (local and self-hosted runs are unaffected).
                 let result = {
-                    use std::time::SystemTime;
-                    use warpui::r#async::Timer;
-
                     /// How far before the sandbox deadline to start the teardown sequence.
                     const SHUTDOWN_WARNING_WINDOW: Duration = Duration::from_secs(5 * 60);
 
@@ -1027,7 +1024,7 @@ impl AgentDriver {
                         me.run_conversation_id.and_then(|conversation_id| {
                             finalize_recording_for_conversation(
                                 conversation_id,
-                                FinalizeReason::AgentFinished,
+                                FinalizeReason::RunEnded,
                                 true,
                                 ctx,
                             )
@@ -1035,9 +1032,10 @@ impl AgentDriver {
                     })
                     .await
                 {
-                    let finalization_result = finalization.resolve().await;
+                    let (finalization_result, actual_reason) = finalization.resolve().await;
                     log::info!(
-                        "Recording finalization completed before agent driver exit: {finalization_result:?}"
+                        "Recording finalization completed before agent driver exit \
+                         (reason={actual_reason:?}): {finalization_result:?}"
                     );
                 }
                 Self::run_snapshot_upload(&foreground).await;
@@ -1212,7 +1210,7 @@ impl AgentDriver {
                 }
                 MCPSpec::Uuid(uuid) => {
                     let client_config = managed_mcp_client
-                        .create_managed_mcp_client_config(*uuid)
+                        .create_managed_mcp_client_config(uuid.to_string())
                         .await
                         .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
                             uid: *uuid,
@@ -1228,6 +1226,41 @@ impl AgentDriver {
                         }
                     })?;
                     resolved.ephemeral_installations.extend(installations);
+                }
+                MCPSpec::WellKnown(id) => {
+                    // Backstop for specs created before the flag was disabled
+                    // (e.g. persisted configs): skip rather than resolve.
+                    if !FeatureFlag::WellKnownMcpIds.is_enabled() {
+                        log::warn!(
+                            "Skipping well-known MCP server '{id}': WellKnownMcpIds is disabled"
+                        );
+                        continue;
+                    }
+                    // Well-known MCP ids (e.g. "linear") resolve best-effort:
+                    // the server owns the set of recognized ids, and the
+                    // backing integration may be disconnected or the feature
+                    // disabled between dispatch and run setup — so resolution
+                    // failures skip the server instead of failing the run.
+                    let client_config = match managed_mcp_client
+                        .create_managed_mcp_client_config(id.clone())
+                        .await
+                    {
+                        Ok(client_config) => client_config,
+                        Err(err) => {
+                            log::warn!("Skipping well-known MCP server '{id}': {err:#}");
+                            continue;
+                        }
+                    };
+                    match Self::installations_from_managed_client_config_json(
+                        &client_config.mcp_config_json,
+                    ) {
+                        Ok(installations) => {
+                            resolved.ephemeral_installations.extend(installations);
+                        }
+                        Err(err) => {
+                            log::warn!("Skipping well-known MCP server '{id}': {err}");
+                        }
+                    }
                 }
                 MCPSpec::Json(json_str) => {
                     resolved

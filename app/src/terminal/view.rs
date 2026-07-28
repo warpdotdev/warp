@@ -11977,6 +11977,10 @@ impl TerminalView {
                                             {
                                                 let remote_host =
                                                     me.active_session_remote_host(ctx);
+                                                let should_auto_toggle_input = agent
+                                                    .supports_cli_agent_footer()
+                                                    && *AISettings::as_ref(ctx)
+                                                        .auto_open_rich_input_on_cli_agent_start;
                                                 sessions_model.set_session(
                                                     view_id,
                                                     CLIAgentSession {
@@ -11985,15 +11989,13 @@ impl TerminalView {
                                                         session_context:
                                                             CLIAgentSessionContext::default(),
                                                         input_state: CLIAgentInputState::Closed,
-                                                        should_auto_toggle_input: *AISettings::as_ref(
-                                                            ctx,
-                                                        )
-                                                        .auto_open_rich_input_on_cli_agent_start,
+                                                        should_auto_toggle_input,
                                                         listener: None,
                                                         plugin_version: None,
                                                         remote_host,
                                                         draft_text: None,
-                                                        custom_command_prefix: custom_command_prefix.clone(),
+                                                        custom_command_prefix:
+                                                            custom_command_prefix.clone(),
                                                         received_rich_notification: false,
                                                     },
                                                     ctx,
@@ -18271,6 +18273,15 @@ impl TerminalView {
     }
 
     #[cfg(feature = "local_fs")]
+    fn open_code_in_warp(
+        &mut self,
+        source: CodeSource,
+        layout: EditorLayout,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.emit(Event::OpenCodeInWarp { source, layout });
+    }
+    #[cfg(feature = "local_fs")]
     fn open_file_path_with_target(
         &mut self,
         path: PathBuf,
@@ -18358,16 +18369,6 @@ impl TerminalView {
         {
             ctx.emit(Event::OpenFileInWarp { path, session })
         }
-    }
-
-    #[cfg(feature = "local_fs")]
-    fn open_code_in_warp(
-        &mut self,
-        source: CodeSource,
-        layout: EditorLayout,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        ctx.emit(Event::OpenCodeInWarp { source, layout })
     }
 
     fn open_code_diff(&self, view: ViewHandle<CodeDiffView>, ctx: &mut ViewContext<Self>) {
@@ -22861,7 +22862,6 @@ impl TerminalView {
         if !FeatureFlag::HoaCodeReview.is_enabled() {
             return None;
         }
-
         CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
             .map(|s| s.agent)
@@ -28045,12 +28045,11 @@ impl View for TerminalView {
             context.set.insert(init::KEYBOARD_PROTOCOL_ENABLED_KEY);
         }
 
-        if CLIAgentSessionsModel::as_ref(app)
-            .session(self.view_id)
-            .is_some()
-        {
+        if let Some(session) = CLIAgentSessionsModel::as_ref(app).session(self.view_id) {
             context.set.insert(init::CLI_AGENT_SESSION_ACTIVE_KEY);
-            if *AISettings::as_ref(app).should_render_cli_agent_footer {
+            if session.agent.supports_cli_agent_footer()
+                && *AISettings::as_ref(app).should_render_cli_agent_footer
+            {
                 context.set.insert(flags::CLI_AGENT_FOOTER_ENABLED);
 
                 if is_rich_input_chip_in_cli_toolbar(app) {

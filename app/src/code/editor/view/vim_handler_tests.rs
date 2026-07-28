@@ -1801,3 +1801,218 @@ fn test_vim_y_percent_yanks_to_matching_bracket() {
         assert_eq!(buffer_text(&editor, &app), "(bar)foo(bar)baz");
     });
 }
+
+#[test]
+fn test_vim_double_greater_indents_current_line() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, ">>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+        assert_eq!(cursor_position(&editor, &app), (2, 4));
+    });
+}
+
+#[test]
+fn test_vim_double_less_dedents_current_line() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("    line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "<<", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+    });
+}
+
+#[test]
+fn test_vim_double_less_at_column_zero_is_noop() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "<<", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_double_less_removes_only_one_indent_unit() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("        line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "<<", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_double_greater_preserves_non_leading_text() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("  line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, ">>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_greater_with_down_motion_indents_two_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, ">j", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_counted_double_greater_indents_two_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "2>>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_greater_to_last_line_indents_all_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, ">G", &mut app);
+        assert_eq!(
+            buffer_text(&editor, &app),
+            "    line 1\n    line 2\n    line 3"
+        );
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_visual_linewise_greater_indents_selection() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, "V", &mut app);
+        assert_eq!(
+            vim_mode(&editor, &app),
+            Some(VimMode::Visual(MotionType::Linewise))
+        );
+        vim_user_insert(&editor, ">", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_visual_linewise_less_dedents_selection() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\n    line 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, "V", &mut app);
+        vim_user_insert(&editor, "<", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\nline 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_visual_greater_across_multiple_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "V", &mut app);
+        vim_user_insert(&editor, "j", &mut app);
+        vim_user_insert(&editor, ">", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_indent_then_undo_restores_buffer() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, ">>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2");
+
+        vim_user_insert(&editor, "u", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_indent_dot_repeat_repeats_last_indent() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, ">>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\nline 3");
+
+        set_cursor_position(&editor, 3, 0, &mut app);
+        vim_user_insert(&editor, ".", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\n    line 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}

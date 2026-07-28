@@ -10,6 +10,9 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
   user(requestContext: $requestContext) {
     ... on UserOutput {
       user {
+        profile {
+          uid
+        }
         workspaces {
           uid
           name
@@ -222,9 +225,16 @@ pub enum PricingInfoResult {
 
 #[derive(cynic::QueryFragment, Debug)]
 pub struct User {
+    pub profile: UserProfile,
     pub workspaces: Vec<Workspace>,
     pub experiments: Option<Vec<Experiment>>,
     pub discoverable_teams: Vec<DiscoverableTeamData>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "FirebaseProfile")]
+pub struct UserProfile {
+    pub uid: String,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

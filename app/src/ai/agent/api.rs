@@ -236,6 +236,9 @@ impl RequestParams {
                     .values(),
             );
 
+            // Include built-in Warp-hosted servers (e.g. the Factory MCP).
+            active_servers.extend(templatable_manager.get_active_builtin_servers().values());
+
             let servers: Vec<MCPServer> = active_servers
                 .into_iter()
                 .map(|server| MCPServer {

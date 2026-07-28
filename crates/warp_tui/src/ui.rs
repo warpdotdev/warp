@@ -157,7 +157,7 @@ pub(crate) fn login_placeholder(
         }
         _ => {
             content = content.child(
-                TuiText::new("Opening your browser…")
+                TuiText::new("Requesting a sign-in link…")
                     .with_style(dim)
                     .truncate()
                     .finish(),

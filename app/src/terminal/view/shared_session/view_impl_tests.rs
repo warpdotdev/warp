@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use chrono::Utc;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use futures::channel::oneshot;
 use pathfinder_geometry::vector::vec2f;
 use persistence::model::ConversationUsageMetadata;
 use session_sharing_protocol::sharer::SessionSourceType;
@@ -11,11 +13,11 @@ use warpui::platform::WindowStyle;
 use warpui::{App, EntityId, TypedActionView, ViewHandle};
 
 use super::*;
-use crate::ai::agent::AIAgentInput;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, ConversationStatus, ServerAIConversationMetadata,
 };
+use crate::ai::agent::{AIAgentInput, UserQueryMode};
 use crate::ai::agent_conversations_model::{
     AgentConversationsModel, AgentConversationsModelEvent, AgentRunDisplayStatus,
 };
@@ -29,12 +31,10 @@ use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::context_chips::prompt_type::PromptType;
 use crate::editor::InteractionState;
 use crate::server::ids::ServerId;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::terminal::TerminalView;
 use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::terminal::view::ambient_agent::{
-    HandoffSubmissionState, PendingHandoff, SnapshotUploadStatus,
-};
 use crate::terminal::view::shared_session::test_utils::terminal_view_for_viewer;
 use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
 use crate::test_util::add_window_with_terminal;
@@ -926,6 +926,28 @@ fn cloud_mode_terminal_for_test(app: &mut App) -> ViewHandle<TerminalView> {
     terminal
 }
 
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+fn handoff_request_for_test() -> SpawnAgentRequest {
+    SpawnAgentRequest {
+        prompt: Some("Continue".to_owned()),
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: None,
+        agent_identity_uid: None,
+        skill: None,
+        attachments: Vec::new(),
+        interactive: Some(true),
+        parent_run_id: None,
+        runtime_skills: Vec::new(),
+        referenced_attachments: Vec::new(),
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    }
+}
+
 #[test]
 fn test_ambient_session_join_auto_opens_details_panel() {
     let _cloud_mode_flag = FeatureFlag::CloudMode.override_enabled(true);
@@ -974,19 +996,8 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                 .expect("cloud mode terminal should have an ambient agent view model")
                 .clone();
             ambient_agent_view_model.update(ctx, |model, ctx| {
-                model.set_pending_handoff(
-                    Some(PendingHandoff {
-                        forked_conversation_id: None,
-                        title: None,
-                        touched_workspace: None,
-                        snapshot_upload: SnapshotUploadStatus::Pending,
-                        submission_state: HandoffSubmissionState::Idle,
-                        auto_submit: None,
-                        orchestration_handoff: None,
-                        should_inject_continue: false,
-                    }),
-                    ctx,
-                );
+                let (cancel, _) = oneshot::channel();
+                model.begin_local_to_cloud_handoff(handoff_request_for_test(), cancel, ctx);
             });
 
             view.on_session_share_joined(

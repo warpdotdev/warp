@@ -9,6 +9,7 @@ use warp_multi_agent_api as api;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
 
+use crate::LLMProvider;
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 pub use crate::geap_credentials::{
     GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
@@ -286,6 +287,48 @@ impl ApiKeyManager {
         &self.keys
     }
 
+    /// Reloads API keys after another process updates the active secure-storage namespace.
+    ///
+    /// GUI edits mutate this manager directly before persisting, so they do not
+    /// need to reload. TUI setup commands run in a separate process and notify
+    /// the live TUI to refresh its cached keys after a successful write.
+    pub fn reload_keys_from_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {
+        let keys = Self::load_keys_from_secure_storage(ctx);
+        if self.keys == keys {
+            return;
+        }
+        self.keys = keys;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    /// Persists a provider API key before publishing the updated in-memory value.
+    pub fn persist_provider_key(
+        &mut self,
+        provider: LLMProvider,
+        key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
+        let mut keys = self.keys.clone();
+        if !provider.set_api_key(&mut keys, key) {
+            return Err(anyhow::anyhow!(
+                "{} does not support pasted API keys",
+                provider.display_name()
+            ));
+        }
+        let json = serde_json::to_string(&keys)
+            .map_err(|error| anyhow::Error::new(error).context("Failed to serialize API keys"))?;
+        ctx.secure_storage()
+            .write_value(SECURE_STORAGE_KEY, &json)
+            .map_err(|error| {
+                anyhow::Error::new(error).context("Failed to write API keys to secure storage")
+            })?;
+        if self.keys != keys {
+            self.keys = keys;
+            ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        }
+        Ok(())
+    }
+
     /// The currently stored xAI/Grok OAuth tokens, if the user has connected a
     /// Grok subscription.
     pub fn grok_tokens(&self) -> Option<&GrokTokens> {
@@ -319,26 +362,15 @@ impl ApiKeyManager {
         self.write_grok_tokens_to_secure_storage(ctx);
     }
 
-    pub fn set_google_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.google = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_anthropic_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.anthropic = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_openai_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.openai = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_open_router_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.open_router = key;
+    pub fn set_provider_key(
+        &mut self,
+        provider: LLMProvider,
+        key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !provider.set_api_key(&mut self.keys, key) {
+            return;
+        }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }

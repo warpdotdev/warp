@@ -56,6 +56,7 @@ fn test_git_branch_tracking_status_displays_ahead_and_behind_when_upstream_exist
     );
 
     assert_eq!(status.display_text(), "feature-a • ↑2 ↓1");
+    assert_eq!(status.status_text().as_deref(), Some("↑2 ↓1"));
 }
 
 #[test]
@@ -68,6 +69,7 @@ fn test_git_branch_tracking_status_hides_zero_counts() {
     );
 
     assert_eq!(status.display_text(), "feature-a • ↑2");
+    assert_eq!(status.status_text().as_deref(), Some("↑2"));
 }
 
 #[test]
@@ -88,6 +90,7 @@ fn test_git_branch_tracking_status_displays_rebased_indicator() {
         GitBranchTrackingStatus::rebased("feature-a".to_string(), "origin/feature-a".to_string());
 
     assert_eq!(status.display_text(), "feature-a • ⇅");
+    assert_eq!(status.status_text().as_deref(), Some("⇅"));
 }
 
 #[test]
@@ -140,6 +143,7 @@ fn test_git_branch_tracking_status_displays_branch_only_without_upstream() {
     let status = GitBranchTrackingStatus::new("feature-a".to_string(), None, 0, 0);
 
     assert_eq!(status.display_text(), "feature-a");
+    assert_eq!(status.status_text(), None);
 }
 
 #[test]
@@ -150,6 +154,7 @@ fn test_git_branch_tracking_status_displays_branch_only_when_counts_are_unavaila
     );
 
     assert_eq!(status.display_text(), "feature-a");
+    assert_eq!(status.status_text(), None);
 }
 
 #[test]

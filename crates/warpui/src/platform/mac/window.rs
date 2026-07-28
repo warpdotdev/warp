@@ -473,7 +473,7 @@ unsafe extern "C" {
         default_filename: &NSString,
         default_directory: &NSString,
     );
-    fn open_url(urlString: &NSString);
+    fn open_url(urlString: &NSString) -> Bool;
     fn set_titlebar_height(window: &NSWindow, height: f64);
 }
 
@@ -742,11 +742,9 @@ impl Window {
         }
     }
 
-    pub fn open_url(url: &str) {
+    pub fn open_url(url: &str) -> bool {
         // SAFETY: `open_url` reads the string for the duration of the call.
-        unsafe {
-            open_url(&NSString::from_str(url));
-        }
+        unsafe { open_url(&NSString::from_str(url)).as_bool() }
     }
 
     pub fn open_file_path(path: &Path) {

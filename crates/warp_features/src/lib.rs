@@ -418,9 +418,6 @@ pub enum FeatureFlag {
     /// Enables the one-time modal on app startup for existing users for the Code launch.
     CodeLaunchModal,
 
-    /// Enables API key authentication for Agent SDK
-    APIKeyAuthentication,
-
     /// Enables API key management UI in settings
     APIKeyManagement,
 
@@ -924,6 +921,17 @@ pub enum FeatureFlag {
     /// Gates the account-first onboarding flow, including the reordered
     /// pre-auth slides and post-auth account offer.
     AccountFirstOnboarding,
+
+    /// Accepts well-known non-UUID managed MCP ids (e.g. `"linear"`) as
+    /// `warp_id` values in MCP configs and as bare identifiers in CLI
+    /// `--mcp` arguments, resolved server-side at run setup.
+    WellKnownMcpIds,
+
+    /// Automatically attaches the Warp-hosted Factory MCP server
+    /// (`/api/v1/mcp/factory`) to agents as a built-in MCP server,
+    /// authenticated with the logged-in user's session token. No manual MCP
+    /// setup or API key required.
+    FactoryMcp,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -992,13 +1000,14 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
-    FeatureFlag::FileBackedExecutionProfiles,
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
+    FeatureFlag::WellKnownMcpIds,
+    FeatureFlag::FactoryMcp,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

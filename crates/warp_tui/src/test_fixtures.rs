@@ -101,7 +101,9 @@ pub(crate) fn add_test_action_model_and_events(
     }
     add_test_semantic_selection(app);
     // Read as a singleton by the action model's executors.
-    app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+    if !app.read(|ctx| ctx.has_singleton_model::<BlocklistAIHistoryModel>()) {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+    }
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     let sessions = app.add_model(|_| Sessions::new_for_test());
     let (_tx, model_events_rx) = async_channel::unbounded();

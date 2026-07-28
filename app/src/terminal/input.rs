@@ -157,8 +157,6 @@ use crate::ai::agent_conversations_model::{
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
 use crate::ai::block_context::BlockContext;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::agent_view::agent_input_footer::sort_environments_by_recency;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::{
     AgentInputFooter, AgentInputFooterEvent, AgentViewController, AgentViewEntryOrigin,
@@ -168,11 +166,9 @@ use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISuba
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
 use crate::ai::blocklist::conversation_selection::ConversationSelectionHandle;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::{
-    TouchedWorkspace, pick_handoff_overlap_env, resolve_repo_for_path,
+use crate::ai::blocklist::handoff::{
+    HandoffLaunchAttachments, PendingCloudLaunch, suggest_handoff_environment,
 };
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::{
@@ -2659,6 +2655,7 @@ impl Input {
                 // The UseAgentToolbar shares this same AgentInputFooter instance,
                 // so its subscriber always fires alongside ours for every chip click.
                 AgentInputFooterEvent::WriteToPty(_)
+                | AgentInputFooterEvent::InsertIntoCLIPty(_)
                 | AgentInputFooterEvent::InsertIntoCLIRichInput(_)
                 | AgentInputFooterEvent::ToggleCodeReviewPane(_)
                 | AgentInputFooterEvent::ToggleFileExplorer(_)
@@ -4295,29 +4292,19 @@ impl Input {
         };
 
         let handoff_compose_state = self.handoff_compose_state.clone();
+        let suggestion = suggest_handoff_environment(pwd, ctx);
         ctx.spawn(
             async move {
-                resolve_repo_for_path(&pwd)
+                suggestion
                     .with_timeout(Duration::from_secs(5))
                     .await
                     .ok()
                     .flatten()
             },
-            move |_input, touched_repo, ctx| {
-                use crate::cloud_object::CloudObjectLookup as _;
-
-                let Some(touched_repo) = touched_repo else {
-                    return;
-                };
-                let workspace = TouchedWorkspace {
-                    repos: vec![touched_repo],
-                    orphan_files: vec![],
-                };
-                let mut envs = CloudAmbientAgentEnvironment::get_all(ctx);
-                sort_environments_by_recency(&mut envs);
-                if let Some(overlap_env) = pick_handoff_overlap_env(&workspace, envs) {
+            move |_input, environment_id, ctx| {
+                if let Some(environment_id) = environment_id {
                     handoff_compose_state.update(ctx, |state, ctx| {
-                        state.set_environment_id(Some(overlap_env), false, ctx);
+                        state.set_environment_id(Some(environment_id), false, ctx);
                     });
                 }
             },
@@ -4330,13 +4317,13 @@ impl Input {
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn exit_cloud_handoff_compose_and_clear(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn exit_cloud_handoff_compose_and_clear_prompt(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.exit_cloud_handoff_compose(ctx);
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
-        });
-        self.ai_context_model.update(ctx, |context_model, ctx| {
-            context_model.clear_pending_attachments(ctx);
         });
     }
 
@@ -4580,7 +4567,7 @@ impl Input {
                 .selected_environment_id()
                 .cloned();
             let entry_point = self.handoff_compose_state.as_ref(ctx).entry_point();
-            self.exit_cloud_handoff_compose_and_clear(ctx);
+            self.exit_cloud_handoff_compose_and_clear_prompt(ctx);
             ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
                 launch: None,
                 environment_id,
@@ -4606,7 +4593,7 @@ impl Input {
             attachments,
         };
 
-        self.exit_cloud_handoff_compose_and_clear(ctx);
+        self.exit_cloud_handoff_compose_and_clear_prompt(ctx);
 
         ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
             launch: Some(launch),
@@ -13430,34 +13417,6 @@ impl Input {
                 #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
                 let attachments = vec![];
 
-                // For local-to-cloud handoff panes, gate the buffer clear on the
-                // async `derive_touched_workspace` derivation having completed and
-                // no orchestrator already being in flight. If we cleared early and
-                // then bailed inside `submit_handoff`, the user's prompt and
-                // pending attachments would be silently dropped. Surface a toast
-                // so the user gets some feedback instead of seeing the submit do
-                // nothing — the prompt and attachments are intentionally left
-                // intact so the next submit picks them back up.
-                if let Some(ambient_agent_view_model) = self.ambient_agent_view_model().cloned() {
-                    let is_handoff_not_ready = {
-                        let model = ambient_agent_view_model.as_ref(ctx);
-                        model.is_local_to_cloud_handoff() && !model.is_handoff_ready_to_submit()
-                    };
-                    if is_handoff_not_ready {
-                        let window_id = ctx.window_id();
-                        ToastStack::handle(ctx).update(ctx, |ts, ctx| {
-                            ts.add_ephemeral_toast(
-                                DismissibleToast::default(
-                                    "Preparing handoff — try again in a moment.".to_owned(),
-                                )
-                                .with_object_id("local-to-cloud-handoff-not-ready".to_owned()),
-                                window_id,
-                                ctx,
-                            );
-                        });
-                        return;
-                    }
-                }
                 self.emit_input_buffer_submitted_telemetry(ctx);
 
                 // Clear the buffer and pending attachments after collecting them.
@@ -13470,11 +13429,7 @@ impl Input {
 
                 if let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
                     ambient_agent_view_model.update(ctx, |state, ctx| {
-                        if state.is_local_to_cloud_handoff() {
-                            state.submit_handoff(prompt, attachments, ctx);
-                        } else {
-                            state.spawn_agent(prompt, attachments, ctx);
-                        }
+                        state.spawn_agent(prompt, attachments, ctx);
                     });
                 }
                 return;

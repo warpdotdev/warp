@@ -1,7 +1,7 @@
 use ai::skills::SkillReference;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
-use warp::settings::AISettings;
+use warp::settings::{AISettings, TuiTheme, TuiThemeSettings};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, DetectedCommand, DetectedSkillCommand,
     ParsedSlashCommandInput, SlashCommandId, SlashCommandMixer,
@@ -236,6 +236,68 @@ fn slash_command_menu_renders_natural_language_detection_row() {
         });
     });
 }
+
+#[test]
+fn slash_command_menu_renders_theme_row() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.update(|ctx| {
+            let input_editor = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
+            let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+            suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
+            });
+            let mixer = ctx.add_model(|_| SlashCommandMixer::new());
+            let conversation_selection = add_test_conversation_selection(ctx);
+            let model = ctx.add_model(|_| {
+                TuiSlashCommandModel::new_for_test(
+                    input_editor,
+                    suggestions_mode,
+                    mixer,
+                    conversation_selection,
+                    vec![TuiSlashCommandRow {
+                        title: slash_commands::THEME.name.to_owned(),
+                        description: Some(slash_commands::THEME.description.to_owned()),
+                        action: AcceptSlashCommandOrSavedPrompt::SlashCommand {
+                            id: SlashCommandId::new(),
+                        },
+                    }],
+                    0,
+                )
+            });
+            let menu = TuiInlineMenu::new(model);
+            let lines = render_menu_lines(
+                menu.render(ctx)
+                    .expect("theme slash command menu should render"),
+                ctx,
+            );
+
+            assert!(lines.iter().any(|line| line.contains("/theme")));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Set color theme (currently auto: dark)"))
+            );
+
+            TuiThemeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .theme
+                    .set_value(TuiTheme::Light, ctx)
+                    .expect("light theme should persist");
+            });
+            let lines = render_menu_lines(
+                menu.render(ctx)
+                    .expect("theme slash command menu should render"),
+                ctx,
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Set color theme (currently light)"))
+            );
+        });
+    });
+}
 fn render_menu_lines(mut element: Box<dyn TuiElement>, ctx: &AppContext) -> Vec<String> {
     let mut rendered_views = EntityIdMap::default();
     let mut layout_ctx = TuiLayoutContext {
@@ -276,6 +338,15 @@ fn argument_hint_uses_shared_static_command_placeholder() {
     assert_eq!(
         argument_hint_text_for_parsed_input(&parsed_skill(Some("")), "/write-product-spec "),
         None
+    );
+
+    let theme = ParsedSlashCommandInput::SlashCommand(DetectedCommand {
+        command: slash_commands::THEME.clone(),
+        argument: Some(String::new()),
+    });
+    assert_eq!(
+        argument_hint_text_for_parsed_input(&theme, "/theme "),
+        Some("<auto|light|dark>")
     );
 }
 

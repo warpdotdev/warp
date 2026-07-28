@@ -6,8 +6,7 @@ use crate::terminal::CLIAgent;
 /// Resolves a CLI agent from the `"agent"` string in a CLI agent event.
 /// Returns `None` if the string doesn't match any known agent.
 fn resolve_agent(agent: &str) -> Option<CLIAgent> {
-    enum_iterator::all::<CLIAgent>()
-        .find(|a| !matches!(a, CLIAgent::Unknown) && a.command_prefix() == agent)
+    enum_iterator::all::<CLIAgent>().find(|candidate| candidate.command_prefixes().contains(&agent))
 }
 
 pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {

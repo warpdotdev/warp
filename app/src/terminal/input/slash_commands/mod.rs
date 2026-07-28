@@ -1255,9 +1255,13 @@ impl Input {
                 return false;
             }
             SlashCommandKind::AutoApprove
+            | SlashCommandKind::Statusline
+            | SlashCommandKind::AddApiKey
+            | SlashCommandKind::ClearApiKey
             | SlashCommandKind::ViewLogs
             | SlashCommandKind::Voice
             | SlashCommandKind::NaturalLanguageDetection
+            | SlashCommandKind::Theme
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout
             | SlashCommandKind::Version => {
