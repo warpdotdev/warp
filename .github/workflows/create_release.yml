@@ -1624,6 +1624,87 @@ jobs:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
 
+  release_windows_tui:
+    name: Build Release (Windows TUI x64)
+    runs-on: windows-latest-large
+    needs: prepare_release
+    if: ${{ inputs.build_windows != false && inputs.channel == 'dev' }}
+    timeout-minutes: 150
+    env:
+      TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+      TRUSTED_SIGNING_ACCOUNT: warpdotdev
+      TRUSTED_SIGNING_CERT_PROFILE: warpterminal
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: tui-x64
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Test Windows TUI installer
+        run: ./script/windows/test_tui_installer.ps1
+        shell: pwsh
+
+      - name: Build Warp Agent CLI
+        id: build_tui
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_installer --arch x64
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Sign Warp Agent CLI and PTY executables
+        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ env.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.TRUSTED_SIGNING_CERT_PROFILE }}
+          files: ${{ steps.build_tui.outputs.binary_path }}
+          files-folder: ${{ github.workspace }}\app\assets\windows\x64
+          files-folder-filter: dll,exe
+          files-folder-recurse: true
+          files-folder-depth: 2
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Build sign-tool command for Inno Setup
+        id: setup_signing
+        shell: pwsh
+        run: ./script/windows/build_inno_sign_tool_command.ps1
+
+      - name: Bundle signed Warp Agent CLI installer
+        id: bundle_tui
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_binary --require_signatures --arch x64
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
+
+      - name: Upload Windows TUI installer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-windows-tui-x64-${{ steps.get-config.outputs.channel }}
+          path: |
+            ${{ steps.bundle_tui.outputs.installer_path }}
+            ${{ steps.bundle_tui.outputs.pdb_file_path }}
+          if-no-files-found: error
+
   release_windows:
     name: Build Release (Windows ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -1701,22 +1782,7 @@ jobs:
       - name: Build sign-tool command for Inno Setup
         id: setup_signing
         shell: pwsh
-        run: |
-          $Dlib = (Get-ChildItem -Recurse "$env:LOCALAPPDATA" -Filter "Azure.CodeSigning.Dlib.dll" -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
-          if (-not $Dlib) { throw "Azure.CodeSigning.Dlib.dll not found — did the earlier signing action run?" }
-          Write-Output "Dlib: $Dlib"
-          $SignTool = (Get-ChildItem -Recurse "C:\Program Files (x86)\Windows Kits" -Filter "signtool.exe" |
-            Where-Object { $_.FullName -match 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1).FullName
-          if (-not $SignTool) { throw "signtool.exe not found in Windows SDK" }
-          Write-Output "SignTool: $SignTool"
-          # Add signtool's directory to PATH so the ISCC sign command can reference it as just "signtool.exe".
-          # Embedded quotes in the /Scodesign= value break PowerShell's native-command argument passing to ISCC.
-          (Split-Path $SignTool) >> $env:GITHUB_PATH
-          $MetadataPath = "${{ runner.temp }}\tsc-metadata.json"
-          @{Endpoint=$env:TRUSTED_SIGNING_ENDPOINT;CodeSigningAccountName=$env:TRUSTED_SIGNING_ACCOUNT;CertificateProfileName=$env:TRUSTED_SIGNING_CERT_PROFILE} |
-            ConvertTo-Json | Set-Content $MetadataPath
-          "sign_tool_cmd=signtool.exe sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $Dlib /dmdf $MetadataPath `$f" >> $env:GITHUB_OUTPUT
+        run: ./script/windows/build_inno_sign_tool_command.ps1
 
       - name: Bundle app
         id: bundle_app
@@ -1801,6 +1867,7 @@ jobs:
       - release_linux_arm
       - release_linux_cli_x86
       - release_web
+      - release_windows_tui
       - release_windows
     if: ${{ always() && needs.prepare_release.outputs.should_publish == 'true' }}
     steps:
@@ -1840,6 +1907,9 @@ jobs:
           fi
           if [[ ${{ needs.release_windows.result }} != 'success' ]]; then
               FAILED+=("Windows")
+          fi
+          if [[ ${{ needs.release_windows_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
+              FAILED+=("Windows TUI")
           fi
 
           if (( ${#FAILED[@]} )); then
