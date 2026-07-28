@@ -3654,8 +3654,16 @@ impl TuiTerminalSessionView {
     /// Toggles and persists vim mode, and surfaces a confirmation hint.
     fn toggle_vim_mode(&mut self, command_name: &'static str, ctx: &mut ViewContext<Self>) {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-        let enabled = !ctx.has_singleton_model::<AppEditorSettings>()
-            || !AppEditorSettings::as_ref(ctx).vim_mode_enabled();
+        // Guard: AppEditorSettings may be absent in lightweight test contexts.
+        // Without it, the toggle cannot persist, so surface a transient hint
+        // instead of panicking on an unregistered singleton.
+        if !ctx.has_singleton_model::<AppEditorSettings>() {
+            log::warn!("TUI vim mode toggle ignored: AppEditorSettings not registered");
+            self.show_transient_hint(VIM_MODE_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
+            record_static_slash_command_accepted(command_name, true, ctx);
+            return;
+        }
+        let enabled = !AppEditorSettings::as_ref(ctx).vim_mode_enabled();
         let result = AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
             settings.vim_mode.set_value(enabled, ctx)
         });

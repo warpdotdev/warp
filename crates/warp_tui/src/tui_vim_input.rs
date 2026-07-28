@@ -8,8 +8,8 @@
 //! character input falls through to the normal editor path.
 
 use vim::vim::{
-    CharacterMotion, Direction, LineMotion, VimEventType, VimFSA, VimMode, VimMotion, VimOperand,
-    VimOperator, WordBound,
+    CharacterMotion, Direction, InsertPosition, LineMotion, VimEventType, VimFSA, VimMode,
+    VimMotion, VimOperand, VimOperator, WordBound,
 };
 
 /// A high-level action for the TUI to apply after processing a keystroke in
@@ -39,36 +39,55 @@ pub(crate) enum TuiVimAction {
     MoveDown,
     /// Move the cursor one word to the left.
     MoveWordLeft,
-    /// Move the cursor one word to the right.
-    MoveWordRight,
+    /// Move the cursor one word to the right (to start of next word; `w`).
+    MoveWordRightStart,
+    /// Move the cursor one word to the right to end of current word (`e`).
+    MoveWordRightEnd,
     /// Move the cursor to the start of the current line.
     MoveToLineStart,
     /// Move the cursor to the end of the current line.
     MoveToLineEnd,
     /// Move the cursor to the first non-whitespace character on the line.
     MoveToFirstNonWhitespace,
-    /// Move the cursor to the start of the input buffer.
+    /// Move the cursor to the start of the input buffer (`gg`).
     MoveToBufferStart,
-    /// Move the cursor to the end of the input buffer.
+    /// Move the cursor to the end of the input buffer (`G`).
     MoveToBufferEnd,
     /// Delete from the cursor to the end of the line (kill).
     KillToLineEnd,
     /// Delete from the cursor to the start of the line (kill).
     KillToLineStart,
-    /// Yank (copy) the selected or current-line text into the vim clipboard.
-    YankSelection,
+    /// Delete the entire current line: move to line start, then kill to end.
+    /// Used for `dd` to match vim semantics regardless of cursor column.
+    KillLine,
+    /// Replace the character at the cursor with `c` (`r<char>`).
+    ReplaceChar(char),
+    /// Yank (copy) from the cursor to the end of the line.
+    YankToLineEnd,
+    /// Yank (copy) one word forward.
+    YankWordForward,
+    /// Yank (copy) the full buffer content into the vim clipboard (`yy`).
+    YankBuffer,
     /// Paste the vim clipboard contents after the cursor.
     PasteAfter(String),
     /// Paste the vim clipboard contents before the cursor.
     PasteBefore(String),
     /// Undo the last edit.
     Undo,
+    /// Switch to Insert mode with a cursor movement appropriate for the entry
+    /// command (`i`, `a`, `A`, `I`, `o`, `O`).
+    ChangeModeToInsert(InsertPosition),
     /// A vim mode transition occurred (new mode returned); no buffer edit needed.
     ModeTransition,
     /// The keystroke was consumed (pending input) but no action is ready yet.
     Pending,
     /// The keystroke was not handled in the current mode.
     Unhandled,
+    /// Repeat an inner action `count` times (for count-prefixed commands).
+    RepeatCount {
+        inner: Box<TuiVimAction>,
+        count: usize,
+    },
 }
 
 /// Vim-mode state machine for the TUI prompt.
@@ -157,14 +176,24 @@ impl TuiVimInputModel {
 
             // ── Escape / mode transitions ──────────────────────────────────
             VimEventType::Escape => TuiVimAction::ModeTransition,
-            VimEventType::ChangeMode { .. } => TuiVimAction::ModeTransition,
+            // `ChangeMode` is emitted for `i`, `a`, `A`, `I`, `o`, `O` (entering
+            // Insert mode with a position) as well as `v`/`V` (Visual), `R`
+            // (Replace), etc. Only Insert mode transitions carry a meaningful
+            // cursor-movement position; all others are plain mode switches.
+            VimEventType::ChangeMode { new, .. } => {
+                if matches!(new.mode, VimMode::Insert) {
+                    TuiVimAction::ChangeModeToInsert(new.position)
+                } else {
+                    TuiVimAction::ModeTransition
+                }
+            }
 
             // ── Undo ───────────────────────────────────────────────────────
             VimEventType::Undo => TuiVimAction::Undo,
 
             // ── Deletion ───────────────────────────────────────────────────
             VimEventType::Backspace => TuiVimAction::Backspace,
-            VimEventType::DeleteForward => TuiVimAction::DeleteForward,
+            VimEventType::DeleteForward => Self::maybe_repeat(TuiVimAction::DeleteForward, count),
 
             // ── Navigation ────────────────────────────────────────────────
             VimEventType::Navigate(motion) => self.map_motion(motion, count),
@@ -211,26 +240,16 @@ impl TuiVimInputModel {
                 }
             }
 
-            // ── Replace char ──────────────────────────────────────────────
-            VimEventType::ReplaceChar(Some(c)) => {
-                // Delete current char and insert the replacement
-                // We return DeleteForward so the view handles the delete;
-                // the mode switch to Insert is handled by the FSA; the char
-                // is inserted via a second InsertChar action. Since we can
-                // only return one action, we return a compound DeleteForward
-                // and the view will be re-notified to insert after mode change.
-                // As a simpler approximation, just replace via delete+insert.
-                let _ = c;
-                // Best approximation: delete forward then the FSA is in Normal
-                // mode, so the next typed char will also go through the FSA.
-                // The FSA handles 'r' → Replace mode transition → types char →
-                // returns to Normal. We just delete the char and insert the new one.
-                TuiVimAction::DeleteForward
-            }
+            // ── Replace char (`r<char>`) ───────────────────────────────────
+            // Delete the character at the cursor and insert the replacement.
+            VimEventType::ReplaceChar(Some(c)) => TuiVimAction::ReplaceChar(c),
             VimEventType::ReplaceChar(None) => TuiVimAction::ModeTransition,
 
             // ── Join lines (J) ────────────────────────────────────────────
-            VimEventType::JoinLine => TuiVimAction::MoveToLineEnd,
+            // Joining lines is not meaningful in a single- or few-line TUI
+            // prompt. Emit Unhandled rather than doing something visually
+            // indistinguishable from an unrelated command.
+            VimEventType::JoinLine => TuiVimAction::Unhandled,
 
             // ── Misc events we don't support ──────────────────────────────
             VimEventType::Search(_)
@@ -250,8 +269,20 @@ impl TuiVimInputModel {
         }
     }
 
-    fn map_motion(&self, motion: VimMotion, _count: usize) -> TuiVimAction {
-        match motion {
+    /// Wrap `action` in a [`TuiVimAction::RepeatCount`] when `count > 1`.
+    fn maybe_repeat(action: TuiVimAction, count: usize) -> TuiVimAction {
+        if count <= 1 {
+            action
+        } else {
+            TuiVimAction::RepeatCount {
+                inner: Box::new(action),
+                count,
+            }
+        }
+    }
+
+    fn map_motion(&self, motion: VimMotion, count: usize) -> TuiVimAction {
+        let base = match motion {
             VimMotion::Character(CharacterMotion::Left)
             | VimMotion::Character(CharacterMotion::WrappingLeft) => TuiVimAction::MoveLeft,
             VimMotion::Character(CharacterMotion::Right)
@@ -260,9 +291,10 @@ impl TuiVimInputModel {
             VimMotion::Character(CharacterMotion::Down) => TuiVimAction::MoveDown,
             VimMotion::Word(ref word_motion) => match word_motion.direction {
                 Direction::Backward => TuiVimAction::MoveWordLeft,
+                // `e` moves to end of current word; `w` moves to start of next
                 Direction::Forward => match word_motion.bound {
-                    WordBound::End => TuiVimAction::MoveWordRight,
-                    WordBound::Start => TuiVimAction::MoveWordRight,
+                    WordBound::End => TuiVimAction::MoveWordRightEnd,
+                    WordBound::Start => TuiVimAction::MoveWordRightStart,
                 },
             },
             VimMotion::Line(LineMotion::Start) => TuiVimAction::MoveToLineStart,
@@ -275,48 +307,61 @@ impl TuiVimInputModel {
             VimMotion::JumpToLastLine => TuiVimAction::MoveToBufferEnd,
             // Other motions are complex (find-char, paragraph, etc.) — no-op
             _ => TuiVimAction::Unhandled,
-        }
+        };
+        Self::maybe_repeat(base, count)
     }
 
     fn map_operation(
         &mut self,
         operator: VimOperator,
         operand: VimOperand,
-        _count: usize,
+        count: usize,
     ) -> TuiVimAction {
         match operator {
             VimOperator::Delete | VimOperator::Change => {
                 // Common delete/change operations
                 match &operand {
-                    VimOperand::Motion { motion, .. } => match motion {
-                        VimMotion::Character(CharacterMotion::Right)
-                        | VimMotion::Character(CharacterMotion::WrappingRight) => {
-                            TuiVimAction::DeleteForward
-                        }
-                        VimMotion::Character(CharacterMotion::Left)
-                        | VimMotion::Character(CharacterMotion::WrappingLeft) => {
-                            TuiVimAction::Backspace
-                        }
-                        VimMotion::Word(word_motion) => match word_motion.direction {
-                            Direction::Forward => TuiVimAction::DeleteWordForward,
-                            Direction::Backward => TuiVimAction::DeleteWordBackward,
-                        },
-                        VimMotion::Line(LineMotion::End) => TuiVimAction::KillToLineEnd,
-                        VimMotion::Line(LineMotion::Start) => TuiVimAction::KillToLineStart,
-                        _ => TuiVimAction::Unhandled,
-                    },
+                    VimOperand::Motion { motion, .. } => {
+                        let base = match motion {
+                            VimMotion::Character(CharacterMotion::Right)
+                            | VimMotion::Character(CharacterMotion::WrappingRight) => {
+                                TuiVimAction::DeleteForward
+                            }
+                            VimMotion::Character(CharacterMotion::Left)
+                            | VimMotion::Character(CharacterMotion::WrappingLeft) => {
+                                TuiVimAction::Backspace
+                            }
+                            VimMotion::Word(word_motion) => match word_motion.direction {
+                                Direction::Forward => TuiVimAction::DeleteWordForward,
+                                Direction::Backward => TuiVimAction::DeleteWordBackward,
+                            },
+                            VimMotion::Line(LineMotion::End) => TuiVimAction::KillToLineEnd,
+                            VimMotion::Line(LineMotion::Start) => TuiVimAction::KillToLineStart,
+                            _ => TuiVimAction::Unhandled,
+                        };
+                        Self::maybe_repeat(base, count)
+                    }
                     VimOperand::Line => {
-                        // dd → kill entire line (select all + delete for single-line input)
-                        // For multi-line: kill the current visual row
-                        TuiVimAction::KillToLineEnd
+                        // `dd` — delete the whole current line regardless of cursor column.
+                        // Move to start of the visual row first, then kill to end, so the
+                        // entire row is removed even when the cursor is mid-line.
+                        TuiVimAction::KillLine
                     }
                     VimOperand::TextObject(_) => TuiVimAction::Unhandled,
                 }
             }
             VimOperator::Yank => {
-                // y + motion → yank into clipboard
-                // For TUI simplicity, always yank the current content
-                TuiVimAction::YankSelection
+                // `y` + motion → yank into clipboard
+                match &operand {
+                    VimOperand::Line => TuiVimAction::YankBuffer,
+                    VimOperand::Motion { motion, .. } => match motion {
+                        VimMotion::Line(LineMotion::End) => TuiVimAction::YankToLineEnd,
+                        VimMotion::Word(_) => TuiVimAction::YankWordForward,
+                        // All other motions fall back to yanking the full buffer.
+                        _ => TuiVimAction::YankBuffer,
+                    },
+                    VimOperand::TextObject(_) => TuiVimAction::YankBuffer,
+                }
             }
             _ => TuiVimAction::Unhandled,
         }
@@ -324,8 +369,11 @@ impl TuiVimInputModel {
 
     fn map_visual_operator(&mut self, operator: VimOperator) -> TuiVimAction {
         match operator {
-            VimOperator::Delete | VimOperator::Change => TuiVimAction::Backspace,
-            VimOperator::Yank => TuiVimAction::YankSelection,
+            // The TUI editor does not track a separate vim selection range;
+            // for now apply a whole-line kill so `d`/`c` in visual mode at
+            // least clear meaningful content rather than deleting a single char.
+            VimOperator::Delete | VimOperator::Change => TuiVimAction::KillLine,
+            VimOperator::Yank => TuiVimAction::YankBuffer,
             _ => TuiVimAction::Unhandled,
         }
     }
@@ -333,9 +381,11 @@ impl TuiVimInputModel {
     /// Force the vim state machine into insert mode (e.g. when the user
     /// clicks in the input or uses a mouse-driven cursor placement).
     pub(crate) fn force_insert_mode(&mut self) {
+        // Drive the FSA to Normal mode first via Escape (clears pending state),
+        // then to Insert via `i` so the state machine's internal invariants
+        // stay intact. Direct field assignment bypasses those invariants.
         self.fsa.process_keystroke("escape");
-        // After escape from any mode, FSA is in Normal. Switch to Insert.
-        self.fsa.mode = VimMode::Insert;
+        self.fsa.process_char('i');
     }
 
     /// Store text in the internal yank buffer (called by the view after

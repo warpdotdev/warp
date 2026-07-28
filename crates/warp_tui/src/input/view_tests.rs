@@ -3329,3 +3329,82 @@ fn submit_accepts_highlighted_prompt_history_entry() {
         });
     });
 }
+
+// ── Vim mode shell-mode regression tests ─────────────────────────────────────
+//
+// These tests confirm that vim mode does not break the `!` shell-mode entry
+// trigger or the Escape shell-mode exit. Both regressions existed in the
+// original implementation and were fixed in this rework.
+
+fn enable_vim_mode(app: &mut warpui::App) {
+    use warp::settings::AppEditorSettings;
+    use warp_core::settings::Setting as _;
+    use warpui::SingletonEntity as _;
+    register_tui_session_view_test_singletons(app);
+    // `register_tui_session_view_test_singletons` does not register
+    // AppEditorSettings. Register it explicitly so `handle` doesn't panic.
+    app.update(AppEditorSettings::register);
+    app.update(|ctx| {
+        AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings
+                .vim_mode
+                .set_value(true, ctx)
+                .expect("failed to enable vim mode in test");
+        });
+    });
+}
+
+/// Regression: typing `!` at the start of an empty input must enter shell mode
+/// even when vim mode is active. Before the fix, the vim InsertChar interception
+/// returned early before the `!` branch, making shell-mode unreachable with vim on.
+#[test]
+fn shell_mode_entry_works_with_vim_enabled() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            // vim starts in Insert mode. `!` at cursor start must enter shell mode.
+            type_str(&view, ctx, "!");
+            assert!(
+                view.as_ref(ctx).is_shell_mode(ctx),
+                "`!` at buffer start must enter shell mode even with vim mode enabled"
+            );
+            assert_eq!(
+                text(&view, ctx),
+                "",
+                "the `!` must not be inserted into the buffer"
+            );
+        });
+    });
+}
+
+/// Regression: pressing Escape in vim Normal mode while `!` shell mode is active
+/// must exit shell mode (not be swallowed by vim). Before the fix, the vim escape
+/// branch returned `true` unconditionally, making shell-mode exit unreachable.
+#[test]
+fn escape_exits_shell_mode_in_vim_normal_mode() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            // Enter shell mode
+            type_str(&view, ctx, "!");
+            assert!(
+                view.as_ref(ctx).is_shell_mode(ctx),
+                "precondition: shell mode must be entered"
+            );
+            // First Escape: Insert → Normal (vim command)
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert!(
+                view.as_ref(ctx).is_shell_mode(ctx),
+                "first Escape transitions vim to Normal mode, shell mode stays"
+            );
+            // Second Escape: already in Normal mode → exit shell mode
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            assert!(
+                !view.as_ref(ctx).is_shell_mode(ctx),
+                "second Escape in Normal mode must exit shell mode"
+            );
+        });
+    });
+}

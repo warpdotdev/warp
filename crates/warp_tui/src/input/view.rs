@@ -24,7 +24,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use string_offset::{ByteOffset, CharOffset};
-use vim::vim::VimMode;
+use vim::vim::{InsertPosition, VimMode};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::AppEditorSettings;
 use warp::tui_export::{
@@ -653,14 +653,16 @@ impl TypedActionView for TuiInputView {
                     });
                     return;
                 }
-                // Route through vim FSA when vim mode is enabled and the input
-                // is a printable character (not in insert mode already handled
-                // as a normal insert by the FSA itself).
-                if let TuiEditorAction::InsertChar(c) = *editor_action {
-                    if self.vim_mode_enabled(ctx) {
-                        let vim_action = self.vim.process_char(c);
-                        return self.apply_vim_action(vim_action, ctx);
-                    }
+                // Route through vim FSA when vim mode is enabled and the
+                // FSA is NOT in Insert mode. In Insert mode the character
+                // falls through to normal editor handling so that `!` at
+                // the start still enters shell mode regardless of vim mode.
+                if let TuiEditorAction::InsertChar(c) = *editor_action
+                    && self.vim_mode_enabled(ctx)
+                    && !matches!(self.vim.mode(), VimMode::Insert)
+                {
+                    let vim_action = self.vim.process_char(c);
+                    return self.apply_vim_action(vim_action, ctx);
                 }
                 // A `!` typed at the very start of the input enters shell mode
                 // instead of inserting (matching the GUI's typed-only trigger).
@@ -1143,7 +1145,17 @@ impl TuiInputView {
         // In vim mode, Escape transitions between modes (Insert→Normal,
         // Visual/Replace→Normal, Normal→clear pending). This takes priority
         // over shell-mode exit so that `<Esc>` is always a vim command first.
+        // Exception: when the FSA is already in Normal mode with no pending
+        // input, a second Escape should exit shell mode if active (matching
+        // bash/zsh vi-mode behaviour where `<Esc><Esc>` exits shell mode).
         if self.vim_mode_enabled(ctx) {
+            if matches!(self.vim.mode(), VimMode::Normal)
+                && !self.vim.has_pending()
+                && self.is_shell_mode(ctx)
+            {
+                self.exit_shell_mode(ctx);
+                return true;
+            }
             let vim_action = self.vim.process_special_key("escape");
             self.apply_vim_action(vim_action, ctx);
             ctx.notify();
@@ -1227,7 +1239,10 @@ impl TuiInputView {
                 );
                 self.follow_cursor(ctx);
             }
-            TuiVimAction::MoveWordRight => {
+            // Both `w` (start of next word) and `e` (end of current word) map
+            // to the single `MoveWordRight` editor command; the TUI model does
+            // not yet expose a separate end-of-word cursor stop.
+            TuiVimAction::MoveWordRightStart | TuiVimAction::MoveWordRightEnd => {
                 self.editor_state.apply_command(
                     &self.model,
                     TuiEditorCommand::MoveWordRight,
@@ -1251,13 +1266,16 @@ impl TuiInputView {
                 self.follow_cursor(ctx);
             }
             TuiVimAction::MoveToBufferStart => {
-                // Jump to start of the buffer.
-                self.model.update(ctx, |m, ctx| m.move_to_line_start(ctx));
+                // `gg` — jump to the start of the buffer. Use paragraph
+                // navigation which moves past all content to the very beginning.
+                self.model
+                    .update(ctx, |m, ctx| m.move_to_paragraph_start(ctx));
                 self.follow_cursor(ctx);
             }
             TuiVimAction::MoveToBufferEnd => {
-                // Jump to end of the buffer.
-                self.model.update(ctx, |m, ctx| m.move_to_line_end(ctx));
+                // `G` — jump to the end of the buffer.
+                self.model
+                    .update(ctx, |m, ctx| m.move_to_paragraph_end(ctx));
                 self.follow_cursor(ctx);
             }
             TuiVimAction::KillToLineEnd => {
@@ -1278,9 +1296,63 @@ impl TuiInputView {
                 }
                 self.follow_cursor(ctx);
             }
-            TuiVimAction::YankSelection => {
-                // Yank the full buffer content into the vim clipboard.
-                // In a single-line prompt this is equivalent to yanking the line.
+            TuiVimAction::KillLine => {
+                // `dd` — delete the whole current line regardless of cursor column.
+                // Move to the start of the visual row first, then kill to the end.
+                self.model.update(ctx, |m, ctx| m.move_to_line_start(ctx));
+                if let Some(killed) = self
+                    .model
+                    .update(ctx, |m, ctx| m.kill_to_char_cell_visual_row_end(ctx))
+                {
+                    self.vim.set_yank_buffer(killed);
+                }
+                self.follow_cursor(ctx);
+            }
+            TuiVimAction::ReplaceChar(c) => {
+                // `r<char>` — replace the character at the cursor in-place.
+                // `replace_char` atomically replaces without changing the cursor
+                // position, matching vim's behaviour of staying on the new char.
+                self.model.update(ctx, |m, ctx| m.replace_char(c, 1, ctx));
+                self.follow_cursor(ctx);
+            }
+            TuiVimAction::YankToLineEnd => {
+                // `y$` — yank from cursor to end of the visual row.
+                // Kill to end, re-insert the text to make the operation
+                // non-destructive, and restore the cursor position.
+                let text = self
+                    .model
+                    .update(ctx, |m, ctx| m.kill_to_char_cell_visual_row_end(ctx))
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    // Re-insert the killed text (non-destructive yank).
+                    self.model.update(ctx, |m, ctx| m.user_insert(&text, ctx));
+                    // Move cursor back to where it was before the kill.
+                    for _ in 0..text.chars().count() {
+                        self.model.update(ctx, |m, ctx| m.move_left(ctx));
+                    }
+                    self.vim.set_yank_buffer(text);
+                }
+                self.follow_cursor(ctx);
+            }
+            TuiVimAction::YankWordForward => {
+                // `yw` — yank one word. The TUI editor model does not expose a
+                // word-delete that returns the deleted text, so we fall back to
+                // yanking the entire buffer content. This is a known limitation:
+                // `yw` and `yy` behave identically here.
+                let text = {
+                    let inner = self.model.as_ref(ctx);
+                    let buffer = inner.content().as_ref(ctx);
+                    if buffer.is_empty() {
+                        String::new()
+                    } else {
+                        buffer.text().into_string()
+                    }
+                };
+                self.vim.set_yank_buffer(text);
+                // Stay in current mode (yank is non-destructive).
+            }
+            TuiVimAction::YankBuffer => {
+                // `yy` / visual `y` — yank the full buffer content.
                 let text = {
                     let inner = self.model.as_ref(ctx);
                     let buffer = inner.content().as_ref(ctx);
@@ -1294,6 +1366,12 @@ impl TuiInputView {
                 // Stay in current mode (yank is non-destructive).
             }
             TuiVimAction::PasteAfter(text) => {
+                // `p` — paste after cursor.
+                // `move_right` is a no-op when the cursor is already on the
+                // very last character, so at end-of-line this effectively
+                // inserts before the last character rather than after. This
+                // edge case is a known limitation of the current editor model
+                // API and is acceptable for the TUI prompt.
                 self.model.update(ctx, |m, ctx| m.move_right(ctx));
                 self.model.update(ctx, |m, ctx| m.user_insert(&text, ctx));
                 self.follow_cursor(ctx);
@@ -1305,6 +1383,37 @@ impl TuiInputView {
             TuiVimAction::Undo => {
                 self.model.update(ctx, |m, ctx| m.undo(ctx));
                 self.follow_cursor(ctx);
+            }
+            TuiVimAction::ChangeModeToInsert(position) => {
+                // Apply the cursor movement implied by the entry command
+                // before handing off to Insert mode.
+                match position {
+                    InsertPosition::AtCursor => {}
+                    InsertPosition::AfterCursor => {
+                        self.model.update(ctx, |m, ctx| m.move_right(ctx));
+                    }
+                    InsertPosition::LineEnd => {
+                        self.model.update(ctx, |m, ctx| m.move_to_line_end(ctx));
+                    }
+                    InsertPosition::LineFirstNonWhitespace => {
+                        self.model.update(ctx, |m, ctx| {
+                            m.vim_move_to_first_nonwhitespace(false, ctx);
+                        });
+                    }
+                    // `o` / `O` (insert newline below/above) are not meaningful
+                    // for TUI single-line prompts; treat as a plain mode switch.
+                    InsertPosition::LineAbove | InsertPosition::LineBelow => {}
+                }
+                self.follow_cursor(ctx);
+            }
+            TuiVimAction::RepeatCount { inner, count } => {
+                // Execute the inner action `count` times.
+                for _ in 0..count {
+                    self.apply_vim_action(*inner.clone(), ctx);
+                }
+                // Skip the ctx.notify() at the bottom since the recursive calls
+                // already handled notification; return early.
+                return;
             }
             // Mode transitions and no-ops — the FSA already updated its internal
             // mode; we just need a re-render (ctx.notify is called below).

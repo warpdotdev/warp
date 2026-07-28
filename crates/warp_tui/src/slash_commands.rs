@@ -304,7 +304,10 @@ impl TuiSlashCommandModel {
         } else if title == slash_commands::NATURAL_LANGUAGE_DETECTION.name {
             AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
         } else if title == slash_commands::VIM_MODE.name {
-            AppEditorSettings::as_ref(ctx).vim_mode_enabled()
+            // Guard against contexts where AppEditorSettings is not registered
+            // (e.g. lightweight test fixtures), matching TuiInputView::vim_mode_enabled.
+            ctx.has_singleton_model::<AppEditorSettings>()
+                && AppEditorSettings::as_ref(ctx).vim_mode_enabled()
         } else {
             return None;
         };
