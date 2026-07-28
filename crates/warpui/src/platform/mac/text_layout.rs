@@ -28,6 +28,7 @@ use core_text::string_attributes::{
     kCTFontAttributeName, kCTKernAttributeName, kCTParagraphStyleAttributeName,
 };
 use itertools::Itertools;
+use markdown_parser::VerticalAlign;
 use ordered_float::OrderedFloat;
 use pathfinder_geometry::vector::vec2f;
 use vec1::Vec1;
@@ -202,6 +203,11 @@ const BORDER_LINE_HEIGHT_RATIO_KEY: &str = "border-line-height-ratio";
 const SHOW_STRIKETHROUGH_KEY: &str = "show-strikethrough";
 const HYPERLINK_UNDERLINE_STYLE_KEY: &str = "hyperlink-underline-style";
 const HYPERLINK_ID: &str = "hyperlink-id";
+const VERTICAL_ALIGN_KEY: &str = "vertical-align";
+// Encoding for the vertical-align attribute; keep in sync with the decode in
+// `attributes_to_text_style`. Absence of the key means no vertical alignment.
+const VERTICAL_ALIGN_SUB: i32 = 0;
+const VERTICAL_ALIGN_SUP: i32 = 1;
 
 fn text_style_as_cf_type_pairs(style: &TextStyle) -> Vec<(CFString, CFType)> {
     let mut key_value_pairs = vec![];
@@ -275,6 +281,17 @@ fn text_style_as_cf_type_pairs(style: &TextStyle) -> Vec<(CFString, CFType)> {
         CFString::new(SHOW_STRIKETHROUGH_KEY),
         CFBoolean::from(style.show_strikethrough).as_CFType(),
     ));
+
+    if let Some(vertical_align) = style.vertical_align {
+        let encoded = match vertical_align {
+            VerticalAlign::Sub => VERTICAL_ALIGN_SUB,
+            VerticalAlign::Sup => VERTICAL_ALIGN_SUP,
+        };
+        key_value_pairs.push((
+            CFString::new(VERTICAL_ALIGN_KEY),
+            CFNumber::from(encoded).as_CFType(),
+        ));
+    }
 
     key_value_pairs
 }
@@ -355,6 +372,18 @@ fn attributes_to_text_style(attributes_dictionary: CFDictionary<CFString, CFType
         .and_then(|hyperlink| hyperlink.to_i32())
     {
         text_styles = text_styles.with_hyperlink_id(hyperlink_id);
+    }
+
+    if let Some(encoded) = attributes_dictionary
+        .find(CFString::new(VERTICAL_ALIGN_KEY))
+        .and_then(|value| value.downcast::<CFNumber>())
+        .and_then(|num| num.to_i32())
+    {
+        match encoded {
+            VERTICAL_ALIGN_SUB => text_styles = text_styles.with_vertical_align(VerticalAlign::Sub),
+            VERTICAL_ALIGN_SUP => text_styles = text_styles.with_vertical_align(VerticalAlign::Sup),
+            _ => {}
+        }
     }
 
     text_styles

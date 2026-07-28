@@ -151,6 +151,66 @@ fn test_table_html_serialization() {
 }
 
 #[test]
+fn test_table_cell_sub_sup_html_serialization() {
+    // Issue #13734: sub/superscript in a table cell round-trips through the HTML table
+    // serializer, emitting `<sub>`/`<sup>` around the affected fragment.
+    App::test((), |mut app| async move {
+        let markdown = format!(
+            "```{}\nH<sub>2</sub>O\tx<sup>2</sup>\n```\n",
+            TABLE_BLOCK_MARKDOWN_LANG
+        );
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let html = app.read_model(&buffer, |buffer, ctx| {
+            let range = CharOffset::from(1)..buffer.max_charoffset();
+            buffer.ranges_as_html(Vec1::try_from_vec(vec![range]).unwrap(), ctx)
+        });
+
+        let html = html.expect("table should serialize to HTML");
+        assert!(
+            html.contains("H<sub>2</sub>O"),
+            "expected subscript markup in table HTML, got: {html}"
+        );
+        assert!(
+            html.contains("x<sup>2</sup>"),
+            "expected superscript markup in table HTML, got: {html}"
+        );
+    });
+}
+
+#[test]
+fn test_table_cell_sub_sup_markdown_round_trip() {
+    // The GFM-table Markdown serializer re-emits `<sub>`/`<sup>` for aligned fragments.
+    App::test((), |mut app| async move {
+        let markdown = format!(
+            "```{}\nH<sub>2</sub>O\tfoot<sup>1</sup>\n```\n",
+            TABLE_BLOCK_MARKDOWN_LANG
+        );
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            &markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let exported_markdown = app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped());
+        assert!(
+            exported_markdown.contains("H<sub>2</sub>O"),
+            "expected subscript tags preserved on export, got: {exported_markdown}"
+        );
+        assert!(
+            exported_markdown.contains("foot<sup>1</sup>"),
+            "expected superscript tags preserved on export, got: {exported_markdown}"
+        );
+    });
+}
+
+#[test]
 fn test_gfm_table_html_serialization() {
     App::test((), |mut app| async move {
         let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
@@ -497,5 +557,51 @@ fn test_image_with_content_html_serialization() {
         assert!(html.contains("<img"));
         assert!(html.contains("src=\"test.png\""));
         assert!(html.contains("Some text"));
+    });
+}
+
+/// `<sub>`/`<sup>` vertical alignment must survive the piece-table marker round-trip that the
+/// file/tab Markdown viewer renders from (issue #13734). The parser consumes the tags and sets
+/// `vertical_align` on `FormattedTextStyles`, but the viewer re-derives styles from
+/// `BufferText::Marker` entries — so unless the alignment is carried by a `BufferTextStyle`
+/// marker it is silently dropped between "parsed" and "rendered", leaving sub/superscript text at
+/// the plain baseline. This test drives the production path via `range_text_styles`, which reads
+/// styles back out of the marker-decorated buffer.
+#[test]
+fn test_sub_sup_survive_buffer_marker_roundtrip() {
+    App::test((), |mut app| async move {
+        let markdown = "H<sub>2</sub>O and x<sup>2</sup>\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        // Scan single-character ranges across the buffer and collect the alignment reported for
+        // each, reading back through the same marker path the viewer uses.
+        let (found_sub, found_sup) = app.read_model(&buffer, |buffer, _| {
+            let max = buffer.max_charoffset();
+            let mut found_sub = false;
+            let mut found_sup = false;
+            let mut offset = CharOffset::from(1);
+            while offset < max {
+                let next = offset + CharOffset::from(1);
+                let styles = buffer.range_text_styles(offset..next);
+                found_sub |= styles.is_subscript();
+                found_sup |= styles.is_superscript();
+                offset = next;
+            }
+            (found_sub, found_sup)
+        });
+
+        assert!(
+            found_sub,
+            "expected a subscript run to survive the buffer marker round-trip"
+        );
+        assert!(
+            found_sup,
+            "expected a superscript run to survive the buffer marker round-trip"
+        );
     });
 }

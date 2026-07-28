@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use line_ending::LineEnding;
 use markdown_parser::{
-    FormattedIndentTextInline, FormattedText, FormattedTextFragment, FormattedTextLine, parse_html,
-    parse_markdown,
+    FormattedIndentTextInline, FormattedText, FormattedTextFragment, FormattedTextLine,
+    VerticalAlign, parse_html, parse_markdown,
 };
 use pathfinder_color::ColorU;
 use rand::SeedableRng;
@@ -16,6 +16,7 @@ use vec1::{Vec1, vec1};
 use warp_util::content_version::ContentVersion;
 use warpui_core::elements::ListIndentLevel;
 use warpui_core::text::point::Point;
+use warpui_core::text_layout::LayoutCache;
 use warpui_core::{App, AppContext, ModelContext, ModelHandle, ReadModel};
 
 use super::{BufferEvent, EditResult, ToBufferCharOffset};
@@ -39,6 +40,7 @@ use crate::content::undo::{
     NonAtomicType, ReversibleEditorActions, ReversibleSelectionState, UndoActionType, UndoArg,
 };
 use crate::render::layout::TextLayout;
+use crate::render::model::test_utils::TEST_STYLES;
 use crate::render::model::{
     EmbeddedItem, EmbeddedItemHTMLRepresentation, EmbeddedItemRichFormat, LaidOutEmbeddedItem,
     RenderedSelectionSet,
@@ -1014,11 +1016,11 @@ fn test_random() {
     assert!(buffer.len().as_usize() <= 50);
     assert_eq!(
         buffer.text().as_str(),
-        "d3\nSOf\ngZjvGHqkBxl2583x69F13\n\n8wlTivQFFQ9cY"
+        "d3\nSOf\ngZjvGHqkBxl2583x69FU3\n\n8wlTivQFFQ9cY"
     );
     assert_eq!(
         buffer.content.debug(),
-        "<text>d3\\nSOf\\ngZjvGHqkBxl25<c_s>83x69F<i_s>13\\n\\n8wlTivQFFQ9cY<i_e><c_e>"
+        "<text>d3\\nSOf\\ngZjvGHqkBxl25<sub_s>83x69F<sup_s>U<s_s>3\\n\\n8wlTivQFFQ9cY<s_e><sup_e>"
     );
 }
 
@@ -1909,6 +1911,313 @@ fn test_block_style() {
                     })
                 ]
             );
+        });
+    });
+}
+
+#[test]
+fn test_block_style_strips_vertical_align() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(3),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().superscript(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><sup_s>te<sup_e>st");
+
+            // Converting the superscript-styled run into a code block (a block style that
+            // disallows formatting) must strip the vertical-align marker, same as it strips
+            // bold/italic/etc. Regression test: `TextStyles::all()` used to only carry
+            // `VerticalAlign::Sub`, so a `Superscript` marker survived the strip and kept
+            // rendering inside the code block.
+            let delta = buffer
+                .block_style_range(
+                    CharOffset::from(1)..CharOffset::from(5),
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default(),
+                    },
+                    selection.clone(),
+                    ctx,
+                )
+                .delta
+                .expect("Should exist");
+            assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
+            assert_eq!(
+                delta.new_lines,
+                vec![StyledBufferBlock::Text(StyledTextBlock {
+                    block: vec![StyledBufferRun {
+                        run: "test\n".to_string(),
+                        text_styles: TextStylesWithMetadata::default(),
+                        block_style: BufferBlockStyle::CodeBlock {
+                            code_block_type: Default::default()
+                        }
+                    },],
+                    style: BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default()
+                    },
+                    content_length: CharOffset::from(5),
+                }),]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_unstyle_subscript_leaves_superscript_intact() {
+    // #13734 finding 2: unstyling a single vertical-alignment mask (subscript) must not clear
+    // superscript-only ranges. The strip-all `TextStyles::all()` path (exercised by
+    // `test_block_style_strips_vertical_align`) still clears both, but a targeted
+    // `Unstyle(subscript)` must be a no-op over a superscript run.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(5),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().superscript(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><sup_s>test<sup_e>");
+
+            // Unstyle *subscript* over the same range: superscript must survive untouched.
+            let _ =
+                buffer.unstyle_internal(TextStyles::default().subscript(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><sup_s>test<sup_e>");
+        });
+    });
+}
+
+/// Collect one `(char, is_subscript, is_superscript)` triple per rendered character from the
+/// styled-block render runs, so a test can compare the render iterator's view against the
+/// `StyleSummary` view character-by-character.
+fn render_run_vertical_aligns(buffer: &Buffer) -> Vec<(char, bool, bool)> {
+    let blocks = buffer.styled_blocks_in_range(
+        CharOffset::from(1)..buffer.max_charoffset(),
+        StyledBlockBoundaryBehavior::Exclusive,
+    );
+    let mut out = Vec::new();
+    for block in &blocks {
+        if let StyledBufferBlock::Text(text_block) = block {
+            for run in &text_block.block {
+                let sub = run.text_styles.is_subscript();
+                let sup = run.text_styles.is_superscript();
+                for ch in run.run.chars().filter(|c| !c.is_whitespace()) {
+                    out.push((ch, sub, sup));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn test_nested_sub_inside_sup_render_matches_summary() {
+    // EDITOR-ACTION-LEVEL test, not a product-behavior test for parsed Markdown. Overlapping
+    // subscript/superscript buffer markers are unreachable via markdown import (the parser bails
+    // any nesting to a single literal fragment — see
+    // `test_nested_sub_sup_markdown_import_matches_parser_resolution` and
+    // `resolve_vertical_align`'s doc comment); they're only reachable by applying one alignment
+    // directly over an in-buffer selection that already carries the other, which is what this test
+    // builds via `style_internal`. This exercises internal-consistency plumbing only: `StyleSummary`
+    // and the render iterator must agree with each other on the same tie rule (#13734 finding 3),
+    // even though which specific rule they pick has no visible product behavior since it's never
+    // reachable from Markdown source.
+    //
+    // NOTE: this test's buffer is subscript-outer / superscript-inner, so the overlap ("bcd") is
+    // Sup under BOTH the old superscript-wins rule and the current innermost-wins rule — the
+    // assertions below are unchanged from before the tie-rule flip. Don't read "test still passes"
+    // as "nothing to verify here": see `test_nested_sup_inside_sub_render_matches_summary` below
+    // for the sup-outer/sub-inner case, which is the one that actually flips and would catch a
+    // regression back to superscript-wins.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "abcde",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            // Subscript over the whole "abcde", then superscript over the middle "bcd".
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(6),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().subscript(), selection.clone(), ctx);
+            buffer.set_selection(
+                CharOffset::from(2)..CharOffset::from(5),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().superscript(), selection.clone(), ctx);
+            assert_eq!(
+                buffer.content.debug(),
+                "<text><sub_s>a<sup_s>bcd<sup_e>e<sub_e>"
+            );
+
+            // Render-iterator view: a=Sub, bcd=Sup (overlap, sup wins), e=Sub (outer sub restored).
+            let render = render_run_vertical_aligns(buffer);
+            assert_eq!(
+                render,
+                vec![
+                    ('a', true, false),
+                    ('b', false, true),
+                    ('c', false, true),
+                    ('d', false, true),
+                    ('e', true, false),
+                ]
+            );
+
+            // StyleSummary view must agree character-by-character.
+            for (i, (ch, sub, sup)) in render.iter().enumerate() {
+                let offset = CharOffset::from(1 + i);
+                let s = buffer.text_styles_with_metadata_at(offset);
+                assert_eq!(
+                    (*sub, *sup),
+                    (s.is_subscript(), s.is_superscript()),
+                    "render vs StyleSummary disagree at char {ch:?} (offset {offset:?})"
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn test_nested_sup_inside_sub_render_matches_summary() {
+    // EDITOR-ACTION-LEVEL test (see the note on the sibling test above — this is internal
+    // `StyleSummary`/render-iterator consistency, not a product behavior reachable via Markdown).
+    //
+    // Mirror of the above with the outer/inner alignments swapped: superscript outer, subscript
+    // inner. The tie rule is innermost-wins, so the overlap ("bcd") renders Sub — the inner,
+    // more-deeply-nested marker — even though it's the outer marker (superscript) that would have
+    // won under the old superscript-wins rule. The inner end-marker then restores the outer Sup.
+    // This is the regression case: a naive revert to type-priority tie-breaking flips "bcd" back
+    // to Sup and this assertion catches it.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "abcde",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(6),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().superscript(), selection.clone(), ctx);
+            buffer.set_selection(
+                CharOffset::from(2)..CharOffset::from(5),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().subscript(), selection.clone(), ctx);
+            assert_eq!(
+                buffer.content.debug(),
+                "<text><sup_s>a<sub_s>bcd<sub_e>e<sup_e>"
+            );
+
+            // Innermost wins the overlap: "bcd" is the more-deeply-nested subscript span, so it
+            // renders Sub even though the outer span is superscript. "e" then restores the outer Sup.
+            let render = render_run_vertical_aligns(buffer);
+            assert_eq!(
+                render,
+                vec![
+                    ('a', false, true),
+                    ('b', true, false),
+                    ('c', true, false),
+                    ('d', true, false),
+                    ('e', false, true),
+                ]
+            );
+
+            for (i, (ch, sub, sup)) in render.iter().enumerate() {
+                let offset = CharOffset::from(1 + i);
+                let s = buffer.text_styles_with_metadata_at(offset);
+                assert_eq!(
+                    (*sub, *sup),
+                    (s.is_subscript(), s.is_superscript()),
+                    "render vs StyleSummary disagree at char {ch:?} (offset {offset:?})"
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn test_block_style_strips_subscript() {
+    // Guard case for `test_block_style_strips_vertical_align`: subscript matches the literal
+    // value `TextStyles::all()` carries, so this already passed before the fix, but it's worth
+    // keeping as a regression guard alongside the superscript case.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(3),
+                selection.clone(),
+                ctx,
+            );
+            let _ =
+                buffer.style_internal(TextStyles::default().subscript(), selection.clone(), ctx);
+            assert_eq!(buffer.content.debug(), "<text><sub_s>te<sub_e>st");
+
+            let _delta = buffer
+                .block_style_range(
+                    CharOffset::from(1)..CharOffset::from(5),
+                    BufferBlockStyle::CodeBlock {
+                        code_block_type: Default::default(),
+                    },
+                    selection.clone(),
+                    ctx,
+                )
+                .delta
+                .expect("Should exist");
+            assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
         });
     });
 }
@@ -2867,6 +3176,187 @@ fn test_styled_runs_multiple_styles() {
                 })]
             );
         });
+    });
+}
+
+/// The file/tab Markdown viewer paints from `styled_blocks_in_range` — the render data path, one
+/// layer below `range_text_styles`. This drives real `<sub>`/`<sup>` markdown through it and asserts
+/// the emitted `StyledBufferRun`s carry the vertical alignment that `layout_run`/`style_and_font`
+/// reads to offset glyphs (issue #13734).
+#[test]
+fn test_sub_sup_reach_styled_blocks_render_runs() {
+    App::test((), |mut app| async move {
+        let markdown = "H<sub>2</sub>O and x<sup>2</sup>\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let (found_sub, found_sup) = app.read_model(&buffer, |buffer, _| {
+            let blocks = buffer.styled_blocks_in_range(
+                CharOffset::from(1)..buffer.max_charoffset(),
+                StyledBlockBoundaryBehavior::Exclusive,
+            );
+            let mut found_sub = false;
+            let mut found_sup = false;
+            for block in &blocks {
+                if let StyledBufferBlock::Text(text_block) = block {
+                    for run in &text_block.block {
+                        found_sub |= run.text_styles.is_subscript();
+                        found_sup |= run.text_styles.is_superscript();
+                    }
+                }
+            }
+            (found_sub, found_sup)
+        });
+
+        assert!(
+            found_sub,
+            "expected a subscript render run from styled_blocks_in_range"
+        );
+        assert!(
+            found_sup,
+            "expected a superscript render run from styled_blocks_in_range"
+        );
+    });
+}
+
+/// Binary-searches the seam between `styled_blocks_in_range` (proven to carry `vertical_align`,
+/// see `test_sub_sup_reach_styled_blocks_render_runs` above) and `Line::paint`'s glyph offset
+/// (proven correct given a `TextStyle` that already has `vertical_align` set, see
+/// `crates/warpui_core/src/text_layout_tests.rs`). Feeds a REAL `StyledBufferRun.text_styles`
+/// (sourced from actual parsed markdown, not a hand-built `TextStylesWithMetadata`) into the real
+/// production `TextLayout::style_and_font` and asserts the resulting `StyleAndFont.style.vertical_align`
+/// is set — the exact input/output pair `render/layout.rs`'s `layout_run` relies on at paint time
+/// (issue #13734).
+#[test]
+fn test_sub_sup_style_and_font_from_real_styled_run() {
+    App::test((), |mut app| async move {
+        let markdown = "H<sub>2</sub>O and x<sup>2</sup>\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let (sub_run_styles, sup_run_styles) = app.read_model(&buffer, |buffer, _| {
+            let blocks = buffer.styled_blocks_in_range(
+                CharOffset::from(1)..buffer.max_charoffset(),
+                StyledBlockBoundaryBehavior::Exclusive,
+            );
+            let mut sub_run_styles = None;
+            let mut sup_run_styles = None;
+            for block in &blocks {
+                if let StyledBufferBlock::Text(text_block) = block {
+                    for run in &text_block.block {
+                        if run.text_styles.is_subscript() {
+                            sub_run_styles = Some(run.text_styles.clone());
+                        }
+                        if run.text_styles.is_superscript() {
+                            sup_run_styles = Some(run.text_styles.clone());
+                        }
+                    }
+                }
+            }
+            (sub_run_styles, sup_run_styles)
+        });
+
+        let sub_run_styles = sub_run_styles.expect("expected a subscript StyledBufferRun to exist");
+        let sup_run_styles =
+            sup_run_styles.expect("expected a superscript StyledBufferRun to exist");
+
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let paragraph = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
+
+            let sub_style_and_font = text_layout.style_and_font(&paragraph, &sub_run_styles);
+            let sup_style_and_font = text_layout.style_and_font(&paragraph, &sup_run_styles);
+
+            assert_eq!(
+                sub_style_and_font.style.vertical_align,
+                Some(VerticalAlign::Sub),
+                "expected style_and_font to carry Sub through from a real StyledBufferRun"
+            );
+            assert_eq!(
+                sup_style_and_font.style.vertical_align,
+                Some(VerticalAlign::Sup),
+                "expected style_and_font to carry Sup through from a real StyledBufferRun"
+            );
+        });
+    });
+}
+
+/// Nested `<sub>`/`<sup>` reaching the render path through *markdown import*, as opposed to
+/// `test_nested_sub_inside_sup_render_matches_summary` / `test_nested_sup_inside_sub_render_matches_summary`
+/// above, which build an overlapping buffer marker structure via direct `style_internal` calls over
+/// an in-buffer selection (an editor-only case — see the note on `resolve_vertical_align`).
+///
+/// This is a distinct seam: `markdown_parser::parse_vertical_align` bails ANY nesting of `<sub>`/
+/// `<sup>` tags to a single literal fragment (whole-formula bail, product ruling on #13734/#13948 —
+/// see `test_parse_nested_vertical_align_bails_whole_span_to_literal` in `markdown_parser_tests.rs`)
+/// before the buffer ever sees it, so `Buffer::from_formatted_text` never emits *overlapping*
+/// subscript/superscript markers for imported markdown at all — nested markdown becomes one plain,
+/// unstyled text fragment. The buffer-level tie rule in `resolve_vertical_align` is therefore
+/// unreachable via markdown import; it only exists for live interactive editing (applying one
+/// alignment over a selection that already carries the other). This test locks in that the parser's
+/// literal bail survives the round-trip to render runs — no run in the imported buffer is styled.
+#[test]
+fn test_nested_sub_sup_markdown_import_matches_parser_resolution() {
+    App::test((), |mut app| async move {
+        let markdown = "<sub>a<sup>bcd</sup>e</sub>\n";
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let render = app.read_model(&buffer, |buffer, _| render_run_vertical_aligns(buffer));
+
+        // The parser already bailed this to a fully literal fragment before the buffer ever saw
+        // it; this just confirms the import path doesn't accidentally re-derive styling from the
+        // literal tag text (e.g. via some unrelated re-parse) and renders everything unstyled.
+        assert_eq!(
+            render,
+            vec![
+                ('<', false, false),
+                ('s', false, false),
+                ('u', false, false),
+                ('b', false, false),
+                ('>', false, false),
+                ('a', false, false),
+                ('<', false, false),
+                ('s', false, false),
+                ('u', false, false),
+                ('p', false, false),
+                ('>', false, false),
+                ('b', false, false),
+                ('c', false, false),
+                ('d', false, false),
+                ('<', false, false),
+                ('/', false, false),
+                ('s', false, false),
+                ('u', false, false),
+                ('p', false, false),
+                ('>', false, false),
+                ('e', false, false),
+                ('<', false, false),
+                ('/', false, false),
+                ('s', false, false),
+                ('u', false, false),
+                ('b', false, false),
+                ('>', false, false),
+            ]
+        );
     });
 }
 
