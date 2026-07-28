@@ -81,6 +81,10 @@ impl TuiUiBuilder {
     pub(crate) fn dim_text_style(&self) -> TuiStyle {
         self.muted_text_style().add_modifier(Modifier::DIM)
     }
+    /// Foreground-overlay-6 text used for read-only menu field labels.
+    pub(crate) fn read_only_menu_label_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(self.foreground_text_color(60))
+    }
 
     /// Style for error text (e.g. failed tool-call glyphs).
     pub(crate) fn error_text_style(&self) -> TuiStyle {

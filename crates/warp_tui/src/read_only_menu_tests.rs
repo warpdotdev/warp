@@ -5,12 +5,15 @@ use warp::tui_export::Appearance;
 use warpui::event::ModifiersState;
 use warpui::{App, EntityId, EntityIdMap};
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition, TuiSelectionHandle,
-    TuiSize,
+    TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition,
+    TuiSelectionHandle, TuiSize,
 };
 
-use super::{TuiReadOnlyMenu, TuiReadOnlyMenuRow, TuiReadOnlyMenuSection, TuiReadOnlyMenuText};
+use super::{
+    TuiReadOnlyMenu, TuiReadOnlyMenuRow, TuiReadOnlyMenuSection, TuiReadOnlyMenuText,
+    TuiReadOnlyMenuVisualRow,
+};
 use crate::tui_builder::TuiUiBuilder;
 
 fn render(app: &App, element: &mut dyn TuiElement, size: TuiSize) -> TuiBuffer {
@@ -87,6 +90,34 @@ fn left_up(x: u16, y: u16) -> TuiEvent {
 }
 
 #[test]
+fn visual_rows_own_the_full_width_background() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (mut element, background) = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let row = TuiReadOnlyMenuRow::new([TuiReadOnlyMenuText::new([(
+                "Version".to_owned(),
+                builder.primary_text_style(),
+            )])]);
+            (
+                TuiReadOnlyMenuVisualRow::Content(row).render(builder.read_only_menu_background()),
+                builder.read_only_menu_background(),
+            )
+        });
+
+        let buffer = render_with_constraint(
+            &app,
+            element.as_mut(),
+            TuiConstraint::loose(TuiSize::new(40, 1)),
+        );
+
+        assert_eq!(buffer.area.width, 40);
+        assert_eq!(buffer[(0, 0)].style().bg, Some(background));
+        assert_eq!(buffer[(39, 0)].style().bg, Some(background));
+    });
+}
+
+#[test]
 fn background_fills_available_width_under_loose_constraints() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -116,6 +147,45 @@ fn background_fills_available_width_under_loose_constraints() {
 
         assert_eq!(buffer.area.width, 40);
         for row in 0..buffer.area.height {
+            assert_eq!(buffer[(0, row)].style().bg, Some(background));
+            assert_eq!(buffer[(39, row)].style().bg, Some(background));
+        }
+    });
+}
+
+#[test]
+fn background_fills_available_width_through_session_style_wrapper() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (mut element, background) = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let row = TuiReadOnlyMenuRow::new([TuiReadOnlyMenuText::new([(
+                "Version".to_owned(),
+                builder.primary_text_style(),
+            )])]);
+            let menu = TuiReadOnlyMenu::new(vec![TuiReadOnlyMenuSection::new("Status", vec![row])])
+                .render(
+                    TuiSelectionHandle::default(),
+                    &builder,
+                    |_, _| {},
+                    |_, _, _| {},
+                );
+            (
+                TuiFlex::column()
+                    .child(TuiContainer::new(menu).with_padding_top(1).finish())
+                    .finish(),
+                builder.read_only_menu_background(),
+            )
+        });
+
+        let buffer = render_with_constraint(
+            &app,
+            element.as_mut(),
+            TuiConstraint::loose(TuiSize::new(40, 3)),
+        );
+
+        assert_eq!(buffer.area.width, 40);
+        for row in 1..buffer.area.height {
             assert_eq!(buffer[(0, row)].style().bg, Some(background));
             assert_eq!(buffer[(39, row)].style().bg, Some(background));
         }

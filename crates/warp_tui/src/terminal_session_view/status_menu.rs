@@ -17,7 +17,7 @@ pub(super) struct TuiStatusInfo {
 
 fn field_row(label: &str, value: &str, builder: &TuiUiBuilder) -> TuiReadOnlyMenuRow {
     TuiReadOnlyMenuRow::new([TuiReadOnlyMenuText::new([
-        (format!("{label:<19}"), builder.dim_text_style()),
+        (format!("{label:<19}"), builder.read_only_menu_label_style()),
         (value.to_owned(), builder.primary_text_style()),
     ])])
 }

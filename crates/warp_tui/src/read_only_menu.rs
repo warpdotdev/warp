@@ -3,7 +3,7 @@
 use warpui_core::AppContext;
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::tui::{
-    Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiEventContext, TuiFlex,
+    Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiEventContext, TuiFlex,
     TuiLayoutContext, TuiSelectable, TuiSelectionHandle, TuiStyle, TuiText, TuiViewportContent,
     TuiViewportWindow, TuiViewportedElement, TuiViewportedList, TuiViewportedListState,
     TuiVisibleViewportItem,
@@ -83,20 +83,28 @@ enum TuiReadOnlyMenuVisualRow {
 }
 
 impl TuiReadOnlyMenuVisualRow {
-    fn render(&self) -> Box<dyn TuiElement> {
-        match self {
+    fn render(&self, background: Color) -> Box<dyn TuiElement> {
+        let content = match self {
             Self::SectionTitle { title, style } => {
                 TuiText::new(*title).with_style(*style).truncate().finish()
             }
             Self::Content(row) => row.render(),
             Self::Spacer => TuiText::new(" ").finish(),
-        }
+        };
+        TuiFlex::row()
+            .flex_child(
+                TuiContainer::new(content)
+                    .with_background(background)
+                    .finish(),
+            )
+            .finish()
     }
 }
 
 #[derive(Clone)]
 struct TuiReadOnlyMenuContent {
     rows: Vec<TuiReadOnlyMenuVisualRow>,
+    background: Color,
 }
 
 impl TuiReadOnlyMenuContent {
@@ -111,7 +119,7 @@ impl TuiReadOnlyMenuContent {
             .filter(|(row, _)| *row >= window.scroll_top && *row < viewport_bottom)
             .map(|(origin_y, row)| TuiVisibleViewportItem {
                 origin_y,
-                element: row.render(),
+                element: row.render(self.background),
             })
             .collect();
         TuiViewportContent {
@@ -160,6 +168,7 @@ impl TuiReadOnlyMenu {
         on_copy: impl FnMut(String, &mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {
         let section_title_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+        let background = builder.read_only_menu_background();
         let mut rows = Vec::new();
 
         for (index, section) in self.sections.into_iter().enumerate() {
@@ -182,7 +191,7 @@ impl TuiReadOnlyMenu {
         viewport_state.scroll_to_rows_from_top(0);
         let viewport = TuiViewportedList::new(
             viewport_state,
-            TuiReadOnlyMenuContent { rows },
+            TuiReadOnlyMenuContent { rows, background },
             builder.selection_style(),
         )
         .with_trimmed_selection_line_ends();
@@ -200,7 +209,7 @@ impl TuiReadOnlyMenu {
             .finish();
         TuiContainer::new(content)
             .with_padding_x(1)
-            .with_background(builder.read_only_menu_background())
+            .with_background(background)
             .finish()
     }
 }
