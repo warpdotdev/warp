@@ -246,6 +246,252 @@ fn detect_urls(text: &str) -> Vec<Range<usize>> {
     url_ranges
 }
 
+/// Maximum number of characters in a URL reconstructed across wrapped lines. Mirrors
+/// `URL_SCAN_CHARACTER_MAX_COUNT` in the terminal-grid path: offering an incomplete link
+/// is worse UX than offering none.
+const MAX_RECONSTRUCTED_URL_CHARS: usize = 1000;
+/// Maximum number of formatted lines that a single reconstructed URL may span.
+const MAX_WRAPPED_URL_LINES: usize = 32;
+
+/// A URL rebuilt from fragments that a CLI agent hard-wrapped across formatted lines,
+/// along with the per-line char ranges that display it.
+struct WrappedUrl {
+    url: String,
+    /// `(index into the run of lines, char range within that line)`.
+    segments: Vec<(usize, Range<usize>)>,
+}
+
+/// Returns a formatted line without the trailing newline that [`FormattedTextLine::raw_text`]
+/// appends, so char ranges line up with what the renderer registers as clickable.
+fn line_body(text: &str) -> &str {
+    text.strip_suffix('\n').unwrap_or(text)
+}
+
+/// Returns true when `line` opens a new layout row rather than continuing a wrapped URL.
+///
+/// TUIs draw lists, tables and quotes with leading markers, and a URL can never resume
+/// after one. Markers that are also legal URL characters (`-`, `#`, `+`, ...) only count
+/// when whitespace follows, since `https://a.example/-x` must keep wrapping normally.
+fn looks_like_new_layout_row(line: &str) -> bool {
+    let mut chars = line.chars();
+    let Some(first) = chars.next() else {
+        return true;
+    };
+    if first.is_whitespace() {
+        return true;
+    }
+
+    const LAYOUT_DELIMITERS: &[char] = &[
+        '|', '│', '┃', '├', '└', '┌', '┐', '┘', '┤', '┬', '┴', '┼', '─', '║', '╠', '╚', '═', '╦',
+        '╩', '╬', '•', '‣', '⁃',
+    ];
+    if LAYOUT_DELIMITERS.contains(&first) {
+        return true;
+    }
+
+    let rest = chars.as_str();
+    if matches!(first, '-' | '*' | '+' | '>' | '$' | '%' | '#')
+        && rest.chars().next().is_none_or(char::is_whitespace)
+    {
+        return true;
+    }
+    if first == '#'
+        && line
+            .trim_start_matches('#')
+            .starts_with(char::is_whitespace)
+    {
+        return true;
+    }
+
+    // Ordered list markers such as `2.` or `3)`.
+    let digit_count = line.chars().take_while(char::is_ascii_digit).count();
+    if digit_count > 0 {
+        let mut after = line.chars().skip(digit_count);
+        if matches!(after.next(), Some('.') | Some(')'))
+            && after.next().is_none_or(char::is_whitespace)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Returns true for characters that carry URL structure rather than prose.
+fn is_url_structural(c: char) -> bool {
+    c.is_ascii_digit()
+        || matches!(
+            c,
+            '/' | '?' | '=' | '&' | '%' | '#' | '.' | '_' | '~' | '+' | ':' | '@' | '-'
+        )
+}
+
+/// Attempts to grow a URL that runs to the end of `bodies[start]` across the lines after it.
+///
+/// Every continuation must clear the guards below; the detector deliberately prefers false
+/// negatives, since a wrong link target is worse than a link that stays split.
+fn extend_wrapped_url(bodies: &[&str], start: usize) -> Option<WrappedUrl> {
+    let first = bodies[start];
+    let first_len = first.chars().count();
+    // Only a URL touching the very end of a line can continue onto the next one.
+    let url_start = detect_urls(first)
+        .into_iter()
+        .find(|range| range.end == first_len)?
+        .start;
+
+    let mut acc = first.to_owned();
+    let mut acc_len = first_len;
+    let mut url_end = first_len;
+    let mut last = start;
+
+    for (offset, body) in bodies[start + 1..].iter().enumerate() {
+        if offset >= MAX_WRAPPED_URL_LINES {
+            break;
+        }
+        // The URL must still run to the end of everything joined so far.
+        if url_end != acc_len || looks_like_new_layout_row(body) {
+            break;
+        }
+        // A line that opens its own URL is a new link, not the tail of a wrapped one.
+        if detect_urls(body).iter().any(|range| range.start == 0) {
+            break;
+        }
+        let body_len = body.chars().count();
+        if url_end - url_start + body_len > MAX_RECONSTRUCTED_URL_CHARS {
+            break;
+        }
+
+        let candidate = format!("{acc}{body}");
+        let Some(extended) = detect_urls(&candidate)
+            .into_iter()
+            .find(|range| range.start == url_start && range.end > acc_len)
+        else {
+            break;
+        };
+
+        // Guard against swallowing prose that merely abuts the URL. A genuine wrap either
+        // runs through the whole continuation line or contributes URL structure, whereas
+        // `https://example.com` followed by `This is a sentence.` only gains a bare word.
+        let appended_len = extended.end - acc_len;
+        let Some(appended) = char_slice(body, 0, appended_len) else {
+            break;
+        };
+        if appended_len != body_len && !appended.chars().any(is_url_structural) {
+            break;
+        }
+
+        acc = candidate;
+        acc_len += body_len;
+        url_end = extended.end;
+        last = start + 1 + offset;
+    }
+
+    if last == start {
+        return None;
+    }
+
+    let mut segments = Vec::new();
+    let mut line_start = 0;
+    for (index, body) in bodies[start..=last].iter().enumerate() {
+        let line_end = line_start + body.chars().count();
+        let segment_start = url_start.max(line_start);
+        let segment_end = url_end.min(line_end);
+        if segment_start < segment_end {
+            segments.push((
+                start + index,
+                (segment_start - line_start)..(segment_end - line_start),
+            ));
+        }
+        line_start = line_end;
+    }
+
+    Some(WrappedUrl {
+        url: char_slice(&acc, url_start, url_end)?.to_owned(),
+        segments,
+    })
+}
+
+/// Reconstructs URLs that a CLI agent hard-wrapped across consecutive formatted lines.
+fn reconstruct_wrapped_urls(bodies: &[&str]) -> Vec<WrappedUrl> {
+    let mut wrapped = Vec::new();
+    let mut line = 0;
+    while line + 1 < bodies.len() {
+        match extend_wrapped_url(bodies, line) {
+            // Resume from the last participating line: it may still end with another URL.
+            Some(url) => {
+                let last = url.segments.last().map_or(line, |(index, _)| *index);
+                wrapped.push(url);
+                line = last;
+            }
+            None => line += 1,
+        }
+    }
+    wrapped
+}
+
+/// Returns true when `next` is the formatted line immediately after `previous` in the
+/// same output section.
+fn is_next_output_line(previous: &TextLocation, next: &TextLocation) -> bool {
+    match (previous, next) {
+        (
+            TextLocation::Output {
+                section_index: previous_section,
+                line_index: previous_line,
+            },
+            TextLocation::Output {
+                section_index: next_section,
+                line_index: next_line,
+            },
+        ) => previous_section == next_section && *next_line == previous_line + 1,
+        _ => false,
+    }
+}
+
+/// Groups `texts` into runs of consecutive formatted lines from a single output section.
+///
+/// Joining is confined to these runs so a URL can never be stitched across separate
+/// sections, code blocks, tables, images or action rows.
+fn consecutive_output_line_runs(
+    texts: &[(String, TextLocation)],
+) -> Vec<&[(String, TextLocation)]> {
+    let mut runs = Vec::new();
+    let mut start = 0;
+    for index in 1..texts.len() {
+        if !is_next_output_line(&texts[index - 1].1, &texts[index].1) {
+            runs.push(&texts[start..index]);
+            start = index;
+        }
+    }
+    if start < texts.len() {
+        runs.push(&texts[start..]);
+    }
+    runs
+}
+
+/// Maps every reconstructed cross-line URL onto the per-line clickable ranges that show it.
+/// Each participating range resolves to the same full URL, so Cmd+clicking any visual line
+/// opens the whole link.
+fn wrapped_url_links(
+    texts: &[(String, TextLocation)],
+) -> HashMap<TextLocation, HashMap<Range<usize>, String>> {
+    let mut links: HashMap<TextLocation, HashMap<Range<usize>, String>> = HashMap::new();
+    for run in consecutive_output_line_runs(texts) {
+        let bodies = run
+            .iter()
+            .map(|(text, _)| line_body(text))
+            .collect::<Vec<_>>();
+        for wrapped in reconstruct_wrapped_urls(&bodies) {
+            for (index, range) in wrapped.segments {
+                links
+                    .entry(run[index].1)
+                    .or_default()
+                    .insert(range, wrapped.url.clone());
+            }
+        }
+    }
+    links
+}
+
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 fn addr_of(s: &str) -> usize {
     s.as_ptr() as usize
@@ -690,12 +936,30 @@ pub(crate) fn detect_all_links(
     let mut all_links: HashMap<TextLocation, HashMap<Range<usize>, DetectedLinkType>> =
         HashMap::new();
 
+    // URLs that a CLI agent hard-wrapped across formatted lines, rebuilt before per-line
+    // detection so each fragment can resolve to the whole link instead of its own prefix.
+    let wrapped_urls = wrapped_url_links(texts);
+
     for (text, location) in texts {
+        let wrapped = wrapped_urls.get(location);
+        let overlaps_wrapped = |range: &Range<usize>| {
+            wrapped.is_some_and(|segments| {
+                segments
+                    .keys()
+                    .any(|segment| segment.start < range.end && range.start < segment.end)
+            })
+        };
+
         let url_ranges = detect_urls(text);
         let mut links = HashMap::new();
 
         // Detect URLs via regex
         for url_range in &url_ranges {
+            // A reconstructed URL supersedes the truncated fragment that per-line detection
+            // finds over the same characters.
+            if overlaps_wrapped(url_range) {
+                continue;
+            }
             if let Some(link_text) = char_slice(text, url_range.start, url_range.end) {
                 links.insert(
                     url_range.clone(),
@@ -712,9 +976,16 @@ pub(crate) fn detect_all_links(
                 if !url_ranges
                     .iter()
                     .any(|ur| ur.start < range.end && range.start < ur.end)
+                    && !overlaps_wrapped(&range)
                 {
                     links.insert(range, link);
                 }
+            }
+        }
+
+        if let Some(segments) = wrapped {
+            for (range, url) in segments {
+                links.insert(range.clone(), DetectedLinkType::Url(url.clone()));
             }
         }
 

@@ -242,3 +242,210 @@ fn link_tooltip_anchor_ids_are_unique_per_block() {
         RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID
     );
 }
+
+// Cross-line URL reconstruction (GH9385).
+//
+// CLI agents such as Claude Code hard-wrap their TUI output, so a long URL arrives as
+// several formatted lines. Detecting each line on its own found only the prefix that
+// happened to parse as a URL, and Cmd+click opened that truncated target.
+
+fn output_line(line_index: usize) -> TextLocation {
+    TextLocation::Output {
+        section_index: 0,
+        line_index,
+    }
+}
+
+/// Builds the `(text, location)` pairs that `collect_output_data_for_link_detection`
+/// produces for one plain-text section. `raw_text()` terminates every formatted line
+/// with a newline, so the fixtures do too.
+fn output_lines(lines: &[&str]) -> Vec<(String, TextLocation)> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(line_index, line)| (format!("{line}\n"), output_line(line_index)))
+        .collect_vec()
+}
+
+fn urls_in(
+    links: &HashMap<TextLocation, HashMap<Range<usize>, DetectedLinkType>>,
+    location: TextLocation,
+) -> Vec<(Range<usize>, String)> {
+    links
+        .get(&location)
+        .map(|detected| {
+            detected
+                .iter()
+                .filter_map(|(range, link)| match link {
+                    DetectedLinkType::Url(url) => Some((range.clone(), url.clone())),
+                    #[cfg(feature = "local_fs")]
+                    DetectedLinkType::FilePath { .. } => None,
+                })
+                .sorted_by_key(|(range, _)| range.start)
+                .collect_vec()
+        })
+        .unwrap_or_default()
+}
+
+fn detected_urls_by_line(lines: &[&str]) -> Vec<Vec<(Range<usize>, String)>> {
+    let texts = output_lines(lines);
+    let links = detect_all_links(&texts, vec![], None, None);
+    (0..lines.len())
+        .map(|line_index| urls_in(&links, output_line(line_index)))
+        .collect_vec()
+}
+
+#[test]
+fn test_reconstructs_url_hard_wrapped_across_two_lines() {
+    const FULL_URL: &str =
+        "https://example.com/some/very/long/path?param1=value1&param2=value2&param3=value3";
+    let detected = detected_urls_by_line(&[
+        "https://example.com/some/very/long/path?param1=value1&param",
+        "2=value2&param3=value3",
+    ]);
+
+    // Both visual lines stay individually clickable, and both open the whole URL.
+    assert_eq!(detected[0], vec![(0..59, FULL_URL.to_owned())]);
+    assert_eq!(detected[1], vec![(0..22, FULL_URL.to_owned())]);
+}
+
+#[test]
+fn test_reconstructs_url_hard_wrapped_across_three_lines() {
+    const FULL_URL: &str =
+        "https://example.com/a/very/long/path/that/keeps/going/and/going?q=1&r=2";
+    let detected = detected_urls_by_line(&[
+        "Docs: https://example.com/a/very/long",
+        "/path/that/keeps/going/and/going",
+        "?q=1&r=2",
+    ]);
+
+    assert_eq!(detected[0], vec![(6..37, FULL_URL.to_owned())]);
+    assert_eq!(detected[1], vec![(0..32, FULL_URL.to_owned())]);
+    assert_eq!(detected[2], vec![(0..8, FULL_URL.to_owned())]);
+}
+
+#[test]
+fn test_single_line_url_detection_is_unchanged() {
+    let detected = detected_urls_by_line(&["see https://example.com/foo and more", "next line"]);
+
+    assert_eq!(
+        detected[0],
+        vec![(4..27, "https://example.com/foo".to_owned())]
+    );
+    assert!(detected[1].is_empty());
+}
+
+#[test]
+fn test_url_followed_by_prose_is_not_joined() {
+    let detected = detected_urls_by_line(&["Visit https://example.com", "This is a sentence."]);
+
+    // Joining would have produced `https://example.comThis`.
+    assert_eq!(detected[0], vec![(6..25, "https://example.com".to_owned())]);
+    assert!(detected[1].is_empty());
+}
+
+#[test]
+fn test_adjacent_independent_urls_stay_separate() {
+    let detected = detected_urls_by_line(&["https://example.com", "https://other.example.org"]);
+
+    assert_eq!(detected[0], vec![(0..19, "https://example.com".to_owned())]);
+    assert_eq!(
+        detected[1],
+        vec![(0..25, "https://other.example.org".to_owned())]
+    );
+}
+
+#[test]
+fn test_layout_rows_are_not_joined_onto_a_url() {
+    // A URL can never resume after a list marker, table delimiter or indentation, so each
+    // of these must leave the first line's URL exactly as detected on its own.
+    for continuation in [
+        "- another item",
+        "* another item",
+        "2. another item",
+        "│ cell │",
+        "|cell|",
+        "    indented/continuation",
+        "",
+    ] {
+        let detected = detected_urls_by_line(&["https://example.com/foo", continuation]);
+        assert_eq!(
+            detected[0],
+            vec![(0..23, "https://example.com/foo".to_owned())],
+            "unexpectedly joined continuation {continuation:?}"
+        );
+    }
+}
+
+#[test]
+fn test_reconstructed_ranges_are_char_based_not_byte_based() {
+    const FULL_URL: &str = "https://example.com/very/long/tail?x=1";
+    let detected = detected_urls_by_line(&["日本語 https://example.com/very/long", "/tail?x=1"]);
+
+    // "日本語 " is 4 chars but 10 bytes; the range must start at char 4.
+    assert_eq!(detected[0], vec![(4..33, FULL_URL.to_owned())]);
+    assert_eq!(detected[1], vec![(0..9, FULL_URL.to_owned())]);
+}
+
+#[test]
+fn test_urls_are_not_reconstructed_across_output_sections() {
+    let texts = vec![
+        (
+            "https://example.com/some/very/long/path?param1=value1&param\n".to_owned(),
+            TextLocation::Output {
+                section_index: 0,
+                line_index: 0,
+            },
+        ),
+        (
+            "2=value2&param3=value3\n".to_owned(),
+            TextLocation::Output {
+                section_index: 1,
+                line_index: 0,
+            },
+        ),
+    ];
+    let links = detect_all_links(&texts, vec![], None, None);
+
+    assert_eq!(
+        urls_in(
+            &links,
+            TextLocation::Output {
+                section_index: 0,
+                line_index: 0
+            }
+        ),
+        vec![(
+            0..59,
+            "https://example.com/some/very/long/path?param1=value1&param".to_owned()
+        )]
+    );
+    assert!(
+        urls_in(
+            &links,
+            TextLocation::Output {
+                section_index: 1,
+                line_index: 0
+            }
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn test_markdown_hyperlinks_take_precedence_over_reconstructed_urls() {
+    let texts = output_lines(&[
+        "https://example.com/some/very/long/path?param1=value1&param",
+        "2=value2&param3=value3",
+    ]);
+    let md_hyperlinks = vec![(
+        output_line(0),
+        vec![(0..59, "https://override.example".to_owned())],
+    )];
+    let links = detect_all_links(&texts, md_hyperlinks, None, None);
+
+    assert_eq!(
+        urls_in(&links, output_line(0)),
+        vec![(0..59, "https://override.example".to_owned())]
+    );
+}
