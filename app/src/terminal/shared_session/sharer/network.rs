@@ -52,9 +52,10 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::telemetry_context;
 use crate::terminal::TerminalModel;
 use crate::terminal::model::block::BlockId;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use crate::terminal::shared_session::SharedSessionScrollbackType;
 use crate::terminal::shared_session::{
-    EventNumber, SELECTION_THROTTLE_PERIOD, SharedSessionScrollbackType, SharedSessionSource,
-    connect_endpoint,
+    EventNumber, SELECTION_THROTTLE_PERIOD, SharedSessionSource, connect_endpoint,
 };
 use crate::throttle::throttle;
 
@@ -311,10 +312,8 @@ impl Network {
     pub fn new_for_test(
         model: Arc<FairMutex<TerminalModel>>,
         ordered_events_rx: Receiver<OrderedTerminalEventType>,
-        _scrollback_type: SharedSessionScrollbackType,
         active_prompt: ActivePrompt,
         selection: Selection,
-        _input_replica_id: ReplicaId,
         max_session_size: Byte,
         ctx: &mut ModelContext<Self>,
     ) -> Self {

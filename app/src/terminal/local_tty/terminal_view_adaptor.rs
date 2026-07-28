@@ -744,13 +744,6 @@ impl TerminalManager<TerminalView> {
         });
 
         let (events_tx, events_rx) = async_channel::unbounded();
-        let input_replica_id = terminal_view
-            .as_ref(ctx)
-            .input()
-            .as_ref(ctx)
-            .editor()
-            .as_ref(ctx)
-            .replica_id(ctx);
 
         let scrollback_first_block_index = scrollback_type.first_block_index(&model.lock());
         let max_session_size = max_session_size(window_id, ctx);
@@ -763,15 +756,20 @@ impl TerminalManager<TerminalView> {
                 let network = ctx.add_model(|ctx| Network::new_for_test(
                     model.clone(),
                     events_rx,
-                    scrollback_type,
                     active_prompt,
                     selection,
-                    input_replica_id,
                     max_session_size,
                     ctx,
                 ));
             } else {
                 let input_config = terminal_view.as_ref(ctx).input_config(ctx);
+                let input_replica_id = terminal_view
+                    .as_ref(ctx)
+                    .input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .replica_id(ctx);
                 // Compute current auto-approve state from the AI context model
                 let auto_approve_agent_actions = terminal_view
                     .as_ref(ctx)

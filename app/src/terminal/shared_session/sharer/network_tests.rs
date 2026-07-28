@@ -23,13 +23,10 @@ use super::{
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
-use crate::editor::ReplicaId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::TerminalModel;
-use crate::terminal::shared_session::{
-    MAX_BYTES_SHAREABLE, SharedSessionScrollbackType, SharedSessionSource,
-};
+use crate::terminal::shared_session::{MAX_BYTES_SHAREABLE, SharedSessionSource};
 use crate::test_util::assert_eventually;
 
 fn is_upstream_message_pty_bytes_read(
@@ -170,7 +167,6 @@ fn create_network(
     session_initialized: bool,
 ) -> (ModelHandle<Network>, Sender<OrderedTerminalEventType>) {
     let (ordered_events_tx, ordered_events_rx) = async_channel::unbounded();
-    let scrollback_type = SharedSessionScrollbackType::None;
     let active_prompt = ActivePrompt::default();
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
 
@@ -178,10 +174,8 @@ fn create_network(
         Network::new_for_test(
             terminal_model,
             ordered_events_rx,
-            scrollback_type,
             active_prompt,
             Selection::None,
-            ReplicaId::random(),
             Byte::from_u64(MAX_BYTES_SHAREABLE as u64),
             ctx,
         )
