@@ -206,9 +206,9 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             } else {
                 theme.background()
             };
-            // In ambient/cloud mode use the combined `OzCloud` silhouette (Oz + cloud),
+            // In ambient/cloud mode use the `OzCloud` icon (cloud-flavored Warp Agent mark),
             // matching the treatment used in the agent view header. Non-ambient runs
-            // continue to use the plain `Oz` glyph.
+            // continue to use the plain `Oz` (Warp Agent) glyph.
             let oz_glyph = if is_ambient {
                 WarpIcon::OzCloud
             } else {

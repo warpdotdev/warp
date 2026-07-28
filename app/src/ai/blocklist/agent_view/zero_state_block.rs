@@ -49,9 +49,9 @@ use crate::terminal::{self, TerminalModel, prompt};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
-const OZ_UPDATES_SECTION_HEADER: &str = "What's new in Oz";
+const OZ_UPDATES_SECTION_HEADER: &str = "Latest updates";
 
-// The maximum number of Oz updates from the changelog rendered in-line in the 'What's new in Oz section'.
+// The maximum number of Warp Agent updates from the changelog rendered in-line in the 'Latest updates' section.
 const MAX_OZ_UPDATE_COUNT: usize = 4;
 
 const MAX_RECENT_CONVERSATION_COUNT: usize = 3;
@@ -401,7 +401,7 @@ impl View for AgentViewZeroStateBlock {
 
         let header_props = if self.origin.is_cloud_agent() {
             HeaderProps {
-                title: "New Oz cloud agent conversation".into(),
+                title: "New cloud agent conversation".into(),
                 description: AgentViewDescription::CloudModeWithDocsLink,
                 icon: Icon::OzCloud,
             }
@@ -417,7 +417,7 @@ impl View for AgentViewZeroStateBlock {
             }
 
             HeaderProps {
-                title: "New Oz agent conversation".into(),
+                title: "New Warp Agent conversation".into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
                 icon: Icon::Oz,
             }

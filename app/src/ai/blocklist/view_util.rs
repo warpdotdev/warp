@@ -32,7 +32,7 @@ pub const OUT_OF_CREDITS_SUBSCRIBE_LABEL: &str = "Subscribe";
 pub static ATTACH_AS_AGENT_MODE_CONTEXT_TEXT: LazyLock<&'static str> =
     LazyLock::new(|| "Attach as agent context");
 
-/// Label we use for the the command palette action to create a new local Oz agent pane.
+/// Label we use for the the command palette action to create a new local Warp Agent pane.
 pub static NEW_AGENT_PANE_LABEL: LazyLock<&'static str> = LazyLock::new(|| "New Agent Pane");
 
 /// Claude/Anthropic brand color (official brand orange #D97757).
