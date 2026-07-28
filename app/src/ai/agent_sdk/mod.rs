@@ -6,6 +6,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
@@ -906,22 +907,45 @@ impl AgentDriverRunner {
             })
             .await?;
 
-        let credentials = match Self::fetch_task_git_credentials(task_id_str, ai_client).await {
-            Ok(credentials) => credentials,
-            Err(err)
-                if err
-                    .downcast_ref::<IsolationPlatformError>()
-                    .is_some_and(|err| {
-                        matches!(err, IsolationPlatformError::NoIsolationPlatformDetected)
-                    }) =>
-            {
-                log::debug!("Skipping git credentials bootstrap: {err}");
-                return Ok(());
-            }
-            Err(err) => {
-                return Err(AgentDriverError::SkillResolutionFailed(format!(
-                    "Failed to fetch git credentials before skill resolution: {err:#}"
-                )));
+        // Retry the credential fetch to handle transient failures (e.g. a race
+        // condition where the task is not yet fully "in progress" on the server
+        // when the worker first contacts it).
+        const GIT_CRED_BOOTSTRAP_RETRY_DELAYS: [Duration; 3] = [
+            Duration::from_secs(2),
+            Duration::from_secs(4),
+            Duration::from_secs(8),
+        ];
+        let mut attempt = 0usize;
+        let credentials = loop {
+            let result =
+                Self::fetch_task_git_credentials(task_id_str.clone(), ai_client.clone()).await;
+            match result {
+                Ok(creds) => break creds,
+                Err(err)
+                    if err
+                        .downcast_ref::<IsolationPlatformError>()
+                        .is_some_and(|e| {
+                            matches!(e, IsolationPlatformError::NoIsolationPlatformDetected)
+                        }) =>
+                {
+                    log::debug!("Skipping git credentials bootstrap: {err}");
+                    return Ok(());
+                }
+                Err(err) if attempt < GIT_CRED_BOOTSTRAP_RETRY_DELAYS.len() => {
+                    let delay = GIT_CRED_BOOTSTRAP_RETRY_DELAYS[attempt];
+                    log::warn!(
+                        "Git credentials bootstrap failed (attempt {}): {err:#}; retrying in {}s",
+                        attempt + 1,
+                        delay.as_secs()
+                    );
+                    warpui::r#async::Timer::after(delay).await;
+                    attempt += 1;
+                }
+                Err(err) => {
+                    return Err(AgentDriverError::SkillResolutionFailed(format!(
+                        "Failed to fetch git credentials before skill resolution: {err:#}"
+                    )));
+                }
             }
         };
         if credentials.is_empty() {
