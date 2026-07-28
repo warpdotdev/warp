@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use ai::project_context::model::{
+    ProjectContextModel, ProjectContextModelEvent, ProjectRulesResult,
+};
 use warp::tui_export::{
     ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
     SkillManager, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
@@ -145,6 +147,21 @@ impl TuiView for TuiZeroStateView {
         )
         .finish();
 
+        // Compute project context once — find_applicable_project_rules walks the
+        // directory tree and clones rule file contents, so resolving it once
+        // avoids a redundant allocation on every zero-state re-render (pwd change,
+        // changelog load, MCP update, PathIndexed).
+        let (path_header_text, project_rules) = match cwd.as_deref() {
+            Some(cwd) => {
+                let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
+                let rules =
+                    ProjectContextModel::as_ref(ctx).find_applicable_project_rules(&cwd_path);
+                let header_text = project_section_header_text(cwd, rules.as_ref());
+                (Some(header_text), Some(rules))
+            }
+            None => (None, None),
+        };
+
         // Title, version, and changelog — constrained to LEFT_COLUMN_COLS so changelog
         // bullets (which lack `.truncate()`) do not wrap against the full terminal width.
         let constrained_top = TuiConstrainedBox::new(render_top_section(&builder, ctx).finish())
@@ -154,19 +171,22 @@ impl TuiView for TuiZeroStateView {
 
         // Project context body (rules / skills / placeholder) and MCP — also constrained
         // to LEFT_COLUMN_COLS, keeping those rows stable.
-        let constrained_bottom =
-            TuiConstrainedBox::new(render_bottom_section(cwd.as_deref(), &builder, ctx).finish())
-                .with_min_cols(LEFT_COLUMN_COLS)
-                .with_max_cols(LEFT_COLUMN_COLS)
-                .finish();
+        // Pass the pre-computed rules so find_applicable_project_rules is not called twice.
+        let rules_ref = project_rules.flatten();
+        let constrained_bottom = TuiConstrainedBox::new(
+            render_bottom_section(cwd.as_deref(), rules_ref.as_ref(), &builder, ctx).finish(),
+        )
+        .with_min_cols(LEFT_COLUMN_COLS)
+        .with_max_cols(LEFT_COLUMN_COLS)
+        .finish();
 
         // The project path header lives *outside* the 48-column constrained boxes so it
         // can expand to the full available terminal width. Give it a blank-row separator
         // from the top section and place it directly above the constrained bottom section.
         // Only truncate the path when the terminal is genuinely too narrow to fit it.
-        let overlay = if let Some(cwd) = cwd.as_deref() {
+        let overlay = if let Some(path_header_text) = path_header_text {
             let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
-            let path_header = TuiText::new(project_section_header_text(cwd, ctx))
+            let path_header = TuiText::new(path_header_text)
                 .with_style(header_style)
                 .truncate()
                 .finish();
@@ -233,10 +253,18 @@ fn render_top_section(builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
 ///
 /// The project path *header* is intentionally omitted here — it lives outside the constrained
 /// box so it can expand to the full available terminal width (see [`TuiZeroStateView::render`]).
-fn render_bottom_section(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
+///
+/// `rules` must be the pre-computed [`ProjectRulesResult`] for `cwd`, resolved once in the
+/// caller to avoid a duplicate upward directory walk.
+fn render_bottom_section(
+    cwd: Option<&str>,
+    rules: Option<&ProjectRulesResult>,
+    builder: &TuiUiBuilder,
+    app: &AppContext,
+) -> TuiFlex {
     let column = TuiFlex::column();
     let column = if let Some(cwd) = cwd {
-        render_project_context_body(cwd, column, builder, app)
+        render_project_context_body(cwd, rules, column, builder, app)
     } else {
         column
     };
@@ -245,15 +273,14 @@ fn render_bottom_section(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppCon
 
 /// Returns the abbreviated path text displayed as the project section header.
 ///
-/// Uses the project root detected by [`ProjectContextModel`] when available, falling back
-/// to the raw `cwd` string. This is the same text previously embedded inside the
-/// 48-column constrained box; it is now computed separately so the caller can render it
-/// outside that box.
-fn project_section_header_text(cwd: &str, app: &AppContext) -> String {
-    let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
-    let rules = ProjectContextModel::as_ref(app).find_applicable_project_rules(&cwd_path);
+/// Uses the project root from `rules` when available, falling back to the raw `cwd` string.
+/// This is the same text previously embedded inside the 48-column constrained box; it is now
+/// computed separately so the caller can render it outside that box.
+///
+/// `rules` must already be resolved by the caller (via [`ProjectContextModel`]) so the
+/// upward directory walk is not repeated for the project context body.
+fn project_section_header_text(cwd: &str, rules: Option<&ProjectRulesResult>) -> String {
     let header = rules
-        .as_ref()
         .map(|rules| rules.root_path.display_path())
         .unwrap_or_else(|| cwd.to_owned());
     abbreviate_home_prefix(&header)
@@ -388,8 +415,12 @@ fn render_version_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiE
 /// The project path *header* is intentionally omitted — it is rendered at the outer
 /// level outside the constrained box so it can use the full terminal width (see
 /// [`TuiZeroStateView::render`] and [`project_section_header_text`]).
+///
+/// `rules` must be the pre-computed [`ProjectRulesResult`] for `cwd`, resolved once in the
+/// caller to avoid a duplicate upward directory walk.
 fn render_project_context_body(
     cwd: &str,
+    rules: Option<&ProjectRulesResult>,
     mut column: TuiFlex,
     builder: &TuiUiBuilder,
     app: &AppContext,
@@ -397,13 +428,10 @@ fn render_project_context_body(
     let muted = builder.muted_text_style();
     let check = builder.success_glyph_style();
 
-    let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
-    let rules = ProjectContextModel::as_ref(app).find_applicable_project_rules(&cwd_path);
-
-    // Rule files that actively apply to the cwd, deduplicated by file name
-    // (nested roots can contribute rules with the same name).
+    // Use the pre-computed rules from the render() call — find_applicable_project_rules
+    // is not called again here.
     let mut rule_files: Vec<String> = Vec::new();
-    if let Some(rules) = &rules {
+    if let Some(rules) = rules {
         for rule in &rules.active_rules {
             if let Some(name) = rule.path.file_name()
                 && !rule_files.iter().any(|file| file == name)
@@ -413,6 +441,7 @@ fn render_project_context_body(
         }
     }
 
+    let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
     let project_skill_count = SkillManager::as_ref(app)
         .get_skills_for_working_directory(Some(&cwd_path), app)
         .iter()
