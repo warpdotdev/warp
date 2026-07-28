@@ -342,6 +342,11 @@ pub(crate) enum TuiInlineMenuAccepted {
 /// Type alias for mouse-interaction callbacks stored in the element tree.
 type InlineMenuAcceptFn = dyn Fn(usize, &mut TuiEventContext<'_>, &AppContext);
 type InlineMenuScrollFn = dyn Fn(isize, &mut TuiEventContext<'_>, &AppContext);
+fn reset_hover_states(states: &RefCell<Vec<MouseStateHandle>>) {
+    for state in states.borrow().iter() {
+        state.lock().unwrap().reset_hover_state();
+    }
+}
 
 /// Type-erased operations shared by TUI inline-menu model handles.
 pub(crate) trait TuiInlineMenuHandle {
@@ -387,10 +392,6 @@ pub(crate) struct TuiInlineMenu {
     /// row count. Shared across `Clone`s so both the session view and the
     /// input view see the same hover/click state.
     item_mouse_states: Rc<RefCell<Vec<MouseStateHandle>>>,
-    /// Row titles from the last-rendered snapshot. Compared in the layout
-    /// path to detect row-set changes (filtering, reloads) that would leave
-    /// stale hover bold on a row that now holds different content.
-    last_row_titles: Rc<RefCell<Vec<String>>>,
 }
 
 impl TuiInlineMenu {
@@ -399,7 +400,6 @@ impl TuiInlineMenu {
         Self {
             handle: Rc::new(handle),
             item_mouse_states: Rc::new(RefCell::new(Vec::new())),
-            last_row_titles: Rc::new(RefCell::new(Vec::new())),
         }
     }
     pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
@@ -440,7 +440,6 @@ impl TuiInlineMenu {
                 builder: TuiUiBuilder::from_app(ctx),
                 content: None,
                 item_mouse_states: Rc::clone(&self.item_mouse_states),
-                last_row_titles: Rc::clone(&self.last_row_titles),
                 on_accept: Some(on_accept),
                 on_scroll: Some(on_scroll),
             }
@@ -474,26 +473,15 @@ impl TuiInlineMenu {
 
     pub(crate) fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
         let result = self.handle.accept(ctx);
-        // Mirror dismiss(): clear hover state when the accept closes the menu
-        // so a stationary pointer does not leave a stale bold row the next time
-        // the menu reopens with the same title list.
         if result.is_some() {
-            for state in self.item_mouse_states.borrow().iter() {
-                state.lock().unwrap().reset_hover_state();
-            }
-            self.last_row_titles.borrow_mut().clear();
+            reset_hover_states(&self.item_mouse_states);
         }
         result
     }
 
     pub(crate) fn dismiss(&self, ctx: &mut AppContext) {
         self.handle.dismiss(ctx);
-        // Clear hover states immediately so no row stays bold after the menu
-        // closes and to ensure a clean state on the next open.
-        for state in self.item_mouse_states.borrow().iter() {
-            state.lock().unwrap().reset_hover_state();
-        }
-        self.last_row_titles.borrow_mut().clear();
+        reset_hover_states(&self.item_mouse_states);
     }
 
     fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
@@ -758,7 +746,6 @@ pub(crate) fn render_inline_menu(
         builder: builder.clone(),
         content: None,
         item_mouse_states: Rc::new(RefCell::new(Vec::new())),
-        last_row_titles: Rc::new(RefCell::new(Vec::new())),
         on_accept: None,
         on_scroll: None,
     }
@@ -771,9 +758,6 @@ struct TuiInlineMenuElement {
     content: Option<Box<dyn TuiElement>>,
     /// Retained per-row mouse handles shared with the owning `TuiInlineMenu`.
     item_mouse_states: Rc<RefCell<Vec<MouseStateHandle>>>,
-    /// Row titles from the last-rendered snapshot, shared with `TuiInlineMenu`
-    /// so row-set changes are detected across frames.
-    last_row_titles: Rc<RefCell<Vec<String>>>,
     /// Called with the absolute snapshot index when a row is clicked.
     on_accept: Option<Rc<InlineMenuAcceptFn>>,
     /// Called with the scroll-wheel row delta.
@@ -787,25 +771,6 @@ impl TuiElement for TuiInlineMenuElement {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiSize {
-        // Detect row-set changes (filtering, reloads): compare snapshot row
-        // titles against the last-seen set. When they differ, clear all stale
-        // hover state so a stationary pointer does not bold a different row
-        // whose content has changed but whose index is reused.
-        // Compare in-place to avoid allocating a fresh Vec<String> on every
-        // layout pass; only allocate when the title set actually changed.
-        {
-            let mut last_titles = self.last_row_titles.borrow_mut();
-            if last_titles
-                .iter()
-                .ne(self.snapshot.rows.iter().map(|r| &r.title))
-            {
-                for state in self.item_mouse_states.borrow().iter() {
-                    state.lock().unwrap().reset_hover_state();
-                }
-                *last_titles = self.snapshot.rows.iter().map(|r| r.title.clone()).collect();
-            }
-        }
-        // Grow mouse-state handles to match the current snapshot's row count.
         {
             let mut states = self.item_mouse_states.borrow_mut();
             while states.len() < self.snapshot.rows.len() {
@@ -874,11 +839,7 @@ impl TuiElement for TuiInlineMenuElement {
         {
             // Positive wheel delta scrolls toward the start of the list,
             // matching `option_selector` and the transcript scrollable.
-            // Clear stale hover states so rows that scroll out of view don't
-            // stay bold under a stationary pointer.
-            for state in self.item_mouse_states.borrow().iter() {
-                state.lock().unwrap().reset_hover_state();
-            }
+            reset_hover_states(&self.item_mouse_states);
             on_scroll(-delta.1, event_ctx, app);
             return true;
         }

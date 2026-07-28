@@ -246,12 +246,11 @@ impl TuiMcpMenuModel {
         }
 
         let preferred_index = rows.iter().position(|row| row.action.is_some());
-        let TuiMcpMenuState::Open { list } = &mut self.state else {
-            return;
-        };
+        let mut list = TuiInlineMenuListState::default();
         list.replace_rows(rows, false, preferred_index, MAX_VISIBLE_ROWS, |row| {
             row.action.is_some()
         });
+        self.state = TuiMcpMenuState::Open { list };
         ctx.emit(TuiMcpMenuEvent::Updated);
     }
 }

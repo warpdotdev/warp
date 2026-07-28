@@ -3537,7 +3537,6 @@ impl TuiTerminalSessionView {
         self.input_view.update(ctx, |input, ctx| {
             input.route_inline_menu_acceptance(accepted, ctx);
         });
-        ctx.notify();
     }
 
     fn select_tui_slash_command(&mut self, command: &StaticCommand, ctx: &mut ViewContext<Self>) {

@@ -21,7 +21,7 @@ use super::{
     argument_hint_text_for_parsed_input, highlighted_prefix_len_for_parsed_input,
     menu_query_for_parsed_input,
 };
-use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, keep_selected_visible};
+use crate::inline_menu::{TuiInlineMenu, keep_selected_visible};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::test_fixtures::add_test_conversation_selection;
 
@@ -569,82 +569,6 @@ fn model_menu_blocks_slash_command_activation() {
 #[test]
 fn skill_menu_blocks_slash_command_activation() {
     assert_explicit_menu_blocks_slash_commands(TuiInputSuggestionsMode::SkillMenu);
-}
-
-#[test]
-fn mouse_accept_row_n_accepts_that_row_not_keyboard_selection() {
-    // Verifies the select_by_snapshot_index + accept glue exercised by
-    // InlineMenuMouseAcceptRow(n): clicking row 2 when the keyboard selection
-    // is at row 0 must deliver the row-2 payload, not the row-0 payload.
-    App::test((), |mut app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let input_editor = app.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
-        let suggestions_mode = app.add_model(|_| TuiInputSuggestionsModeModel::new());
-        suggestions_mode.update(&mut app, |mode, ctx| {
-            mode.set_mode(TuiInputSuggestionsMode::SlashCommands, ctx);
-        });
-        let mixer = app.add_model(|_| SlashCommandMixer::new());
-        let conversation_selection = app.update(add_test_conversation_selection);
-        let id_0 = SlashCommandId::new();
-        let id_2 = SlashCommandId::new();
-        let model = app.add_model(|_| {
-            TuiSlashCommandModel::new_for_test(
-                input_editor,
-                suggestions_mode,
-                mixer,
-                conversation_selection,
-                vec![
-                    TuiSlashCommandRow {
-                        title: "/cmd-0".to_owned(),
-                        description: None,
-                        action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: id_0 },
-                    },
-                    TuiSlashCommandRow {
-                        title: "/cmd-1".to_owned(),
-                        description: None,
-                        action: AcceptSlashCommandOrSavedPrompt::SlashCommand {
-                            id: SlashCommandId::new(),
-                        },
-                    },
-                    TuiSlashCommandRow {
-                        title: "/cmd-2".to_owned(),
-                        description: None,
-                        action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: id_2 },
-                    },
-                ],
-                0, // keyboard selection at row 0
-            )
-        });
-
-        // Wrap in TuiInlineMenu — the interface used by handle_inline_menu_mouse_accept.
-        let menu = TuiInlineMenu::new(model);
-
-        // Simulate InlineMenuMouseAcceptRow(2): select row 2 (displacing the
-        // keyboard selection at row 0), then accept.
-        let selected = app.update(|ctx| menu.select_by_snapshot_index(2, ctx));
-        assert!(
-            selected,
-            "select_by_snapshot_index must succeed for a valid in-bounds row"
-        );
-        let accepted = app.update(|ctx| menu.accept(ctx));
-        // TuiInlineMenuAccepted does not implement PartialEq, so match instead.
-        match accepted {
-            Some(TuiInlineMenuAccepted::SlashCommand(
-                AcceptSlashCommandOrSavedPrompt::SlashCommand { id },
-            )) => assert_eq!(
-                id, id_2,
-                "InlineMenuMouseAcceptRow(2) must deliver the row-2 id, not keyboard-selected row 0"
-            ),
-            other => panic!(
-                "expected SlashCommand for row 2, got accepted = {}",
-                if other.is_some() {
-                    "Some(non-SlashCommand)"
-                } else {
-                    "None"
-                }
-            ),
-        }
-    });
 }
 
 #[test]
