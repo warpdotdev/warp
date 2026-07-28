@@ -424,6 +424,22 @@ pub enum DropResult {
     /// `target` and then re-invoke `CrossWindowTabDrag::finalize(ctx)` to
     /// close the preview and clean up source state.
     DropInto { target: AttachTarget },
+    /// A whole group was transferred out of a source that has other tabs.
+    /// The caller should unsubscribe and remove every listed member.
+    ///
+    /// Members are carried as pane-group identities rather than an index
+    /// range: the source tab list can shift while the drag is in flight, and
+    /// a stale range removes bystanders that are still in bounds.
+    RemoveSourceGroup { member_pane_group_ids: Vec<EntityId> },
+    /// As [`Self::RemoveSourceGroup`], plus close the now-unused preview.
+    RemoveSourceGroupAndClosePreview {
+        member_pane_group_ids: Vec<EntityId>,
+        preview_window_id: WindowId,
+    },
+    /// The dragged group was every tab in the source window, so the source has
+    /// nothing left. The caller should unsubscribe the members and close
+    /// itself, the same way a single-tab source does.
+    CloseSourceWindowForGroup { member_pane_group_ids: Vec<EntityId> },
 }
 
 impl Entity for CrossWindowTabDrag {
@@ -1453,8 +1469,24 @@ impl CrossWindowTabDrag {
                 );
                 self.register_pending_source_close(*preview_window_id);
             }
+            DropResult::CloseSourceWindowForGroup { .. } => {
+                log::info!(
+                    "tab_drag: register_pending_source_close source_wid={} (CloseSourceWindowForGroup)",
+                    drag.source_window_id
+                );
+                self.register_pending_source_close(drag.source_window_id);
+            }
+            DropResult::RemoveSourceGroupAndClosePreview {
+                preview_window_id, ..
+            } => {
+                log::info!(
+                    "tab_drag: register_pending_source_close preview_wid={preview_window_id} (RemoveSourceGroupAndClosePreview)"
+                );
+                self.register_pending_source_close(*preview_window_id);
+            }
             DropResult::FocusSelf
             | DropResult::RemoveSourceTab { .. }
+            | DropResult::RemoveSourceGroup { .. }
             | DropResult::NoOp
             | DropResult::DropInto { .. } => {}
         }

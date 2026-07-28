@@ -976,6 +976,23 @@ pub struct TransferredTab {
     pub is_right_panel_maximized: bool,
     pub draggable_state: DraggableState,
 }
+
+/// Snapshot of a whole tab group moving between windows.
+///
+/// Built by [`Workspace::get_tab_group_transfer_info_for_attach`]. The
+/// `TabGroupId` is preserved rather than re-minted: `Workspace::tab_groups` is
+/// per-window and the id is a v4 UUID, so carrying it across keeps the
+/// group-keyed drag geometry stable for the whole gesture and makes putting
+/// the group back symmetric.
+pub struct TransferredTabGroup {
+    /// Group metadata: name, colour, collapsed and pinned state.
+    pub group: TabGroup,
+    /// Members in tab-bar order. Non-empty by construction.
+    pub tabs: Vec<TransferredTab>,
+    /// Pane-group identities captured at drag start, used to re-derive the
+    /// source tabs by identity at drop time.
+    pub member_pane_group_ids: Vec<EntityId>,
+}
 #[cfg(not(target_family = "wasm"))]
 struct ThirdPartyLocalContinuationLaunch {
     command: String,
@@ -27665,6 +27682,81 @@ impl Workspace {
         self.tab_transfer_info_at_index(index, ctx)
     }
 
+    /// Snapshots a whole tab group for transfer to another window.
+    ///
+    /// Read-only: mutates nothing, so a `None` here is a clean bail with no
+    /// state to unwind. Returns `None` when the group has no members, when a
+    /// member's transfer info cannot be built, or when the run is not
+    /// contiguous - `group_member_index_range` returns the span between the
+    /// first and last match and only *assumes* contiguity, so a span-based
+    /// capture on a broken run would pull in bystanders.
+    pub fn get_tab_group_transfer_info_for_attach(
+        &self,
+        group_id: TabGroupId,
+        ctx: &AppContext,
+    ) -> Option<TransferredTabGroup> {
+        let group = self.tab_groups.get(&group_id)?.clone();
+        let indices: Vec<usize> = group_member_indices(&self.tabs, group_id).collect();
+        let (&first, &last) = (indices.first()?, indices.last()?);
+        if last - first + 1 != indices.len() {
+            log::warn!(
+                "tab_drag: refusing to drag group {group_id:?} - run is not contiguous                  (first={first} last={last} members={})",
+                indices.len()
+            );
+            return None;
+        }
+
+        let mut tabs = Vec::with_capacity(indices.len());
+        let mut member_pane_group_ids = Vec::with_capacity(indices.len());
+        for &index in &indices {
+            tabs.push(self.tab_transfer_info_at_index(index, ctx)?);
+            member_pane_group_ids.push(self.tabs.get(index)?.pane_group.id());
+        }
+
+        Some(TransferredTabGroup {
+            group,
+            tabs,
+            member_pane_group_ids,
+        })
+    }
+
+    /// Removes the members of a transferred group from this (source) window,
+    /// resolved by pane-group identity.
+    ///
+    /// Goes through `remove_tab_without_undo` per member rather than draining
+    /// the vector directly, so each removal still clears the vertical-tabs
+    /// detail sidecar, prunes the MRU order, and prunes the group once its
+    /// last member leaves. Removes in descending index order so earlier
+    /// indices stay valid.
+    ///
+    /// When the members are everything this window has left, closes the window
+    /// the content-transfer way instead: `remove_tab` treats the last tab as
+    /// "close the window" using a bare close, which leaves pane detach
+    /// unsuppressed and would tear down pane groups that now live elsewhere.
+    fn remove_transferred_source_group(
+        &mut self,
+        member_pane_group_ids: &[EntityId],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let indices = self.tab_indices_for_pane_group_ids(member_pane_group_ids);
+        if indices.is_empty() {
+            log::warn!(
+                "tab_drag: transferred group members are already gone from the source                  (skipping remove)"
+            );
+            return;
+        }
+        for &index in &indices {
+            ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
+        }
+        if indices.len() >= self.tabs.len() {
+            self.close_window_for_content_transfer(ctx);
+            return;
+        }
+        for &index in indices.iter().rev() {
+            self.remove_tab_without_undo(index, ctx);
+        }
+    }
+
     /// Prepares this workspace for having a pane group transferred out by
     /// suppressing pane-detach on close and unsubscribing from the view.
     /// The suppress flag is **not** auto-restored; callers that keep the
@@ -28555,6 +28647,27 @@ impl Workspace {
                 // until `on_window_closed` fires.
                 ctx.windows()
                     .close_window(preview_window_id, TerminationMode::ContentTransferred);
+            }
+            DropResult::RemoveSourceGroup {
+                member_pane_group_ids,
+            } => {
+                self.remove_transferred_source_group(&member_pane_group_ids, ctx);
+            }
+            DropResult::RemoveSourceGroupAndClosePreview {
+                member_pane_group_ids,
+                preview_window_id,
+            } => {
+                self.remove_transferred_source_group(&member_pane_group_ids, ctx);
+                ctx.windows()
+                    .close_window(preview_window_id, TerminationMode::ContentTransferred);
+            }
+            DropResult::CloseSourceWindowForGroup {
+                member_pane_group_ids,
+            } => {
+                for index in self.tab_indices_for_pane_group_ids(&member_pane_group_ids) {
+                    ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
+                }
+                self.close_window_for_content_transfer(ctx);
             }
             DropResult::DropInto { target } => {
                 // Drop landed on a tab bar that hadn't yet triggered a
