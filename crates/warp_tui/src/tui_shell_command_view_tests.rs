@@ -402,6 +402,70 @@ fn escape_while_editing_exits_editor_without_cancelling() {
 }
 
 #[test]
+fn second_escape_after_editor_exit_cancels_tool_call() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        app.update(crate::tui_permission_prompt::init);
+        app.update(crate::option_selector::init);
+        let action = command_action("action-1", "echo original");
+        let view = add_shell_view(
+            &mut app,
+            action.clone(),
+            Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+        );
+        let (action_model, conversation_id, prompt) = app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            (
+                view.action_model.clone(),
+                view.conversation_id,
+                view.permission_prompt.clone(),
+            )
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+
+        // Enter command body editing mode.
+        prompt.update(&mut app, |prompt, ctx| {
+            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
+        });
+        app.read(|ctx| {
+            assert!(view.as_ref(ctx).command_editor.as_ref(ctx).is_focused());
+        });
+
+        // First Esc: exits the editor and returns focus to the option list.
+        present_shell_view(&mut app, &view);
+        assert!(dispatch_focused_key(&mut app, &view, "escape"));
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            assert!(!view.command_editor.as_ref(ctx).is_focused());
+            // Tool call has NOT been cancelled yet.
+            assert!(
+                view.action_model
+                    .as_ref(ctx)
+                    .get_action_result(&view.action.id)
+                    .is_none()
+            );
+        });
+
+        // Second Esc: the list now owns focus and PERMISSION_PROMPT_ACTIVE is
+        // set, so CancelOrBack fires and the tool call is rejected.
+        assert!(dispatch_focused_key(&mut app, &view, "escape"));
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            // The action should now have a terminal result (cancelled).
+            assert!(
+                view.action_model
+                    .as_ref(ctx)
+                    .get_action_result(&view.action.id)
+                    .is_some(),
+                "second Esc should cancel the tool call"
+            );
+        });
+    });
+}
+
+#[test]
 fn manual_collapse_override_wins_over_auto_expansion() {
     let mut state = ShellCommandViewState::new_collapsed();
 

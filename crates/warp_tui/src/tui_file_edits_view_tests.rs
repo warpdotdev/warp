@@ -4,15 +4,24 @@ use ai::diff_validation::{DiffDelta, DiffType};
 use futures::channel::oneshot;
 use warp::appearance::Appearance;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
-use warp::tui_export::FileDiff;
+use warp::tui_export::{
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId, FileDiff, TaskId,
+    queue_tui_permission_action,
+};
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
-use warpui::App;
+use warpui::platform::WindowStyle;
+use warpui::{AddWindowOptions, App, WindowInvalidation};
+use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::keymap::Keystroke;
+use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::{TuiView, ViewHandle};
 
 use super::{
-    SectionKey, SectionStates, ToolCallDisplayState, deltas_for, file_edit_header_label,
-    verb_and_name,
+    FILE_EDITS_PERMISSION_ACTIVE, SectionKey, SectionStates, ToolCallDisplayState,
+    TuiFileEditsView, deltas_for, file_edit_header_label, verb_and_name,
 };
+use crate::test_fixtures::{TestHostView, add_test_action_model};
 
 fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
     DiffDelta {
@@ -269,4 +278,170 @@ fn deltas_cover_every_diff_op() {
         }),
         vec![d, delta(4..5, "y\n")]
     );
+}
+
+/// Renders the blocked file-edits permission card and returns the presenter
+/// frame so callers can inspect rendered lines and cell colors.
+fn present_file_edits_view(
+    app: &mut App,
+    view: &ViewHandle<TuiFileEditsView>,
+) -> warpui_core::presenter::tui::TuiFrame {
+    let mut presenter = TuiPresenter::new();
+    app.update(|ctx| {
+        let view_ref = view.as_ref(ctx);
+        let prompt = &view_ref.permission_prompt;
+        let mut invalidation = WindowInvalidation::default();
+        invalidation.updated.insert(view.id());
+        invalidation.updated.insert(prompt.id());
+        invalidation
+            .updated
+            .extend(prompt.as_ref(ctx).child_view_ids(ctx));
+        presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+        presenter.present(ctx, view, TuiRect::new(0, 0, 80, 20))
+    })
+}
+
+/// Dispatches a keystroke through the responder chain starting from the
+/// currently focused view in the file-edits view's window.
+fn dispatch_focused_key(app: &mut App, view: &ViewHandle<TuiFileEditsView>, key: &str) -> bool {
+    present_file_edits_view(app, view);
+    let (window_id, responder_chain) = app.read(|ctx| {
+        let window_id = view.window_id(ctx);
+        let focused = ctx
+            .focused_view_id(window_id)
+            .expect("file-edits permission card has a focused view");
+        (window_id, ctx.view_ancestors(window_id, focused))
+    });
+    app.dispatch_keystroke(
+        window_id,
+        &responder_chain,
+        &Keystroke::parse(key).expect("valid keystroke"),
+        false,
+    )
+    .expect("keystroke dispatch succeeds")
+}
+
+/// Creates a `TuiFileEditsView` for the given `action_id` inside a test
+/// TUI window and returns its handle.
+fn add_file_edits_view(app: &mut App, action_id: AIAgentActionId) -> ViewHandle<TuiFileEditsView> {
+    let action_model = add_test_action_model(app);
+    app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        let action_id = action_id.clone();
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiFileEditsView::new(
+                action_id,
+                AIConversationId::new(),
+                Vec::new(),
+                &action_model,
+                ctx,
+            )
+        })
+    })
+}
+
+/// Builds a `RequestFileEdits` agent action for the given action id.
+fn file_edits_action(id: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::RequestFileEdits {
+            file_edits: Vec::new(),
+            title: None,
+        },
+        requires_result: true,
+    }
+}
+
+/// The blocked file-edits card renders the permission header, the
+/// `e to expand/collapse` affordance, and the yes/no/Other options.
+/// This mirrors `blocked_command_card_matches_permission_layout` for
+/// `TuiShellCommandView` and covers AC 3 (header affordance).
+#[test]
+fn blocked_file_edits_card_shows_expand_hint_and_options() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        let action_id = AIAgentActionId::from("file-edits-1".to_owned());
+        let view = add_file_edits_view(&mut app, action_id.clone());
+        let (action_model, conversation_id) = app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            (view.action_model.clone(), view.conversation_id)
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(
+                model,
+                file_edits_action("file-edits-1"),
+                conversation_id,
+                ctx,
+            );
+        });
+
+        let frame = present_file_edits_view(&mut app, &view);
+        let lines = frame.buffer.to_lines();
+
+        let has_header = lines
+            .iter()
+            .any(|l| l.contains("Is it OK if I make these file edits?"));
+        assert!(has_header, "blocked card header missing in {lines:?}");
+
+        // AC 3: the header row carries the `e to expand/collapse` affordance.
+        let has_expand_hint = lines.iter().any(|l| l.contains("e to expand/collapse"));
+        assert!(
+            has_expand_hint,
+            "e-to-expand-collapse hint missing in {lines:?}"
+        );
+
+        let has_yes_option = lines.iter().any(|l| l.contains("yes"));
+        assert!(has_yes_option, "yes option missing in {lines:?}");
+    });
+}
+
+/// Pressing `e` while the file-edits permission card's option list is focused
+/// dispatches `ToggleExpandAll` through the full responder chain, including
+/// `TuiFileEditsView`. This covers AC 4 (keymap wiring end-to-end).
+#[test]
+fn e_key_dispatches_toggle_expand_all_on_blocked_card() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        app.update(crate::tui_permission_prompt::init);
+        app.update(crate::option_selector::init);
+        let action_id = AIAgentActionId::from("file-edits-2".to_owned());
+        let view = add_file_edits_view(&mut app, action_id.clone());
+        let (action_model, conversation_id) = app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            (view.action_model.clone(), view.conversation_id)
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(
+                model,
+                file_edits_action("file-edits-2"),
+                conversation_id,
+                ctx,
+            );
+        });
+
+        // `e` is only gated when FILE_EDITS_PERMISSION_ACTIVE is set, which
+        // requires the action to be blocked AND the list to be focused.
+        app.read(|ctx| {
+            let keymap_ctx = view.as_ref(ctx).keymap_context(ctx);
+            assert!(
+                keymap_ctx.set.contains(FILE_EDITS_PERMISSION_ACTIVE),
+                "FILE_EDITS_PERMISSION_ACTIVE not set — list not focused or action not blocked"
+            );
+        });
+
+        // Dispatch `e` through the focused view's responder chain. Because
+        // `TuiFileEditsView` is an ancestor and its context predicate is
+        // satisfied, the keystroke must be consumed and emit LayoutChanged.
+        assert!(
+            dispatch_focused_key(&mut app, &view, "e"),
+            "`e` should be consumed as ToggleExpandAll"
+        );
+    });
 }

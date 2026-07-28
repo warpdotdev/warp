@@ -257,9 +257,16 @@ impl TuiPermissionPrompt {
     /// Renders the context-sensitive interaction hints beneath the options.
     pub(crate) fn render_footer(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
+        // When the body editor owns focus, Esc exits the editor rather than
+        // cancelling the whole tool call — reflect that in the visible hint.
+        let esc_hint = if self.body_editor_is_focused(app) {
+            " to exit editor  "
+        } else {
+            " to cancel  "
+        };
         let mut spans = vec![
             ("Esc".to_owned(), builder.primary_text_style()),
-            (" to cancel  ".to_owned(), builder.muted_text_style()),
+            (esc_hint.to_owned(), builder.muted_text_style()),
         ];
         if self.body_editor.is_some() {
             spans.extend([

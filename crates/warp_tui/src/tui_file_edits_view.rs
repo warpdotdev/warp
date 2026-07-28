@@ -280,11 +280,17 @@ impl TuiFileEditsView {
         // the terminal result so the row doesn't stay pending. Successful
         // actions also update their header glyph from this event.
         ctx.subscribe_to_model(action_model, |me, _, event, ctx| {
-            if let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event
-                && *action_id == me.action_id
+            // Reset explicit toggle state as soon as the action leaves Blocked
+            // (ExecutingAction or FinishedAction) so the transcript chrome
+            // renders collapsed rather than showing stale explicit state during
+            // the executing window and after completion.
+            if event.action_id() == &me.action_id
+                && matches!(
+                    event,
+                    BlocklistAIActionEvent::ExecutingAction(_)
+                        | BlocklistAIActionEvent::FinishedAction { .. }
+                )
             {
-                // Reset explicit section toggle state so the transcript chrome
-                // renders collapsed (the non-blocked default) after accept.
                 me.section_states.reset_states();
                 ctx.notify();
             }
