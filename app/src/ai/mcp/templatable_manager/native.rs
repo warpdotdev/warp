@@ -410,6 +410,7 @@ impl TemplatableMCPServerManager {
             authorization_urls: Default::default(),
             cli_spawned_server_uuids: Default::default(),
             builtin_server_uuids: Default::default(),
+            builtin_server_token: Default::default(),
         };
 
         me.fetch_cloud_servers(ctx);
@@ -787,6 +788,7 @@ impl TemplatableMCPServerManager {
                 self.shutdown_server(installation_uuid, ctx);
             }
             self.builtin_server_uuids.remove(&installation_uuid);
+            self.builtin_server_token = None;
             return;
         }
 
@@ -805,11 +807,20 @@ impl TemplatableMCPServerManager {
             return;
         };
 
+        // Auth events cluster at startup (login completion, user refresh,
+        // token refresh) and usually carry the same credential. Respawning
+        // for each would open a redundant server-side MCP session per event,
+        // so only respawn when the effective bearer actually changed.
+        if is_active && self.builtin_server_token.as_deref() == Some(token.as_str()) {
+            return;
+        }
+
         if is_active {
             self.shutdown_server(installation_uuid, ctx);
         }
         log::info!("Spawning the built-in Factory MCP server");
         self.builtin_server_uuids.insert(installation_uuid);
+        self.builtin_server_token = Some(token.clone());
         self.spawn_ephemeral_server(builtin::factory_mcp_installation(&token), ctx);
     }
 
