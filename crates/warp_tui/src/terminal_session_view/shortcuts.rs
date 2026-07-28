@@ -1,36 +1,34 @@
 //! Stateless shortcuts projection for the shared read-only menu component.
 
 use warpui_core::AppContext;
-use warpui_core::elements::tui::{TuiElement, TuiFlex, TuiText};
 use warpui_core::keymap::Context;
 
 use super::state::{TuiShortcut, TuiTerminalSessionState};
-use crate::read_only_menu::{TuiReadOnlyMenu, TuiReadOnlyMenuSection};
+use crate::read_only_menu::{
+    TuiReadOnlyMenu, TuiReadOnlyMenuRow, TuiReadOnlyMenuSection, TuiReadOnlyMenuText,
+};
 use crate::tui_builder::TuiUiBuilder;
-
-fn render_entry(shortcut: &TuiShortcut, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
-    TuiText::from_spans([
+fn entry(shortcut: &TuiShortcut, builder: &TuiUiBuilder) -> TuiReadOnlyMenuText {
+    TuiReadOnlyMenuText::new([
         (format!("{} ", shortcut.key), builder.link_text_style()),
         (
             shortcut.description.to_owned(),
             builder.primary_text_style(),
         ),
     ])
-    .truncate()
-    .finish()
 }
 
-/// Renders the keyboard-shortcuts panel (opened by `?`).
+/// Builds the keyboard-shortcuts menu opened by `?`.
 ///
 /// The panel lists contextual keybindings grouped by section. Status
 /// information is intentionally absent here — it lives in the dedicated
 /// status menu opened by `/status`.
-pub(super) fn render(
+pub(super) fn menu(
     state: &TuiTerminalSessionState,
     context: &Context,
+    builder: &TuiUiBuilder,
     ctx: &AppContext,
-) -> Box<dyn TuiElement> {
-    let builder = TuiUiBuilder::from_app(ctx);
+) -> TuiReadOnlyMenu {
     let sections = state.shortcut_sections(context, ctx);
     let sections = sections
         .iter()
@@ -39,18 +37,18 @@ pub(super) fn render(
                 .shortcuts
                 .chunks(2)
                 .map(|shortcuts| {
-                    let mut row = TuiFlex::row();
-                    for shortcut in shortcuts {
-                        row = row.flex_child(render_entry(shortcut, &builder));
+                    let mut columns = shortcuts
+                        .iter()
+                        .map(|shortcut| entry(shortcut, builder))
+                        .collect::<Vec<_>>();
+                    if columns.len() == 1 {
+                        columns.push(TuiReadOnlyMenuText::empty());
                     }
-                    if shortcuts.len() == 1 {
-                        row = row.flex_child(TuiText::new("").finish());
-                    }
-                    row.finish()
+                    TuiReadOnlyMenuRow::new(columns)
                 })
                 .collect();
             TuiReadOnlyMenuSection::new(section.title, rows)
         })
         .collect();
-    TuiReadOnlyMenu::new(sections).render(&builder)
+    TuiReadOnlyMenu::new(sections)
 }

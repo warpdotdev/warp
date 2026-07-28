@@ -9,7 +9,7 @@ use std::cmp::{max, min};
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::selectable::{TuiSelectionHandle, row_glyphs, row_text};
+use super::selectable::{TuiSelectionHandle, row_glyphs, row_text, trim_trailing_whitespace};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
@@ -159,6 +159,15 @@ where
                 }
             }
         }
+        let selection_line_ends = self.trim_selection_line_ends.then(|| {
+            (0..visible_height)
+                .map(|row| {
+                    let mut glyphs = row_glyphs(&snapshot, row, size.width);
+                    trim_trailing_whitespace(&mut glyphs);
+                    glyphs.last().map(|glyph| glyph.end_col)
+                })
+                .collect::<Vec<_>>()
+        });
         *self.selection_snapshot.borrow_mut() = Some((resolved, snapshot));
         if !selection.validate_width(size.width) {
             return;
@@ -186,11 +195,21 @@ where
             } else {
                 0
             };
-            let end_col = if row == range.end.row {
+            let mut end_col = if row == range.end.row {
                 range.end.col
             } else {
                 size.width
             };
+            if let Some(selection_line_ends) = &selection_line_ends {
+                let row_in_view = row.saturating_sub(resolved.window.scroll_top);
+                end_col = end_col.min(
+                    selection_line_ends
+                        .get(row_in_view)
+                        .copied()
+                        .flatten()
+                        .unwrap_or_default(),
+                );
+            }
             if start_col < end_col {
                 selection_rects.push((
                     origin.offset(i32::from(start_col), i32::from(y)),
@@ -414,6 +433,7 @@ where
     origin: Option<TuiScreenPoint>,
     vertical_alignment: TuiViewportVerticalAlignment,
     selection_style: TuiStyle,
+    trim_selection_line_ends: bool,
     selection_snapshot: RefCell<Option<(TuiResolvedViewport, TuiBuffer)>>,
 }
 
@@ -432,8 +452,29 @@ where
             origin: None,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
             selection_style,
+            trim_selection_line_ends: false,
             selection_snapshot: RefCell::new(None),
         }
+    }
+
+    /// Prevents selection from extending through blank cells after row content.
+    pub fn with_trimmed_selection_line_ends(mut self) -> Self {
+        self.trim_selection_line_ends = true;
+        self
+    }
+
+    fn selection_snapshot_row_glyphs(
+        &self,
+        row: usize,
+        width: u16,
+    ) -> Option<Vec<super::TuiRowGlyph>> {
+        let snapshot = self.selection_snapshot.borrow();
+        let (resolved, buffer) = snapshot.as_ref()?;
+        let row_in_snapshot = row.checked_sub(resolved.window.scroll_top)?;
+        if row_in_snapshot >= usize::from(buffer.area.height) {
+            return None;
+        }
+        Some(row_glyphs(buffer, row_in_snapshot as u16, width))
     }
 
     pub fn with_vertical_alignment(
@@ -636,7 +677,7 @@ where
             }
             usize::try_from(position.y - content_top).ok()?
         };
-        Some(TuiGridPoint {
+        let mut point = TuiGridPoint {
             row: resolved
                 .window
                 .scroll_top
@@ -644,7 +685,19 @@ where
                 .min(resolved.content_height.saturating_sub(1)),
             col: u16::try_from(position.x.clamp(0, i32::from(size.width.saturating_sub(1))))
                 .unwrap_or_default(),
-        })
+        };
+        if self.trim_selection_line_ends {
+            let mut glyphs = self.selection_snapshot_row_glyphs(point.row, size.width)?;
+            trim_trailing_whitespace(&mut glyphs);
+            let content_end = glyphs.last()?.end_col;
+            if point.col >= content_end {
+                if !clamp_outside {
+                    return None;
+                }
+                point.col = content_end.saturating_sub(1);
+            }
+        }
+        Some(point)
     }
 
     /// Materializes selectable rows using the content's direct hook.
@@ -671,17 +724,17 @@ where
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> Vec<super::TuiRowGlyph> {
-        if let Some((resolved, snapshot)) = self.selection_snapshot.borrow().as_ref() {
-            let row_in_snapshot = row.saturating_sub(resolved.window.scroll_top);
-            if row >= resolved.window.scroll_top
-                && row_in_snapshot < usize::from(snapshot.area.height)
-            {
-                return row_glyphs(snapshot, row_in_snapshot as u16, width);
-            }
+        let mut glyphs = self
+            .selection_snapshot_row_glyphs(row, width)
+            .or_else(|| {
+                self.selection_rows(row..row.saturating_add(1), width, ctx, app)
+                    .map(|buffer| row_glyphs(&buffer, 0, width))
+            })
+            .unwrap_or_default();
+        if self.trim_selection_line_ends {
+            trim_trailing_whitespace(&mut glyphs);
         }
-        self.selection_rows(row..row.saturating_add(1), width, ctx, app)
-            .map(|buffer| row_glyphs(&buffer, 0, width))
-            .unwrap_or_default()
+        glyphs
     }
 
     /// Extracts selected text from current read-only content rows.

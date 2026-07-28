@@ -227,17 +227,14 @@ fn logout_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
-fn version_command_is_registered_only_for_tui_mode() {
-    assert!(
-        all_commands(settings::SettingsMode::Tui)
-            .iter()
-            .any(|command| command == &VERSION)
-    );
-    assert!(
-        !all_commands(settings::SettingsMode::Gui)
-            .iter()
-            .any(|command| command == &VERSION)
-    );
+fn version_command_is_not_registered() {
+    for settings_mode in [settings::SettingsMode::Gui, settings::SettingsMode::Tui] {
+        assert!(
+            all_commands(settings_mode)
+                .iter()
+                .all(|command| command.name != "/version")
+        );
+    }
 }
 
 #[test]

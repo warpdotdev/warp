@@ -65,7 +65,6 @@ pub enum SlashCommandKind {
     Theme,
     Exit,
     Logout,
-    Version,
     CreateEnvironment,
     CreateDockerSandbox,
     CreateNewProject,

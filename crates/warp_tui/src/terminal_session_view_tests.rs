@@ -1690,8 +1690,8 @@ fn status_slash_command_opens_dedicated_status_menu_via_shared_structure() {
         assert!(rendered.contains("Version"), "Version row:\n{rendered}");
         assert!(rendered.contains("Session"), "Session row:\n{rendered}");
         assert!(
-            rendered.contains("Session ID"),
-            "Session ID row:\n{rendered}"
+            rendered.contains("Conversation ID"),
+            "Conversation ID row:\n{rendered}"
         );
         assert!(
             rendered.contains("Working directory"),
@@ -1739,6 +1739,15 @@ fn status_slash_command_opens_dedicated_status_menu_via_shared_structure() {
     });
 }
 
+#[test]
+fn status_conversation_id_uses_the_selected_id_or_none() {
+    let conversation_id = AIConversationId::new();
+    assert_eq!(
+        super::format_status_conversation_id(Some(conversation_id)),
+        conversation_id.to_string()
+    );
+    assert_eq!(super::format_status_conversation_id(None), "None");
+}
 #[test]
 fn bootstrap_renders_starting_shell_above_input() {
     App::test((), |mut app| async move {
@@ -3603,31 +3612,7 @@ fn status_email_fallback_chain_covers_username_and_signed_in_arms() {
 }
 
 #[test]
-fn version_and_resume_shell_commands_use_shared_tui_launcher() {
-    assert_eq!(
-        super::version_shell_command(Channel::Stable),
-        "warp --version"
-    );
-    assert_eq!(
-        super::version_shell_command(Channel::Dev),
-        "warp-dev --version"
-    );
-    assert_eq!(
-        super::version_shell_command(Channel::Local),
-        "./script/run-tui -- --version"
-    );
-    assert_eq!(
-        super::version_shell_command(Channel::Preview),
-        "warp-preview --version"
-    );
-    assert_eq!(
-        super::version_shell_command(Channel::Oss),
-        "warp-oss --version"
-    );
-    assert_eq!(
-        super::version_shell_command(Channel::Integration),
-        "warp-integration --version"
-    );
+fn resume_shell_commands_use_shared_tui_launcher() {
     assert_eq!(
         super::tui_resume_shell_command(Channel::Local, "conversation-token"),
         "./script/run-tui -- --resume conversation-token"
