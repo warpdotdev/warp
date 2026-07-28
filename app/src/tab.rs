@@ -347,11 +347,12 @@ impl TabData {
             }
         }
 
-        // Add "Copy link" option if the focused session in this tab is being shared or viewed
-        let is_shared_or_viewed = self
-            .pane_group
-            .as_ref(ctx)
-            .focused_session_view(ctx)
+        // Add "Copy link" option if the focused session in this tab is being shared or viewed.
+        // Disable the item (rather than silently no-op) when the Manager does not yet have a
+        // session id (e.g. during ViewPending / SharePending while the session is still setting up).
+        let focused_session_view = self.pane_group.as_ref(ctx).focused_session_view(ctx);
+        let is_shared_or_viewed = focused_session_view
+            .as_ref()
             .map(|view| {
                 view.as_ref(ctx)
                     .model
@@ -362,11 +363,18 @@ impl TabData {
             .unwrap_or(false);
 
         if is_shared_or_viewed {
+            let has_session_link = focused_session_view.as_ref().is_some_and(|view| {
+                let manager = crate::terminal::shared_session::manager::Manager::as_ref(ctx);
+                let view_id = view.id();
+                manager.session_id(&view_id).is_some()
+                    || manager.ended_session_id(&view_id).is_some()
+            });
             menu_items.push(
                 MenuItemFields::new("Copy link")
                     .with_on_select_action(WorkspaceAction::CopySharedSessionLinkFromTab {
                         tab_index: index,
                     })
+                    .with_disabled(!has_session_link)
                     .into_item(),
             );
         }

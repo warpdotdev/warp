@@ -640,9 +640,17 @@ impl BackingView for TerminalView {
         let is_ambient_agent = self.is_ambient_agent_session(ctx);
         if shared_session_status.is_sharer_or_viewer() {
             if !is_ambient_agent {
+                // Disable the item (rather than silently no-op) when the Manager does not yet
+                // have a session id (e.g. during ViewPending while the session is still setting up).
+                let has_session_link = {
+                    let manager = crate::terminal::shared_session::manager::Manager::as_ref(ctx);
+                    manager.session_id(&self.view_id).is_some()
+                        || manager.ended_session_id(&self.view_id).is_some()
+                };
                 items.push(
                     MenuItemFields::new("Copy link")
                         .with_on_select_action(TerminalAction::CopySharedSessionLink { source })
+                        .with_disabled(!has_session_link)
                         .into_item(),
                 );
             }

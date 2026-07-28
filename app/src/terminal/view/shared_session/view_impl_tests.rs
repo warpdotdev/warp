@@ -2406,3 +2406,103 @@ fn passive_suggestions_suppressed_for_shared_ambient_viewer() {
         );
     });
 }
+
+// APP-5027 regression: "Copy link" / "Copy session sharing link" must not silently do
+// nothing when the Manager has no session id (e.g. during ViewPending / SharePending).
+
+#[test]
+fn test_copy_shared_session_link_does_not_write_clipboard_when_session_pending() {
+    // copy_shared_session_link was a silent no-op when the Manager had no session_id
+    // (e.g. ViewPending while the cloud agent environment is still setting up).
+    // With the fix it shows an error toast and does NOT write the join link to the clipboard.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(crate::terminal::shared_session::manager::Manager::new);
+        app.add_singleton_model(|_| crate::workspace::ToastStack);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // Put the terminal in ViewPending state without registering a session_id with the Manager.
+        // This simulates a cloud agent environment still setting up (no join yet).
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ViewPending);
+        });
+
+        // Write a sentinel to the clipboard so we can detect if it is overwritten.
+        terminal.update(&mut app, |_, ctx| {
+            ctx.clipboard()
+                .write(warpui::clipboard::ClipboardContent::plain_text(
+                    "sentinel".to_string(),
+                ));
+        });
+
+        // Call copy_shared_session_link. With the fix, it shows a toast and returns early;
+        // the clipboard sentinel must remain unchanged (join link must NOT be written).
+        terminal.update(&mut app, |view, ctx| {
+            view.copy_shared_session_link(SharedSessionActionSource::RightClickMenu, ctx);
+        });
+
+        let clipboard_text = terminal.update(&mut app, |_, ctx| ctx.clipboard().read().plain_text);
+        assert_eq!(
+            clipboard_text, "sentinel",
+            "copy_shared_session_link must not write the join link when no session_id is registered"
+        );
+    });
+}
+
+#[test]
+fn test_session_sharing_context_menu_copy_link_disabled_when_no_session_link() {
+    // The "Copy session sharing link" context-menu item must be disabled (greyed out)
+    // when the session link is not yet available (has_session_link=false).
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+
+        terminal.read(&app, |view, _| {
+            let model = view.model.lock();
+            // has_session_link=false simulates ViewPending with no registered session_id.
+            let items = view.session_sharing_context_menu_items(&model, false, false);
+
+            let copy_link_item = items.iter().find(|item| {
+                item.fields()
+                    .is_some_and(|f| f.label() == "Copy session sharing link")
+            });
+            assert!(
+                copy_link_item.is_some(),
+                "Copy session sharing link item should be present when is_sharer_or_viewer"
+            );
+            assert!(
+                copy_link_item.unwrap().fields().unwrap().is_disabled(),
+                "Copy session sharing link must be disabled when no session link is available"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_session_sharing_context_menu_copy_link_enabled_when_session_link_available() {
+    // The "Copy session sharing link" item must be enabled when the session link is available.
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+
+        terminal.read(&app, |view, _| {
+            let model = view.model.lock();
+            // has_session_link=true simulates an active or ended session with a registered id.
+            let items = view.session_sharing_context_menu_items(&model, false, true);
+
+            let copy_link_item = items.iter().find(|item| {
+                item.fields()
+                    .is_some_and(|f| f.label() == "Copy session sharing link")
+            });
+            assert!(
+                copy_link_item.is_some(),
+                "Copy session sharing link item should be present when is_sharer_or_viewer"
+            );
+            assert!(
+                !copy_link_item.unwrap().fields().unwrap().is_disabled(),
+                "Copy session sharing link must be enabled when session link is available"
+            );
+        });
+    });
+}

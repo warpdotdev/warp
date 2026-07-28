@@ -1556,11 +1556,19 @@ impl TerminalView {
         source: SharedSessionActionSource,
         ctx: &mut ViewContext<Self>,
     ) {
-        let manager = Manager::as_ref(ctx);
-        let Some(session_id) = manager
-            .session_id(&ctx.view_id())
-            .or_else(|| manager.ended_session_id(&ctx.view_id()))
-        else {
+        let view_id = ctx.view_id();
+        let session_id_opt = {
+            let manager = Manager::as_ref(ctx);
+            manager
+                .session_id(&view_id)
+                .or_else(|| manager.ended_session_id(&view_id))
+        };
+        let Some(session_id) = session_id_opt else {
+            let window_id = ctx.window_id();
+            crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                let toast = DismissibleToast::error("Sharing link not yet available".to_string());
+                toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+            });
             return;
         };
 
@@ -1905,6 +1913,7 @@ impl TerminalView {
         &self,
         model: &TerminalModel,
         is_share_session_disabled: bool,
+        has_session_link: bool,
     ) -> Vec<MenuItem<TerminalAction>> {
         let mut items = Vec::new();
 
@@ -1933,6 +1942,7 @@ impl TerminalView {
                     .with_on_select_action(TerminalAction::CopySharedSessionLink {
                         source: SharedSessionActionSource::RightClickMenu,
                     })
+                    .with_disabled(!has_session_link)
                     .into_item(),
             );
         }
