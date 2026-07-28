@@ -1,13 +1,17 @@
+use std::env;
+use std::io::{self, Write};
+
 use warp::tui_export::{
     AIAgentActionResultType, AIAgentActionType, AIConversationId, ActiveSession,
     BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, ConversationSelectionHandle, ConversationStatus,
     ConversationStatusUpdate,
 };
-use warp_core::cli_agent_protocol::CLIAgentNotification;
+use warp_core::cli_agent_protocol::{CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentNotification};
+use warp_terminal::model::escape_sequences::{C0, C1, tmux_passthrough};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
-use crate::osc_notifications::{self, WARP_TUI_AGENT_NAME};
+const WARP_TUI_AGENT_NAME: &str = "warp-tui";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StatusOscEvent {
@@ -153,25 +157,37 @@ impl TuiCliAgentOscEventPublisher {
     fn notification(&self, event: &str, ctx: &AppContext) -> CLIAgentNotification {
         CLIAgentNotification {
             session_id: Some(self.terminal_surface_id.to_string()),
-            cwd: self.current_working_directory(ctx),
+            cwd: self
+                .active_session
+                .as_ref(ctx)
+                .current_working_directory()
+                .cloned()
+                .or_else(|| {
+                    env::current_dir()
+                        .ok()
+                        .map(|cwd| cwd.to_string_lossy().into_owned())
+                }),
             ..CLIAgentNotification::new(WARP_TUI_AGENT_NAME, event)
         }
     }
 
-    fn current_working_directory(&self, ctx: &AppContext) -> Option<String> {
-        self.active_session
-            .as_ref(ctx)
-            .current_working_directory()
-            .cloned()
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|cwd| cwd.to_string_lossy().into_owned())
-            })
-    }
-
     fn publish(&self, notification: CLIAgentNotification) {
-        osc_notifications::emit(notification);
+        let json =
+            serde_json::to_string(&notification).expect("CLI-agent notification is serializable");
+        let osc = C1::to_utf8(C1::OSC);
+        let bell = char::from(C0::BEL);
+        let sequence = format!("{osc}777;notify;{CLI_AGENT_NOTIFICATION_SENTINEL};{json}{bell}");
+        let sequence = if env::var_os("TMUX").is_some() {
+            tmux_passthrough(&sequence)
+        } else {
+            sequence
+        };
+
+        // Lifecycle notifications are best-effort and must not disrupt the TUI
+        // if its stdout is unavailable.
+        let mut stdout = io::stdout().lock();
+        let _ = stdout.write_all(sequence.as_bytes());
+        let _ = stdout.flush();
     }
 }
 
