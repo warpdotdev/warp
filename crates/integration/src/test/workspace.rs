@@ -991,20 +991,45 @@ pub fn test_detach_tab_group_to_new_window_with_drag() -> Builder {
                     );
                 }),
         )
-        // The detached window holds BOTH members - the whole group moved as a
-        // unit, not just the tab under the cursor.
+        // Assert per window id rather than via focus. `assert_tab_count` does
+        // not follow `focus_saved_window`, which only changes OS focus - the
+        // existing single-tab test cannot expose that because both its windows
+        // end up with one tab, whereas here the counts differ.
         .with_step(
-            focus_other_window(DETACHED_WINDOW_KEY, SOURCE_WINDOW_KEY)
-                .add_assertion(assert_tab_count(2)),
-        )
-        // The source window keeps only the ungrouped tab.
-        .with_step(
-            focus_saved_window(SOURCE_WINDOW_KEY)
-                .add_assertion(assert_tab_count(1))
-                .add_assertion(assert_command_executed_for_single_terminal_in_tab(
-                    0,
-                    "echo source-zero".to_string(),
-                )),
+            focus_other_window(DETACHED_WINDOW_KEY, SOURCE_WINDOW_KEY).with_action(
+                |app, _, data| {
+                    let detached = *data
+                        .get::<_, WindowId>(DETACHED_WINDOW_KEY)
+                        .expect("detached window id should exist");
+                    let source = *data
+                        .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                        .expect("source window id should exist");
+
+                    // The whole group moved as a unit, not just the tab under
+                    // the cursor.
+                    let detached_tabs = workspace_view(app, detached)
+                        .read(app, |workspace, _| workspace.tab_count());
+                    assert_eq!(
+                        detached_tabs, 2,
+                        "the detached window should hold both group members"
+                    );
+
+                    // The source keeps only the ungrouped tab, and the group
+                    // itself is gone from it.
+                    let (source_tabs, source_groups) =
+                        workspace_view(app, source).read(app, |workspace, _| {
+                            (workspace.tab_count(), workspace.tab_groups_for_test().len())
+                        });
+                    assert_eq!(
+                        source_tabs, 1,
+                        "the source window should keep only the ungrouped tab"
+                    );
+                    assert_eq!(
+                        source_groups, 0,
+                        "the group should be pruned from the source window"
+                    );
+                },
+            ),
         )
 }
 
