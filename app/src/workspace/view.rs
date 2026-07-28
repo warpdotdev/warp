@@ -24490,6 +24490,17 @@ impl TypedActionView for Workspace {
                     })
                     .unwrap_or_default();
                 self.current_workspace_state.is_tab_being_dragged = false;
+                // A whole-window group drag suppresses the group's overlay
+                // paint at detach. Nothing else clears it - the existing
+                // clears all operate on a TAB's DraggableState, and a group
+                // has its own - so without this the group header's drag
+                // overlay stays suppressed for the rest of the session and
+                // the flag travels with the group into other windows.
+                if let Some(group_id) = CrossWindowTabDrag::as_ref(ctx).source_group_id()
+                    && let Some(group) = self.tab_groups.get(&group_id)
+                {
+                    group.draggable_state.set_suppress_overlay_paint(false);
+                }
                 for (i, tab) in self.tabs.iter_mut().enumerate() {
                     if handed_off.contains(&i) {
                         continue;
@@ -27818,11 +27829,16 @@ impl Workspace {
     /// the palette, close the agent view and retitle the window N times.
     pub(crate) fn adopt_transferred_group_members(
         &mut self,
-        group: TabGroup,
+        mut group: TabGroup,
         members: Vec<TransferredTab>,
         ctx: &mut ViewContext<Self>,
     ) {
         let group_id = group.id;
+        // DraggableState is a shared Arc, so the clone taken from the source
+        // group is the SAME live drag handle. Left alone, this window would
+        // bind a second Draggable to it and its on_drop would dispatch
+        // DropGroup into the preview workspace instead of the source.
+        group.draggable_state = Default::default();
         for member in members {
             let TransferredTab {
                 pane_group,
@@ -28397,6 +28413,65 @@ impl Workspace {
         }
 
         if !has_dedicated_preview {
+            // A group that took every tab in its window has no dedicated
+            // preview - this window IS the preview. Without a group branch
+            // here the single-tab path below would move ONE member across as
+            // an ungrouped tab, and finalize would then close this window with
+            // pane detach suppressed, destroying the other members' live
+            // shells.
+            if let Some(group_id) = CrossWindowTabDrag::as_ref(ctx).source_group_id() {
+                log::info!(
+                    "tab_drag: perform_handoff branch=whole_window_group->other target_wid={} caller_wid={caller_window_id}",
+                    target.window_id
+                );
+                let Some(transferred_group) =
+                    self.get_tab_group_transfer_info_for_attach(group_id, ctx)
+                else {
+                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                        drag.reset_to_floating();
+                    });
+                    return;
+                };
+                let group_pinned = transferred_group.group.pinned;
+                let member_ids = transferred_group.member_pane_group_ids.clone();
+
+                for id in &member_ids {
+                    if let Some(index) = self.tab_index_for_pane_group_id(*id) {
+                        let pane_group = self.tabs[index].pane_group.clone();
+                        self.prepare_for_transferred_tab_attach(&pane_group, ctx);
+                    }
+                }
+                // Every view tree moves before the target's list is touched.
+                for id in &member_ids {
+                    ctx.transfer_view_tree_to_window(*id, caller_window_id, target.window_id);
+                }
+
+                let Some(target_workspace) =
+                    WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx)
+                else {
+                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                        drag.reset_to_floating();
+                    });
+                    return;
+                };
+                let raw_index = target.insertion_index;
+                target_workspace.update(ctx, move |workspace, ctx| {
+                    let resolved = workspace.resolve_group_drop_index(raw_index, group_pinned);
+                    workspace.insert_transferred_tab_group_at_index(
+                        transferred_group,
+                        resolved,
+                        ctx,
+                    );
+                    workspace.current_workspace_state.is_tab_being_dragged = true;
+                });
+
+                ctx.windows().show_window_and_focus_app(target.window_id);
+                CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                    drag.mark_inserted_in_target(target.window_id, raw_index);
+                });
+                return;
+            }
+
             log::info!(
                 "tab_drag: perform_handoff branch=single_tab_source->other target_wid={} caller_wid={caller_window_id}",
                 target.window_id

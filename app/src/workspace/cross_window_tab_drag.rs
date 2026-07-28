@@ -615,6 +615,18 @@ impl CrossWindowTabDrag {
             .unwrap_or_default()
     }
 
+    /// Records that the dragged content now lives in `target_window_id`.
+    /// Used by the whole-window group handoff, which performs its own transfer
+    /// rather than going through one of the execute_handoff_* helpers.
+    pub(crate) fn mark_inserted_in_target(&mut self, target_window_id: WindowId, index: usize) {
+        if let Some(drag) = self.active_drag.as_mut() {
+            drag.phase = DragPhase::InsertedInTarget {
+                target_window_id,
+                target_insertion_index: index,
+            };
+        }
+    }
+
     pub(crate) fn reset_to_floating(&mut self) {
         if let Some(drag) = self.active_drag.as_mut() {
             drag.phase = DragPhase::Floating;
