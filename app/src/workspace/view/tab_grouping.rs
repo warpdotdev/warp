@@ -561,7 +561,7 @@ impl Workspace {
     ///   inside the pinned prefix; an unpinned one stays out of it),
     /// - pushed past any group whose run it would otherwise land inside, so a
     ///   drop can never split an existing group in the target window.
-    pub(super) fn resolve_group_drop_index(&self, raw: usize, group_pinned: bool) -> usize {
+    pub(crate) fn resolve_group_drop_index(&self, raw: usize, group_pinned: bool) -> usize {
         let index = raw.min(self.tabs.len());
         let boundary = self.pinned_boundary_index(&self.tabs);
         let index = if group_pinned {

@@ -1897,6 +1897,61 @@ impl CrossWindowTabDrag {
             self.reset_to_floating();
             return;
         };
+        // Group drag: move the whole group out of the preview as one block.
+        if let Some(group_id) = drag.source_group_id() {
+            let Some(transferred_group) = preview_workspace.read(ctx, |workspace, ctx| {
+                workspace.get_tab_group_transfer_info_for_attach(group_id, ctx)
+            }) else {
+                log::warn!(
+                    "tab_drag: execute_handoff_multi_tab_to_other preview has no group {group_id:?} for preview_wid={preview_window_id} (reset_to_floating)"
+                );
+                self.reset_to_floating();
+                return;
+            };
+            let group_pinned = transferred_group.group.pinned;
+            let member_pane_group_ids = transferred_group.member_pane_group_ids.clone();
+
+            preview_workspace.update(ctx, |workspace, ctx| {
+                for id in &member_pane_group_ids {
+                    if let Some(index) = workspace.tab_index_for_pane_group_id(*id) {
+                        let pane_group = workspace.tabs[index].pane_group.clone();
+                        workspace.prepare_for_transferred_tab_attach(&pane_group, ctx);
+                    }
+                }
+            });
+
+            // Every view tree moves before the target's tab list is touched.
+            for id in &member_pane_group_ids {
+                ctx.transfer_view_tree_to_window(*id, preview_window_id, target.window_id);
+            }
+
+            let raw_index = target.insertion_index;
+            target_workspace.update(ctx, move |workspace, ctx| {
+                let resolved = workspace.resolve_group_drop_index(raw_index, group_pinned);
+                workspace.insert_transferred_tab_group_at_index(transferred_group, resolved, ctx);
+                workspace.current_workspace_state.is_tab_being_dragged = true;
+            });
+
+            ctx.windows().hide_window(preview_window_id);
+            ctx.windows().show_window_and_focus_app(target.window_id);
+            if let Some(workspace) = WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx) {
+                workspace.update(ctx, |ws, ctx| {
+                    ws.focus_active_tab(ctx);
+                });
+            }
+
+            drag.phase = DragPhase::InsertedInTarget {
+                target_window_id: target.window_id,
+                target_insertion_index: target.insertion_index,
+            };
+            log::info!(
+                "tab_drag: execute_handoff_multi_tab_to_other (group) -> InsertedInTarget target_wid={} insertion_index={}",
+                target.window_id,
+                target.insertion_index
+            );
+            return;
+        }
+
         let Some(mut transferred_tab) = preview_workspace.read(ctx, |workspace, ctx| {
             workspace.get_tab_transfer_info_for_attach(0, ctx)
         }) else {

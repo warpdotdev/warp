@@ -28722,6 +28722,13 @@ impl Workspace {
     /// source tab list can shift while a drag is in flight, so a drag-start
     /// index no longer identifies the tab it was captured for. Ids that are no
     /// longer present are simply absent from the result.
+    /// Index of the tab whose pane group is `pane_group_id`, if still present.
+    pub(crate) fn tab_index_for_pane_group_id(&self, pane_group_id: EntityId) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.pane_group.id() == pane_group_id)
+    }
+
     pub(crate) fn tab_indices_for_pane_group_ids(&self, pane_group_ids: &[EntityId]) -> Vec<usize> {
         self.tabs
             .iter()
