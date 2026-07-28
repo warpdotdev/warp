@@ -6303,9 +6303,8 @@ fn submit_cli_agent_rich_input_codex_uses_bracketed_paste() {
 }
 
 /// Verifies that multi-line Hermes rich input is delivered as a single bracketed
-/// paste payload with a standalone \r submit — not as separate per-line writes.
-/// Regression test for voice-input auto-submit (#11632): embedded newlines in a
-/// multi-segment transcription must not trigger separate submissions.
+/// paste payload with a standalone \r submit. Embedded newlines must remain
+/// inside the paste instead of triggering separate submissions.
 #[test]
 fn submit_cli_agent_rich_input_hermes_multiline_uses_bracketed_paste() {
     App::test((), |mut app| async move {
