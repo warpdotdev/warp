@@ -28351,6 +28351,23 @@ impl Workspace {
                 )
             });
 
+            // A group put-back needs none of the remove-and-reinsert dance
+            // below. Its placeholders are still in this window, still carry
+            // their group_id, and `execute_handoff_back_to_caller` has already
+            // moved every member's view tree home, so they simply own their
+            // views again. Removing one placeholder and inserting one tab
+            // would drop that member out of the group - the tab count would
+            // look right while one member came back ungrouped.
+            let is_group_put_back = CrossWindowTabDrag::as_ref(ctx).source_group_id().is_some();
+            if is_group_put_back {
+                if result.is_some() {
+                    self.current_workspace_state.is_tab_being_dragged = true;
+                    self.focus_active_tab(ctx);
+                    ctx.notify();
+                }
+                return;
+            }
+
             if let Some(info) = result {
                 if let Some(tab) = self.tabs.get(source_tab_index) {
                     ctx.unsubscribe_to_view(&tab.pane_group);
