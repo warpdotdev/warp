@@ -704,6 +704,7 @@ impl CharCellState {
 
     /// Replace the stored ghost lines. Replace-all semantics, mirroring the
     /// GUI path's `reset_temporary_block`, so stale ghosts never linger.
+    #[cfg(any(test, feature = "test-util"))]
     fn set_temporary_blocks(&self, mut blocks: Vec<CharCellTemporaryBlock>) {
         blocks.sort_by_key(|block| block.insert_before);
         *self.temporary_blocks.borrow_mut() = blocks;
@@ -2461,8 +2462,9 @@ impl RenderState {
     /// Required (unlike [`Self::new`]'s optional handle): every char-cell editor is
     /// built through `CodeEditorModel::new_tui`, which always has one.
     ///
-    /// `styles` is stored on the struct for API compatibility but is **not used** for rendering
-    /// in CharCell mode. Callers (e.g. `warp_tui`) should supply a minimal stub.
+    /// `styles` is consulted for `code_text.fixed_width_tab_size` to derive the tab-stop size
+    /// used for char-cell layout and paint; all other style fields are unused in CharCell mode.
+    /// Callers (e.g. `warp_tui`) should supply a minimal stub with the desired tab size set.
     pub fn new_tui(
         terminal_width: u16,
         styles: RichTextStyles,

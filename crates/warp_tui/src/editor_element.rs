@@ -518,16 +518,15 @@ impl TuiEditorElement {
         let (content, style) = match &row.kind {
             DisplayRowKind::Buffer { line_index } => {
                 let raw = slice_chars(chars, &row.char_range);
-                // Tabs in the raw text are expanded to spaces so that the
-                // painted glyphs match the column widths already charged to
-                // `\t` in `char_widths` during layout.  The expansion uses the
-                // same `tab_size` the char-cell layout used, so wrapping,
-                // cursor, selection, and paint all agree on how many columns
-                // each tab occupies.  Continuation rows start mid-line;
-                // leading-tab expansions are rare in continuations, so
-                // starting the column counter at 0 is an acceptable
-                // approximation for that edge case.
-                let content = expand_tabs(&raw, 0, usize::from(self.tab_size));
+                // Tabs are expanded using `row.row_start_col` as the baseline
+                // so that the column counter matches what `char_widths` used
+                // at layout time.  For the first row of a logical line this is
+                // 0; for soft-wrapped continuation rows it is the accumulated
+                // width of all chars that precede this row in the same logical
+                // line.  Passing the correct baseline keeps paint, cursor, and
+                // selection highlight aligned on every wrapped row, including
+                // those that start with a tab character.
+                let content = expand_tabs(&raw, row.row_start_col, usize::from(self.tab_size));
                 let style = self
                     .styles
                     .line_overrides
@@ -540,9 +539,10 @@ impl TuiEditorElement {
             DisplayRowKind::Ghost { ghost_index } => {
                 let ghost_chars: Vec<char> = ghosts[*ghost_index].content.chars().collect();
                 let raw = slice_chars(&ghost_chars, &row.char_range);
-                // Same tab expansion for ghost (removed-line) rows: the paint
-                // and the ghost's `char_widths` both use `self.tab_size`.
-                let content = expand_tabs(&raw, 0, usize::from(self.tab_size));
+                // Mirror the buffer-row logic: use the ghost row's accumulated
+                // starting column so soft-wrapped ghost continuation rows also
+                // expand tabs consistently with the ghost's `char_widths`.
+                let content = expand_tabs(&raw, row.row_start_col, usize::from(self.tab_size));
                 (content, self.styles.ghost)
             }
             DisplayRowKind::Gap { line_range } => {

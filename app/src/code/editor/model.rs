@@ -375,7 +375,8 @@ impl CodeEditorModel {
             ctx,
             |hidden_lines, ctx| {
                 let hidden_lines = hidden_lines.clone();
-                // CharCell layout never consults `RichTextStyles`, so pass a stub.
+                // CharCell layout reads `code_text.fixed_width_tab_size` from the
+                // styles to derive the tab-stop size; all other fields are unused.
                 ctx.add_model(|ctx| {
                     RenderState::new_tui(
                         terminal_width,
@@ -474,10 +475,11 @@ impl CodeEditorModel {
 
     /// A minimal [`RichTextStyles`] for the TUI char-cell editor.
     ///
-    /// `RenderState::new_tui` stores styles only for API compatibility and never
-    /// uses them for char-cell layout, so these values are placeholders. This
-    /// lives here (the caller of `RenderState::new_tui`) rather than in the core
-    /// editor crate so the editor API doesn't carry a TUI-specific stub.
+    /// [`RenderState::new_tui`] reads `code_text.fixed_width_tab_size` from these
+    /// styles to determine the tab-stop size used for char-cell layout and paint;
+    /// all other fields are unused in CharCell mode. The tab size here (4) must
+    /// match the editor's indentation configuration. This stub lives here so the
+    /// core editor crate doesn't carry a TUI-specific dependency.
     fn tui_stub_text_styles() -> RichTextStyles {
         use warpui::elements::{Border, Fill};
         use warpui::fonts::{FamilyId, Weight};

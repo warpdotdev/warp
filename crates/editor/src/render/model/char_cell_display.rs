@@ -68,6 +68,16 @@ pub struct DisplayRow {
     pub char_range: Range<CharOffset>,
     /// Whether this is a soft-wrap continuation of the previous row.
     pub is_continuation: bool,
+    /// The accumulated display-column width of all characters on the same
+    /// logical line (or ghost content) that precede this display row. Always
+    /// 0 for the first row of a logical line; positive for soft-wrapped
+    /// continuation rows.
+    ///
+    /// Used as `starting_col` when expanding tab characters in the paint path
+    /// so that `expand_tabs` charges the same width as the layout layer's
+    /// `char_widths` entry, keeping cursor, selection, and painted glyphs
+    /// aligned on soft-wrapped continuation rows.
+    pub row_start_col: usize,
 }
 
 /// The display-row projection at one snapshot of wrap tables, ghosts, and
@@ -279,6 +289,7 @@ fn display_rows(
                     kind: DisplayRowKind::Gap { line_range },
                     char_range: CharOffset::zero().empty_range(),
                     is_continuation: false,
+                    row_start_col: 0,
                 });
             }
         };
@@ -340,12 +351,29 @@ fn push_buffer_line_rows(
     text_index: &CharCellTextIndex,
 ) {
     let line_rows = text_index.logical_line_visual_rows(line_index);
+    let line_char_start = text_index.line_starts[line_index].as_usize();
     for (row, visual_row) in line_rows.enumerate() {
         let range = text_index.visual_row_char_range(line_index, visual_row);
+        // The accumulated display-column width of all chars on this logical
+        // line that precede this display row's start.  The first row always
+        // starts at column 0; continuation rows accumulate the widths of
+        // every character from the line's first char up to — but not
+        // including — this row's first char.  Passed to `expand_tabs` in the
+        // paint path so tab width agrees with what `char_widths` recorded
+        // at layout time.
+        let row_start_col = if row == 0 {
+            0
+        } else {
+            text_index.char_widths[line_char_start..range.start]
+                .iter()
+                .map(|&w| w as usize)
+                .sum()
+        };
         rows.push(DisplayRow {
             kind: DisplayRowKind::Buffer { line_index },
             char_range: CharOffset::range(range),
             is_continuation: row > 0,
+            row_start_col,
         });
     }
 }
@@ -384,10 +412,19 @@ fn push_ghost_rows(
             .get(row + 1)
             .copied()
             .unwrap_or(ghost.char_widths.len());
+        // Mirror the buffer-row logic: the first row starts at col 0;
+        // continuation rows inherit the accumulated width of all preceding
+        // chars in the ghost's content.
+        let row_start_col = if row == 0 {
+            0
+        } else {
+            ghost.char_widths[..start].iter().map(|&w| w as usize).sum()
+        };
         rows.push(DisplayRow {
             kind: DisplayRowKind::Ghost { ghost_index },
             char_range: CharOffset::range(start..end),
             is_continuation: row > 0,
+            row_start_col,
         });
     }
 }

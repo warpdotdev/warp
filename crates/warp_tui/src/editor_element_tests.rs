@@ -673,6 +673,69 @@ fn tab_indented_rows_with_line_number_gutter() {
     });
 }
 
+/// A tab that falls on a soft-wrapped continuation row must paint with the
+/// same column width that the layout layer charged it, keeping selection
+/// highlight and painted glyphs aligned.
+///
+/// Scenario: "abcde\tXY" at terminal width 6, tab size 4.
+/// - Row 0: "abcde" (logical cols 0-4, total width 5 — wraps before the tab).
+/// - Row 1: "\tXY"  (logical col starts at 5; tab at col 5 → next stop 8,
+///   width 3 → rendered as "   XY").
+///
+/// The layout lattice charges the tab 3 columns.  Paint must write 3 spaces
+/// so 'X' is at display column 3 on row 1, matching the selection highlight.
+/// Before the fix, `expand_tabs` restarted from column 0 on the continuation
+/// row, producing 4 spaces and shifting 'X' to column 4.
+#[test]
+fn tab_on_continuation_row_paint_and_selection_agree() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let m = model(ctx, "abcde\tXY");
+
+            // Verify the rendered text on the continuation row.
+            let element = TuiEditorElement::new(&m, ctx);
+            let lines = render_lines(ctx, element, 6, 5);
+            assert_eq!(lines[0], "abcde", "first row must be 'abcde'");
+            assert_eq!(
+                lines[1], "   XY",
+                "tab at logical col 5 with tab_size 4 must expand to 3 spaces \
+                 (next stop at col 8, width 8-5=3), not 4"
+            );
+
+            // Verify selection highlight agrees with paint position.
+            let mut element = TuiEditorElement::new(&m, ctx);
+            // Select 'X' (char offset 6, one past the tab at offset 5).
+            element.sel_char_range = Some(CharOffset::range(6..7));
+            let buffer = render_buffer(ctx, element, 6, 2);
+            let selection_bg = TuiUiBuilder::from_app(ctx).selection_style().bg;
+            // Tab columns 0-2 on row 1 must NOT be selected.
+            assert_ne!(
+                Some(buffer[(0, 1)].bg),
+                selection_bg,
+                "col 0 on row 1 (tab space) must not be selected"
+            );
+            assert_ne!(
+                Some(buffer[(2, 1)].bg),
+                selection_bg,
+                "col 2 on row 1 (tab space) must not be selected"
+            );
+            // Column 3 on row 1 is 'X' — must be selected.
+            assert_eq!(
+                Some(buffer[(3, 1)].bg),
+                selection_bg,
+                "col 3 on row 1 ('X') must be selected; tab expands to 3 spaces"
+            );
+            // Column 4 on row 1 is 'Y' — outside the selection.
+            assert_ne!(
+                Some(buffer[(4, 1)].bg),
+                selection_bg,
+                "col 4 on row 1 ('Y') must not be selected"
+            );
+        });
+    });
+}
+
 // ── Unit tests for the expand_tabs helper ────────────────────────────────────
 
 #[test]
