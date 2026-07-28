@@ -151,7 +151,7 @@ impl TuiVimInputModel {
         match self.fsa.mode {
             VimMode::Insert => TuiVimAction::InsertChar(c),
             _ => {
-                let event = self.fsa.process_char(c);
+                let event = self.fsa.typed_character(c);
                 match event {
                     None => TuiVimAction::Pending,
                     Some(event) => self.map_event(event),
@@ -163,7 +163,7 @@ impl TuiVimInputModel {
     /// Process a special key name (as used by the TUI keymap, e.g.
     /// `"escape"`, `"backspace"`, `"enter"`). Returns the action to apply.
     pub(crate) fn process_special_key(&mut self, key: &str) -> TuiVimAction {
-        let event = self.fsa.process_keystroke(key);
+        let event = self.fsa.keypress(key);
         match event {
             None => {
                 // escape with no pending command in normal mode → no-op
@@ -390,8 +390,8 @@ impl TuiVimInputModel {
         // Drive the FSA to Normal mode first via Escape (clears pending state),
         // then to Insert via `i` so the state machine's internal invariants
         // stay intact. Direct field assignment bypasses those invariants.
-        self.fsa.process_keystroke("escape");
-        self.fsa.process_char('i');
+        self.fsa.keypress("escape");
+        self.fsa.typed_character('i');
     }
 
     /// Store text in the internal yank buffer (called by the view after

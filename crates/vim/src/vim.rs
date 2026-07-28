@@ -785,7 +785,7 @@ impl VimFSA {
     }
 
     /// For processing Vim keypresses that are represented by a single char.
-    fn typed_character(&mut self, c: char) -> Option<VimEvent> {
+    pub fn typed_character(&mut self, c: char) -> Option<VimEvent> {
         self.showcmd.push(c);
         let event_type = match self.mode {
             VimMode::Insert => self.handle_insert_char(c),
@@ -811,7 +811,7 @@ impl VimFSA {
     }
 
     /// Like Self::typed_character, but for keypresses that aren't representable by a single char.
-    fn keypress(&mut self, keystroke: &str) -> Option<VimEvent> {
+    pub fn keypress(&mut self, keystroke: &str) -> Option<VimEvent> {
         let event = match keystroke {
             "escape" => match self.mode {
                 VimMode::Normal => {
@@ -1706,23 +1706,6 @@ impl VimFSA {
         self.pending_operand_count
             .as_ref()
             .and_then(|s| s.parse().ok())
-    }
-
-    /// Process a printable character through the VimFSA and return the resulting event.
-    ///
-    /// This is the public entry point for character-by-character vim input processing.
-    /// Returns `None` when the character was consumed as part of a pending multi-key sequence
-    /// (e.g. the first `d` in `dd`).
-    pub fn process_char(&mut self, c: char) -> Option<VimEvent> {
-        self.typed_character(c)
-    }
-
-    /// Process a named special key (e.g. `"escape"`, `"backspace"`, `"enter"`) through the VimFSA.
-    ///
-    /// This is the public entry point for special-key vim input processing.
-    /// Returns `None` when the key has no action in the current mode.
-    pub fn process_keystroke(&mut self, key: &str) -> Option<VimEvent> {
-        self.keypress(key)
     }
 
     /// This is for when the view needs to initiate a switch to insert mode, e.g. when the user

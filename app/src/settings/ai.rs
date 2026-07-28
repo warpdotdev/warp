@@ -687,6 +687,8 @@ settings::macros::implement_setting_for_enum!(
 pub enum TuiStatuslineItem {
     AutoApprove,
     AutoQueue,
+    /// Vim mode indicator (NOR/INS/VIS/V-L/REP); hidden when vim mode is disabled.
+    VimModeIndicator,
     Model,
     WorkingDirectory,
     GitBranch,
@@ -704,9 +706,10 @@ pub enum TuiStatuslineItem {
 }
 
 impl TuiStatuslineItem {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::AutoApprove,
         Self::AutoQueue,
+        Self::VimModeIndicator,
         Self::Model,
         Self::WorkingDirectory,
         Self::GitBranch,
@@ -725,6 +728,7 @@ impl TuiStatuslineItem {
         match self {
             Self::AutoApprove => "Auto-approve indicator",
             Self::AutoQueue => "Auto-queue next prompt indicator",
+            Self::VimModeIndicator => "Vim mode indicator",
             Self::Model => "Model",
             Self::WorkingDirectory => "Working directory",
             Self::GitBranch => "Git branch",
@@ -762,6 +766,7 @@ impl Default for TuiStatuslineConfig {
         Self {
             order: TuiStatuslineItem::ALL.to_vec(),
             enabled: vec![
+                TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,

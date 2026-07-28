@@ -442,7 +442,7 @@ fn bordered_input(
 enum FooterSegment {
     ShellMode,
     ActiveIndicator(&'static str),
-    /// Vim mode indicator in place of the model label (NOR, VIS, REP).
+    /// Vim mode indicator (NOR/INS/VIS/V-L/REP), driven by the VimModeIndicator statusline item.
     VimIndicator(&'static str),
     Model(Box<dyn TuiElement>),
     WorkingDirectory(String),
@@ -531,8 +531,7 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
                 );
             }
             FooterSegment::VimIndicator(label) => {
-                // Vim mode indicator (NOR/VIS/REP) rendered with the accent border style,
-                // appearing in place of the model label when vim is in a non-Insert mode.
+                // Vim mode indicator rendered with the accent border style.
                 row = row.child(
                     TuiText::new(label)
                         .with_style(builder.accent_border_style())
@@ -2878,49 +2877,46 @@ impl TuiTerminalSessionView {
                 .then_some(FooterSegment::ActiveIndicator("Auto-approve")),
                 TuiStatuslineItem::AutoQueue => (!shell_mode && self.is_auto_queue_enabled(ctx))
                     .then_some(FooterSegment::ActiveIndicator("Auto-queue")),
+                TuiStatuslineItem::VimModeIndicator => {
+                    // Show the vim mode label (NOR/INS/VIS/V-L/REP) when vim is enabled;
+                    // hidden when vim mode is disabled (vim_mode_indicator returns None).
+                    self.vim_mode_indicator(ctx)
+                        .map(FooterSegment::VimIndicator)
+                }
                 TuiStatuslineItem::Model => {
-                    // The vim mode indicator (NOR/VIS/REP) takes priority over
-                    // the model name and is shown unconditionally — including in
-                    // shell mode — so the current mode is always visible whenever
-                    // vim is active.  Shell mode suppression only applies to the
-                    // model label that follows.
-                    if let Some(vim_label) = self.vim_mode_indicator(ctx) {
-                        Some(FooterSegment::VimIndicator(vim_label))
-                    } else {
-                        // The model label is suppressed in shell mode (the
-                        // shell-mode badge is already shown at the start of the
-                        // footer row).
-                        (!shell_mode).then(|| {
-                            let model_name = LLMPreferences::as_ref(ctx)
-                                .get_active_base_model(ctx, Some(self.terminal_surface_id))
-                                .display_name
-                                .clone();
-                            let model_label_hovered = self
-                                .model_label_hover
-                                .lock()
-                                .is_ok_and(|state| state.is_hovered());
-                            let model_label_style = if model_label_hovered {
-                                builder.primary_text_style()
-                            } else {
-                                builder.muted_text_style()
-                            };
-                            FooterSegment::Model(
-                                TuiHoverable::new(
-                                    self.model_label_hover.clone(),
-                                    TuiText::new(model_name)
-                                        .with_style(model_label_style)
-                                        .truncate()
-                                        .finish(),
-                                )
-                                .on_click(|event_ctx, _| {
-                                    event_ctx.dispatch_typed_action(
-                                        TuiTerminalSessionAction::ToggleModelMenu,
-                                    );
-                                })
-                                .finish(),
+                    // The model label is suppressed in shell mode (the
+                    // shell-mode badge is already shown at the start of the
+                    // footer row).
+                    (!shell_mode).then(|| {
+                        let model_name = LLMPreferences::as_ref(ctx)
+                            .get_active_base_model(ctx, Some(self.terminal_surface_id))
+                            .display_name
+                            .clone();
+                        let model_label_hovered = self
+                            .model_label_hover
+                            .lock()
+                            .is_ok_and(|state| state.is_hovered());
+                        let model_label_style = if model_label_hovered {
+                            builder.primary_text_style()
+                        } else {
+                            builder.muted_text_style()
+                        };
+                        FooterSegment::Model(
+                            TuiHoverable::new(
+                                self.model_label_hover.clone(),
+                                TuiText::new(model_name)
+                                    .with_style(model_label_style)
+                                    .truncate()
+                                    .finish(),
                             )
-                        })
-                    }
+                            .on_click(|event_ctx, _| {
+                                event_ctx.dispatch_typed_action(
+                                    TuiTerminalSessionAction::ToggleModelMenu,
+                                );
+                            })
+                            .finish(),
+                        )
+                    })
                 }
                 TuiStatuslineItem::WorkingDirectory => self
                     .current_working_directory(ctx)
@@ -3013,8 +3009,7 @@ impl TuiTerminalSessionView {
     }
 
     /// Returns a brief vim mode label for the footer when vim mode is enabled,
-    /// or `None` when vim mode is disabled or in Insert mode (the default
-    /// editing state that needs no explicit label).
+    /// or `None` when vim mode is disabled.
     fn vim_mode_indicator(&self, ctx: &AppContext) -> Option<&'static str> {
         use vim::vim::{MotionType, VimMode};
         let mode = self.input_view.as_ref(ctx).vim_mode(ctx)?;
@@ -3023,7 +3018,8 @@ impl TuiTerminalSessionView {
             VimMode::Visual(MotionType::Charwise) => Some("VIS"),
             VimMode::Visual(MotionType::Linewise) => Some("V-L"),
             VimMode::Replace => Some("REP"),
-            VimMode::Insert => None,
+            // Insert mode is shown with a label, matching the GUI vim status indicator.
+            VimMode::Insert => Some("INS"),
         }
     }
 
