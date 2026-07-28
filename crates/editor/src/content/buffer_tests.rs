@@ -33,9 +33,10 @@ use crate::content::markdown::MarkdownStyle;
 use crate::content::selection::TextStyleBias;
 use crate::content::selection_model::BufferSelectionModel;
 use crate::content::text::{
-    BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, CodeBlockType, IndentBehavior,
-    IndentUnit, TABLE_BLOCK_MARKDOWN_LANG, TextStyles, TextStylesWithMetadata,
+    BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, BufferTextStyle, CodeBlockType,
+    IndentBehavior, IndentUnit, TABLE_BLOCK_MARKDOWN_LANG, TextStyles, TextStylesWithMetadata,
 };
+use markdown_parser::weight::CustomWeight;
 use crate::content::undo::{
     NonAtomicType, ReversibleEditorActions, ReversibleSelectionState, UndoActionType, UndoArg,
 };
@@ -2054,6 +2055,58 @@ fn test_block_style_strips_bold_weight() {
                 .delta
                 .expect("Should exist");
             assert_eq!(buffer.content.debug(), "<code:Shell>test<text>");
+        });
+    });
+}
+
+#[test]
+fn test_targeted_bold_unstyle_preserves_non_matching_weight() {
+    // Regression test for the strip-all vs. targeted-unstyle distinction (#13949 follow-up):
+    // `unstyle_internal_editor_actions` must remove *only* the requested style. `TextStyles::all()`
+    // and `TextStyles::default().bold()` carry byte-identical weight fields (both
+    // `Some(CustomWeight::Bold)`), so the strip-all `has_any_weight()` breadth must not leak into a
+    // targeted request. Unstyling Bold over text carrying `Black` is a no-op — `Black` must survive.
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            let _ = buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "test",
+                TextStyles::default(),
+                selection.clone(),
+                ctx,
+            );
+            buffer.set_selection(
+                CharOffset::from(1)..CharOffset::from(5),
+                selection.clone(),
+                ctx,
+            );
+            let mut black = TextStyles::default();
+            black.set_weight(Weight::Black);
+            let _ = buffer.style_internal(black, selection.clone(), ctx);
+            let black_style = BufferTextStyle::Weight(CustomWeight::Black);
+            assert!(
+                buffer
+                    .active_style_at(
+                        CharOffset::from(1)..CharOffset::from(5),
+                        TextStyleBias::InStyle
+                    )
+                    .exact_match_style(&black_style)
+            );
+
+            // Targeted unstyle of Bold — Black does not match, so this is a no-op for the weight.
+            let _ = buffer.unstyle_internal(TextStyles::default().bold(), selection.clone(), ctx);
+            assert!(
+                buffer
+                    .active_style_at(
+                        CharOffset::from(1)..CharOffset::from(5),
+                        TextStyleBias::InStyle
+                    )
+                    .exact_match_style(&black_style),
+                "targeted Bold unstyle must leave a non-matching Black weight intact"
+            );
         });
     });
 }
