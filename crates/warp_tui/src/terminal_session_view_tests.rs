@@ -4034,6 +4034,35 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
 }
 
 #[test]
+fn copy_debugging_link_shows_no_token_hint_when_conversation_has_no_server_token() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        // Start a conversation so the selection has a conversation ID, but
+        // do not send any messages. The conversation therefore has no server
+        // conversation token yet.
+        view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection
+                    .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
+                    .expect("test conversation should start");
+            });
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_LINK, None, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.transient_hint.current().map(|(text, _)| text),
+                Some(super::COPY_DEBUGGING_LINK_NO_TOKEN_HINT),
+            );
+        });
+    });
+}
+
+#[test]
 fn kill_child_hint_constant_matches_expected_text() {
     assert_eq!(CTRL_C_KILL_CHILD_HINT, "ctrl-c again to kill child agent");
 }

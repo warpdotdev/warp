@@ -1265,7 +1265,8 @@ impl Input {
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout
             | SlashCommandKind::Clear
-            | SlashCommandKind::Status => {
+            | SlashCommandKind::Status
+            | SlashCommandKind::CopyDebuggingLink => {
                 debug_assert!(
                     false,
                     "Attempted to execute TUI-only slash command in the GUI: {}",

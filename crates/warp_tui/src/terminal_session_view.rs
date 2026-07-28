@@ -293,6 +293,8 @@ const THEME_INVALID_ARGUMENT_HINT: &str = "Theme must be auto, light, or dark.";
 const SHELL_MODE_HINT: &str = "Shell mode";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
+const COPY_DEBUGGING_LINK_HINT: &str = "Debugging link copied to clipboard";
+const COPY_DEBUGGING_LINK_NO_TOKEN_HINT: &str = "No debugging link available for this conversation";
 const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
 const NLD_ENABLED_HINT: &str = "Natural language detection enabled.";
 const NLD_DISABLED_HINT: &str = "Natural language detection disabled.";
@@ -4330,6 +4332,37 @@ impl TuiTerminalSessionView {
                             extra: { "path" => %path.display() }
                         );
                         self.show_transient_hint(message, ctx);
+                    }
+                }
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            SlashCommandKind::CopyDebuggingLink => {
+                let server_token = self
+                    .conversation_selection
+                    .as_ref(ctx)
+                    .selected_conversation(ctx)
+                    .and_then(|conversation| {
+                        conversation
+                            .server_conversation_token()
+                            .or_else(|| conversation.forked_from_server_conversation_token())
+                            .cloned()
+                    });
+                match server_token {
+                    Some(token) => {
+                        let url = token.debug_link();
+                        match copy_to_clipboard(&url) {
+                            Ok(()) => {
+                                self.show_success_hint(COPY_DEBUGGING_LINK_HINT.to_owned(), ctx);
+                            }
+                            Err(error) => {
+                                log::warn!("Failed to copy TUI debugging link: {error}");
+                                self.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
+                            }
+                        }
+                    }
+                    None => {
+                        self.show_transient_hint(COPY_DEBUGGING_LINK_NO_TOKEN_HINT.to_owned(), ctx);
                     }
                 }
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));

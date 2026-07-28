@@ -131,10 +131,15 @@ impl TuiSlashCommandDataSource {
     }
 
     fn availability(&self, ctx: &AppContext) -> Availability {
-        self.base_availability(ctx)
-            | Availability::AGENT_VIEW
-            | Availability::ACTIVE_CONVERSATION
-            | Availability::NOT_CLOUD_AGENT
+        let mut availability =
+            self.base_availability(ctx) | Availability::AGENT_VIEW | Availability::NOT_CLOUD_AGENT;
+        // Unlike the GUI where agent-view always implies an active conversation,
+        // the TUI can be at the zero state before any messages are sent. Only
+        // set ACTIVE_CONVERSATION when the history model confirms one exists.
+        if self.has_active_conversation(false, ctx) {
+            availability |= Availability::ACTIVE_CONVERSATION;
+        }
+        availability
     }
 }
 

@@ -373,6 +373,42 @@ fn strip_command_prefix_substring_not_matched() {
 }
 
 #[test]
+fn copy_debugging_link_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command.kind == SlashCommandKind::CopyDebuggingLink),
+        "/copy-debugging-link should be registered in TUI mode"
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::CopyDebuggingLink),
+        "/copy-debugging-link should not be registered in GUI mode"
+    );
+}
+
+#[test]
+fn copy_debugging_link_command_has_correct_registry_metadata() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::CopyDebuggingLink)
+        .expect("expected /copy-debugging-link to be registered in TUI mode");
+
+    assert_eq!(command.name, "/copy-debugging-link");
+    assert_eq!(command.kind, SlashCommandKind::CopyDebuggingLink);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert_eq!(command.supported_surfaces.gui_icon_path(), None);
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(command.availability, Availability::ACTIVE_CONVERSATION);
+    assert!(command.argument.is_none());
+    // Available when there is an active conversation.
+    assert!(command.is_active(Availability::ACTIVE_CONVERSATION));
+    // Hidden when there is no active conversation.
+    assert!(!command.is_active(Availability::ALWAYS));
+}
+
+#[test]
 fn clear_command_is_registered_only_for_tui_mode() {
     assert!(
         all_commands(settings::SettingsMode::Tui)
