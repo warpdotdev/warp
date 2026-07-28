@@ -80,7 +80,7 @@ fn remap_action_for_target(action: &Action, target: Target) -> Result<Action, St
     Ok(match action {
         Action::MouseMove { to } => Action::MouseMove { to: remap(*to)? },
         Action::MouseDown { button, at } => Action::MouseDown {
-            button: button.clone(),
+            button: *button,
             at: remap(*at)?,
         },
         Action::MouseWheel {

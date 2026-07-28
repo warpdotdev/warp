@@ -29,6 +29,7 @@ use crate::attachment_bar::TuiAttachmentBar;
 use crate::cloud_run_view::TuiCloudRunView;
 use crate::editor_interaction::{TuiEditorBindingTarget, TuiEditorCommand, editor_binding_specs};
 use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
+use crate::handoff::TuiHandoffBlock;
 use crate::input::TuiInputView;
 use crate::input::view::TuiInputAction;
 use crate::option_selector::TuiOptionSelector;
@@ -46,11 +47,9 @@ pub(crate) const KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG: &str = "TuiKeyboardEnhance
 pub(crate) const PLAN_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_plan";
 pub(crate) const CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME: &str =
     "tui:session:toggle_plan_when_available";
-pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
-    let mut context = Context::default();
-    context.set.insert(TuiTerminalSessionView::ui_name());
+pub(crate) fn binding_hint(name: &str, context: &Context, ctx: &AppContext) -> Option<String> {
     ctx.editable_bindings()
-        .find(|binding| binding.name == PLAN_TOGGLE_BINDING_NAME && binding.in_context(&context))
+        .find(|binding| binding.name == name && binding.in_context(context))
         .and_then(|binding| match binding.trigger {
             Trigger::Keystrokes(keystrokes) if !keystrokes.is_empty() => Some(
                 keystrokes
@@ -64,6 +63,11 @@ pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
             }
         })
 }
+pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
+    let mut context = Context::default();
+    context.set.insert(TuiTerminalSessionView::ui_name());
+    binding_hint(PLAN_TOGGLE_BINDING_NAME, &context, ctx)
+}
 
 /// Registers all TUI view keybindings and the cross-surface binding
 /// validators. Called once at TUI startup, before the driver starts.
@@ -73,6 +77,7 @@ pub(crate) fn init(app: &mut AppContext) {
     crate::terminal_session_view::init(app);
     crate::attachment_bar::init(app);
     crate::input::init(app);
+    crate::option_selector::init(app);
     register_editor_bindings(
         app,
         TuiEditorBindingTarget::Input,
@@ -86,7 +91,9 @@ pub(crate) fn init(app: &mut AppContext) {
         TuiEditorViewAction::Command,
     );
     crate::orchestration_block::init(app);
+    crate::handoff::init(app);
     crate::tui_ask_question_view::init(app);
+    crate::statusline_config_view::init(app);
     crate::tui_permission_prompt::init(app);
     crate::tui_shell_command_view::init(app);
 
@@ -146,6 +153,7 @@ fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<TuiEditorView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiOrchestrationBlock>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiHandoffBlock>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiOptionSelector>(is_tui_owned_binding);
 }
 

@@ -12,6 +12,61 @@ use crate::settings::ai::DefaultSessionMode;
 use crate::settings::{AISettings, CodeSettings};
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::FtueAccountClass;
+
+pub fn apply_account_first_onboarding_settings(
+    selected_settings: &SelectedSettings,
+    account_class: Option<FtueAccountClass>,
+    app: &mut AppContext,
+) {
+    // Every authenticated account-first user gets the Warp Agent surface,
+    // including standard-free accounts with no included Warp credits. Skipping
+    // account creation is the only outcome that leaves Agent disabled.
+    let is_ai_enabled = match account_class {
+        None => false,
+        Some(
+            FtueAccountClass::Paid | FtueAccountClass::FreeIcp | FtueAccountClass::FreeStandard,
+        ) => true,
+    };
+
+    match selected_settings {
+        SelectedSettings::AgentDrivenDevelopment {
+            agent_settings,
+            ui_customization,
+            ..
+        } => {
+            apply_agent_settings(agent_settings, app);
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, true, app);
+            }
+        }
+        SelectedSettings::Terminal {
+            ui_customization,
+            cli_agent_toolbar_enabled,
+            show_agent_notifications,
+        } => {
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, false, app);
+            }
+            AISettings::handle(app).update(app, |settings, ctx| {
+                report_if_error!(
+                    settings
+                        .should_render_cli_agent_footer
+                        .set_value(*cli_agent_toolbar_enabled, ctx)
+                );
+                report_if_error!(
+                    settings
+                        .show_agent_notifications
+                        .set_value(*show_agent_notifications, ctx)
+                );
+            });
+        }
+    }
+
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(settings.is_any_ai_enabled.set_value(is_ai_enabled, ctx));
+    });
+}
 
 /// Applies onboarding settings based on the user's selected mode.
 ///
@@ -83,7 +138,9 @@ fn apply_ui_customization_settings(
     app: &mut AppContext,
 ) {
     // Customize UI slide should only exist with this flag enabled.
-    if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+    if !FeatureFlag::AccountFirstOnboarding.is_enabled()
+        && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+    {
         return;
     }
     TabSettings::handle(app).update(app, |settings, ctx| {

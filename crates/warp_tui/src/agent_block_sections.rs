@@ -128,18 +128,24 @@ pub(crate) fn render_thinking_section(
 
 /// Renders a streamed conversation summary with the same persistent
 /// collapse/hover behavior as a reasoning section.
+///
+/// Defaults to **collapsed** whether or not streaming has finished, so an
+/// in-progress summary does not auto-expand — the prior expand-while-streaming
+/// then collapse-on-finish flip jittered the transcript. Manual expand still
+/// works via `CollapsibleSectionStates`.
 pub(crate) fn render_summarization_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
-    finished: bool,
     body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     render_collapsible_message_section(
         states,
         message_id,
-        "Conversation summarized".to_owned(),
-        finished,
+        "Conversation summary".to_owned(),
+        // Always collapsed by default; a manual override in
+        // `CollapsibleSectionStates` still wins so users can expand it.
+        true,
         body,
         app,
     )
@@ -154,8 +160,8 @@ fn render_collapsible_message_section(
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    // Indent the body so every wrapped line aligns beneath the header.
-    let body_element = TuiContainer::new(body).with_padding_left(4);
+    // Left-align the body with the header and separate the two with a blank row.
+    let body_element = TuiContainer::new(body).with_padding_top(1).finish();
 
     let collapsed = states.is_collapsed(message_id, finished);
     let toggle_message_id = message_id.clone();
@@ -163,7 +169,7 @@ fn render_collapsible_message_section(
         collapsed,
         header,
         states.hover_state(message_id),
-        body_element.finish(),
+        body_element,
         move |event_ctx, _app| {
             event_ctx.dispatch_typed_action(TuiAIBlockAction::SetSectionCollapsed {
                 message_id: toggle_message_id.clone(),

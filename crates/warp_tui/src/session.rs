@@ -7,8 +7,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use clap::error::ErrorKind;
+use warp::settings::TuiThemeSettings;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
+use warp_core::channel::ChannelState;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -22,10 +24,19 @@ use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
 use crate::terminal_background::probe_and_select_theme;
-use crate::terminal_session_view::{TuiConversationRestoreOrigin, TuiConversationRestoreTarget};
+use crate::terminal_session_view::{
+    TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
+};
 
-#[derive(Parser)]
-#[command(name = "warp")]
+/// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
+/// local cargo builds fall back to a numeric placeholder.
+const CLI_VERSION: &str = match option_env!("GIT_RELEASE_TAG") {
+    Some(version) => version,
+    None => "v0.0.0.0.0.0",
+};
+
+#[derive(Debug, Parser)]
+#[command(name = "warp", version = CLI_VERSION)]
 struct TuiArgs {
     /// Resume an Oz/Warp conversation by server token.
     #[arg(long)]
@@ -45,6 +56,9 @@ fn parse_resume_token(token: String) -> Result<ServerConversationToken> {
 
 /// Boots the headless Warp app and mounts the transcript-capable TUI session.
 pub fn run() -> Result<()> {
+    // Protect this managed version before any worker dispatch or resource
+    // access. The guard stays alive until this process exits.
+    let _version_lease = crate::autoupdate::VersionLease::acquire_for_current_process()?;
     // If this process was re-exec'd as a Warp worker (e.g. the terminal
     // server), dispatch that instead of starting another TUI — otherwise the
     // worker re-exec would recursively launch TUIs.
@@ -53,12 +67,12 @@ pub fn run() -> Result<()> {
     }
     let args = match TuiArgs::try_parse() {
         Ok(args) => args,
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            ) =>
-        {
+        // Match the zero-state version line: bare tag/version, no binary name prefix.
+        Err(error) if error.kind() == ErrorKind::DisplayVersion => {
+            println!("{CLI_VERSION}");
+            return Ok(());
+        }
+        Err(error) if error.kind() == ErrorKind::DisplayHelp => {
             error.print()?;
             return Ok(());
         }
@@ -76,7 +90,8 @@ pub fn run() -> Result<()> {
     {
         let token = token.as_str();
         println!("To continue this conversation, run:");
-        println!("warp --resume {token}");
+        let command = tui_resume_shell_command(ChannelState::channel(), token);
+        println!("{command}");
     }
     result
 }
@@ -96,11 +111,14 @@ fn init(
     // release builds installed via the managed versioned layout; see the
     // `autoupdate` module docs).
     crate::autoupdate::TuiAutoupdater::register(ctx);
+    crate::zero_state_animation::ZeroStateAnimationConfig::register(ctx);
 
-    // Theme the transcript to match the host terminal. Keep this scoped to
-    // the TUI process by overriding the already-initialized Appearance theme at
-    // mount time, without changing normal GUI theme selection or font settings.
-    let theme = probe_and_select_theme();
+    // Honor an explicit TUI theme or match the host terminal automatically.
+    // Keep this scoped to the TUI process by overriding the already-initialized
+    // Appearance theme at mount time, without changing normal GUI theme
+    // selection or font settings.
+    let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
+    let theme = probe_and_select_theme(selected_theme);
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
         appearance.set_theme(theme, ctx);
     });
@@ -124,21 +142,24 @@ fn init(
             });
             let orchestration = TuiOrchestrationModel::register(ctx);
             TuiSessions::wire_orchestration(&sessions, &orchestration, ctx);
+            let sessions_for_login = sessions.clone();
+            let root_for_login = root.clone();
+            let login_model = TuiLoginModel::handle(ctx);
+            ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
+                TuiLoginEvent::PhaseChanged => {
+                    root_for_login.update(ctx, |_, ctx| ctx.notify());
+                }
+                TuiLoginEvent::LoggedIn => {
+                    create_terminal_session_after_login(&sessions_for_login, &root_for_login, ctx)
+                }
+                TuiLoginEvent::LoggedOut => {
+                    root_for_login.update(ctx, |root, ctx| root.show_auth(ctx));
+                    sessions_for_login.update(ctx, |sessions, ctx| sessions.clear(ctx));
+                }
+            });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
                 create_terminal_session_after_login(&sessions, &root, ctx);
-            } else {
-                // Otherwise wait for login to complete and create it then.
-                let sessions_for_login = sessions.clone();
-                let root_for_login = root.clone();
-                let login_model = TuiLoginModel::handle(ctx);
-                ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
-                    TuiLoginEvent::LoggedIn => create_terminal_session_after_login(
-                        &sessions_for_login,
-                        &root_for_login,
-                        ctx,
-                    ),
-                });
             }
         }
         Err(error) => {

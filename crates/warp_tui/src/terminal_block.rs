@@ -17,6 +17,9 @@ use warpui_core::elements::tui::{
 };
 
 use crate::terminal_use::user_controls_running_command;
+use crate::tui_builder::TuiUiBuilder;
+const SHELL_COMMAND_PREFIX: &str = "!";
+const SHELL_COMMAND_PREFIX_WIDTH: u16 = 2;
 
 /// Selects which rows of a terminal block an element paints.
 enum TerminalBlockRows {
@@ -31,6 +34,15 @@ enum TerminalBlockRows {
 struct TerminalBlockPaintBounds {
     origin: TuiScreenPosition,
     size: TuiSize,
+    background: Option<TuiColor>,
+    content_offset: u16,
+    prefix_style: Option<TuiStyle>,
+}
+
+#[derive(Clone, Copy)]
+struct TerminalCommandStyle {
+    background: TuiColor,
+    prefix: TuiStyle,
 }
 
 /// Paints terminal cells from one block using either a pre-clipped transcript
@@ -49,6 +61,7 @@ pub(super) struct TerminalBlockElement {
     rows: TerminalBlockRows,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
+    command_style: Option<TerminalCommandStyle>,
 }
 
 impl TerminalBlockElement {
@@ -68,6 +81,7 @@ impl TerminalBlockElement {
             },
             size: None,
             origin: None,
+            command_style: None,
         }
     }
     /// Creates an element for all currently displayed command/output rows.
@@ -78,6 +92,7 @@ impl TerminalBlockElement {
             rows: TerminalBlockRows::Content,
             size: None,
             origin: None,
+            command_style: None,
         }
     }
 }
@@ -126,11 +141,19 @@ impl TuiElement for TerminalBlockElement {
         &mut self,
         constraint: TuiConstraint,
         _ctx: &mut TuiLayoutContext,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> TuiSize {
         let rows = match &self.rows {
-            TerminalBlockRows::Visible { rows, .. } => rows.clone(),
+            TerminalBlockRows::Visible { rows, .. } => {
+                let builder = TuiUiBuilder::from_app(app);
+                self.command_style = Some(TerminalCommandStyle {
+                    background: builder.shell_command_background(),
+                    prefix: builder.shell_command_prefix_style(),
+                });
+                rows.clone()
+            }
             TerminalBlockRows::Content => {
+                self.command_style = None;
                 let model = self.model.lock();
                 model
                     .block_list()
@@ -168,14 +191,28 @@ impl TuiElement for TerminalBlockElement {
             TerminalBlockRows::Visible { rows, width } => (rows.clone(), (*width).min(size.width)),
             TerminalBlockRows::Content => (block_content_rows(block), size.width),
         };
-        let cursor = terminal_block_cursor(block, &rows, size);
+        let cursor = terminal_block_cursor(block, &rows, size).and_then(|(column, row)| {
+            let column = if self.command_style.is_some() && block.is_command_grid_active() {
+                column.saturating_add(SHELL_COMMAND_PREFIX_WIDTH)
+            } else {
+                column
+            };
+            (column < size.width).then_some((column, row))
+        });
         render_block_rows(
             block,
             rows,
             width,
-            TerminalBlockPaintBounds { origin, size },
+            TerminalBlockPaintBounds {
+                origin,
+                size,
+                background: None,
+                content_offset: 0,
+                prefix_style: None,
+            },
             surface,
             &colors,
+            self.command_style,
         );
         drop(model);
         if let Some((col, row)) = cursor {
@@ -236,8 +273,18 @@ fn render_block_rows(
     bounds: TerminalBlockPaintBounds,
     surface: &mut TuiPaintSurface<'_>,
     colors: &TerminalColorList,
+    command_style: Option<TerminalCommandStyle>,
 ) {
     if !block.should_hide_command_grid() {
+        let command_bounds = match command_style {
+            Some(style) => TerminalBlockPaintBounds {
+                background: Some(style.background),
+                content_offset: SHELL_COMMAND_PREFIX_WIDTH,
+                prefix_style: Some(style.prefix),
+                ..bounds
+            },
+            None => bounds,
+        };
         render_grid_rows(
             block.prompt_and_command_grid(),
             block
@@ -247,7 +294,7 @@ fn render_block_rows(
                 .max(0.0) as usize,
             visible_rows.clone(),
             max_width,
-            bounds,
+            command_bounds,
             surface,
             colors,
         );
@@ -259,7 +306,12 @@ fn render_block_rows(
             block.output_grid_offset().as_f64().ceil().max(0.0) as usize,
             visible_rows,
             max_width,
-            bounds,
+            TerminalBlockPaintBounds {
+                background: None,
+                content_offset: 0,
+                prefix_style: None,
+                ..bounds
+            },
             surface,
             colors,
         );
@@ -288,6 +340,7 @@ pub(super) fn render_grid_handler(
             origin.offset(0, screen_row as i32),
             surface,
             colors,
+            None,
         );
     }
 }
@@ -323,14 +376,31 @@ fn render_displayed_rows(
         if *y >= bounds.size.height {
             break;
         }
+        let row_origin = bounds.origin.offset(0, i32::from(*y));
+        if let Some(background) = bounds.background {
+            for column in 0..max_width.min(bounds.size.width) {
+                if let Some(cell) = surface.cell_mut(row_origin.offset(i32::from(column), 0)) {
+                    cell.set_style(TuiStyle::default().bg(background));
+                }
+            }
+        }
+        if displayed_row == 0
+            && let Some(prefix_style) = bounds.prefix_style
+            && let Some(cell) = surface.cell_mut(row_origin)
+        {
+            cell.set_symbol(SHELL_COMMAND_PREFIX)
+                .set_style(prefix_style);
+        }
         let original_row = grid.maybe_translate_row_from_displayed_to_original(displayed_row);
+        let content_width = max_width.saturating_sub(bounds.content_offset);
         render_grid_row(
             grid,
             original_row,
-            grid.columns().min(usize::from(max_width)),
-            bounds.origin.offset(0, i32::from(*y)),
+            grid.columns().min(usize::from(content_width)),
+            row_origin.offset(i32::from(bounds.content_offset), 0),
             surface,
             colors,
+            bounds.background,
         );
         *y = (*y).saturating_add(1);
     }
@@ -344,6 +414,7 @@ fn render_grid_row(
     origin: TuiScreenPosition,
     surface: &mut TuiPaintSurface<'_>,
     colors: &TerminalColorList,
+    background: Option<TuiColor>,
 ) {
     let Some(row) = grid.row(row) else {
         return;
@@ -353,9 +424,13 @@ fn render_grid_row(
         if let Some(buffer_cell) =
             surface.cell_mut(origin.offset(i32::try_from(column).unwrap_or(i32::MAX), 0))
         {
+            let mut style = cell_to_style(cell, colors);
+            if let Some(background) = background {
+                style = style.bg(background);
+            }
             buffer_cell
                 .set_symbol(&sanitized_symbol(cell))
-                .set_style(cell_to_style(cell, colors));
+                .set_style(style);
         }
     }
 }

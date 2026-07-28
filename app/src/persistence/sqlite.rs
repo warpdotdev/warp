@@ -284,25 +284,39 @@ unsafe fn init_logging() {
 
                 #[cfg(feature = "crash_reporting")]
                 if level == log::Level::Error {
-                    sentry::with_scope(
-                        |scope| {
-                            let mut context = std::collections::BTreeMap::new();
-                            context.insert("message".to_string(), err_message.into());
-                            context.insert("code".to_string(), err_code.into());
-                            context.insert(
-                                "code_description".to_string(),
-                                sqlite3::code_to_str(err_code).into(),
-                            );
-                            scope.set_context("sqlite", sentry::protocol::Context::Other(context));
-                        },
-                        || {
-                            sentry::capture_message(
-                                "Sqlite Error",
-                                sentry_log::convert_log_level(level),
-                            )
-                        },
-                    );
-                    return;
+                    use std::sync::atomic::{AtomicU64, Ordering};
+
+                    // Each bit represents a primary SQLite error code (0-63). Primary codes are
+                    // the least-significant byte of the extended code; real error codes are ≤ 28.
+                    static REPORTED_PRIMARY_CODES: AtomicU64 = AtomicU64::new(0);
+                    let primary_code = (primary_error_code as u64).min(63);
+                    let bit = 1u64 << primary_code;
+                    if REPORTED_PRIMARY_CODES.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
+                        // First occurrence of this primary error code — report to Sentry.
+                        sentry::with_scope(
+                            |scope| {
+                                let mut context = std::collections::BTreeMap::new();
+                                context.insert("message".to_string(), err_message.into());
+                                context.insert("code".to_string(), err_code.into());
+                                context.insert(
+                                    "code_description".to_string(),
+                                    sqlite3::code_to_str(err_code).into(),
+                                );
+                                scope.set_context(
+                                    "sqlite",
+                                    sentry::protocol::Context::Other(context),
+                                );
+                            },
+                            || {
+                                sentry::capture_message(
+                                    "Sqlite Error",
+                                    sentry_log::convert_log_level(level),
+                                )
+                            },
+                        );
+                        // The structured Sentry event is the record; skip the redundant log line.
+                        return;
+                    }
                 }
 
                 log::log!(

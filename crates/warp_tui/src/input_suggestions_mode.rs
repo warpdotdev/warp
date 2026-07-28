@@ -15,6 +15,9 @@ pub(crate) enum TuiInputSuggestionsMode {
     ModelSelector,
     SkillMenu,
     Mcp,
+    PromptHistory,
+    CompletionSuggestions,
+    Shortcuts,
 }
 
 impl TuiInputSuggestionsMode {
@@ -71,7 +74,10 @@ impl TuiInputSuggestionsModeModel {
             | TuiInputSuggestionsMode::ConversationMenu
             | TuiInputSuggestionsMode::ModelSelector
             | TuiInputSuggestionsMode::SkillMenu
-            | TuiInputSuggestionsMode::Mcp => false,
+            | TuiInputSuggestionsMode::Mcp
+            | TuiInputSuggestionsMode::PromptHistory
+            | TuiInputSuggestionsMode::CompletionSuggestions
+            | TuiInputSuggestionsMode::Shortcuts => false,
         }
     }
 

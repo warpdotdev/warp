@@ -25,10 +25,8 @@ const PROVIDER_BUTTON_ICON_SIZE: f32 = 14.;
 const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;
 const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
 const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
-const OUT_OF_CREDITS_TITLE: &str = "I’m sorry, I couldn’t complete that request.";
-const OUT_OF_CREDITS_DETAIL: &str =
-    "In order to use Warp’s AI features, subscribe to a Warp plan, or bring your own inference.";
-
+pub const FAILED_OUTPUT_USAGE_NOTICE_TEXT: &str = "This response won't count towards your usage.";
+pub const OUT_OF_CREDITS_SUBSCRIBE_LABEL: &str = "Subscribe";
 /// Text to use as a label throughout the app for user interactions that will attach selected
 /// block(s) or text selections to a new AI query.
 pub static ATTACH_AS_AGENT_MODE_CONTEXT_TEXT: LazyLock<&'static str> =
@@ -66,8 +64,7 @@ pub fn error_color(theme: &WarpTheme) -> ColorU {
 pub enum FailedOutputPresentation {
     Message(String),
     OutOfCredits {
-        title: &'static str,
-        detail: &'static str,
+        message: String,
         can_use_own_api_keys: bool,
     },
     InvalidApiKey {
@@ -78,6 +75,9 @@ pub enum FailedOutputPresentation {
         message: String,
     },
     AwsBedrockCredentialsExpiredOrInvalid {
+        fallback_message: String,
+    },
+    GeminiEnterpriseCredentialsExpiredOrInvalid {
         fallback_message: String,
     },
 }
@@ -101,8 +101,7 @@ pub fn failed_output_presentation(
             if let Some(message) = user_display_message {
                 if should_show_subscribe_cta(app) {
                     FailedOutputPresentation::OutOfCredits {
-                        title: OUT_OF_CREDITS_TITLE,
-                        detail: OUT_OF_CREDITS_DETAIL,
+                        message: format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
                         can_use_own_api_keys: UserWorkspaces::as_ref(app)
                             .is_byo_api_key_enabled(app),
                     }
@@ -145,6 +144,14 @@ pub fn failed_output_presentation(
                 fallback_message: format!(
                     "{ERROR_APOLOGY_TEXT}\n\nAWS credentials expired or missing for {model_name}. \
                      Please refresh your AWS credentials."
+                ),
+            }
+        }
+        RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => {
+            FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
+                fallback_message: format!(
+                    "{ERROR_APOLOGY_TEXT}\n\nGemini Enterprise credentials expired or invalid.\n\n\
+                     Warp couldn't authenticate with Google Cloud. Refresh your Gemini Enterprise credentials, then retry the request."
                 ),
             }
         }

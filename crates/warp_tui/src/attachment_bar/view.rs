@@ -178,9 +178,9 @@ impl TuiAttachmentBar {
             .update(ctx, |model, ctx| model.try_attach_paste(text, ctx))
     }
 
-    pub(crate) fn paste_image_from_clipboard(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn paste_from_clipboard(&mut self, ctx: &mut ViewContext<Self>) {
         self.model
-            .update(ctx, |model, ctx| model.paste_image_from_clipboard(ctx));
+            .update(ctx, |model, ctx| model.paste_from_clipboard(ctx));
     }
 
     pub(crate) fn remove_selected(&mut self, ctx: &mut ViewContext<Self>) {

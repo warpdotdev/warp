@@ -22,6 +22,7 @@ use crate::workflows::{WorkflowId, WorkflowSource, WorkflowType};
 
 mod up_arrow;
 pub(crate) use up_arrow::UpArrowHistoryConfig;
+pub use up_arrow::prompt_history_for_terminal_view;
 
 /// Data model for a history command persisted to sqlite, used as an intermediate representation
 /// between the sqlite schema (sqlite::model::Command) and the [`History`] model.

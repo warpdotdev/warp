@@ -6,7 +6,6 @@ use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::OrchestrationConfigStatus;
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_graphql::queries::get_runners::RunnerSortBy;
 use warpui::elements::{
@@ -46,6 +45,7 @@ use crate::ai::harness_availability::{
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
+use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
@@ -209,6 +209,17 @@ impl OrchestrationConfigBlockView {
                 }
             },
         );
+        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, _, event, ctx| {
+            let ServerExperimentsEvent::ExperimentsUpdated = event;
+            if !oc::runner_controls_enabled(ctx) {
+                me.pickers.runner_picker = None;
+                me.runners.clear();
+                me.runners_loading = false;
+            } else {
+                me.ensure_runner_picker(ctx);
+            }
+            ctx.notify();
+        });
 
         // Repopulate the model picker when available LLMs change (Oz
         // harness only — non-Oz harnesses get their catalog from
@@ -654,12 +665,13 @@ impl OrchestrationConfigBlockView {
     }
 
     /// Builds the Runner picker and kicks off the `getRunners` fetch, but
-    /// only when the `CloudAgentRunners` feature is enabled and the config
+    /// only when the `CloudAgentRunners` feature is enabled and the macOS
+    /// runner experiment is active, and the config
     /// is in remote mode — otherwise the Runner control is not rendered, so
     /// there is no reason to create the picker or hit `getRunners`.
     /// Idempotent, and re-invoked on the Local→Cloud toggle.
     fn ensure_runner_picker(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::CloudAgentRunners.is_enabled() {
+        if !oc::runner_controls_enabled(ctx) {
             return;
         }
         if !self
@@ -886,6 +898,7 @@ impl View for OrchestrationConfigBlockView {
                     &self.pickers,
                     appearance,
                     true,
+                    oc::runner_controls_enabled(app),
                 ));
 
                 // Helper text

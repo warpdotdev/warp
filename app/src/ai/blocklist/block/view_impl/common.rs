@@ -69,6 +69,7 @@ use crate::ai::blocklist::code_block::{
 };
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
+use crate::ai::blocklist::inline_action::gemini_enterprise_credentials_error::GeminiEnterpriseCredentialsErrorView;
 use crate::ai::blocklist::inline_action::inline_action_header::{
     INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
 };
@@ -77,7 +78,8 @@ use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
 use crate::ai::blocklist::view_util::{
-    FailedOutputPresentation, error_color, failed_output_presentation,
+    FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL, error_color,
+    failed_output_presentation,
 };
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
@@ -3035,6 +3037,8 @@ pub struct FailedOutputProps<'a> {
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
     pub subscribe_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
+    pub gemini_enterprise_credentials_error_view:
+        Option<&'a ViewHandle<GeminiEnterpriseCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
 }
@@ -3047,10 +3051,9 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
 
     let error_text = match presentation {
         FailedOutputPresentation::Message(message) => message,
-        FailedOutputPresentation::OutOfCredits { title, detail, .. } => {
+        FailedOutputPresentation::OutOfCredits { message, .. } => {
             return render_out_of_credits_error(
-                title,
-                detail,
+                &message,
                 props.subscribe_button_handle,
                 props.is_ai_input_enabled,
                 props.icon_right_margin,
@@ -3078,6 +3081,14 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 return ChildView::new(view).finish();
             }
             // Fallback for contexts that don't have the stateful view (e.g. CLI subagent)
+            fallback_message
+        }
+        FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
+            fallback_message,
+        } => {
+            if let Some(view) = props.gemini_enterprise_credentials_error_view {
+                return ChildView::new(view).finish();
+            }
             fallback_message
         }
     };
@@ -3159,8 +3170,7 @@ fn out_of_credits_cta_button(
 
 /// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
 fn render_out_of_credits_error(
-    title: &str,
-    detail: &str,
+    message: &str,
     subscribe_button_handle: &MouseStateHandle,
     is_ai_input_enabled: bool,
     icon_right_margin: f32,
@@ -3184,7 +3194,7 @@ fn render_out_of_credits_error(
     .finish();
 
     let text = Text::new(
-        format!("{title}\n\n{detail}"),
+        message.to_owned(),
         appearance.monospace_font_family(),
         appearance.monospace_font_size(),
     )
@@ -3202,12 +3212,13 @@ fn render_out_of_credits_error(
     })
     .finish();
 
-    let subscribe_button = out_of_credits_cta_button("Subscribe", subscribe_button_handle, app)
-        .build()
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
-        })
-        .finish();
+    let subscribe_button =
+        out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+            })
+            .finish();
 
     Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)

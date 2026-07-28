@@ -704,6 +704,7 @@ pub enum RenderableAIError {
     AwsBedrockCredentialsExpiredOrInvalid {
         model_name: String,
     },
+    GeminiEnterpriseCredentialsExpiredOrInvalid,
     /// A transient network failure (lost connection or truncated response stream). Carries its
     /// own complete user-facing copy; `kind` preserves the structured cause (including the raw
     /// API error) so user reports can disambiguate the different causes behind the shared message.
@@ -900,6 +901,9 @@ impl Display for RenderableAIError {
                     f,
                     "AWS Bedrock credentials expired or invalid for {model_name}"
                 )
+            }
+            Self::GeminiEnterpriseCredentialsExpiredOrInvalid => {
+                write!(f, "Gemini Enterprise credentials expired or invalid")
             }
             Self::TransientNetworkError { kind, .. } => {
                 write!(

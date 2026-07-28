@@ -45,14 +45,16 @@ fn opening_a_menu_does_not_replace_an_active_menu() {
             assert!(!mode.try_open(TuiInputSuggestionsMode::SlashCommands, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::ModelSelector, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::SkillMenu, ctx));
+            assert!(!mode.try_open(TuiInputSuggestionsMode::Shortcuts, ctx));
             assert_eq!(mode.mode(), TuiInputSuggestionsMode::ConversationMenu);
 
             mode.set_mode(TuiInputSuggestionsMode::Closed, ctx);
-            assert!(mode.try_open(TuiInputSuggestionsMode::SkillMenu, ctx));
+            assert!(mode.try_open(TuiInputSuggestionsMode::Shortcuts, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::SlashCommands, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::ConversationMenu, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::ModelSelector, ctx));
-            assert_eq!(mode.mode(), TuiInputSuggestionsMode::SkillMenu);
+            assert!(!mode.try_open(TuiInputSuggestionsMode::SkillMenu, ctx));
+            assert_eq!(mode.mode(), TuiInputSuggestionsMode::Shortcuts);
         });
     });
 }

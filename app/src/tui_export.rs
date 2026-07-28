@@ -9,6 +9,11 @@ pub use ::ai::agent::{
 pub use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 pub use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 pub use repo_metadata::repositories::RepoDetectionSource;
+#[cfg(feature = "voice_input")]
+pub use voice_input::{
+    StartListeningError, VoiceInput, VoiceInputLifecycle, VoiceInputLifecycleState,
+    VoiceInputState, VoiceInputToggledFrom, VoiceSession, VoiceSessionResult,
+};
 pub use warp_cli::agent::Harness;
 use warp_completer::completer::{CompletionContext as _, TopLevelCommandCaseSensitivity};
 use warp_completer::signatures::CommandRegistry;
@@ -30,8 +35,8 @@ pub use crate::ai::agent::{
     FileGlobV2Result, GrepResult, ImageContext, MessageId, ReceivedMessageDisplay,
     RenderableAIError, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
-    StartAgentExecutionMode, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UserQueryMode,
+    StartAgentExecutionMode, StopRecordingResult, SuggestNewConversationResult, SummarizationType,
+    TodoOperation, UserQueryMode,
 };
 pub use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,
@@ -40,6 +45,7 @@ pub use crate::ai::agent_conversations_model::{
     query_conversation_entries,
 };
 pub use crate::ai::ambient_agents::AmbientAgentTaskId;
+pub use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffSurface};
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
@@ -61,10 +67,18 @@ pub use crate::ai::blocklist::diff_storage::{
     UpdatedFileState,
 };
 pub use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff, changed_lines_from_op};
+#[cfg(feature = "local_fs")]
+pub use crate::ai::blocklist::handoff::{
+    HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated, HandoffLaunchAttachments,
+    HandoffPrepareError, HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
+    HandoffTargetMaterialization, MaterializeHandoffTarget, PendingCloudLaunch, PendingHandoff,
+    SnapshotUploadTarget, execute_handoff, prepare_handoff, suggest_handoff_environment,
+};
 pub use crate::ai::blocklist::history_model::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
+    AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
 };
+pub use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
 pub use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, register_agent_event_consumer,
     unregister_agent_event_consumer,
@@ -76,23 +90,27 @@ pub use crate::ai::blocklist::orchestration_topology::{
     resolve_orchestration_participant,
 };
 pub use crate::ai::blocklist::view_util::{
-    FailedOutputPresentation, failed_output_presentation, format_credits,
-    should_show_failed_output_usage_notice,
+    FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
+    failed_output_presentation, format_credits, should_show_failed_output_usage_notice,
 };
 pub use crate::ai::blocklist::{
     AIActionStatus, AskUserQuestionExecutor, AttachmentType, BlocklistAIActionEvent,
     BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
     BlocklistAIController, BlocklistAIInputModel, InputConfig, InputModePolicy,
     InputModePolicyHandle, InputType, InputTypeAutoDetectionSource, NewConversationDecision,
-    PendingAttachmentSummary, PolicyConfigUpdate, RequestFileEditsExecutor, RunAgentsExecutor,
-    RunAgentsExecutorEvent, RunAgentsSpawningSnapshot, ShellCommandExecutor,
-    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
-    StartAgentRequest, StartAgentRequestId, block_context_from_terminal_model,
-    inherit_child_agent_settings, maybe_build_ai_query_upsert_event,
+    PendingAttachment, PendingAttachmentSummary, PolicyConfigUpdate, QueuedQueryEvent,
+    QueuedQueryModel, RequestFileEditsExecutor, RunAgentsExecutor, RunAgentsExecutorEvent,
+    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest, StartAgentRequestId,
+    block_context_from_terminal_model, inherit_child_agent_settings,
+    maybe_build_ai_query_upsert_event,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{
     PreparedLocalOzChildLaunch, apply_child_agent_model_override, prepare_local_oz_child_launch,
+};
+pub use crate::ai::cloud_environments::{
+    CloudEnvironment, CloudEnvironmentCatalog, CloudEnvironmentCatalogEvent, OZ_ENVIRONMENTS_URL,
 };
 pub use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -115,11 +133,13 @@ pub use crate::ai::orchestration::{
     PreparedRemoteChildLaunch, RemoteChildLaunchConfig, accept_disabled_reason_with_auth,
     api_key_snapshot, auth_secret_selection_required, classify_cloud_agent_startup_error,
     empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
-    harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_run_url,
-    persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
+    harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_model_snapshot,
+    oz_run_url, persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
     resolve_default_host_slug, should_show_auth_secret_picker,
 };
+#[cfg(feature = "voice_input")]
+pub use crate::ai::request_usage_model::AIRequestUsageModel;
 pub use crate::ai::skills::{SkillManager, SkillReference};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
@@ -132,13 +152,20 @@ pub use crate::code_review::git_repo_model::{
 };
 pub use crate::completer::SessionContext;
 pub use crate::persistence::PersistenceWriter;
+pub use crate::prefix::longest_common_prefix;
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
 };
+pub use crate::search::slash_command_menu::static_commands::{
+    SlashCommandKind, SlashCommandSurfaces,
+};
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
+pub use crate::server::ids::SyncId;
 pub use crate::server::server_api::ServerApiProvider;
+#[cfg(feature = "voice_input")]
+pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
-    AIClient, AgentConfigSnapshot, SpawnAgentRequest, SpawnAgentResponse,
+    AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
 pub use crate::settings::AISettingsChangedEvent;
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
@@ -162,11 +189,11 @@ pub use crate::terminal::input::slash_command_model::{
 pub use crate::terminal::input::slash_commands::{
     AcceptSlashCommandOrSavedPrompt, InlineItem, SlashCommandDataSource, SlashCommandMixer,
     SlashCommandSelectionBehavior, TuiDataSourceArgs as TuiSlashCommandDataSourceArgs,
-    TuiSlashCommand, TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
-    build_slash_command_mixer, record_saved_prompt_accepted, record_static_slash_command_accepted,
-    saved_prompt_text_for_id, should_close_slash_command_menu_for_exact_match,
-    slash_command_is_submitted_as_prompt, slash_command_is_supported_in_tui, slash_command_query,
-    slash_command_selection_behavior,
+    TuiSlashCommandDataSource, TuiZeroStateDataSource, UpdatedActiveCommands,
+    build_slash_command_mixer, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    should_close_slash_command_menu_for_exact_match, slash_command_is_submitted_as_prompt,
+    slash_command_query, slash_command_selection_behavior,
 };
 pub use crate::terminal::local_tty::{
     TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceInit,
@@ -193,16 +220,18 @@ pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
     BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData, SizeInfo, SizeUpdate,
     TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
+    prompt_history_for_terminal_view,
 };
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
 pub use crate::tui::{
     TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
-    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
+    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, log_out_tui,
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
-    queue_tui_permission_action, register_tui_session_view_test_singletons,
+    blocklist_ai_history_model_with_queries, queue_tui_permission_action,
+    register_tui_session_view_test_singletons,
 };
 pub use crate::util::image::{
     MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES, MIME_SNIFF_BYTES, ProcessImageResult,
@@ -210,6 +239,9 @@ pub use crate::util::image::{
 };
 pub use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_git_repo};
 pub use crate::util::time_format::format_elapsed_seconds;
+#[cfg(feature = "voice_input")]
+pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
+pub use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Builds the live-shell completion context used to parse TUI input for NLD.
 pub fn tui_completion_session_context(

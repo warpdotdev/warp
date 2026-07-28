@@ -1,9 +1,14 @@
-// Some of these re-exported types aren't used in the wasm build, so we suppress this
-// warning.
+mod catalog;
+pub use catalog::CloudEnvironmentCatalog;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+pub(crate) use catalog::sort_environments_by_recency;
+#[cfg(feature = "tui")]
+pub use catalog::{CloudEnvironment, CloudEnvironmentCatalogEvent};
 #[cfg_attr(target_family = "wasm", expect(unused_imports))]
 pub use cloud_object_models::{
     AmbientAgentEnvironment, AwsProviderConfig, BaseImage, CloudAmbientAgentEnvironment,
-    CloudAmbientAgentEnvironmentModel, GcpProviderConfig, GithubRepo, ProvidersConfig, SourceRepo,
+    CloudAmbientAgentEnvironmentModel, CodeForge, GcpProviderConfig, GithubRepo, ProvidersConfig,
+    SourceRepo,
 };
 use cloud_objects::cloud_object::Owner;
 use warpui::{AppContext, SingletonEntity as _};
@@ -16,6 +21,10 @@ use crate::cloud_object::{
 };
 use crate::server::sync_queue::QueueItem;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+/// Oz web app page for viewing and creating cloud environments.
+#[cfg(feature = "tui")]
+pub const OZ_ENVIRONMENTS_URL: &str = "https://oz.warp.dev/environments";
 
 impl StringModel for AmbientAgentEnvironment {
     type CloudObjectType = CloudAmbientAgentEnvironment;

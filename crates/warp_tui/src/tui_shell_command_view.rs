@@ -56,7 +56,7 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_group(TUI_BINDING_GROUP),
     ]);
-    app.register_editable_bindings(["enter", "numpadenter", "down"].map(|key| {
+    app.register_editable_bindings([
         EditableBinding::new(
             "tui:shell-permission:save",
             "Save the edited shell command",
@@ -64,8 +64,16 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_context_predicate(predicate.clone())
         .with_group(TUI_BINDING_GROUP)
-        .with_key_binding(key)
-    }));
+        .with_key_binding("enter"),
+        EditableBinding::new(
+            "tui:shell-permission:save",
+            "Save the edited shell command",
+            TuiShellCommandViewAction::SaveCommandEdit,
+        )
+        .with_context_predicate(predicate)
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("numpadenter"),
+    ]);
     app.register_tui_binding_validator::<TuiShellCommandView>(is_tui_owned_binding);
 }
 
@@ -407,7 +415,12 @@ impl TuiView for TuiShellCommandView {
             .as_ref(app)
             .get_action_status(&self.action.id)
             .is_some_and(|status| status.is_blocked());
-        if blocked && self.command_editor.as_ref(app).is_focused() {
+        if blocked
+            && self
+                .permission_prompt
+                .as_ref(app)
+                .body_editor_is_focused(app)
+        {
             context.set.insert(SHELL_COMMAND_EDITING);
         }
         context

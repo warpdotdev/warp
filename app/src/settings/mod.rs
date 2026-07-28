@@ -34,6 +34,8 @@ mod shared_object_limit_banner;
 mod ssh;
 mod theme;
 mod tui_autoupdate;
+mod tui_theme;
+mod tui_zero_state;
 mod vim_banner;
 
 #[cfg(test)]
@@ -69,6 +71,8 @@ pub use shared_object_limit_banner::*;
 pub use ssh::*;
 pub use theme::*;
 pub use tui_autoupdate::*;
+pub use tui_theme::*;
+pub use tui_zero_state::*;
 pub use vim_banner::*;
 use warp_core::user_preferences::GetUserPreferences as _;
 

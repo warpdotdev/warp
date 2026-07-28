@@ -157,14 +157,18 @@ pub(crate) fn login_placeholder(
         }
         _ => {
             content = content.child(
-                TuiText::new("Opening your browser…")
+                TuiText::new("Requesting a sign-in link…")
                     .with_style(dim)
                     .truncate()
                     .finish(),
             );
         }
     }
-    vertically_centered(content)
+    centered_in_viewport(
+        content
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .finish(),
+    )
 }
 
 /// Placeholder shown between login completion and terminal session creation.

@@ -44,7 +44,6 @@ impl AssetProvider for Assets {
 fn main() -> Result<()> {
     // Initialize logging for the onboarding binary.
     warp_logging::init(warp_logging::LogConfig {
-        is_cli: false,
         log_destination: None,
         ..Default::default()
     })?;

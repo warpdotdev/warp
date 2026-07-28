@@ -5,16 +5,20 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     ActiveSession, Appearance, BlocklistAIActionModel, BlocklistAIHistoryModel,
-    GetRelevantFilesController, ModelEventDispatcher, Sessions, TerminalManagerTrait,
-    TerminalModel, TerminalSurfaceInit,
+    ConversationSelection, ConversationSelectionHandle, GetRelevantFilesController,
+    ModelEventDispatcher, Sessions, TerminalManagerTrait, TerminalModel, TerminalSurfaceInit,
+    TranscriptScope,
 };
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::semantic_selection::SemanticSelection;
 use warpui::{AddSingletonModel, App, EntityId, ModelHandle};
 use warpui_core::elements::tui::{TuiElement, TuiText};
 use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewHandle, WindowId};
 
+use crate::conversation_selection::TuiConversationSelection;
 use crate::resume::TuiExitSummaryHandle;
 use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::zero_state_animation::ZeroStateAnimationConfig;
 
 struct TestTerminalManager(Arc<FairMutex<TerminalModel>>);
 
@@ -58,6 +62,28 @@ pub(crate) fn add_test_semantic_selection(ctx: &mut impl AddSingletonModel) {
     ctx.add_singleton_model(|_| SemanticSelection::mock(true, ""));
 }
 
+pub(crate) fn add_test_conversation_selection(ctx: &mut AppContext) -> ConversationSelectionHandle {
+    if !ctx.has_singleton_model::<AppExecutionMode>() {
+        ctx.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
+    }
+    if !ctx.has_singleton_model::<BlocklistAIHistoryModel>() {
+        ctx.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+    }
+    let terminal_surface_id = EntityId::new();
+    let mut terminal_model = TerminalModel::mock(None, None);
+    terminal_model
+        .block_list_mut()
+        .set_transcript_scope(TranscriptScope::Unfiltered);
+    let terminal_model = Arc::new(FairMutex::new(terminal_model));
+    ctx.add_model(|ctx| {
+        Box::new(TuiConversationSelection::new(
+            terminal_surface_id,
+            terminal_model,
+            ctx,
+        )) as Box<dyn ConversationSelection>
+    })
+}
+
 /// Builds the action model injected into stateful TUI tool-call views.
 pub(crate) fn add_test_action_model(app: &mut App) -> ModelHandle<BlocklistAIActionModel> {
     add_test_action_model_and_events(app).0
@@ -75,7 +101,9 @@ pub(crate) fn add_test_action_model_and_events(
     }
     add_test_semantic_selection(app);
     // Read as a singleton by the action model's executors.
-    app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+    if !app.read(|ctx| ctx.has_singleton_model::<BlocklistAIHistoryModel>()) {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+    }
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     let sessions = app.add_model(|_| Sessions::new_for_test());
     let (_tx, model_events_rx) = async_channel::unbounded();
@@ -109,6 +137,9 @@ pub(crate) fn add_test_terminal_session(
     ModelHandle<Box<dyn TerminalManagerTrait>>,
 ) {
     app.update(|ctx| {
+        if !ctx.has_singleton_model::<ZeroStateAnimationConfig>() {
+            ctx.add_singleton_model(|_| ZeroStateAnimationConfig::default());
+        }
         let surface_init = TerminalSurfaceInit::new_for_test(ctx);
         let terminal_model = surface_init.model.clone();
         let view = ctx.add_typed_action_tui_view(window_id, |ctx| {

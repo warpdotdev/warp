@@ -25,6 +25,7 @@ use warpui_core::{AppContext, ViewContext, WindowInvalidation};
 use super::TuiTranscriptView;
 use crate::agent_block::TuiAIBlock;
 use crate::test_fixtures::add_test_action_model_and_events;
+use crate::tui_builder::TuiUiBuilder;
 
 #[test]
 fn transcript_view_renders_terminal_blocks_from_canonical_order() {
@@ -672,12 +673,22 @@ fn assert_drag_highlights_text(
     ));
 
     let (selected, scene) = render_retained_element(app, element, rendered_views, area);
+    let selection_style = app.read(|ctx| TuiUiBuilder::from_app(ctx).selection_style());
     for column in start..=end {
+        let cell = &selected[(column, row as u16)];
+        assert_eq!(
+            Some(cell.fg),
+            selection_style.fg,
+            "selected {description} cell at column {column} should use the selection foreground"
+        );
+        assert_eq!(
+            Some(cell.bg),
+            selection_style.bg,
+            "selected {description} cell at column {column} should use the selection background"
+        );
         assert!(
-            selected[(column, row as u16)]
-                .modifier
-                .contains(Modifier::REVERSED),
-            "selected {description} cell at column {column} should be reversed"
+            !cell.modifier.contains(Modifier::REVERSED),
+            "selected {description} cell at column {column} should not use reverse video"
         );
     }
 
@@ -694,11 +705,20 @@ fn assert_drag_highlights_text(
     ));
     let (settled, _) = render_retained_element(app, element, rendered_views, area);
     for column in start..=end {
+        let cell = &settled[(column, row as u16)];
+        assert_eq!(
+            Some(cell.fg),
+            selection_style.fg,
+            "{description} selection foreground should persist after mouse-up"
+        );
+        assert_eq!(
+            Some(cell.bg),
+            selection_style.bg,
+            "{description} selection background should persist after mouse-up"
+        );
         assert!(
-            settled[(column, row as u16)]
-                .modifier
-                .contains(Modifier::REVERSED),
-            "{description} selection should persist after mouse-up"
+            !cell.modifier.contains(Modifier::REVERSED),
+            "{description} selection should not use reverse video after mouse-up"
         );
     }
 }

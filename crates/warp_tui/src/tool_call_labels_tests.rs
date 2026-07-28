@@ -35,6 +35,7 @@ fn block(state: CommandBlockState) -> ResolvedCommandBlock {
 fn failed_agent(name: &str) -> RunAgentsAgentOutcome {
     RunAgentsAgentOutcome {
         name: name.to_owned(),
+        resolved_model_id: String::new(),
         kind: RunAgentsAgentOutcomeKind::Failed {
             error: "launch failed".to_owned(),
         },

@@ -147,23 +147,37 @@ impl AgentConversationListPolicy for TuiConversationSelection {
         entry: &AgentConversationEntry,
         _: &AppContext,
     ) -> AgentConversationListEntryState {
-        classify_conversation_list_entry(
-            self.selected_id(),
-            entry.identity.local_conversation_id,
-            entry.identity.server_conversation_token.is_some(),
-            entry.display.harness,
-            &entry.display.status,
-        )
+        classify_conversation_list_entry(ConversationListEntryContext {
+            selected_id: self.selected_id(),
+            local_conversation_id: entry.identity.local_conversation_id,
+            has_server_token: entry.identity.server_conversation_token.is_some(),
+            is_cloud_agent_run: entry.is_cloud_agent_run(),
+            harness: entry.display.harness,
+            status: &entry.display.status,
+        })
     }
 }
 
-fn classify_conversation_list_entry(
+struct ConversationListEntryContext<'a> {
     selected_id: Option<AIConversationId>,
     local_conversation_id: Option<AIConversationId>,
     has_server_token: bool,
+    is_cloud_agent_run: bool,
     harness: Option<Harness>,
-    status: &AgentRunDisplayStatus,
+    status: &'a AgentRunDisplayStatus,
+}
+
+fn classify_conversation_list_entry(
+    context: ConversationListEntryContext<'_>,
 ) -> AgentConversationListEntryState {
+    let ConversationListEntryContext {
+        selected_id,
+        local_conversation_id,
+        has_server_token,
+        is_cloud_agent_run,
+        harness,
+        status,
+    } = context;
     if selected_id.is_some_and(|selected_id| local_conversation_id == Some(selected_id)) {
         return AgentConversationListEntryState::Selected;
     }
@@ -188,7 +202,9 @@ fn classify_conversation_list_entry(
         | AgentRunDisplayStatus::ConversationError
         | AgentRunDisplayStatus::ConversationCancelled => true,
     };
-    if has_terminal_status && (local_conversation_id.is_some() || has_server_token) {
+    if (!is_cloud_agent_run || has_terminal_status)
+        && (local_conversation_id.is_some() || has_server_token)
+    {
         AgentConversationListEntryState::Available
     } else {
         AgentConversationListEntryState::Unavailable

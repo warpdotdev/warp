@@ -6,6 +6,7 @@ use pathfinder_geometry::vector::vec2f;
 use uuid::Uuid;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -15,6 +16,7 @@ use warpui::elements::{
 };
 use warpui::fonts::Weight;
 use warpui::keymap::Keystroke;
+use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
@@ -32,9 +34,41 @@ const VERTICAL_PADDING: f32 = 8.;
 const HORIZONTAL_PADDING: f32 = 12.;
 const ICON_RIGHT_MARGIN: f32 = 8.;
 const CLOSE_BUTTON_SIZE: f32 = 16.;
+const MAX_VISIBLE_TOASTS: usize = 3;
+const COLLAPSED_MAX_CHARS: usize = 140;
+const COLLAPSED_MAX_LINES: usize = 2;
 
 const SUCCESS_ICON_PATH: &str = "bundled/svg/check-skinny.svg";
 const ERROR_ICON_PATH: &str = "bundled/svg/alert-circle.svg";
+
+fn toast_message_is_truncated(message: &str) -> bool {
+    message.chars().count() > COLLAPSED_MAX_CHARS - 3
+        || message.lines().count() > COLLAPSED_MAX_LINES
+}
+
+fn truncate_toast_message(message: &str) -> String {
+    if message.chars().count() > COLLAPSED_MAX_CHARS - 3 {
+        let truncated: String = message.chars().take(COLLAPSED_MAX_CHARS - 3).collect();
+        format!("{truncated}…")
+    } else if message.lines().count() > COLLAPSED_MAX_LINES {
+        let truncated = message
+            .lines()
+            .take(COLLAPSED_MAX_LINES)
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{truncated}…")
+    } else {
+        message.to_owned()
+    }
+}
+
+fn is_expand_toggle_keystroke(keystroke: &Keystroke) -> bool {
+    keystroke.is_unmodified_enter() || keystroke.is_unmodified_key(" ")
+}
+
+#[cfg(test)]
+#[path = "dismissible_toast_tests.rs"]
+mod tests;
 
 struct ToastData<A: Action + Clone> {
     /// The toast itself.
@@ -47,6 +81,9 @@ struct ToastData<A: Action + Clone> {
     /// Unique identifier for the toast. Used for finding the toast to dismiss from the
     /// stack.
     uuid: Uuid,
+
+    /// Whether this toast's message is currently expanded.
+    message_expanded: bool,
 }
 /// This View is a stack of toasts, each of which holds some "main text" on the left, and optionally
 /// a hyperlink on the right. They can either be manually dismissed by clicking the X button, or
@@ -92,9 +129,20 @@ impl<A: Action + Clone> DismissibleToastStack<A> {
             dismissible_toast: toast,
             abort_handle: Some(abort_handle),
             uuid,
+            message_expanded: false,
         });
+        self.evict_oldest_toasts();
 
         ctx.notify();
+    }
+
+    fn evict_oldest_toasts(&mut self) {
+        while self.toasts.len() > MAX_VISIBLE_TOASTS {
+            let evicted = self.toasts.remove(0);
+            if let Some(abort_handle) = evicted.abort_handle {
+                abort_handle.abort();
+            }
+        }
     }
 
     /// Put a new persistent toast at the top of the stack.
@@ -112,7 +160,9 @@ impl<A: Action + Clone> DismissibleToastStack<A> {
             dismissible_toast: toast,
             abort_handle: None,
             uuid: Uuid::new_v4(),
+            message_expanded: false,
         });
+        self.evict_oldest_toasts();
 
         ctx.notify();
     }
@@ -182,9 +232,13 @@ impl<A: Action + Clone> View for DismissibleToastStack<A> {
         // use this UUID to determine which toast in the stack to close.
         for toast in self.toasts.iter().rev() {
             rendered_toasts.add_child(
-                Container::new(toast.dismissible_toast.render(app, toast.uuid))
-                    .with_margin_bottom(5.)
-                    .finish(),
+                Container::new(toast.dismissible_toast.render(
+                    app,
+                    toast.uuid,
+                    toast.message_expanded,
+                ))
+                .with_margin_bottom(5.)
+                .finish(),
             );
         }
 
@@ -200,6 +254,7 @@ impl<A: Action + Clone> Entity for DismissibleToastStack<A> {
 pub enum DismissibleToastAction {
     ClickDismissButton(Uuid),
     ClickBody(Uuid),
+    ToggleMessageExpanded(Uuid),
 }
 
 impl<A: Action + Clone> TypedActionView for DismissibleToastStack<A> {
@@ -222,6 +277,39 @@ impl<A: Action + Clone> TypedActionView for DismissibleToastStack<A> {
                     ctx.notify();
                 }
             }
+            DismissibleToastAction::ToggleMessageExpanded(uuid) => {
+                if let Some(toast) = self.toasts.iter_mut().find(|toast| toast.uuid == *uuid) {
+                    toast.message_expanded = !toast.message_expanded;
+                    ctx.notify();
+                }
+            }
+        }
+    }
+
+    fn action_accessibility_contents(
+        &mut self,
+        action: &Self::Action,
+        _ctx: &mut ViewContext<Self>,
+    ) -> ActionAccessibilityContent {
+        match action {
+            DismissibleToastAction::ToggleMessageExpanded(uuid) => {
+                let label = self.toasts.iter().find(|toast| toast.uuid == *uuid).map_or(
+                    "Show more",
+                    |toast| {
+                        if toast.message_expanded {
+                            "Show less"
+                        } else {
+                            "Show more"
+                        }
+                    },
+                );
+                Some(AccessibilityContent::new_without_help(
+                    label,
+                    WarpA11yRole::ButtonRole,
+                ))
+                .into()
+            }
+            _ => ActionAccessibilityContent::default(),
         }
     }
 }
@@ -312,6 +400,7 @@ pub struct DismissibleToast<A: Action + Clone> {
     flavor: ToastFlavor,
     main_text: String,
     link: Option<ToastLink<A>>,
+    expand_button_mouse_state: MouseStateHandle,
     close_button_mouse_state: MouseStateHandle,
     close_button_hover_state: MouseStateHandle,
     /// An optional string-based ID representing the object that is the subject of this toast.
@@ -333,6 +422,7 @@ impl<A: Action + Clone> DismissibleToast<A> {
             flavor,
             main_text,
             link: None,
+            expand_button_mouse_state: Default::default(),
             close_button_mouse_state: Default::default(),
             close_button_hover_state: Default::default(),
             object_id: Default::default(),
@@ -387,7 +477,7 @@ impl<A: Action + Clone> DismissibleToast<A> {
         format!("toast_id_{uuid}")
     }
 
-    fn render(&self, app: &AppContext, uuid: Uuid) -> Box<dyn Element> {
+    fn render(&self, app: &AppContext, uuid: Uuid, message_expanded: bool) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let ui_builder = appearance.ui_builder();
 
@@ -399,26 +489,76 @@ impl<A: Action + Clone> DismissibleToast<A> {
             left_aligned.add_child(icon);
         }
 
-        left_aligned.add_child(
-            Shrinkable::new(
-                1.,
-                ui_builder
-                    .wrappable_text(self.main_text.clone(), true)
-                    .with_style(UiComponentStyles {
-                        font_size: Some(appearance.ui_font_size() * 1.2),
-                        font_color: Some(self.flavor.text_color(appearance)),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            )
-            .finish(),
-        );
+        let font_size = appearance.ui_font_size() * 1.2;
+        let message = if message_expanded {
+            self.main_text.clone()
+        } else {
+            truncate_toast_message(&self.main_text)
+        };
+        let message_element = ui_builder
+            .wrappable_text(message, true)
+            .with_style(UiComponentStyles {
+                font_size: Some(font_size),
+                font_color: Some(self.flavor.text_color(appearance)),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        let message_element = if message_expanded {
+            message_element
+        } else {
+            ConstrainedBox::new(message_element)
+                .with_max_height(
+                    font_size * appearance.line_height_ratio() * COLLAPSED_MAX_LINES as f32,
+                )
+                .finish()
+        };
+
+        left_aligned.add_child(Shrinkable::new(1., message_element).finish());
 
         let mut right_aligned = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_main_axis_size(MainAxisSize::Min);
+
+        if toast_message_is_truncated(&self.main_text) {
+            let label = if message_expanded {
+                "Show less"
+            } else {
+                "Show more"
+            };
+            let toggle_button = ui_builder
+                .button(ButtonVariant::Text, self.expand_button_mouse_state.clone())
+                .with_text_label(label.to_string())
+                .with_style(UiComponentStyles {
+                    font_color: Some(self.flavor.text_color(appearance)),
+                    font_weight: Some(Weight::Bold),
+                    ..Default::default()
+                })
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(DismissibleToastAction::ToggleMessageExpanded(uuid))
+                })
+                .finish();
+            let toggle_button = EventHandler::new(toggle_button)
+                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+                .on_keydown(move |ctx, _, keystroke| {
+                    if is_expand_toggle_keystroke(keystroke) {
+                        ctx.dispatch_typed_action(DismissibleToastAction::ToggleMessageExpanded(
+                            uuid,
+                        ));
+                        DispatchEventResult::StopPropagation
+                    } else {
+                        DispatchEventResult::PropagateToParent
+                    }
+                })
+                .finish();
+            right_aligned.add_child(
+                Container::new(toggle_button)
+                    .with_margin_left(TEXT_MARGIN)
+                    .finish(),
+            );
+        }
 
         if let Some(link) = &self.link {
             right_aligned.add_child(

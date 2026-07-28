@@ -176,7 +176,7 @@ pub fn prepare_remote_child_launch(
             Ok(harness) => Some(HarnessConfig::from_harness_type(harness)),
             Err(_) => {
                 log::warn!(
-                    "Unknown harness type from StartAgentV2 proto: {harness_type:?}; omitting harness override so the server picks its default"
+                    "Unknown child-agent harness type: {harness_type:?}; omitting harness override so the server picks its default"
                 );
                 None
             }

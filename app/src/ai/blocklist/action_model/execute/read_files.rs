@@ -6,7 +6,7 @@ use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
     ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
-    read_local_file_context,
+    describe_failed_files, read_local_file_context,
 };
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesFailedFile,
@@ -182,11 +182,7 @@ impl ReadFilesExecutor {
                         .collect::<Vec<_>>();
 
                     if !failed_files.is_empty() && response.file_contexts.is_empty() {
-                        let failed = failed_files
-                            .iter()
-                            .map(|f| format!("{}: {}", f.path, f.message))
-                            .collect::<Vec<_>>()
-                            .join(", ");
+                        let failed = describe_failed_files(&failed_files);
                         return Ok(ReadFilesResult::Error(format!(
                             "Failed to read files: {failed}"
                         )));
@@ -251,12 +247,7 @@ impl ReadFilesExecutor {
                         failed_files: Vec::new(),
                     })
                 } else if result.file_contexts.is_empty() {
-                    let failed_files = result
-                        .failed_files
-                        .iter()
-                        .map(|f| format!("{}: {}", f.path, f.message))
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                    let failed_files = describe_failed_files(&result.failed_files);
                     Ok(ReadFilesResult::Error(format!(
                         "Failed to read files: {failed_files}"
                     )))

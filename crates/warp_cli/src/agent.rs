@@ -693,6 +693,10 @@ pub struct AgentCreateArgs {
     #[arg(long = "description")]
     pub description: Option<String>,
 
+    /// Base prompt for runs of this agent.
+    #[arg(long = "prompt", value_name = "TEXT")]
+    pub prompt: Option<String>,
+
     /// Attach a secret to the agent. Repeat the flag for multiple secrets.
     #[arg(long = "secret", value_name = "NAME")]
     pub secrets: Vec<String>,
@@ -802,6 +806,14 @@ pub struct AgentUpdateArgs {
     /// Remove the agent default environment.
     #[arg(long = "remove-environment", conflicts_with = "environment")]
     pub remove_environment: bool,
+
+    /// Replacement base prompt for runs executed by this agent.
+    #[arg(long = "prompt", value_name = "TEXT", conflicts_with = "remove_prompt")]
+    pub prompt: Option<String>,
+
+    /// Remove the agent base prompt.
+    #[arg(long = "remove-prompt", conflicts_with = "prompt")]
+    pub remove_prompt: bool,
 
     /// JSON formatting configuration.
     #[command(flatten)]

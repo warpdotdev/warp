@@ -266,6 +266,9 @@ fn test_detect_known_agents() {
                 ("vibe", CLIAgent::Vibe),
                 ("agy", CLIAgent::Antigravity),
                 ("omp", CLIAgent::OhMyPi),
+                ("warp", CLIAgent::WarpTui),
+                ("warp-dev", CLIAgent::WarpTui),
+                ("./script/run-tui", CLIAgent::WarpTui),
             ] {
                 assert_eq!(
                     CLIAgent::detect(command, None, None, ctx),
@@ -576,49 +579,80 @@ fn test_oh_my_pi_supports_bash_mode() {
 }
 
 #[test]
-fn test_command_is_warp_tui_matches_binaries_and_launchers() {
+fn test_warp_tui_matches_binaries_and_launchers() {
     // Direct binary names.
-    assert!(CLIAgent::command_is_warp_tui("warp", None));
-    assert!(CLIAgent::command_is_warp_tui("warp-tui", None));
-    assert!(CLIAgent::command_is_warp_tui("warp-tui-oss", None));
+    assert!(CLIAgent::WarpTui.matches_command("warp", None));
+    assert!(CLIAgent::WarpTui.matches_command("warp-preview", None));
+    assert!(CLIAgent::WarpTui.matches_command("warp-dev", None));
+    assert!(CLIAgent::WarpTui.matches_command("warp-tui", None));
+    assert!(CLIAgent::WarpTui.matches_command("warp-tui-oss", None));
     // The dev launcher script.
-    assert!(CLIAgent::command_is_warp_tui("./script/run-tui", None));
-    assert!(CLIAgent::command_is_warp_tui("script/run-tui", None));
+    assert!(CLIAgent::WarpTui.matches_command("./script/run-tui", None));
+    assert!(CLIAgent::WarpTui.matches_command("script/run-tui", None));
     // Absolute / relative paths to the binary.
-    assert!(CLIAgent::command_is_warp_tui(
-        "/workspace/warp/target/debug/warp-tui",
+    assert!(CLIAgent::WarpTui.matches_command("/workspace/warp/target/debug/warp-tui", None,));
+    assert!(CLIAgent::WarpTui.matches_command("./target/debug/warp-tui", None));
+    assert!(CLIAgent::WarpTui.matches_command(
+        "/Applications/WarpPreview.app/Contents/MacOS/warp-preview --resume abc",
         None,
     ));
-    assert!(CLIAgent::command_is_warp_tui(
-        "./target/debug/warp-tui",
-        None
-    ));
     // With arguments and leading whitespace.
-    assert!(CLIAgent::command_is_warp_tui("  warp --resume abc", None));
+    assert!(CLIAgent::WarpTui.matches_command("  warp --resume abc", None));
 }
 
 #[test]
-fn test_command_is_warp_tui_with_env_var_prefix() {
+fn test_warp_tui_matches_with_env_var_prefix() {
     // Env-var assignments before the command are skipped when an escape char is
     // provided (mirrors `CLIAgent::detect`).
-    assert!(CLIAgent::command_is_warp_tui(
-        "WARP_API_KEY=secret warp",
-        Some(EscapeChar::Backslash),
-    ));
+    assert!(
+        CLIAgent::WarpTui.matches_command("WARP_API_KEY=secret warp", Some(EscapeChar::Backslash),)
+    );
 }
 
 #[test]
-fn test_command_is_warp_tui_negatives() {
-    assert!(!CLIAgent::command_is_warp_tui("vim", None));
-    assert!(!CLIAgent::command_is_warp_tui("htop", None));
-    assert!(!CLIAgent::command_is_warp_tui("claude", None));
+fn test_warp_tui_does_not_match_other_commands() {
+    assert!(!CLIAgent::WarpTui.matches_command("vim", None));
+    assert!(!CLIAgent::WarpTui.matches_command("htop", None));
+    assert!(!CLIAgent::WarpTui.matches_command("claude", None));
     // Lookalikes / substrings should not match.
-    assert!(!CLIAgent::command_is_warp_tui("warp-tui-wrapper", None));
-    assert!(!CLIAgent::command_is_warp_tui("mywarp-tui", None));
-    assert!(!CLIAgent::command_is_warp_tui("", None));
+    assert!(!CLIAgent::WarpTui.matches_command("warp-preview-wrapper", None));
+    assert!(!CLIAgent::WarpTui.matches_command("mywarp-dev", None));
+    assert!(!CLIAgent::WarpTui.matches_command("warp-tui-wrapper", None));
+    assert!(!CLIAgent::WarpTui.matches_command("mywarp-tui", None));
+    assert!(!CLIAgent::WarpTui.matches_command("", None));
     // `cargo run` is a known non-match (the first token is `cargo`).
-    assert!(!CLIAgent::command_is_warp_tui(
-        "cargo run -p warp_tui",
-        None
+    assert!(!CLIAgent::WarpTui.matches_command("cargo run -p warp_tui", None));
+}
+
+#[test]
+fn test_warp_tui_variant_properties() {
+    assert!(CLIAgent::Claude.supports_cli_agent_footer());
+    assert_eq!(CLIAgent::WarpTui.command_prefix(), "warp");
+    assert_eq!(
+        CLIAgent::WarpTui.command_prefixes(),
+        &[
+            "warp",
+            "warp-preview",
+            "warp-dev",
+            "warp-tui",
+            "warp-tui-oss",
+            "run-tui",
+        ]
+    );
+    assert_eq!(CLIAgent::WarpTui.display_name(), "Warp TUI");
+    assert_eq!(CLIAgent::WarpTui.brand_color(), None);
+    assert_eq!(CLIAgent::WarpTui.icon(), None);
+    assert!(CLIAgent::WarpTui.supported_skill_providers().is_empty());
+    assert!(!CLIAgent::WarpTui.supports_bash_mode());
+    assert!(!CLIAgent::WarpTui.supports_cli_agent_footer());
+    assert!(matches!(
+        crate::server::telemetry::CLIAgentType::from(CLIAgent::WarpTui),
+        crate::server::telemetry::CLIAgentType::WarpTui
     ));
+    // Serialized name round-trips (also covered by
+    // `test_serialized_name_round_trips_known_agents`, asserted explicitly here).
+    assert_eq!(
+        CLIAgent::from_serialized_name(&CLIAgent::WarpTui.to_serialized_name()),
+        CLIAgent::WarpTui
+    );
 }

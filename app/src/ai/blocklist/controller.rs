@@ -3338,19 +3338,28 @@ impl BlocklistAIController {
                     .try_into()
                     .ok()
                     .is_some_and(|p: LlmProvider| p == LlmProvider::AwsBedrock);
+                let is_gemini_enterprise = details
+                    .provider
+                    .try_into()
+                    .ok()
+                    .is_some_and(|p: LlmProvider| p == LlmProvider::GeminiEnterprise);
 
                 let error = if is_aws_bedrock {
                     RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid {
                         model_name: details.model_name,
                     }
+                } else if is_gemini_enterprise {
+                    RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
                 } else {
-                    let provider = details.provider.try_into().ok().and_then(|p| match p {
+                    let provider = details.provider.try_into().ok().and_then(|provider| match provider {
                         LlmProvider::Google => Some("Google"),
                         LlmProvider::Anthropic => Some("Anthropic"),
                         LlmProvider::Openai => Some("OpenAI"),
                         LlmProvider::Xai => Some("xAI"),
                         LlmProvider::Openrouter => Some("OpenRouter"),
-                        LlmProvider::AwsBedrock | LlmProvider::Unknown => None,
+                        LlmProvider::AwsBedrock
+                        | LlmProvider::GeminiEnterprise
+                        | LlmProvider::Unknown => None,
                     });
                     RenderableAIError::InvalidApiKey {
                         provider: provider.unwrap_or("Unknown").to_string(),

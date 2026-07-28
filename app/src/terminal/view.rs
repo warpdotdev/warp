@@ -431,7 +431,7 @@ use crate::terminal::model::block::{
 };
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::blocks::{
-    BlockFilter, BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, Gap,
+    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, Gap,
     RemovableBlocklistItem,
 };
 use crate::terminal::model::escape_sequences::{
@@ -9476,26 +9476,8 @@ impl TerminalView {
     }
 
     fn handle_typeahead_event(&mut self, ctx: &mut ViewContext<Self>) {
-        let mut model = self.model.lock();
-        let completed_block_idx = model.block_list().prev_matching_block_from_index(
-            BlockFilter {
-                include_hidden: true,
-                include_background: false,
-            },
-            model.block_list().active_block_index(),
-        );
-        let was_typeahead_entered_during_ai_requested_command =
-            completed_block_idx.is_some_and(|idx| {
-                model
-                    .block_list()
-                    .block_at(idx)
-                    .is_some_and(|block| block.agent_interaction_metadata().is_some())
-            });
-
-        let Some((typeahead, num_typeahead_chars_inserted)) = model
-            .block_list_mut()
-            .early_output_mut()
-            .advance_typeahead()
+        let Some((typeahead, num_typeahead_chars_inserted)) =
+            self.model.lock().take_typeahead_for_input()
         else {
             #[cfg(feature = "integration_tests")]
             log::warn!("Received typeahead event, but typeahead was empty");
@@ -9503,20 +9485,13 @@ impl TerminalView {
             return;
         };
 
-        // We don't insert typeahead into the input buffer when it was entered during an
-        // agent-requested command - the agent is going to follow-up immediately after the
-        // command exists anyway, not to mention the expected semantics of typeahead are
-        // probably different with AI requested commands because the input remains interactive
-        // (for at least the first few seconds of the command's execution).
-        if !was_typeahead_entered_during_ai_requested_command {
-            #[cfg(feature = "integration_tests")]
-            log::info!("Writing typeahead to input editor: {typeahead}");
+        #[cfg(feature = "integration_tests")]
+        log::info!("Writing typeahead to input editor: {typeahead}");
 
-            self.input.update(ctx, |input, ctx| {
-                input.insert_typeahead_text(num_typeahead_chars_inserted, typeahead, ctx);
-            });
-            ctx.notify();
-        }
+        self.input.update(ctx, |input, ctx| {
+            input.insert_typeahead_text(num_typeahead_chars_inserted, &typeahead, ctx);
+        });
+        ctx.notify();
     }
 
     /// This function is invoked every time there is some form of view event
@@ -12002,6 +11977,10 @@ impl TerminalView {
                                             {
                                                 let remote_host =
                                                     me.active_session_remote_host(ctx);
+                                                let should_auto_toggle_input = agent
+                                                    .supports_cli_agent_footer()
+                                                    && *AISettings::as_ref(ctx)
+                                                        .auto_open_rich_input_on_cli_agent_start;
                                                 sessions_model.set_session(
                                                     view_id,
                                                     CLIAgentSession {
@@ -12010,15 +11989,13 @@ impl TerminalView {
                                                         session_context:
                                                             CLIAgentSessionContext::default(),
                                                         input_state: CLIAgentInputState::Closed,
-                                                        should_auto_toggle_input: *AISettings::as_ref(
-                                                            ctx,
-                                                        )
-                                                        .auto_open_rich_input_on_cli_agent_start,
+                                                        should_auto_toggle_input,
                                                         listener: None,
                                                         plugin_version: None,
                                                         remote_host,
                                                         draft_text: None,
-                                                        custom_command_prefix: custom_command_prefix.clone(),
+                                                        custom_command_prefix:
+                                                            custom_command_prefix.clone(),
                                                         received_rich_notification: false,
                                                     },
                                                     ctx,
@@ -16432,6 +16409,15 @@ impl TerminalView {
         if !self.selected_blocks.is_empty() {
             self.copy_blocks(BlockEntity::CommandAndOutput, ctx);
         }
+
+        // If nothing was copied and a fullscreen TUI (alt screen) is managing its own selection,
+        // forward the copy intent to the foreground TUI so it can copy its own selection.
+        if cfg!(target_os = "linux")
+            && self.selected_blocks.is_empty()
+            && self.model.lock().is_alt_screen_active()
+        {
+            self.user_write_ctrl_c_to_pty(ctx);
+        }
     }
 
     fn copy_commands(&mut self, ctx: &mut ViewContext<Self>) {
@@ -18287,6 +18273,15 @@ impl TerminalView {
     }
 
     #[cfg(feature = "local_fs")]
+    fn open_code_in_warp(
+        &mut self,
+        source: CodeSource,
+        layout: EditorLayout,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.emit(Event::OpenCodeInWarp { source, layout });
+    }
+    #[cfg(feature = "local_fs")]
     fn open_file_path_with_target(
         &mut self,
         path: PathBuf,
@@ -18374,16 +18369,6 @@ impl TerminalView {
         {
             ctx.emit(Event::OpenFileInWarp { path, session })
         }
-    }
-
-    #[cfg(feature = "local_fs")]
-    fn open_code_in_warp(
-        &mut self,
-        source: CodeSource,
-        layout: EditorLayout,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        ctx.emit(Event::OpenCodeInWarp { source, layout })
     }
 
     fn open_code_diff(&self, view: ViewHandle<CodeDiffView>, ctx: &mut ViewContext<Self>) {
@@ -22877,7 +22862,6 @@ impl TerminalView {
         if !FeatureFlag::HoaCodeReview.is_enabled() {
             return None;
         }
-
         CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
             .map(|s| s.agent)
@@ -28061,12 +28045,11 @@ impl View for TerminalView {
             context.set.insert(init::KEYBOARD_PROTOCOL_ENABLED_KEY);
         }
 
-        if CLIAgentSessionsModel::as_ref(app)
-            .session(self.view_id)
-            .is_some()
-        {
+        if let Some(session) = CLIAgentSessionsModel::as_ref(app).session(self.view_id) {
             context.set.insert(init::CLI_AGENT_SESSION_ACTIVE_KEY);
-            if *AISettings::as_ref(app).should_render_cli_agent_footer {
+            if session.agent.supports_cli_agent_footer()
+                && *AISettings::as_ref(app).should_render_cli_agent_footer
+            {
                 context.set.insert(flags::CLI_AGENT_FOOTER_ENABLED);
 
                 if is_rich_input_chip_in_cli_toolbar(app) {

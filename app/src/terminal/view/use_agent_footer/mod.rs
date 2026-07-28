@@ -137,6 +137,7 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::Hermes
         | CLIAgent::Vibe
         | CLIAgent::Antigravity
+        | CLIAgent::WarpTui
         | CLIAgent::Unknown => RichInputSubmitStrategy::Inline,
     }
 }
@@ -305,8 +306,11 @@ impl TerminalView {
             .session(self.view_id)
             .map(|s| s.agent);
 
-        // Check the appropriate setting based on whether this is a CLI agent command
-        if cli_agent.is_some() {
+        // Check the appropriate setting based on whether this is a CLI agent command.
+        if let Some(cli_agent) = cli_agent {
+            if !cli_agent.supports_cli_agent_footer() {
+                return false;
+            }
             // For CLI agent commands, only check the CLI agent footer setting.
             // This is independent of the global AI toggle so that users who
             // disable Warp AI still get the footer for third-party coding agents.
@@ -389,12 +393,7 @@ impl TerminalView {
     }
 
     /// Returns whether the active long-running command in this terminal is
-    /// Warp's own headless TUI (`warp_tui`). Uses the same command-based
-    /// detection as [`Self::detect_cli_agent_from_model`] (which decides when to
-    /// show the CLI agent footer), but callers use it to *hide* the "Use agent"
-    /// footer and the outer agent input bar, since the Warp TUI is itself an
-    /// agent surface. This is the single source of truth for "is the Warp TUI
-    /// running here".
+    /// Warp's own headless TUI (`warp_tui`).
     pub(super) fn is_running_warp_tui(&self, model: &TerminalModel, ctx: &AppContext) -> bool {
         let active_block = model.block_list().active_block();
         if !active_block.is_active_and_long_running() {
@@ -409,7 +408,7 @@ impl TerminalView {
                     .map(|session| session.shell_family().escape_char())
             })
         });
-        CLIAgent::command_is_warp_tui(&command, escape_char)
+        CLIAgent::WarpTui.matches_command(&command, escape_char)
     }
 
     /// Updates the UI during a long running command to agent "tagged-in state".
@@ -1349,7 +1348,10 @@ impl View for UseAgentToolbar {
         // If a CLI agent is detected, delegate rendering to the CLI agent footer view.
         // Wrap with horizontal padding matching the terminal view padding so the footer
         // aligns consistently with the input context (which inherits terminal padding).
-        if self.cli_agent(app).is_some() {
+        if let Some(cli_agent) = self.cli_agent(app) {
+            if !cli_agent.supports_cli_agent_footer() {
+                return Empty::new().finish();
+            }
             let mut container = Container::new(ChildView::new(&self.agent_input_footer).finish())
                 .with_horizontal_padding(*super::PADDING_LEFT);
 

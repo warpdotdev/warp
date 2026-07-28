@@ -952,9 +952,7 @@ impl CommentListView {
             if !has_sendable_comments {
                 Cow::Borrowed("No non-outdated comments to send")
             } else {
-                let cmd = agent.command_prefix();
-                let label = if cmd.is_empty() { "CLI agent" } else { cmd };
-                Cow::Owned(format!("Send diff comments to {label}"))
+                Cow::Owned(format!("Send diff comments to {}", agent.display_name()))
             }
         } else if !ai_enabled {
             Cow::Borrowed("AI must be enabled to send comments to Agent")
@@ -1137,7 +1135,9 @@ impl View for CommentListView {
                 .with_dragbar_color(warpui::elements::Fill::Solid(
                     warpui::color::ColorU::transparent_black(),
                 ))
-                .with_bounds_callback(Box::new(|window_size| (100.0, window_size.y() * 0.8)))
+                .with_bounds_callback(Box::new(|window_size| {
+                    (100.0, (window_size.y() * 0.8).max(100.0))
+                }))
                 .on_resize(|ctx, _| {
                     ctx.notify();
                 })

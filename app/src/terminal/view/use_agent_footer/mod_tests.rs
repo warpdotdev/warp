@@ -391,6 +391,50 @@ fn cli_agent_footer_renders_for_viewer_of_shared_cloud_agent_session() {
 }
 
 #[test]
+fn cli_agent_footer_does_not_render_for_warp_tui_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            simulate_user_started_long_running_command(view);
+
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    view.id(),
+                    CLIAgentSession {
+                        agent: CLIAgent::WarpTui,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext::default(),
+                        input_state: CLIAgentInputState::Closed,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: None,
+                        custom_command_prefix: None,
+                        received_rich_notification: false,
+                        should_auto_toggle_input: false,
+                    },
+                    ctx,
+                );
+            });
+
+            view.maybe_show_use_agent_footer_in_blocklist(ctx);
+
+            let model = view.model.lock();
+            assert!(!view.should_render_use_agent_footer(&model, ctx));
+            let active_block_index = model.block_list().active_block_index();
+            assert!(
+                model
+                    .block_list()
+                    .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
+                    .is_none()
+            );
+        });
+    })
+}
+#[test]
 fn test_rich_input_submit_strategy_for_oh_my_pi() {
     assert_eq!(
         rich_input_submit_strategy(CLIAgent::OhMyPi),

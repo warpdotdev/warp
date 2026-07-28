@@ -170,6 +170,7 @@ impl TuiSkillMenuModel {
                 .map(|row| TuiInlineMenuRow {
                     title: format!("/{}", row.name),
                     description: (!row.description.is_empty()).then(|| row.description.clone()),
+                    state_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })

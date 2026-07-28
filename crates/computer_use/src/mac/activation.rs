@@ -33,7 +33,8 @@ use std::time::Duration;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventSubtype, NSEventType};
 use objc2_core_foundation::{CFMachPort, CFRunLoop, CGPoint, kCFRunLoopDefaultMode};
 use objc2_core_graphics::{
-    CGEvent, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType, CGMouseButton,
+    CGEvent, CGEventField, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
+    CGMouseButton,
 };
 
 use super::window::{self, WindowInfo};
@@ -83,10 +84,17 @@ pub fn ensure_activated(target_pid: libc::pid_t, info: &WindowInfo, owner: Optio
 
     // Install focus-suppression taps before sending the activation click, so the focus-change
     // messages it triggers are intercepted. Skip the taps if there is no distinct previous app.
+    // The activation window number is carried into each tap context so the callback can narrow
+    // suppression to the activation transition for this specific window rather than dropping
+    // every focus event headed to the previously-frontmost process (APP-4902).
     let thread = match previous {
-        Some((previous_pid, _)) if previous_pid != target_pid => {
-            spawn_tap_thread(previous_pid, target_pid, suppress.clone(), stop.clone())
-        }
+        Some((previous_pid, _)) if previous_pid != target_pid => spawn_tap_thread(
+            previous_pid,
+            target_pid,
+            window_number,
+            suppress.clone(),
+            stop.clone(),
+        ),
         _ => None,
     };
     let has_taps = thread.is_some();
@@ -208,6 +216,12 @@ struct TapContext {
     /// Whether this tap is attached to the previously-frontmost app (whose focus messages we
     /// drop) versus the target app (which we always let through).
     is_previous: bool,
+    /// The window number this session activated. Only focus events that AppKit addresses to this
+    /// exact window are the activation transition we intend to suppress; focus events for any
+    /// other window (including the user clicking a different Warp window) pass through. Both the
+    /// previous-process and target-process contexts carry this, but the target context never
+    /// suppresses because `is_previous` is false.
+    window_number: i64,
 }
 
 /// Spawns the run-loop thread that installs and services the focus-suppression taps for
@@ -216,13 +230,23 @@ struct TapContext {
 fn spawn_tap_thread(
     previous_pid: libc::pid_t,
     target_pid: libc::pid_t,
+    window_number: i64,
     suppress: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 ) -> Option<JoinHandle<()>> {
     let (ready_tx, ready_rx) = mpsc::channel();
     let handle = thread::Builder::new()
         .name("cu-bg-activation".to_string())
-        .spawn(move || run_tap_loop(previous_pid, target_pid, suppress, stop, ready_tx))
+        .spawn(move || {
+            run_tap_loop(
+                previous_pid,
+                target_pid,
+                window_number,
+                suppress,
+                stop,
+                ready_tx,
+            )
+        })
         .ok()?;
 
     match ready_rx.recv() {
@@ -240,6 +264,7 @@ fn spawn_tap_thread(
 fn run_tap_loop(
     previous_pid: libc::pid_t,
     target_pid: libc::pid_t,
+    window_number: i64,
     suppress: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     ready_tx: mpsc::Sender<bool>,
@@ -260,6 +285,7 @@ fn run_tap_loop(
         let context = Box::into_raw(Box::new(TapContext {
             suppress: suppress.clone(),
             is_previous,
+            window_number,
         }));
         // SAFETY: `tap_callback` matches the `CGEventTapCallBack` ABI and `context` is a valid,
         // owned `TapContext` pointer that outlives the tap (it is dropped only after the run
@@ -313,12 +339,72 @@ fn run_tap_loop(
     }
 }
 
+/// The raw `CGEventType` values of the focus-change messages macOS delivers when an app is
+/// activated/deactivated. These do not have stable public `CGEventType` variants across macOS
+/// versions, so they are matched by raw value (13, 19, 20) as in the existing implementation.
+const FOCUS_EVENT_TYPES: [u32; 3] = [13, 19, 20];
+
+/// The private CGEvent field that carries the target window number on the `postToPid` path.
+const FIELD_WINDOW_NUMBER: CGEventField = CGEventField(51);
+/// The private CGEvent field that flags `FIELD_WINDOW_NUMBER` as valid (1 = valid).
+const FIELD_WINDOW_NUMBER_VALID: CGEventField = CGEventField(58);
+
+/// Returns true when `event` is the AppKit activation transition for this session's activated
+/// window — the one focus event the previous-process tap should swallow to keep the target window
+/// backgrounded while it receives input.
+///
+/// This is the window-scoped narrowing of the previous process-wide suppression (APP-4902). It
+/// recognizes only raw focus types `13`, `19`, and `20`; requires the previous-process context
+/// with suppression enabled; reads the event's window-addressing identity using the same
+/// private field-51/field-58 contract [`post_appkit_activation`] stamps, corroborated by the
+/// standard mouse window-under-pointer fields (`91`/`92`) when present; and returns true only
+/// when the event is validly addressed to this session's activated window. Missing, invalid, or
+/// different identities return false so the event passes through — failing open preserves the
+/// user's ability to focus any other window (including other Warp windows) during an active
+/// background computer-use task.
+///
+/// Side-effect-free so the callback matrix can be unit-tested with synthetic events.
+fn is_activation_focus_transition(
+    context: &TapContext,
+    event_type: CGEventType,
+    event: &CGEvent,
+) -> bool {
+    if !FOCUS_EVENT_TYPES.contains(&event_type.0) {
+        return false;
+    }
+    if !context.is_previous || !context.suppress.load(Ordering::SeqCst) {
+        return false;
+    }
+    // The private routing pair is the primary identity: field 58 must mark field 51 valid, and
+    // field 51 must equal the window this session activated.
+    if CGEvent::integer_value_field(Some(event), FIELD_WINDOW_NUMBER_VALID) != 1 {
+        return false;
+    }
+    if CGEvent::integer_value_field(Some(event), FIELD_WINDOW_NUMBER) != context.window_number {
+        return false;
+    }
+    // Corroborate against the standard mouse window-under-pointer fields when they are present.
+    // If either identifies a different window, the event is not this session's activation
+    // transition — pass it through rather than risking suppression of an unrelated focus change.
+    for field in [
+        CGEventField::MouseEventWindowUnderMousePointer,
+        CGEventField::MouseEventWindowUnderMousePointerThatCanHandleThisEvent,
+    ] {
+        let window = CGEvent::integer_value_field(Some(event), field);
+        if window != 0 && window != context.window_number {
+            return false;
+        }
+    }
+    true
+}
+
 /// The C event-tap callback. Returns the event to pass it through, or null to drop it.
 ///
-/// Focus-change messages do not have a stable public `CGEventType` across macOS versions, so
-/// they are identified by their raw values (13, 19, 20). When suppression is active we drop
-/// those headed to the previous app (keeping it from being deactivated, i.e. keeping it the
-/// user's frontmost app) while letting the target app's activation through.
+/// Only the AppKit activation transition for this session's specific activated window is dropped
+/// (see [`is_activation_focus_transition`]); every other event — including focus events for a
+/// different window the user clicked — passes through unchanged. This keeps a background
+/// computer-use target window controllable without raising it, while never trapping the user's
+/// own focus changes to any Warp window.
 unsafe extern "C-unwind" fn tap_callback(
     _proxy: CGEventTapProxy,
     event_type: CGEventType,
@@ -329,8 +415,7 @@ unsafe extern "C-unwind" fn tap_callback(
     let Some(context) = (unsafe { (user_info as *const TapContext).as_ref() }) else {
         return event_ptr;
     };
-    let is_focus_message = matches!(event_type.0, 13 | 19 | 20);
-    if is_focus_message && context.is_previous && context.suppress.load(Ordering::SeqCst) {
+    if is_activation_focus_transition(context, event_type, unsafe { &*event_ptr }) {
         return std::ptr::null_mut();
     }
     event_ptr

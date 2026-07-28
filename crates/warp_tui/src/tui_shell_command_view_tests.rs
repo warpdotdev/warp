@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
+use string_offset::CharOffset;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId, Appearance, TaskId,
     TerminalModel, queue_tui_permission_action,
@@ -21,8 +22,11 @@ use warpui_core::{
 use super::{
     ShellCommandViewState, TuiShellCommandView, TuiShellCommandViewAction, TuiShellCommandViewEvent,
 };
+use crate::editor_element::TuiEditorAction;
+use crate::editor_view::TuiEditorViewAction;
 use crate::test_fixtures::{TestHostView, add_test_action_model};
 use crate::tui_builder::TuiUiBuilder;
+use crate::tui_permission_prompt::TuiPermissionPromptAction;
 
 #[test]
 fn command_without_terminal_block_uses_fallback_row() {
@@ -88,7 +92,13 @@ fn blocked_command_card_matches_permission_layout() {
         let header_row = row_containing("Is it OK if I run this command");
         let command_row = row_containing("echo 1");
         let first_option_row = row_containing("(1) yes");
+        row_containing("(3) Other");
         let footer_row = row_containing("Esc to cancel");
+        assert!(
+            lines[usize::from(header_row)]
+                .trim_end()
+                .ends_with("e to edit command")
+        );
         assert!(first_option_row >= command_row + 2);
 
         let (header_background, surface_background) = app.read(|ctx| {
@@ -128,33 +138,18 @@ fn finishing_command_editing_selects_yes_without_executing() {
         });
 
         prompt.update(&mut app, |prompt, ctx| {
-            prompt.handle_action(
-                &crate::tui_permission_prompt::TuiPermissionPromptAction::MoveUp,
-                ctx,
-            );
+            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
         });
         app.read(|ctx| {
             let view = view.as_ref(ctx);
             assert!(view.command_editor.as_ref(ctx).is_focused());
-            assert_eq!(
-                view.permission_prompt.as_ref(ctx).highlighted_index(ctx),
-                None
-            );
         });
         let command_editor = app.read(|ctx| view.as_ref(ctx).command_editor.clone());
         command_editor.update(&mut app, |editor, ctx| {
             editor.set_text("echo edited\necho second", ctx)
         });
-        let window_id = app.read(|ctx| view.window_id(ctx));
-        let handled = app
-            .dispatch_keystroke(
-                window_id,
-                &[view.id(), prompt.id(), command_editor.id()],
-                &Keystroke::parse("enter").expect("valid Enter keystroke"),
-                false,
-            )
-            .expect("Enter dispatch succeeds");
-        assert!(handled);
+        present_shell_view(&mut app, &view);
+        assert!(dispatch_focused_key(&mut app, &view, "enter"));
 
         app.read(|ctx| {
             let view = view.as_ref(ctx);
@@ -173,6 +168,81 @@ fn finishing_command_editing_selects_yes_without_executing() {
                     .get_action_result(&view.action.id)
                     .is_none()
             );
+        });
+    });
+}
+
+#[test]
+fn command_editor_arrows_move_within_multiline_text_then_cycle_at_boundaries() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        app.update(crate::option_selector::init);
+        let action = command_action("action-1", "first\nsecond\nthird");
+        let view = add_shell_view(
+            &mut app,
+            action.clone(),
+            Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+        );
+        let (action_model, conversation_id, prompt, command_editor) = app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            (
+                view.action_model.clone(),
+                view.conversation_id,
+                view.permission_prompt.clone(),
+                view.command_editor.clone(),
+            )
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+        prompt.update(&mut app, |prompt, ctx| {
+            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
+        });
+        command_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+
+        present_shell_view(&mut app, &view);
+        app.read(|ctx| {
+            let window_id = view.window_id(ctx);
+            let focused = ctx
+                .focused_view_id(window_id)
+                .expect("command editor is focused");
+            let responder_chain = ctx.view_ancestors(window_id, focused);
+            let selector_id = prompt.as_ref(ctx).child_view_ids(ctx)[0];
+            assert!(responder_chain.contains(&selector_id));
+        });
+
+        assert!(dispatch_focused_key(&mut app, &view, "down"));
+        assert!(app.read(|ctx| command_editor.as_ref(ctx).is_focused()));
+        assert!(dispatch_focused_key(&mut app, &view, "down"));
+        assert!(app.read(|ctx| command_editor.as_ref(ctx).is_focused()));
+        assert!(dispatch_focused_key(&mut app, &view, "down"));
+        app.read(|ctx| {
+            assert!(!command_editor.as_ref(ctx).is_focused());
+            assert_eq!(prompt.as_ref(ctx).highlighted_index(ctx), Some(0));
+        });
+
+        prompt.update(&mut app, |prompt, ctx| {
+            prompt.handle_action(&TuiPermissionPromptAction::EditBody, ctx);
+        });
+        command_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+        assert!(dispatch_focused_key(&mut app, &view, "up"));
+        app.read(|ctx| {
+            assert!(!command_editor.as_ref(ctx).is_focused());
+            assert_eq!(prompt.as_ref(ctx).highlighted_index(ctx), Some(2));
         });
     });
 }
@@ -275,6 +345,40 @@ fn manual_collapse_override_wins_over_auto_expansion() {
     assert!(!state.is_collapsed());
     assert!(state.manual_override);
     assert!(!state.auto_expanded);
+}
+
+fn present_shell_view(app: &mut App, view: &ViewHandle<TuiShellCommandView>) {
+    let mut presenter = TuiPresenter::new();
+    app.update(|ctx| {
+        let view_ref = view.as_ref(ctx);
+        let prompt = &view_ref.permission_prompt;
+        let mut invalidation = WindowInvalidation::default();
+        invalidation.updated.insert(view.id());
+        invalidation.updated.insert(view_ref.command_editor.id());
+        invalidation.updated.insert(prompt.id());
+        invalidation
+            .updated
+            .extend(prompt.as_ref(ctx).child_view_ids(ctx));
+        presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
+        presenter.present(ctx, view, TuiRect::new(0, 0, 80, 16));
+    });
+}
+
+fn dispatch_focused_key(app: &mut App, view: &ViewHandle<TuiShellCommandView>, key: &str) -> bool {
+    let (window_id, responder_chain) = app.read(|ctx| {
+        let window_id = view.window_id(ctx);
+        let focused = ctx
+            .focused_view_id(window_id)
+            .expect("shell permission interaction has a focused view");
+        (window_id, ctx.view_ancestors(window_id, focused))
+    });
+    app.dispatch_keystroke(
+        window_id,
+        &responder_chain,
+        &Keystroke::parse(key).expect("valid keystroke"),
+        false,
+    )
+    .expect("keystroke dispatch succeeds")
 }
 
 fn add_shell_view(

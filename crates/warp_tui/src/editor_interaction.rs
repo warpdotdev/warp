@@ -8,6 +8,7 @@ use warp_editor::selection::{TextDirection, TextUnit};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, ModelHandle};
 
+use crate::clipboard::copy_to_clipboard;
 use crate::editor_element::TuiEditorAction;
 
 /// Editing commands shared by TUI text fields.
@@ -33,6 +34,8 @@ pub enum TuiEditorCommand {
     SelectWordLeft,
     SelectWordRight,
     SelectAll,
+    Copy,
+    Cut,
     KillToLineEnd,
     KillToLineStart,
     Yank,
@@ -52,6 +55,14 @@ pub(crate) enum TuiEditorLineMode {
 pub(crate) struct TuiEditorBehavior {
     line_mode: TuiEditorLineMode,
     viewport_rows: u32,
+    /// When `true`, completing a mouse drag-selection (i.e. `SelectionEnd`
+    /// from a mouse-up event) automatically copies the selected text to the
+    /// clipboard, matching the transcript view's highlight-to-copy behavior.
+    /// Keyboard selection commands (`SelectLeft`, `SelectWordRight`, etc.) do
+    /// **not** trigger an auto-copy: they go through `apply_command` and never
+    /// reach the `SelectionEnd` path. Disabled by default; opt in with
+    /// [`Self::with_copy_on_mouse_highlight`].
+    copy_on_mouse_highlight: bool,
 }
 
 impl TuiEditorBehavior {
@@ -60,6 +71,7 @@ impl TuiEditorBehavior {
         Self {
             line_mode: TuiEditorLineMode::SingleLine,
             viewport_rows: 1,
+            copy_on_mouse_highlight: false,
         }
     }
 
@@ -68,7 +80,19 @@ impl TuiEditorBehavior {
         Self {
             line_mode: TuiEditorLineMode::Multiline,
             viewport_rows,
+            copy_on_mouse_highlight: false,
         }
+    }
+
+    /// Enables automatic clipboard copy when the user completes a mouse
+    /// drag-selection (mouse-up → `SelectionEnd`), mirroring the transcript
+    /// view's highlight-to-copy behavior. Keyboard-driven selection commands
+    /// (`SelectLeft`, `SelectWordRight`, etc.) are intentionally excluded:
+    /// they go through `apply_command` and never reach the `SelectionEnd`
+    /// arm. Any editor that opts in will auto-copy on mouse-drag-release.
+    pub(crate) fn with_copy_on_mouse_highlight(mut self) -> Self {
+        self.copy_on_mouse_highlight = true;
+        self
     }
 
     /// Returns the number of visible editor rows.
@@ -95,6 +119,14 @@ impl TuiEditorBehavior {
 pub(crate) enum TuiEditorInteractionOutcome {
     FollowCursor,
     PreserveViewport,
+    Clipboard(TuiEditorClipboardAction),
+}
+
+/// Clipboard operation requested by a shared TUI editor command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TuiEditorClipboardAction {
+    Copy,
+    Cut,
 }
 
 /// Selects stable user-configurable names for each binding consumer.
@@ -261,6 +293,20 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         editor_name: Some("tui:editor:select_all"),
         description: "Select all text",
         keys: &["ctrl-shift-A"],
+    },
+    EditorBindingSpec {
+        command: TuiEditorCommand::Copy,
+        input_name: Some("tui:input:copy"),
+        editor_name: Some("tui:editor:copy"),
+        description: "Copy selected text",
+        keys: &["ctrl-shift-C", "alt-w"],
+    },
+    EditorBindingSpec {
+        command: TuiEditorCommand::Cut,
+        input_name: Some("tui:input:cut"),
+        editor_name: Some("tui:editor:cut"),
+        description: "Cut selected text",
+        keys: &["ctrl-x"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::KillToLineEnd,
@@ -435,6 +481,12 @@ impl TuiEditorState {
             TuiEditorCommand::SelectAll => {
                 model.update(ctx, |model, ctx| model.select_all(ctx));
             }
+            TuiEditorCommand::Copy => {
+                return TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Copy);
+            }
+            TuiEditorCommand::Cut => {
+                return TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Cut);
+            }
             TuiEditorCommand::KillToLineEnd => {
                 if let Some(killed) = model.update(ctx, |model, ctx| {
                     model.kill_to_char_cell_visual_row_end(ctx)
@@ -467,6 +519,46 @@ impl TuiEditorState {
     }
 }
 
+/// Copies the current editor selection and, for a cut, deletes it only after
+/// the clipboard write succeeds. Returns `false` when there is no selection.
+pub(crate) fn apply_editor_clipboard_action(
+    model: &ModelHandle<CodeEditorModel>,
+    action: TuiEditorClipboardAction,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    apply_editor_clipboard_action_with(model, action, copy_to_clipboard, ctx)
+}
+
+fn apply_editor_clipboard_action_with(
+    model: &ModelHandle<CodeEditorModel>,
+    action: TuiEditorClipboardAction,
+    copy: impl FnOnce(&str) -> anyhow::Result<()>,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    let selected_text = model
+        .as_ref(ctx)
+        .read_selected_text_as_clipboard_content(ctx)
+        .plain_text;
+    if selected_text.is_empty() {
+        return Ok(false);
+    }
+
+    copy(&selected_text)?;
+    if action == TuiEditorClipboardAction::Cut {
+        model.update(ctx, |model, ctx| model.backspace(ctx));
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+pub(crate) fn apply_editor_clipboard_action_for_test(
+    model: &ModelHandle<CodeEditorModel>,
+    action: TuiEditorClipboardAction,
+    copy: impl FnOnce(&str) -> anyhow::Result<()>,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    apply_editor_clipboard_action_with(model, action, copy, ctx)
+}
 /// Applies an element-originated action and reports the required viewport work.
 pub(crate) fn apply_editor_action(
     model: &ModelHandle<CodeEditorModel>,
@@ -503,6 +595,9 @@ pub(crate) fn apply_editor_action(
         }
         TuiEditorAction::SelectionEnd => {
             model.update(ctx, |model, ctx| model.end_selection(ctx));
+            if behavior.copy_on_mouse_highlight {
+                return TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Copy);
+            }
         }
         TuiEditorAction::Scroll { rows } => {
             scroll_editor_viewport(model, *rows, behavior, ctx);
