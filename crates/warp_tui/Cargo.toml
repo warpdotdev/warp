@@ -40,6 +40,7 @@ async-fs.workspace = true
 base64.workspace = true
 blocking.workspace = true
 channel_versions.workspace = true
+chrono.workspace = true
 clap.workspace = true
 command.workspace = true
 dirs.workspace = true

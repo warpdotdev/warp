@@ -15994,6 +15994,7 @@ dependencies = [
  "base64 0.22.1",
  "blocking",
  "channel_versions",
+ "chrono",
  "clap",
  "command",
  "dirs 6.0.0",

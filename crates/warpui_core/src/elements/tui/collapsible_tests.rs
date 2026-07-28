@@ -109,3 +109,108 @@ fn header_styles_apply_per_span_without_bleeding_past_the_text() {
         });
     });
 }
+
+/// Renders `collapsible` through the presenter at `size`, returning the
+/// frame's rows. `present_element` lays the `TuiFlex` column out before paint,
+/// so the composite header is measured and rendered like it would be live.
+fn render_collapsible_to_lines(collapsible: Box<dyn TuiElement>, size: TuiSize) -> Vec<String> {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            TuiPresenter::new()
+                .present_element(
+                    collapsible,
+                    TuiRect::new(0, 0, size.width, size.height),
+                    app_ctx,
+                )
+                .buffer
+                .to_lines()
+        })
+    })
+}
+
+#[test]
+fn narrow_header_keeps_chevron_on_first_row_while_label_wraps() {
+    // A shell-command-style header whose label ("✓ Ran `print` ") is too long
+    // to fit at 12 columns. The disclosure chevron must stay on the first row
+    // while the label wraps onto later rows. The bug: appending the chevron to
+    // a single `.truncate()`d label clipped the chevron away once the label no
+    // longer fit (the repro frame was `["✓ Ran `print"]` with no `▸`).
+    let lines = render_collapsible_to_lines(
+        tui_collapsible(
+            true, // collapsed → ▸
+            [
+                ("✓ ".to_owned(), TuiStyle::default()),
+                ("Ran `print` ".to_owned(), TuiStyle::default()),
+            ],
+            TuiStyle::default(),
+            MouseStateHandle::default(),
+            || TuiText::new("body").finish(),
+            |_, _| {},
+        ),
+        TuiSize::new(12, 4),
+    );
+    assert!(
+        lines[0].contains('▸'),
+        "collapsed chevron ▸ should remain on the first row at narrow width; got: {lines:?}",
+    );
+    assert!(
+        lines.iter().skip(1).any(|row| row.contains("print")),
+        "the label text should wrap onto a later row at narrow width; got: {lines:?}",
+    );
+}
+
+#[test]
+fn very_narrow_header_keeps_chevron_visible_without_a_truncated_spacer() {
+    for (width, collapsed, glyph) in [
+        (1, true, '▸'),
+        (1, false, '▾'),
+        (2, true, '▸'),
+        (2, false, '▾'),
+        (3, true, '▸'),
+        (3, false, '▾'),
+    ] {
+        let lines = render_collapsible_to_lines(
+            tui_collapsible(
+                collapsed,
+                [("Long shell command".to_owned(), TuiStyle::default())],
+                TuiStyle::default(),
+                MouseStateHandle::default(),
+                || TuiText::new("body").finish(),
+                |_, _| {},
+            ),
+            TuiSize::new(width, 2),
+        );
+        assert!(
+            lines[0].contains(glyph),
+            "chevron {glyph} should remain visible at width {width}; got: {lines:?}",
+        );
+    }
+}
+
+#[test]
+fn narrow_header_keeps_chevron_on_first_row_when_expanded() {
+    // The expanded disclosure glyph (▾) stays on the first row at narrow
+    // widths too, with the label wrapping below it.
+    let lines = render_collapsible_to_lines(
+        tui_collapsible(
+            false, // expanded → ▾
+            [
+                ("✓ ".to_owned(), TuiStyle::default()),
+                ("Ran `print` ".to_owned(), TuiStyle::default()),
+            ],
+            TuiStyle::default(),
+            MouseStateHandle::default(),
+            || TuiText::new("body").finish(),
+            |_, _| {},
+        ),
+        TuiSize::new(12, 4),
+    );
+    assert!(
+        lines[0].contains('▾'),
+        "expanded chevron ▾ should remain on the first row at narrow width; got: {lines:?}",
+    );
+    assert!(
+        lines.iter().skip(1).any(|row| row.contains("print")),
+        "the label text should wrap onto a later row at narrow width; got: {lines:?}",
+    );
+}
