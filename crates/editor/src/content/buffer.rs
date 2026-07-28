@@ -3143,8 +3143,11 @@ impl Buffer {
             } else {
                 range.clone()
             };
-            editor_action_set
-                .extend(self.unstyle_internal_editor_actions(unstyle_range, TextStyles::all()));
+            editor_action_set.extend(self.unstyle_internal_editor_actions(
+                unstyle_range,
+                TextStyles::all(),
+                true,
+            ));
         }
 
         let new_line_before_block_styling = if start_block_type != BlockType::Text(style.clone())
@@ -3646,10 +3649,17 @@ impl Buffer {
 
     /// Remove the provided `text_style` from the given range in the buffer.
     /// This is a no-op if the given range is not decorated with `text_style`.
+    ///
+    /// When `strip_all_weights` is set (the strip-all-styles path — see [`TextStyles::all`]), any
+    /// active weight is cleared regardless of which concrete `CustomWeight` the mask happens to
+    /// carry. When it is unset (a targeted unstyle, e.g. toggling Bold off), only the exact weight
+    /// named by `text_style` is removed, leaving any other active weight (`Black`, `Light`, …)
+    /// intact per the documented no-op-for-non-matching-styles contract.
     fn unstyle_internal_editor_actions(
         &self,
         range: Range<CharOffset>,
         text_style: TextStyles,
+        strip_all_weights: bool,
     ) -> Vec<CoreEditorAction> {
         let mut editor_action_set = Vec::new();
 
@@ -3660,11 +3670,13 @@ impl Buffer {
                 continue;
             }
             // `weight` is a single `Option<CustomWeight>`, so a mask like `TextStyles::all()` can
-            // only ever name one `BufferTextStyle::Weight(_)` variant (it hardcodes `Bold`). Fall
-            // back to `has_any_weight` for weight variants so a "strip everything" mask clears
-            // whichever weight is actually active instead of only the one it happens to carry.
+            // only ever name one `BufferTextStyle::Weight(_)` variant (it hardcodes `Bold`), and it
+            // is indistinguishable from a targeted `TextStyles::default().bold()` request. Only the
+            // strip-all path (`strip_all_weights`) uses `has_any_weight` breadth to clear whichever
+            // weight is active; a targeted request falls through to an exact match so a non-matching
+            // weight survives.
             let wants_style = match style {
-                BufferTextStyle::Weight(_) => text_style.has_any_weight(),
+                BufferTextStyle::Weight(_) if strip_all_weights => text_style.has_any_weight(),
                 _ => text_style.exact_match_style(&style),
             };
             if wants_style {
@@ -3687,11 +3699,15 @@ impl Buffer {
                         break;
                     }
 
-                    let active_matching_style = if is_weight {
+                    let active_matching_style = if is_weight && strip_all_weights {
+                        // Strip-all: clear whichever concrete weight this run actually carries
+                        // (it can vary run-to-run, e.g. `Black` then `Light`).
                         active_style
                             .get_custom_weight()
                             .map(BufferTextStyle::Weight)
                     } else if active_style.exact_match_style(&style) {
+                        // Targeted (and non-weight) styles: only the exact style named by the mask
+                        // matches, so a non-matching weight is left untouched.
                         Some(style)
                     } else {
                         None
@@ -3743,7 +3759,8 @@ impl Buffer {
             selection_model,
             |buffer, selection, selection_model, _index| {
                 let range = selection_model.selection_to_offset_range(selection);
-                let editor_action_set = buffer.unstyle_internal_editor_actions(range, text_style);
+                let editor_action_set =
+                    buffer.unstyle_internal_editor_actions(range, text_style, false);
 
                 ActionWithSelectionDelta::new_with_offsets(
                     editor_action_set,
