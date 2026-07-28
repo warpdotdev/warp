@@ -14501,7 +14501,7 @@ impl Input {
         prompt: String,
         pending_attachments: Vec<PendingAttachment>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> SpawnedFutureHandle {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let server_api = ServerApiProvider::as_ref(ctx).get();
 
@@ -14600,7 +14600,7 @@ impl Input {
                 });
                 ctx.emit(Event::SubmitCloudFollowup { prompt });
             },
-        );
+        )
     }
 
     fn emit_input_buffer_submitted_telemetry(&self, ctx: &mut ViewContext<Self>) {
