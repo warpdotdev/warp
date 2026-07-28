@@ -1149,6 +1149,10 @@ impl HistoryInputSuggestion<'_> {
         }
     }
 
+    pub fn normalized_text(&self) -> &str {
+        self.text().trim()
+    }
+
     /// Which type of detail panel to show for this suggestion, if any.
     fn details(&self) -> Option<DetailContent> {
         match self {

@@ -1169,6 +1169,7 @@ impl TuiOptionSelector {
             Some(OptionBadge::Default) => Some("default"),
             Some(OptionBadge::Recent) => Some("recent"),
             Some(OptionBadge::Connected) => Some("connected"),
+            Some(OptionBadge::Recommended) => Some("recommended"),
             None => None,
         };
         if let Some(badge) = badge {

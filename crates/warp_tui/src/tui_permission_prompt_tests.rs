@@ -96,6 +96,7 @@ fn render_lines(app: &mut App, prompt: &ViewHandle<TuiPermissionPrompt>) -> Vec<
                     prompt,
                     "Permission",
                     Some(TuiText::new("details").finish()),
+                    None,
                     ctx,
                 ),
                 TuiRect::new(0, 0, 80, 12),
@@ -199,12 +200,11 @@ fn leading_editor_participates_in_selector_focus_cycle() {
 }
 
 #[test]
-fn editable_prompt_renders_other_and_e_focuses_the_body_editor() {
+fn e_focuses_the_body_editor_without_interfering_with_other() {
     App::test((), |mut app| async move {
         app.update(super::init);
         let prompt = add_prompt(&mut app, true);
         let lines = render_lines(&mut app, &prompt);
-        assert!(lines.iter().any(|line| line.ends_with("e to edit command")));
         assert!(lines.iter().any(|line| line == "(3) Other"));
 
         let (action_model, action) = app.read(|ctx| {
@@ -260,6 +260,36 @@ fn editable_prompt_renders_other_and_e_focuses_the_body_editor() {
                     .as_ref(ctx)
                     .is_focused()
         }));
+    });
+}
+
+/// When the body editor owns focus `render_footer` shows "Esc to exit editor"
+/// instead of "Esc to cancel". This guards the branch at the top of
+/// `render_footer` against future focus-model changes.
+#[test]
+fn footer_shows_exit_editor_hint_while_body_editor_is_focused() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        let prompt = add_prompt(&mut app, true);
+        let (action_model, action) = app.read(|ctx| {
+            let prompt = prompt.as_ref(ctx);
+            (prompt.action_model.clone(), pending_action(prompt))
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
+        });
+        // Focus the body editor via EditBody so body_editor_is_focused returns true.
+        dispatch_focused_key(&mut app, &prompt, "e");
+        // Render and assert the footer reflects the editor-focus state.
+        let lines = render_lines(&mut app, &prompt);
+        assert!(
+            lines.iter().any(|l| l.contains("to exit editor")),
+            "footer must show 'Esc to exit editor' while body editor is focused; got: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("to cancel")),
+            "footer must not show 'Esc to cancel' while body editor is focused; got: {lines:?}"
+        );
     });
 }
 
@@ -377,14 +407,14 @@ fn other_emits_guidance_without_requesting_rejection() {
 }
 
 #[test]
-fn editable_prompt_includes_the_edit_hint() {
+fn editable_prompt_uses_the_standard_footer() {
     App::test((), |mut app| async move {
         let prompt = add_prompt(&mut app, true);
 
         assert!(
             render_lines(&mut app, &prompt)
                 .iter()
-                .any(|line| line == "Esc to cancel  Ctrl+E to edit/save  Enter to run")
+                .any(|line| line == "Esc to cancel  Enter to run")
         );
     });
 }

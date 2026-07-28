@@ -27,7 +27,7 @@ use string_offset::{ByteOffset, CharOffset};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
-    InputTypeAutoDetectionSource, LLMId, TuiMcpAction,
+    InputTypeAutoDetectionSource, LLMId, TuiMcpAction, TuiUpArrowHistoryItemKind,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::MouseStateHandle;
@@ -135,9 +135,11 @@ pub enum TuiInputViewEvent {
     AcceptedMcp(TuiMcpAction),
     /// Shift+Up should move focus from the first visual row to the region above.
     MoveFocusUp,
-    /// The user accepted a prompt from the up-arrow prompt-history menu. Carries
-    /// the prompt text to fill into the input and submit.
-    AcceptedPromptHistory(String),
+    /// The user accepted an item from the up-arrow prompt-and-command history menu.
+    AcceptedPromptAndCommandHistory {
+        text: String,
+        kind: TuiUpArrowHistoryItemKind,
+    },
     /// Tab requested shell completion for the current input snapshot.
     RequestShellCompletion,
     /// Selected prompt text was copied to the host clipboard.
@@ -363,6 +365,11 @@ impl TuiInputView {
         })
     }
 
+    pub(crate) fn stop_voice_input(&mut self, ctx: &mut ViewContext<Self>) {
+        self.voice_input
+            .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+    }
+
     /// Returns a handle to the backing [`CodeEditorModel`].
     pub fn model(&self) -> &ModelHandle<CodeEditorModel> {
         &self.model
@@ -553,6 +560,9 @@ impl TuiView for TuiInputView {
 
     fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
         if blur_ctx.is_self_blurred() {
+            if let Some(inline_menu) = self.active_inline_menu(ctx) {
+                inline_menu.dismiss(ctx);
+            }
             self.focused = false;
             ctx.notify();
         }
@@ -666,10 +676,9 @@ impl TypedActionView for TuiInputView {
                     self.open_inline_menu(TuiInputSuggestionsMode::ConversationMenu, ctx);
                     TuiEditorInteractionOutcome::FollowCursor
                 } else if matches!(*command, TuiEditorCommand::MoveUp)
-                    && !self.is_shell_mode(ctx)
                     && self.single_cursor_on_first_row(ctx)
                 {
-                    self.open_inline_menu(TuiInputSuggestionsMode::PromptHistory, ctx);
+                    self.open_inline_menu(TuiInputSuggestionsMode::PromptAndCommandHistory, ctx);
                     TuiEditorInteractionOutcome::FollowCursor
                 // With nothing left to delete, backspace removes the `!`
                 // affordance instead; typed text is preserved.
@@ -888,7 +897,7 @@ impl TuiInputView {
     // ── Shell mode ────────────────────────────────────────────────────────────
 
     /// Locks the shared input mode to shell with the `!` shell-prefix source.
-    fn enter_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn enter_shell_mode(&mut self, ctx: &mut ViewContext<Self>) {
         let is_input_buffer_empty = self.plain_text(ctx).is_empty();
         self.input_mode.clone().update(ctx, |input_mode, ctx| {
             input_mode.set_input_config(
@@ -963,8 +972,8 @@ impl TuiInputView {
 
     // ── Submit ────────────────────────────────────────────────────────────────
 
-    /// Emits [`TuiInputViewEvent::Submitted`] without clearing the buffer; the
-    /// owner decides whether the submission is accepted and calls [`Self::clear`].
+    /// Emits the submission event without clearing the buffer; the owner
+    /// decides whether the submission is accepted.
     fn submit(&mut self, ctx: &mut ViewContext<Self>) {
         let text = self.plain_text(ctx);
         ctx.emit(TuiInputViewEvent::Submitted(text));
@@ -982,6 +991,32 @@ impl TuiInputView {
         }
     }
 
+    pub(crate) fn route_inline_menu_acceptance(
+        &mut self,
+        accepted: TuiInlineMenuAccepted,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match accepted {
+            TuiInlineMenuAccepted::SlashCommand(action) => {
+                ctx.emit(TuiInputViewEvent::AcceptedSlashCommand(action));
+            }
+            TuiInlineMenuAccepted::Conversation(entry_id) => {
+                ctx.emit(TuiInputViewEvent::AcceptedConversation(entry_id));
+            }
+            TuiInlineMenuAccepted::Model(id) => {
+                ctx.emit(TuiInputViewEvent::AcceptedModel(id));
+            }
+            TuiInlineMenuAccepted::Mcp(action) => {
+                ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
+            }
+            TuiInlineMenuAccepted::PromptAndCommandHistory { text, kind } => {
+                ctx.emit(TuiInputViewEvent::AcceptedPromptAndCommandHistory { text, kind });
+            }
+            TuiInlineMenuAccepted::Completion(acceptance) => {
+                self.apply_shell_completion(acceptance, ctx);
+            }
+        }
+    }
     fn handle_inline_menu_action(
         &mut self,
         action: &TuiInputAction,
@@ -1023,26 +1058,7 @@ impl TuiInputView {
             }
             TuiInputAction::Submit => {
                 if let Some(accepted) = inline_menu.accept(ctx) {
-                    match accepted {
-                        TuiInlineMenuAccepted::SlashCommand(action) => {
-                            ctx.emit(TuiInputViewEvent::AcceptedSlashCommand(action));
-                        }
-                        TuiInlineMenuAccepted::Conversation(entry_id) => {
-                            ctx.emit(TuiInputViewEvent::AcceptedConversation(entry_id));
-                        }
-                        TuiInlineMenuAccepted::Model(id) => {
-                            ctx.emit(TuiInputViewEvent::AcceptedModel(id));
-                        }
-                        TuiInlineMenuAccepted::Mcp(action) => {
-                            ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
-                        }
-                        TuiInlineMenuAccepted::PromptHistory(text) => {
-                            ctx.emit(TuiInputViewEvent::AcceptedPromptHistory(text));
-                        }
-                        TuiInlineMenuAccepted::Completion(acceptance) => {
-                            self.apply_shell_completion(acceptance, ctx);
-                        }
-                    }
+                    self.route_inline_menu_acceptance(accepted, ctx);
                 }
             }
             TuiInputAction::HandleEscape => return self.handle_escape(ctx),
@@ -1052,9 +1068,7 @@ impl TuiInputView {
         true
     }
 
-    /// Handles the input's contextual Escape behavior in explicit priority
-    /// order. New input modes should be added after the inline-menu branch so
-    /// one Escape always closes the most local surface first.
+    /// Handles the input's contextual Escape behavior in explicit priority order.
     fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         if self.close_shortcuts(ctx) {
             return true;

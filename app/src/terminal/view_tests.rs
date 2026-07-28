@@ -6302,6 +6302,47 @@ fn submit_cli_agent_rich_input_codex_uses_bracketed_paste() {
     })
 }
 
+/// Verifies that multi-line Hermes rich input is delivered as a single bracketed
+/// paste payload with a standalone \r submit. Embedded newlines must remain
+/// inside the paste instead of triggering separate submissions.
+#[test]
+fn submit_cli_agent_rich_input_hermes_multiline_uses_bracketed_paste() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        let (_terminal, pty_writes) =
+            submit_rich_input_and_collect_pty_writes(&mut app, CLIAgent::Hermes, "line1\nline2");
+
+        let writes = pty_writes.borrow();
+        // BracketedPaste: first write is ESC[200~ + both lines + ESC[201~, second is \r.
+        // The embedded \n between lines must NOT split into a separate write or trigger
+        // a second submission — that was the voice-input auto-submit regression.
+        assert_eq!(
+            writes.len(),
+            2,
+            "expected 2 PTY writes (paste payload + submit \r), got {}: {:?}",
+            writes.len(),
+            writes
+        );
+
+        let mut expected_paste =
+            Vec::with_capacity(BRACKETED_PASTE_START.len() + 11 + BRACKETED_PASTE_END.len());
+        expected_paste.extend_from_slice(BRACKETED_PASTE_START);
+        expected_paste.extend_from_slice(b"line1\nline2");
+        expected_paste.extend_from_slice(BRACKETED_PASTE_END);
+        assert_eq!(
+            writes[0], expected_paste,
+            "first write should be the full bracketed paste payload"
+        );
+        assert_eq!(
+            writes[1], b"\r",
+            "second write should be the standalone submit \r"
+        );
+    })
+}
+
 #[test]
 fn submit_cli_agent_rich_input_opencode_defers_enter_and_close() {
     App::test((), |mut app| async move {

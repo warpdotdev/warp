@@ -119,7 +119,9 @@ for arg in "$@"; do
       export WARP_SKIP_GCLOUD_AUTH=1
       ;;
     *)
-      PLATFORM_ARGS+=("${arg}")
+      echo "error: unknown argument '${arg}'" >&2
+      echo "Run ./script/bootstrap --help to see available options." >&2
+      exit 1
       ;;
   esac
 done

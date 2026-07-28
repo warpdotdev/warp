@@ -12,7 +12,7 @@ use warp_core::command::ExitCode;
 
 use super::{
     CommandBlockState, ResolvedCommandBlock, ToolCallDisplayState, launched_agents_label,
-    tool_call_display_state, tool_call_label,
+    tool_call_display_state, tool_call_label, tool_call_label_with_server,
 };
 
 /// Builds a `Finished` status wrapping the given result.
@@ -55,6 +55,22 @@ fn command_action(command: &str) -> AIAgentAction {
             uses_pager: None,
             rationale: None,
             citations: Vec::new(),
+        },
+        requires_result: true,
+    }
+}
+
+/// Builds a `CallMCPTool` action for `tool`. The `server_id` is left `None`
+/// because `tool_call_label_with_server` takes the resolved server name as a
+/// direct argument, bypassing the action's server-id -> name lookup.
+fn mcp_tool_action(tool: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from("action-1".to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::CallMCPTool {
+            server_id: None,
+            name: tool.to_owned(),
+            input: serde_json::Value::Null,
         },
         requires_result: true,
     }
@@ -246,5 +262,95 @@ fn label_prefers_executed_command_over_streamed_command() {
             Some(&block(CommandBlockState::Running))
         ),
         "Running `git status`"
+    );
+}
+
+/// An MCP tool call's transcript label must surface both the tool name and its
+/// originating server across every lifecycle state, with a deterministic
+/// no-server fallback (legacy/flat MCP call or unknown server).
+#[test]
+fn mcp_tool_call_label_surfaces_tool_and_server_across_lifecycle() {
+    let action = mcp_tool_action("create_issue");
+    let server = Some("github");
+
+    // Constructing: the tool name may still be empty while args stream in.
+    let constructing_empty = mcp_tool_action("");
+    assert_eq!(
+        tool_call_label_with_server(&constructing_empty, None, true, None, None),
+        "Calling MCP tool…"
+    );
+    assert_eq!(
+        tool_call_label_with_server(&constructing_empty, None, true, None, server),
+        "Calling MCP tool on github…"
+    );
+    assert_eq!(
+        tool_call_label_with_server(&action, None, true, None, None),
+        "Calling \"create_issue\" MCP tool…"
+    );
+    assert_eq!(
+        tool_call_label_with_server(&action, None, true, None, server),
+        "Calling \"create_issue\" MCP tool on github…"
+    );
+
+    // Pending.
+    assert_eq!(
+        tool_call_label_with_server(&action, None, false, None, None),
+        "Call MCP tool create_issue"
+    );
+    assert_eq!(
+        tool_call_label_with_server(&action, None, false, None, server),
+        "Call MCP tool create_issue on github"
+    );
+
+    // Blocked / awaiting approval.
+    assert_eq!(
+        tool_call_label_with_server(&action, Some(&AIActionStatus::Blocked), false, None, None),
+        "Call MCP tool create_issue (awaiting approval)"
+    );
+    assert_eq!(
+        tool_call_label_with_server(&action, Some(&AIActionStatus::Blocked), false, None, server),
+        "Call MCP tool create_issue on github (awaiting approval)"
+    );
+
+    // Running.
+    assert_eq!(
+        tool_call_label_with_server(
+            &action,
+            Some(&AIActionStatus::RunningAsync),
+            false,
+            None,
+            server
+        ),
+        "Calling MCP tool create_issue on github"
+    );
+
+    // Terminal states are driven through a resolved command block so the label
+    // text can be exercised without constructing an rmcp `CallToolResult`.
+    let succeeded = block(CommandBlockState::Finished {
+        exit_code: ExitCode::from(0),
+    });
+    assert_eq!(
+        tool_call_label_with_server(&action, None, false, Some(&succeeded), server),
+        "Called MCP tool create_issue on github"
+    );
+    let failed = block(CommandBlockState::Finished {
+        exit_code: ExitCode::from(1),
+    });
+    assert_eq!(
+        tool_call_label_with_server(&action, None, false, Some(&failed), server),
+        "MCP tool create_issue on github failed"
+    );
+    let cancelled = block(CommandBlockState::Finished {
+        exit_code: ExitCode::from(130),
+    });
+    assert_eq!(
+        tool_call_label_with_server(&action, None, false, Some(&cancelled), server),
+        "MCP tool create_issue on github cancelled"
+    );
+
+    // No server (legacy/flat MCP call or unknown server): tool name only.
+    assert_eq!(
+        tool_call_label_with_server(&action, None, false, Some(&succeeded), None),
+        "Called MCP tool create_issue"
     );
 }

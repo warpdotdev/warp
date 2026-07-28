@@ -30,7 +30,9 @@ use command::Stdio;
 use command::r#async::Command;
 use futures_lite::future;
 use is_executable::IsExecutable as _;
+use itertools::Itertools;
 use sha2::{Digest, Sha256};
+use warp_core::safe_info;
 use warp_errors::{ErrorExt, register_error};
 
 pub mod spacectl;
@@ -553,6 +555,7 @@ where
         Ok(Some(plan)) => plan,
         Ok(None) => return report,
         Err(error) => {
+            tracing::error!(error = ?error, "Cache planning failed");
             report.invocations.push(failed_invocation(
                 CacheScope::Global,
                 Vec::new(),
@@ -582,6 +585,10 @@ where
                 Duration::ZERO,
             )
         } else {
+            safe_info!(
+                safe: ("Mounting cache modes {:?} for scope kind '{}'", configuration.modes, configuration.scope.kind()),
+                full: ("Mounting cache modes {:?} for {:?}", configuration.modes, configuration.scope)
+            );
             run_spacectl_mount(
                 configuration.scope.clone(),
                 configuration.modes.clone(),
@@ -595,6 +602,8 @@ where
         };
 
         if let Some(response) = &invocation.response {
+            tracing::info!(cache_result = ?response.output, modes = ?response.input.modes, scope = ?configuration.scope, "Mounted cache paths");
+
             match &configuration.scope {
                 CacheScope::Repository { .. } => {
                     for (name, value) in &response.output.add_envs {
@@ -660,13 +669,19 @@ where
 /// - `~/.cargo/registry` => `/cache/shared/$HOME/.cargo/registry`
 /// - `/workspace/repo-a/target` => `/cache/<repo-a-key>/target`
 /// - `/workspace/repo-b/target` => `/cache/<repo-b-key>/target`
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, additional_global_modes = tracing::field::Empty, resolved_modes = tracing::field::Empty))]
 fn construct_plan(
     cache_root: PathBuf,
     mut detections: Vec<DetectedCacheModes>,
     additional_global_modes: Vec<String>,
 ) -> Result<Option<CacheSetupPlan>, CacheSetupError> {
+    tracing::Span::current().record(
+        "additional_global_modes",
+        additional_global_modes.iter().join(", "),
+    );
     for detection in &mut detections {
         detection.modes = canonical_modes(std::mem::take(&mut detection.modes));
+        tracing::info!(modes = ?detection.modes, repo_key = %detection.key, "Adding detected cache modes");
     }
     let mut global_modes = BTreeSet::new();
     for detection in &detections {
@@ -705,6 +720,7 @@ fn construct_plan(
             .expect("repository configuration")
             .cmp(right.scope.repo_key().expect("repository configuration"))
     });
+    tracing::Span::current().record("resolved_modes", global_modes.iter().join(", "));
     configurations.push(CacheConfiguration {
         scope: CacheScope::Global,
         cwd: scratch,

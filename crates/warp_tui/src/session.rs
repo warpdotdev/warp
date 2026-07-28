@@ -4,9 +4,14 @@
 //! initialization is done, the mount built here starts the TUI driver and
 //! defers creating the first terminal session until login.
 
-use anyhow::{Context, Result};
+use std::io::{self, IsTerminal as _, Read as _};
+
+use ai::LLMProvider;
+use ai::api_keys::ApiKeyManager;
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use clap::error::ErrorKind;
+use inquire::{InquireError, Password, PasswordDisplayMode};
 use warp::settings::TuiThemeSettings;
 use warp::tui_export::{Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
@@ -45,6 +50,56 @@ struct TuiArgs {
     /// API key for non-interactive authentication.
     #[arg(long, env = "WARP_API_KEY")]
     api_key: Option<String>,
+
+    /// Securely store a model-provider API key for Warp Agent CLI.
+    #[arg(
+        long,
+        value_name = LLMProvider::API_KEY_PROVIDER_VALUE_NAME,
+        value_parser = LLMProvider::from_api_key_slug,
+        conflicts_with_all = ["resume", "clear_provider_api_key"]
+    )]
+    set_provider_api_key: Option<LLMProvider>,
+
+    /// Remove a securely stored model-provider API key from Warp Agent CLI.
+    #[arg(
+        long,
+        value_name = LLMProvider::API_KEY_PROVIDER_VALUE_NAME,
+        value_parser = LLMProvider::from_api_key_slug,
+        conflicts_with_all = ["resume", "set_provider_api_key"]
+    )]
+    clear_provider_api_key: Option<LLMProvider>,
+}
+
+enum ProviderApiKeyCommand {
+    Set {
+        provider: LLMProvider,
+        api_key: String,
+    },
+    Clear {
+        provider: LLMProvider,
+    },
+}
+
+/// Reads a provider API key from a masked TTY prompt or, when stdin is piped,
+/// from stdin. Empty input and interactive cancellation return `Ok(None)`.
+fn read_provider_api_key() -> Result<Option<String>> {
+    if io::stdin().is_terminal() {
+        return match Password::new("Provider API key:")
+            .with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation()
+            .prompt()
+        {
+            Ok(value) if value.trim().is_empty() => Ok(None),
+            Ok(value) => Ok(Some(value)),
+            Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => Ok(None),
+            Err(error) => Err(error.into()),
+        };
+    }
+
+    let mut value = String::new();
+    io::stdin().read_to_string(&mut value)?;
+    let value = value.trim().to_owned();
+    Ok((!value.is_empty()).then_some(value))
 }
 
 /// Validates and wraps a server conversation token from the command line.
@@ -78,6 +133,39 @@ pub fn run() -> Result<()> {
         }
         Err(error) => return Err(anyhow::Error::new(error)),
     };
+    let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
+        let Some(api_key) = read_provider_api_key()? else {
+            return Err(anyhow!("No provider API key was supplied"));
+        };
+        Some(ProviderApiKeyCommand::Set { provider, api_key })
+    } else {
+        args.clear_provider_api_key
+            .map(|provider| ProviderApiKeyCommand::Clear { provider })
+    };
+    if let Some(command) = provider_api_key_command {
+        return warp::run_tui_cli_command(Box::new(move |ctx| {
+            let (provider, api_key, success_verb) = match command {
+                ProviderApiKeyCommand::Set { provider, api_key } => {
+                    (provider, Some(api_key), "saved")
+                }
+                ProviderApiKeyCommand::Clear { provider } => (provider, None, "cleared"),
+            };
+            let result = ApiKeyManager::handle(ctx)
+                .update(ctx, |manager, ctx| {
+                    manager.persist_provider_key(provider, api_key, ctx)
+                })
+                .and_then(|()| warp::tui_export::notify_tui_api_keys_changed());
+            match result {
+                Ok(()) => {
+                    println!("{} API key {success_verb}", provider.display_name());
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                }
+                Err(error) => {
+                    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+                }
+            }
+        }));
+    }
     let resume_token = args.resume.map(parse_resume_token).transpose()?;
     let exit_summary = TuiExitSummaryHandle::default();
     let exit_summary_for_app = exit_summary.clone();

@@ -125,6 +125,7 @@ where
     } else {
         mount_command(cache_root, cwd, &modes)
     };
+    tracing::info!(?command, "Executing spacectl");
     let started = Instant::now();
     let result = async {
         let bytes = run_command(command).await?;
