@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
@@ -684,6 +686,99 @@ impl pane::PaneContent for PreAttachReturnsFalsePane {
     fn is_pane_being_dragged(&self, _ctx: &AppContext) -> bool {
         false
     }
+}
+
+struct RecordingDetachPane {
+    pane_id: PaneId,
+    pane_configuration: ModelHandle<PaneConfiguration>,
+    detach_types: Rc<RefCell<Vec<pane::DetachType>>>,
+}
+
+impl RecordingDetachPane {
+    fn new(
+        detach_types: Rc<RefCell<Vec<pane::DetachType>>>,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) -> Self {
+        Self {
+            pane_id: PaneId::dummy_pane_id(),
+            pane_configuration: ctx.add_model(|_ctx| PaneConfiguration::new("")),
+            detach_types,
+        }
+    }
+}
+
+impl pane::PaneContent for RecordingDetachPane {
+    fn id(&self) -> PaneId {
+        self.pane_id
+    }
+
+    fn attach(
+        &self,
+        _group: &PaneGroup,
+        _focus_handle: focus_state::PaneFocusHandle,
+        _ctx: &mut ViewContext<PaneGroup>,
+    ) {
+    }
+
+    fn detach(
+        &self,
+        _group: &PaneGroup,
+        detach_type: pane::DetachType,
+        _ctx: &mut ViewContext<PaneGroup>,
+    ) {
+        self.detach_types.borrow_mut().push(detach_type);
+    }
+
+    fn snapshot(&self, _app: &AppContext) -> LeafContents {
+        LeafContents::GetStarted
+    }
+
+    fn has_application_focus(&self, _ctx: &mut ViewContext<PaneGroup>) -> bool {
+        false
+    }
+
+    fn focus(&self, _ctx: &mut ViewContext<PaneGroup>) {}
+
+    fn shareable_link(
+        &self,
+        _ctx: &mut ViewContext<PaneGroup>,
+    ) -> Result<pane::ShareableLink, pane::ShareableLinkError> {
+        Ok(pane::ShareableLink::Base)
+    }
+
+    fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
+        self.pane_configuration.clone()
+    }
+
+    fn is_pane_being_dragged(&self, _ctx: &AppContext) -> bool {
+        false
+    }
+}
+
+#[test]
+fn test_clean_up_panes_for_discard_permanently_closes_panes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let detach_types = Rc::new(RefCell::new(Vec::new()));
+        let detach_types_for_pane = detach_types.clone();
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.add_pane_with_direction(
+                Direction::Right,
+                RecordingDetachPane::new(detach_types_for_pane, ctx),
+                false,
+                ctx,
+            );
+            let working_directories_model = ctx.add_model(|_| WorkingDirectoriesModel::new());
+
+            panes.clean_up_panes_for_discard(&working_directories_model, ctx);
+        });
+
+        let detach_types = detach_types.borrow();
+        assert_eq!(detach_types.len(), 1);
+        assert!(matches!(detach_types[0], pane::DetachType::Closed));
+    });
 }
 
 // TODO: This test is commented out for now until we can fix it. It is flaky and sometimes hangs, causing the CI to cancel.
