@@ -93,7 +93,6 @@ struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
 }
-
 #[test]
 fn figma_statusline_metadata_formats_are_stable() {
     let now = NaiveDate::from_ymd_opt(2026, 7, 20)

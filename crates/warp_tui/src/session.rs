@@ -289,6 +289,9 @@ fn create_terminal_session_after_login(
         std::env::current_dir().ok(),
         ctx,
     );
+    surface.update(ctx, |view, ctx| {
+        view.enable_cli_agent_osc_event_publishing(ctx);
+    });
     if let Some(token) = resume_token {
         surface.update(ctx, |view, ctx| {
             view.restore_conversation(

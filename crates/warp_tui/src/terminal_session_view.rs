@@ -771,7 +771,7 @@ pub(crate) struct TuiTerminalSessionView {
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
-    cli_agent_osc_event_publisher: ModelHandle<CliAgentOscEventPublisher>,
+    cli_agent_osc_event_publisher: Option<ModelHandle<CliAgentOscEventPublisher>>,
     ai_controller: ModelHandle<BlocklistAIController>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     cli_subagent_views: HashMap<BlockId, ViewHandle<TuiCLISubagentView>>,
@@ -1490,17 +1490,8 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
-
-        let cli_agent_osc_event_publisher = ctx.add_model(|ctx| {
-            CliAgentOscEventPublisher::new(
-                terminal_surface_id,
-                active_session.clone(),
-                conversation_selection.clone(),
-                &action_model,
-                ctx,
-            )
-        });
         let start_agent_executor = action_model.as_ref(ctx).start_agent_executor(ctx);
+
         ctx.subscribe_to_model(&start_agent_executor, |view, _, event, ctx| match event {
             StartAgentExecutorEvent::CreateAgent(request) => {
                 ctx.emit(TuiTerminalSessionEvent::StartAgentConversation {
@@ -2055,9 +2046,6 @@ impl TuiTerminalSessionView {
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
         let zero_state_view =
             ctx.add_tui_view(|ctx| TuiZeroStateView::new(active_session.clone(), ctx));
-        cli_agent_osc_event_publisher
-            .as_ref(ctx)
-            .publish_session_start(ctx);
         let mut view = Self {
             transcript,
             input_view,
@@ -2074,7 +2062,7 @@ impl TuiTerminalSessionView {
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
-            cli_agent_osc_event_publisher,
+            cli_agent_osc_event_publisher: None,
             ai_controller,
             cli_subagent_controller,
             cli_subagent_views: HashMap::new(),
@@ -2115,6 +2103,28 @@ impl TuiTerminalSessionView {
             view.show_zero_state_ascii_load_failure(failure, ctx);
         }
         view
+    }
+
+    /// Enables CLI-agent lifecycle notifications for the root TUI session.
+    pub(crate) fn enable_cli_agent_osc_event_publishing(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.cli_agent_osc_event_publisher.is_some() {
+            return;
+        }
+        let terminal_surface_id = self.terminal_surface_id;
+        let active_session = self.active_session.clone();
+        let conversation_selection = self.conversation_selection.clone();
+        let action_model = self.ai_action_model.clone();
+        let publisher = ctx.add_model(|ctx| {
+            CliAgentOscEventPublisher::new(
+                terminal_surface_id,
+                active_session,
+                conversation_selection,
+                &action_model,
+                ctx,
+            )
+        });
+        publisher.as_ref(ctx).publish_session_start(ctx);
+        self.cli_agent_osc_event_publisher = Some(publisher);
     }
 
     /// Starts the first request for a child conversation hosted by this
@@ -3756,8 +3766,8 @@ impl TuiTerminalSessionView {
         let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
             controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
         });
-        if dispatched {
-            self.cli_agent_osc_event_publisher
+        if dispatched && let Some(publisher) = &self.cli_agent_osc_event_publisher {
+            publisher
                 .as_ref(ctx)
                 .publish_prompt_submit(prompt.clone(), ctx);
         }
