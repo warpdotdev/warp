@@ -31,12 +31,6 @@ const GROK_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::f
 
 /// How long a request will hold for a request-time GEAP credential mint before
 /// giving up and sending anyway.
-///
-/// This is not a failure deadline: on expiry the request is sent with the
-/// credential snapshot it already had, exactly as it would have been without
-/// the refresh attempt. It is sized for the mint's three sequential legs (Warp
-/// OIDC token, Google STS exchange, optional service-account impersonation)
-/// rather than copied from the single-call Grok refresh above.
 #[cfg(not(target_family = "wasm"))]
 const GEAP_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -266,16 +260,6 @@ impl ResponseStream {
     /// single shared refresh (owned by `ApiKeyManager`, so only one runs at a
     /// time) before sending. Requests with valid credentials, and requests for
     /// other providers, are sent directly.
-    ///
-    /// The two providers diverge on failure. The Grok subscription is the only
-    /// client-side source of xAI auth with no alternate host, so a dead token
-    /// means the request cannot succeed and a terminal error is surfaced
-    /// instead of sending. Gemini Enterprise is a *host*, not a provider: the
-    /// server picks between Bedrock, GEAP, and Direct API per request, and the
-    /// client cannot know which one a given request will land on. So a failed
-    /// GEAP mint sends the snapshot unchanged and lets the server decide — a
-    /// GEAP-routed request gets the usual credentials error from Google, and
-    /// one routed elsewhere is unaffected.
     fn spawn_request(
         request_id: Uuid,
         params: api::RequestParams,
@@ -346,16 +330,6 @@ impl ResponseStream {
                 }
             }
 
-            // Gemini Enterprise credentials are minted by the app layer but
-            // coordinated on ApiKeyManager so concurrent prompts share one
-            // in-flight mint. This asks whether the model *may* route to GEAP,
-            // which is the most the client can know — the server resolves the
-            // actual host per request, and for auto models it does so only
-            // after a classifier picks a concrete model. Over-triggering is
-            // therefore expected and costs nothing but a bounded wait, since a
-            // failed mint still sends. Only a hard-expired, binding-matching
-            // credential blocks; near-expiry ones ride the existing
-            // asynchronous safety net.
             let uses_geap = LLMPreferences::as_ref(ctx)
                 .get_llm_info(&params.model)
                 .is_some_and(|info| {
@@ -771,9 +745,7 @@ impl ResponseStream {
 /// Applies the result of a request-time GEAP mint to the request snapshot.
 ///
 /// A successful mint swaps in the fresh credential. Anything else — mint
-/// failure, timeout, or a dropped sender — leaves the snapshot untouched, so
-/// the request goes out exactly as it would have without the refresh attempt
-/// and the server decides whether that credential still works.
+/// failure, timeout, or a dropped sender — leaves the snapshot untouched.
 #[cfg(not(target_family = "wasm"))]
 fn apply_geap_refresh_to_params(
     params: &mut api::RequestParams,

@@ -213,15 +213,9 @@ pub enum GrokRefreshOutcome {
 }
 /// Outcome of a Gemini Enterprise credential mint, delivered to requests
 /// waiting for an expired credential to be replaced before sending.
-///
-/// `Failed` is not terminal for the waiting request: it sends with the
-/// credential snapshot it already had, which is exactly what would have gone
-/// out had no refresh been attempted. The server remains the authority on
-/// whether that credential still works.
 #[cfg(not(target_family = "wasm"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeapRefreshOutcome {
-    /// The credential was refreshed and the new value stored.
     Refreshed,
     /// The mint failed; the stored credential is unchanged.
     Failed,
@@ -271,10 +265,8 @@ pub struct ApiKeyManager {
     /// may be empty for a proactive mint with no waiters.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) geap_refresh_waiters: Option<Vec<oneshot::Sender<GeapRefreshOutcome>>>,
-    /// When the last GEAP mint failed, if one has. A failed mint restores the
-    /// previous (still expired) credential rather than moving to `Failed`, so
-    /// there is no state to read — the timestamp is what suppresses repeated
-    /// request-time waits. See [`GEAP_MINT_FAILURE_COOLDOWN`].
+    /// When the last GEAP mint failed, if one has. The timestamp is what
+    /// suppresses repeated request-time waits.
     #[cfg(not(target_family = "wasm"))]
     geap_last_mint_failure: Option<SystemTime>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
@@ -527,17 +519,9 @@ impl ApiKeyManager {
     /// block on a mint before sending.
     ///
     /// True only when the stored credential was minted for this same binding
-    /// and is at or past hard expiry, and no mint has failed recently. The
-    /// proactive lead window is deliberately excluded: a token that is near
-    /// expiry but still valid is sent immediately while the background refresh
-    /// runs, so only a credential we know is unusable costs the request any
-    /// latency.
+    /// and is at or past hard expiry, and no mint has failed recently.
     #[cfg(not(target_family = "wasm"))]
     pub fn geap_expired_refresh_eligibility(&self, binding: &GeapMintBinding) -> bool {
-        // A mint that just failed will almost certainly fail again, and a
-        // failure leaves the expired credential in place so every subsequent
-        // request would look eligible. Skip the wait and send immediately;
-        // the asynchronous safety net keeps retrying in the background.
         if self.geap_mint_recently_failed() {
             return false;
         }
@@ -555,17 +539,7 @@ impl ApiKeyManager {
     }
 
     /// Ensures one mint is in flight for an expired GEAP credential and returns
-    /// a receiver for its completion, or `None` when no wait is warranted (see
-    /// [`Self::geap_expired_refresh_eligibility`]).
-    ///
-    /// Concurrent prompts attach to the existing mint rather than starting a
-    /// second one. `start_refresh` is supplied by the app layer, which owns the
-    /// network credential machinery; it takes the completion sender and is
-    /// responsible for installing it via [`Self::install_geap_refresh_waiter`]
-    /// only once it has committed to minting. If it declines to start a mint,
-    /// the sender is simply dropped and the caller's receiver resolves as "not
-    /// refreshed" — the caller then sends with the credential it already had,
-    /// so a declined kickoff cannot strand the guard.
+    /// a receiver for its completion, or `None` when no wait is warranted.
     #[cfg(not(target_family = "wasm"))]
     pub fn begin_expired_geap_refresh<F>(
         &mut self,
@@ -591,11 +565,6 @@ impl ApiKeyManager {
     }
 
     /// Opens the single-flight window for a mint that is about to start.
-    ///
-    /// Must be called from the mint kickoff immediately before the credential
-    /// state transitions to `Refreshing`, and only once the kickoff has passed
-    /// every early return. That pairing is what makes "waiters present" mean
-    /// "mint in flight" by construction.
     #[cfg(not(target_family = "wasm"))]
     pub fn install_geap_refresh_waiter(
         &mut self,
@@ -604,29 +573,21 @@ impl ApiKeyManager {
         self.geap_refresh_waiters = Some(waiter.into_iter().collect());
     }
 
-    /// Closes the single-flight window and hands back everyone waiting on the
-    /// finished mint. Dropped receivers are expected when a stream was
-    /// cancelled or superseded.
     #[cfg(not(target_family = "wasm"))]
     pub fn take_geap_refresh_waiters(&mut self) -> Vec<oneshot::Sender<GeapRefreshOutcome>> {
         self.geap_refresh_waiters.take().unwrap_or_default()
     }
 
-    /// Starts the cooldown that suppresses request-time blocking mints.
     #[cfg(not(target_family = "wasm"))]
     pub fn record_geap_mint_failure(&mut self) {
         self.geap_last_mint_failure = Some(SystemTime::now());
     }
 
-    /// Clears the cooldown after a mint succeeds.
     #[cfg(not(target_family = "wasm"))]
     pub fn clear_geap_mint_failure(&mut self) {
         self.geap_last_mint_failure = None;
     }
 
-    /// Whether a mint failed within [`GEAP_MINT_FAILURE_COOLDOWN`]. A clock
-    /// that moved backwards reads as "not recent", which only costs one extra
-    /// wait rather than suppressing refreshes indefinitely.
     #[cfg(not(target_family = "wasm"))]
     fn geap_mint_recently_failed(&self) -> bool {
         self.geap_last_mint_failure.is_some_and(|failed_at| {

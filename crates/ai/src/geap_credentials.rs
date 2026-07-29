@@ -8,13 +8,6 @@ use warp_multi_agent_api as api;
 pub const GEAP_REFRESH_LEAD_TIME: Duration = Duration::from_secs(5 * 60);
 
 /// How long a failed mint suppresses the request-time blocking refresh.
-///
-/// A failed mint leaves the expired credential in place, so without this every
-/// subsequent prompt would look eligible again and pay the full request-time
-/// wait before sending anyway. The asynchronous safety net keeps re-arming
-/// mints during the cooldown, so recovery is never delayed by it — only the
-/// blocking wait is. Mirrors `GEAP_MIN_TIMER_DELAY`, the equivalent hot-loop
-/// floor on the proactive refresh timer.
 pub const GEAP_MINT_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, PartialEq, Eq)]
@@ -55,11 +48,6 @@ impl GeapCredentials {
         }
     }
 
-    /// Returns `true` when the credential is at or past its hard expiry.
-    ///
-    /// Unlike [`Self::needs_refresh`], this deliberately ignores the proactive
-    /// lead window so request-time blocking refresh only adds latency when the
-    /// currently stored token is known to be unusable.
     pub fn is_expired(&self) -> bool {
         match self.expires_at {
             Some(expires_at) => expires_at <= SystemTime::now(),

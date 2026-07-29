@@ -145,11 +145,6 @@ pub(crate) fn force_refresh_geap_credentials(
 }
 
 /// Mint kickoff for a request blocked on an expired credential.
-///
-/// `waiter` is handed to the mint rather than installed by the caller, so it is
-/// only registered once this function commits to minting. If any guard below
-/// declines, the sender drops and the blocked request proceeds with the
-/// credential it already had.
 pub(crate) fn start_geap_refresh_for_waiter(
     manager: &mut ApiKeyManager,
     waiter: oneshot::Sender<GeapRefreshOutcome>,
@@ -187,12 +182,6 @@ pub(crate) fn refresh_geap_credentials_if_needed(
 }
 
 /// The refresh guard + mint kickoff that all triggers funnel through.
-///
-/// `waiter`, when present, is a request blocked on this mint. It is installed
-/// only after every guard below has passed, immediately before the state moves
-/// to `Refreshing`, so the single-flight window on `ApiKeyManager` is open
-/// exactly while a mint is actually running. Returning early drops the sender,
-/// which the blocked request reads as "not refreshed" and sends unchanged.
 fn refresh_geap_credentials_with_options(
     manager: &mut ApiKeyManager,
     force: bool,
@@ -239,8 +228,6 @@ fn refresh_geap_credentials_with_options(
         "GEAP: minting credentials (audience={}, force={force})",
         minted_for.audience
     );
-    // Commit point: from here a mint is guaranteed to run and to funnel through
-    // `apply_geap_mint_result`, which is the only place the window closes.
     manager.install_geap_refresh_waiter(waiter);
     manager.set_geap_credentials_state(GeapCredentialsState::Refreshing { previous }, ctx);
 
@@ -269,11 +256,6 @@ fn refresh_geap_credentials_with_options(
     );
 }
 
-/// Applies a finished mint and wakes everything blocked on it.
-///
-/// Closing the single-flight window and delivering the outcome happen here and
-/// only here: the waiters are taken up front and the outcome is sent once, so
-/// no arm of the inner logic can forget to release a blocked request.
 fn apply_geap_mint_result(
     manager: &mut ApiKeyManager,
     result: Result<GeapCredentials, LoadGeapCredentialsError>,
@@ -335,9 +317,6 @@ fn apply_geap_mint_result_inner(
                 manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
             }
         }
-        // Not a mint failure, so no cooldown: the config moved, and the re-mint
-        // below runs under the current binding. Requests blocked on the old
-        // binding send with the credential they already had.
         refresh_geap_credentials(manager, ctx);
         return GeapRefreshOutcome::Failed;
     }
@@ -391,9 +370,7 @@ fn apply_geap_mint_result_inner(
                     );
                 }
             }
-            // Start the cooldown. The restore above leaves the expired
-            // credential looking eligible again, so without this every
-            // subsequent request would block on a mint that is failing.
+            // Start the cooldown.
             manager.record_geap_mint_failure();
             GeapRefreshOutcome::Failed
         }
