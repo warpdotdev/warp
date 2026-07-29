@@ -2127,6 +2127,54 @@ impl TuiTerminalSessionView {
         });
     }
 
+    /// Restores a child conversation's persisted transcript onto this fresh
+    /// background child surface.
+    ///
+    /// This mirrors the surface-restoration half of
+    /// [`Self::replace_conversation_surface`] but for a newly created child
+    /// session that has no previous conversation to clear. It reuses the shared
+    /// block-restoration plan, action-result restoration, history association,
+    /// and transcript restoration. It deliberately does **not** relaunch the
+    /// child, resend its prompt, or create a server task — the child keeps its
+    /// persisted status.
+    pub(crate) fn restore_orchestrated_child_conversation(
+        &mut self,
+        conversation: AIConversation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let conversation_id = conversation.id();
+        let restoration_plan = {
+            let mut terminal_model = self.terminal_model.lock();
+            prepare_conversation_block_restoration(&conversation, &mut terminal_model)
+        };
+
+        self.ai_action_model.update(ctx, |actions, _| {
+            actions.restore_action_results_from_exchanges(restoration_plan.exchanges().collect());
+        });
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.restore_conversations(self.terminal_surface_id, vec![conversation], ctx);
+        });
+
+        self.transcript.update(ctx, |transcript, ctx| {
+            transcript.restore_conversation(conversation_id, restoration_plan, ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.set_active_conversation_id(conversation_id, self.terminal_surface_id, ctx);
+        });
+
+        self.conversation_selection.update(ctx, |selection, ctx| {
+            selection.select_existing_conversation(
+                conversation_id,
+                AgentViewEntryOrigin::RestoreExistingConversation,
+                ctx,
+            );
+        });
+
+        ctx.notify();
+    }
+
     /// Resolves live semantic orchestration state for this session.
     fn compute_orchestration_tab_snapshot(
         &self,
@@ -2589,6 +2637,58 @@ impl TuiTerminalSessionView {
         self.replace_conversation_surface(*conversation, origin, ctx);
     }
 
+    /// Discards the retained child-agent sessions of a previously restored
+    /// parent tree before a different parent replaces it, without cancelling or
+    /// deleting the underlying local processes or cloud tasks.
+    fn discard_replaced_child_agent_sessions(
+        &self,
+        previous_parent_conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !ctx.has_singleton_model::<TuiOrchestrationModel>()
+            || !ctx.has_singleton_model::<TuiSessions>()
+        {
+            return;
+        }
+        let Some(root_session_id) =
+            TuiSessions::as_ref(ctx).session_id_for_surface(self.terminal_surface_id)
+        else {
+            return;
+        };
+        TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.discard_restored_descendant_sessions(
+                previous_parent_conversation_id,
+                root_session_id,
+                ctx,
+            );
+        });
+    }
+
+    /// Eagerly materializes retained TUI sessions for every supported,
+    /// locally-known descendant of the just-restored parent conversation, so
+    /// restored child agents appear in the orchestration tab bar. Both restore
+    /// entry points (startup `--resume` and the conversations menu) converge
+    /// here, so both restore the same descendant tree.
+    fn restore_child_agent_sessions(
+        &self,
+        parent_conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !ctx.has_singleton_model::<TuiOrchestrationModel>()
+            || !ctx.has_singleton_model::<TuiSessions>()
+        {
+            return;
+        }
+        let Some(root_session_id) =
+            TuiSessions::as_ref(ctx).session_id_for_surface(self.terminal_surface_id)
+        else {
+            return;
+        };
+        TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.restore_descendant_sessions(parent_conversation_id, root_session_id, ctx);
+        });
+    }
+
     /// Replaces the visible conversation and completes the restore state transition.
     fn replace_conversation_surface(
         &mut self,
@@ -2601,6 +2701,14 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .selected_conversation_id(ctx);
         if let Some(previous_conversation_id) = previous_conversation_id {
+            // When a different parent replaces the current tree, drop the prior
+            // tree's retained child-session projections first (idempotent for a
+            // re-restore of the same parent, which is left untouched here and
+            // deduplicated by `restore_descendant_sessions`).
+            if previous_conversation_id != conversation.id() {
+                self.discard_replaced_child_agent_sessions(previous_conversation_id, ctx);
+            }
+
             self.transcript.update(ctx, |transcript, ctx| {
                 transcript.clear_for_replacement(ctx);
             });
@@ -2648,6 +2756,11 @@ impl TuiTerminalSessionView {
                 ctx,
             );
         });
+
+        // Restore the parent's child-agent tree so restored children appear in
+        // the orchestration tab bar. The parent stays focused; children are
+        // materialized as background sessions.
+        self.restore_child_agent_sessions(conversation_id, ctx);
 
         self.conversation_restore_state = ConversationRestoreState::Idle;
         self.refresh_exit_summary(ctx);

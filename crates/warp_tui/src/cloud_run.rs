@@ -41,6 +41,27 @@ impl TuiCloudRunState {
         }
     }
 
+    /// Builds the retained state for a cloud child restored from history.
+    ///
+    /// A restored child already has a stable task/run identity, so it starts in
+    /// [`TuiCloudRunStartup::Spawned`] and never renders the "Starting cloud
+    /// run…" dispatching state. Displayed lifecycle status is still derived from
+    /// the restored `AIConversation` by [`crate::cloud_run_view::TuiCloudRunView`].
+    pub(crate) fn new_restored(
+        conversation_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        run_id: String,
+        run_url: String,
+    ) -> Self {
+        Self {
+            conversation_id: Some(conversation_id),
+            startup: TuiCloudRunStartup::Spawned,
+            task_id: Some(task_id),
+            run_id: Some(run_id),
+            run_url: Some(run_url),
+        }
+    }
+
     pub(crate) fn conversation_id(&self) -> Option<AIConversationId> {
         self.conversation_id
     }
