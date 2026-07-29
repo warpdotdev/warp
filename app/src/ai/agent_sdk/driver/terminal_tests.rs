@@ -80,23 +80,34 @@ fn shell_exit_fails_in_flight_and_subsequent_commands() {
 
         // The in-flight command must resolve with the shell-exit error
         // instead of hanging forever, regardless of whether it had already
-        // started executing.
+        // started executing. The error must name the command that was
+        // running when the shell died.
         let result = match command_future.await {
             Ok(handle) => handle.await,
             Err(error) => Err(error),
         };
-        assert!(
-            matches!(result, Err(AgentDriverError::AgentExitedShell)),
-            "in-flight command should fail with AgentExitedShell, got {result:?}"
-        );
+        match &result {
+            Err(AgentDriverError::SetupCommandExitedShell { command }) => {
+                assert_eq!(command, "echo hi");
+            }
+            other => {
+                panic!("in-flight command should fail with SetupCommandExitedShell, got {other:?}")
+            }
+        }
 
-        // Any further command must fail fast with the same error.
+        // Any further command must fail fast with the same error, still
+        // attributing the command that killed the shell (not the newly
+        // attempted one).
         let fail_fast = terminal_driver.update(&mut app, |driver, ctx| {
             driver.execute_command("echo again", ctx).err()
         });
-        assert!(
-            matches!(fail_fast, Some(AgentDriverError::AgentExitedShell)),
-            "commands after shell exit should fail fast with AgentExitedShell, got {fail_fast:?}"
-        );
+        match &fail_fast {
+            Some(AgentDriverError::SetupCommandExitedShell { command }) => {
+                assert_eq!(command, "echo hi");
+            }
+            other => panic!(
+                "commands after shell exit should fail fast with SetupCommandExitedShell, got {other:?}"
+            ),
+        }
     });
 }

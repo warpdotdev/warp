@@ -526,13 +526,15 @@ pub enum AgentDriverError {
     ConversationCancelled { reason: CancellationReason },
     #[error("The agent got stuck waiting for user confirmation on the action: {blocked_action}")]
     ConversationBlocked { blocked_action: String },
-    /// The shell process exited while the driver was executing a command
-    /// outside a conversation (e.g. an environment setup command ran `exit`),
-    /// so the run cannot continue. Carries the same user-facing message as
-    /// the conversation-level [`RenderableAIError::AgentExitedShell`] failure
-    /// so both paths report identically.
-    #[error("{}", RenderableAIError::AGENT_EXITED_SHELL_MESSAGE)]
-    AgentExitedShell,
+    /// The shell process exited while an environment setup command was
+    /// running (e.g. the command ran `exit`), so the run cannot continue.
+    /// `command` is the command that was in flight (or most recently
+    /// submitted) when the shell died.
+    #[error(
+        "The shell exited during setup command {command}, so the run could not continue. \
+         Check the setup commands for this environment."
+    )]
+    SetupCommandExitedShell { command: String },
     #[error("Timed out refreshing team metadata")]
     TeamMetadataRefreshTimeout,
     #[error("{0}")]
@@ -1084,7 +1086,7 @@ impl AgentDriver {
                 if matches!(
                     err,
                     AgentDriverError::EnvironmentSetupFailed(_)
-                        | AgentDriverError::AgentExitedShell
+                        | AgentDriverError::SetupCommandExitedShell { .. }
                 ) {
                     let _ = foreground_for_error
                         .spawn(|me, ctx| {

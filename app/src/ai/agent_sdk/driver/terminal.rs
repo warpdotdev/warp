@@ -146,8 +146,9 @@ pub(crate) struct TerminalDriver {
     session_share_rx: Option<oneshot::Receiver<Result<(), ShareSessionError>>>,
     pending_share_requests: Vec<ShareRequest>,
     /// Resolves the in-flight command's exit status. Sent `Ok` when the
-    /// command's block completes, or `Err(AgentDriverError::AgentExitedShell)`
-    /// if the shell process exits while the command is still running.
+    /// command's block completes, or
+    /// `Err(AgentDriverError::SetupCommandExitedShell)` if the shell process
+    /// exits while the command is still running.
     waiting_command: Option<oneshot::Sender<Result<ExitCode, AgentDriverError>>>,
 
     /// State for the pending command we're expecting to start executing.
@@ -159,8 +160,15 @@ pub(crate) struct TerminalDriver {
     /// True once the shell process backing this session has exited
     /// post-bootstrap. No further commands can execute, so
     /// [`Self::execute_command`] fails fast with
-    /// [`AgentDriverError::AgentExitedShell`].
+    /// [`AgentDriverError::SetupCommandExitedShell`].
     shell_exited: bool,
+
+    /// The most recently submitted command, used to attribute a shell exit
+    /// to the command that caused it. When the shell dies mid-command, the
+    /// exit path force-finishes the command's block (with exit code 0)
+    /// before `Event::Exited` is delivered, so at exit time this — not any
+    /// still-pending command — names the culprit.
+    last_command: Option<String>,
 }
 
 impl Entity for TerminalDriver {
@@ -314,6 +322,7 @@ impl TerminalDriver {
             waiting_command: None,
             pending_command_start: None,
             shell_exited: false,
+            last_command: None,
         }
     }
 
@@ -475,6 +484,17 @@ impl TerminalDriver {
         })
     }
 
+    /// The error reported for commands affected by a shell exit, attributing
+    /// the most recently submitted command as the cause.
+    fn shell_exited_error(&self) -> AgentDriverError {
+        AgentDriverError::SetupCommandExitedShell {
+            command: self
+                .last_command
+                .clone()
+                .unwrap_or_else(|| "<unknown>".to_string()),
+        }
+    }
+
     /// Execute a command in the terminal and return a future that resolves to a
     /// [`CommandHandle`] once the command starts executing.
     pub fn execute_command(
@@ -486,11 +506,11 @@ impl TerminalDriver {
         AgentDriverError,
     > {
         // The shell process has exited, so no further commands can run in
-        // this session. Fail fast with the canonical shell-exit error so
-        // callers (e.g. environment setup) report the failure instead of
-        // waiting forever on a command that can never start.
+        // this session. Fail fast with the shell-exit error so callers
+        // (e.g. environment setup) report the failure instead of waiting
+        // forever on a command that can never start.
         if self.shell_exited {
-            return Err(AgentDriverError::AgentExitedShell);
+            return Err(self.shell_exited_error());
         }
 
         let (exit_tx, exit_rx) = oneshot::channel::<Result<ExitCode, AgentDriverError>>();
@@ -503,6 +523,7 @@ impl TerminalDriver {
         }
 
         let command_string = command.to_string();
+        self.last_command = Some(command_string.clone());
         self.terminal_view.update(ctx, |terminal, ctx| {
             self.waiting_command = Some(exit_tx);
             self.pending_command_start = Some((command_string, start_tx));
@@ -767,15 +788,14 @@ impl TerminalDriver {
 
                 // The shell is gone: no further command can start or finish.
                 // Fail any in-flight command (e.g. an environment setup
-                // command) with the canonical shell-exit error so the run
-                // reports the failure instead of hanging until the sandbox
-                // is killed.
+                // command) with the shell-exit error so the run reports the
+                // failure instead of hanging until the sandbox is killed.
                 self.shell_exited = true;
                 if let Some((_, sender)) = self.pending_command_start.take() {
-                    let _ = sender.send(Err(AgentDriverError::AgentExitedShell));
+                    let _ = sender.send(Err(self.shell_exited_error()));
                 }
                 if let Some(sender) = self.waiting_command.take() {
-                    let _ = sender.send(Err(AgentDriverError::AgentExitedShell));
+                    let _ = sender.send(Err(self.shell_exited_error()));
                 }
             }
             crate::terminal::view::Event::SlowBootstrap => {

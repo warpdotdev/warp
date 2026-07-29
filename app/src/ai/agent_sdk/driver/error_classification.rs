@@ -2,7 +2,6 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::AgentDriverError;
 use super::terminal::ShareSessionError;
-use crate::ai::agent::RenderableAIError;
 use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
 use crate::server::server_api::ai::TaskStatusUpdate;
 
@@ -174,22 +173,16 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        // The shell died under a driver-issued command (e.g. a setup command
-        // ran `exit`). Reuse the conversation-level shell-exit classification
-        // so the reported state, message, and error code are identical to an
-        // agent-issued command exiting the shell.
-        AgentDriverError::AgentExitedShell => {
-            let (state, update) = classify_renderable_error(&RenderableAIError::AgentExitedShell);
-            (
-                state,
-                update.unwrap_or_else(|| {
-                    TaskStatusUpdate::with_error_code(
-                        RenderableAIError::AGENT_EXITED_SHELL_MESSAGE,
-                        PlatformErrorCode::InvalidRequest,
-                    )
-                }),
-            )
-        }
+        // The shell died while an environment setup command was running
+        // (e.g. the command ran `exit`). This is a user-side environment
+        // configuration problem, so classify as FAILED.
+        AgentDriverError::SetupCommandExitedShell { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::InvalidWorkingDirectory { path, .. } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

@@ -1,7 +1,6 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
-use crate::ai::agent::RenderableAIError;
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 
@@ -165,15 +164,24 @@ fn environment_setup_failed_is_failed() {
 }
 
 #[test]
-fn agent_exited_shell_is_failed_with_same_message_as_conversation_path() {
-    let (state, update) = classify_driver_error(&AgentDriverError::AgentExitedShell);
+fn setup_command_exited_shell_is_failed_with_env_setup_and_names_command() {
+    let (state, update) = classify_driver_error(&AgentDriverError::SetupCommandExitedShell {
+        command: "./setup.sh".into(),
+    });
     assert_eq!(state, AgentTaskState::Failed);
-    assert_eq!(update.error_code, Some(PlatformErrorCode::InvalidRequest));
-    // A shell exit during a setup command must report the exact same
-    // user-facing message as an agent-issued command exiting the shell.
     assert_eq!(
-        update.message,
-        RenderableAIError::AGENT_EXITED_SHELL_MESSAGE
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    // The message must name the setup command that exited the shell and
+    // point the user at the environment's setup commands.
+    assert!(update.message.contains("./setup.sh"), "{}", update.message);
+    assert!(
+        update
+            .message
+            .contains("Check the setup commands for this environment"),
+        "{}",
+        update.message
     );
 }
 
