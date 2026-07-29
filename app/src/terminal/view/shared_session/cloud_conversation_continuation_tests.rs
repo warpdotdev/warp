@@ -235,7 +235,7 @@ impl AmbientAgentTaskTestExt for AmbientAgentTask {
     }
 }
 
-fn current_team_uid() -> ServerId {
+fn test_team_uid() -> ServerId {
     ServerId::from(123)
 }
 
@@ -249,7 +249,7 @@ fn workspaces_for_permission_fixture(
                 ServerId::from(456).into(),
                 "Test Workspace".to_string(),
                 Some(vec![Team::from_local_cache(
-                    current_team_uid(),
+                    test_team_uid(),
                     "Test Team".to_string(),
                     None,
                     None,
@@ -312,13 +312,13 @@ fn server_permissions(permissions_fixture: ConversationPermissionFixture) -> Ser
             user_uid: UserUid::new("other-user"),
         },
         ConversationPermissionFixture::CurrentTeamOwner => Owner::Team {
-            team_uid: current_team_uid(),
+            team_uid: test_team_uid(),
         },
     };
     let guests = match permissions_fixture {
         ConversationPermissionFixture::CurrentTeamEditorGuest => vec![ServerObjectGuest {
             subject: ServerGuestSubject::Team {
-                team_uid: current_team_uid(),
+                team_uid: test_team_uid(),
             },
             access_level: AccessLevel::Editor,
             source: None,

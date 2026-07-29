@@ -389,7 +389,7 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
             }
             Action::Enable => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let Some(team_uid) = workspaces.current_team_uid() else {
+                let Some(team_uid) = workspaces.team_uid_for_window(ctx.window_id()) else {
                     ctx.emit(EnableAutoReloadModalBodyEvent::ShowToast {
                         message: "Oops, something went wrong; your team's data could not be found."
                             .to_string(),

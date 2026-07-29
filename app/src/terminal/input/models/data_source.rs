@@ -18,6 +18,7 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
+    WindowId,
 };
 
 use super::model_spec_scores::{
@@ -206,16 +207,19 @@ pub fn query_model_picker_choices<'a>(
 
 pub struct ModelSelectorDataSource {
     terminal_view_id: EntityId,
+    window_id: WindowId,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
 }
 
 impl ModelSelectorDataSource {
     pub fn new(
         terminal_view_id: EntityId,
+        window_id: WindowId,
         ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
     ) -> Self {
         Self {
             terminal_view_id,
+            window_id,
             ambient_agent_view_model,
         }
     }
@@ -320,7 +324,14 @@ impl SyncDataSource for ModelSelectorDataSource {
         Ok(
             query_model_picker_choices(llm_preferences, choices, &query.text, app)
                 .into_iter()
-                .map(|choice| QueryResult::from(ModelSearchItem::new(choice, &active_llm_id, app)))
+                .map(|choice| {
+                    QueryResult::from(ModelSearchItem::new(
+                        choice,
+                        &active_llm_id,
+                        self.window_id,
+                        app,
+                    ))
+                })
                 .collect(),
         )
     }
@@ -333,6 +344,7 @@ impl Entity for ModelSelectorDataSource {
 #[derive(Clone)]
 struct ModelSearchItem {
     id: LLMId,
+    window_id: WindowId,
     provider: LLMProvider,
     spec: Option<LLMSpec>,
     leading_icon: Icon,
@@ -356,7 +368,12 @@ struct ModelSearchItem {
 }
 
 impl ModelSearchItem {
-    fn new(choice: ModelPickerChoice, active_llm_id: &LLMId, app: &AppContext) -> Self {
+    fn new(
+        choice: ModelPickerChoice,
+        active_llm_id: &LLMId,
+        window_id: WindowId,
+        app: &AppContext,
+    ) -> Self {
         let llm = &choice.llm;
         let is_custom_router = is_custom_router_id(llm.id.as_str());
         let is_auto = is_auto(llm);
@@ -378,6 +395,7 @@ impl ModelSearchItem {
             (!is_using_cloud_host && byo_key_source.is_some()).then_some(Icon::Key);
         Self {
             id: llm.id.clone(),
+            window_id,
             provider: llm.provider,
             spec: llm.spec.clone(),
             leading_icon,
@@ -679,15 +697,16 @@ impl SearchItem for ModelSearchItem {
             .with_child(scores);
 
         if self.disable_reason.as_ref() == Some(&DisableReason::RequiresUpgrade) {
-            let upgrade_url = if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
-                UserWorkspaces::upgrade_link_for_team(team.uid)
-            } else {
-                let user_id = AuthStateProvider::as_ref(app)
-                    .get()
-                    .user_id()
-                    .unwrap_or_default();
-                UserWorkspaces::upgrade_link(user_id)
-            };
+            let upgrade_url =
+                if let Some(team) = UserWorkspaces::as_ref(app).team_for_window(self.window_id) {
+                    UserWorkspaces::upgrade_link_for_team(team.uid)
+                } else {
+                    let user_id = AuthStateProvider::as_ref(app)
+                        .get()
+                        .user_id()
+                        .unwrap_or_default();
+                    UserWorkspaces::upgrade_link(user_id)
+                };
 
             let mut display_name = self.display_text.clone();
             if let Some(first) = display_name.get_mut(..1) {

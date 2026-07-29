@@ -388,17 +388,17 @@ impl TeamUpdateManager {
         }
     }
 
-    pub fn rename_team(&mut self, new_name: String, ctx: &mut ModelContext<Self>) {
+    pub fn rename_team(
+        &mut self,
+        new_name: String,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let team_client = self.team_client.clone();
-        let team_uid = UserWorkspaces::handle(ctx).read(ctx, |user_workspaces, _| {
-            user_workspaces.current_team().map(|team| team.uid)
-        });
-        if let Some(team_uid) = team_uid {
-            let _ = ctx.spawn(
-                async move { team_client.rename_team(new_name, team_uid).await },
-                Self::on_team_renamed,
-            );
-        }
+        let _ = ctx.spawn(
+            async move { team_client.rename_team(new_name, team_uid).await },
+            Self::on_team_renamed,
+        );
     }
 
     fn on_team_renamed(

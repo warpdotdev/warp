@@ -23,7 +23,7 @@ use warpui::prelude::Coords;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    ViewHandle, WeakViewHandle,
 };
 
 use super::editor_text_colors;
@@ -293,6 +293,7 @@ impl Default for EnvironmentFormCopy {
     }
 }
 pub struct UpdateEnvironmentForm {
+    self_handle: WeakViewHandle<Self>,
     mode: EnvironmentFormMode,
     form_state: EnvironmentFormValues,
     repos_input: String,
@@ -620,6 +621,7 @@ impl UpdateEnvironmentForm {
         });
 
         let mut form = Self {
+            self_handle: ctx.handle(),
             mode,
             form_state: EnvironmentFormValues::default(),
             repos_input: String::new(),
@@ -854,7 +856,7 @@ impl UpdateEnvironmentForm {
             EnvironmentFormInitArgs::Create => {
                 // Clear form
                 self.form_state = EnvironmentFormValues::default();
-                self.share_with_team = UserWorkspaces::as_ref(ctx).current_team_uid().is_some();
+                self.share_with_team = UserWorkspaces::as_ref(ctx).team_for_view(ctx).is_some();
                 self.name_editor.update(ctx, |editor, ctx| {
                     editor.clear_buffer_and_reset_undo_stack(ctx);
                 });
@@ -1615,7 +1617,9 @@ impl UpdateEnvironmentForm {
     fn should_show_share_with_team_checkbox(&self, app: &AppContext) -> bool {
         self.show_share_with_team_controls
             && matches!(self.mode, EnvironmentFormMode::Create)
-            && UserWorkspaces::as_ref(app).current_team_uid().is_some()
+            && UserWorkspaces::as_ref(app)
+                .team_for_view_handle(&self.self_handle, app)
+                .is_some()
     }
 
     fn render_submit_actions(
@@ -3331,7 +3335,7 @@ impl TypedActionView for UpdateEnvironmentForm {
             }
             UpdateEnvironmentFormAction::ToggleShareWithTeam => {
                 if matches!(self.mode, EnvironmentFormMode::Create)
-                    && UserWorkspaces::as_ref(ctx).current_team_uid().is_some()
+                    && UserWorkspaces::as_ref(ctx).team_for_view(ctx).is_some()
                 {
                     self.share_with_team = !self.share_with_team;
                     ctx.notify();

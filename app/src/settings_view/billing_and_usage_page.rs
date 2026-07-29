@@ -27,7 +27,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::SettingsSection;
@@ -58,11 +58,10 @@ use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_
 use crate::ui_components::tab_selector::{self, SettingsTab};
 use crate::view_components::ToastFlavor;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
-use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::workspaces::workspace::{CustomerType, Workspace};
+use crate::workspaces::workspace::{BillingMetadata, CustomerType, Workspace};
 use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -180,6 +179,7 @@ pub(crate) struct ProratedRequestLimitsInfo {
 }
 
 pub struct BillingAndUsagePageView {
+    self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     overage_limit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
     addon_credit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
@@ -342,6 +342,7 @@ impl BillingAndUsagePageView {
         });
 
         let mut me = Self {
+            self_handle: ctx.handle(),
             auth_state,
             overage_limit_modal_state: ModalViewState::new(overage_limit_modal_view),
             addon_credit_modal_state: ModalViewState::new(addon_credit_modal_view),
@@ -524,7 +525,7 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.current_team_uid();
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
                 let usage_settings = workspaces.usage_based_pricing_settings();
 
                 if let Some(team_uid) = team_uid {
@@ -552,7 +553,7 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.current_team_uid();
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
 
                 if let Some(team_uid) = team_uid {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
@@ -918,8 +919,8 @@ impl TypedActionView for BillingAndUsagePageView {
             BillingAndUsagePageAction::SelectTopupDenomination(i) => {
                 self.selected_addon_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
+                let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    let team_uid = user_workspaces.current_team_uid();
                     if let Some((workspace, team_uid)) =
                         user_workspaces.current_workspace().zip(team_uid)
                         && workspace
@@ -1161,8 +1162,8 @@ impl BillingAndUsagePageView {
 
         // Only show "Buy more" button for users not on a paid plan.
         let is_on_paid_plan = UserWorkspaces::as_ref(app)
-            .current_team()
-            .is_some_and(|team| team.billing_metadata.is_user_on_paid_plan());
+            .current_workspace_billing_metadata()
+            .is_some_and(BillingMetadata::is_user_on_paid_plan);
         if !is_on_paid_plan {
             let user_id = AuthStateProvider::as_ref(app).get().user_id();
             let buy_more_button = ui_builder
@@ -1246,13 +1247,13 @@ impl BillingAndUsagePageView {
     fn render_usage_based_pricing_section(
         &self,
         enabled: bool,
-        team: &Team,
+        billing_metadata: &BillingMetadata,
+        team_uid: ServerId,
         appearance: &Appearance,
         app: &AppContext,
         has_admin_permissions: bool,
-        ubp_toggle_loading: bool,
     ) -> Box<dyn Element> {
-        let is_delinquent = team.billing_metadata.is_delinquent_due_to_payment_issue();
+        let is_delinquent = billing_metadata.is_delinquent_due_to_payment_issue();
         let enabled_and_not_delinquent = enabled && !is_delinquent;
 
         let (header_text, description_text) = if has_admin_permissions {
@@ -1296,7 +1297,6 @@ impl BillingAndUsagePageView {
         let mut column = Flex::column();
 
         if has_admin_permissions {
-            let team_uid = team.uid;
             let toggle = appearance
                 .ui_builder()
                 .switch(self.ubp_switch_state.clone())
@@ -1312,7 +1312,7 @@ impl BillingAndUsagePageView {
                     );
                 });
 
-            let toggle = if ubp_toggle_loading || is_delinquent {
+            let toggle = if self.usage_based_pricing_toggle_loading || is_delinquent {
                 toggle.disable().finish()
             } else {
                 toggle.finish()
@@ -1333,7 +1333,7 @@ impl BillingAndUsagePageView {
 
         column.add_child(Container::new(description).with_margin_right(100.).finish());
 
-        if enabled_and_not_delinquent || team.billing_metadata.has_overages_used() {
+        if enabled_and_not_delinquent || billing_metadata.has_overages_used() {
             column.add_child(self.render_monthly_overage_spending_limit(
                 appearance,
                 app,
@@ -1341,7 +1341,7 @@ impl BillingAndUsagePageView {
             ));
             column.add_child(self.render_total_overages_row(appearance, app));
             if let Some(manage_link) =
-                self.render_manage_overages_link(appearance, team.uid, has_admin_permissions)
+                self.render_manage_overages_link(appearance, team_uid, has_admin_permissions)
             {
                 column.add_child(manage_link);
             }
@@ -1636,14 +1636,12 @@ impl BillingAndUsagePageView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .finish();
 
-        let team_can_purchase_addon_credits = UserWorkspaces::as_ref(app)
-            .current_team()
-            .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
+        let team_can_purchase_addon_credits = workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy
             .is_some_and(|policy| policy.enabled);
-        let can_upgrade_to_build = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .map(|workspace| workspace.billing_metadata.can_upgrade_to_build_plan())
-            .unwrap_or(false);
+        let can_upgrade_to_build = workspace.billing_metadata.can_upgrade_to_build_plan();
 
         let no_credits_access_explanation = match (
             team_can_purchase_addon_credits,
@@ -1658,10 +1656,7 @@ impl BillingAndUsagePageView {
             // and the current user is an admin, then we show them a nudge to switch to Build.
             (false, true, true) => {
                 let upgrade_url = UserWorkspaces::upgrade_link_for_team(team_uid);
-                let is_legacy_paid = UserWorkspaces::handle(app)
-                    .as_ref(app)
-                    .current_team()
-                    .is_some_and(|team| team.billing_metadata.is_on_legacy_paid_plan());
+                let is_legacy_paid = workspace.billing_metadata.is_on_legacy_paid_plan();
                 let (link_text, suffix) = if is_legacy_paid {
                     ("Switch to the Build plan", " to purchase add-on credits.")
                 } else {
@@ -1751,10 +1746,7 @@ impl BillingAndUsagePageView {
                 .finish();
         }
 
-        let team_member_count = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|team| team.members.len())
-            .unwrap_or(1);
+        let team_member_count = workspace.members.len();
 
         let paragraph_text = if team_member_count > 1 {
             format!("{ADDON_CREDITS_DESCRIPTION} {ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM}")
@@ -2128,8 +2120,8 @@ impl BillingAndUsagePageView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let billing_metadata = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|team| team.billing_metadata.clone())
+            .current_workspace_billing_metadata()
+            .cloned()
             .unwrap_or_default();
         let ai_overages = billing_metadata.ai_overages.as_ref();
         let is_period_over_now = ai_overages
@@ -2430,8 +2422,8 @@ impl BillingAndUsagePageView {
             .format("%b %d at %-I:%M %p")
             .to_string();
         let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|team| team.billing_metadata.is_delinquent_due_to_payment_issue())
+            .current_workspace_billing_metadata()
+            .map(BillingMetadata::is_delinquent_due_to_payment_issue)
             .unwrap_or_default();
 
         let mut usage = Flex::column();
@@ -2651,7 +2643,7 @@ impl BillingAndUsagePageView {
     /// contact their admin.
     pub fn render_enterprise_usage_card(
         &self,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         has_admin_permissions: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -2687,7 +2679,7 @@ impl BillingAndUsagePageView {
             .finish();
 
         // Body text differs for admin vs non-admin
-        let body = if has_admin_permissions {
+        let body = if let Some(team_uid) = team_uid.filter(|_| has_admin_permissions) {
             let admin_panel_url = AdminActions::admin_panel_link_for_team(team_uid);
             let text_fragments = vec![
                 FormattedTextFragment::plain_text(ENTERPRISE_USAGE_CALLOUT_BODY_ADMIN_PREFIX),
@@ -2761,7 +2753,9 @@ impl BillingAndUsagePageView {
             .get()
             .user_email()
             .unwrap_or_default();
-        let team = UserWorkspaces::as_ref(app).current_team();
+        let workspaces = UserWorkspaces::as_ref(app);
+        let team = workspaces.team_for_view_handle(&self.self_handle, app);
+        let billing_metadata = workspaces.current_workspace_billing_metadata();
         let has_admin_permissions =
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
 
@@ -2903,15 +2897,15 @@ impl BillingAndUsagePageView {
 
         // For enterprise plan users with base limit = 0, show a limited usage reporting callout
         // as this is not applicable to them
-        if let Some(t) = team
-            && t.billing_metadata.customer_type == CustomerType::Enterprise
-            && t.billing_metadata
+        if let Some(billing_metadata) = billing_metadata
+            && billing_metadata.customer_type == CustomerType::Enterprise
+            && billing_metadata
                 .tier
                 .warp_ai_policy
                 .is_some_and(|p| p.limit == 0)
         {
             usage.add_child(self.render_enterprise_usage_card(
-                t.uid,
+                team.map(|team| team.uid),
                 has_admin_permissions,
                 appearance,
             ));
@@ -3055,8 +3049,8 @@ impl BillingAndUsagePageView {
 
         let auth_state = AuthStateProvider::as_ref(app).get();
 
-        let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).current_team()
+        let upgrade_cta_text_fragments = if let (Some(team), Some(billing_metadata)) =
+            (team, billing_metadata)
         {
             if workspace_is_delinquent_due_to_payment_issue {
                 if has_admin_permissions {
@@ -3075,11 +3069,11 @@ impl BillingAndUsagePageView {
                         "Contact your team admin to resolve billing issues.",
                     )]
                 }
-            } else if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
+            } else if billing_metadata.can_upgrade_to_higher_tier_plan() {
                 let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
                 if has_admin_permissions {
-                    if team.billing_metadata.can_upgrade_to_build_plan() {
-                        if team.billing_metadata.is_on_legacy_paid_plan() {
+                    if billing_metadata.can_upgrade_to_build_plan() {
+                        if billing_metadata.is_on_legacy_paid_plan() {
                             vec![
                                 FormattedTextFragment::hyperlink(
                                     "Switch to the Build plan",
@@ -3094,7 +3088,7 @@ impl BillingAndUsagePageView {
                                 "Upgrade to the Build plan",
                                 upgrade_url,
                             )];
-                            if team.billing_metadata.is_byo_api_key_enabled() {
+                            if billing_metadata.is_byo_api_key_enabled() {
                                 fragments.push(FormattedTextFragment::plain_text(" or "));
                                 fragments.push(FormattedTextFragment::hyperlink_action(
                                     "bring your own key",
@@ -3107,7 +3101,7 @@ impl BillingAndUsagePageView {
                             fragments
                         }
                     } else {
-                        let upgrade_text = match team.billing_metadata.customer_type {
+                        let upgrade_text = match billing_metadata.customer_type {
                             CustomerType::Prosumer => "Upgrade to Turbo plan",
                             CustomerType::Turbo => "Upgrade to Lightspeed plan",
                             _ => "Upgrade",
@@ -3120,7 +3114,7 @@ impl BillingAndUsagePageView {
                 } else {
                     vec![]
                 }
-            } else if team.billing_metadata.is_on_build_plan() {
+            } else if billing_metadata.is_on_build_plan() {
                 vec![
                     FormattedTextFragment::hyperlink(
                         "Upgrade to Max",
@@ -3128,7 +3122,7 @@ impl BillingAndUsagePageView {
                     ),
                     FormattedTextFragment::plain_text(" for more AI credits."),
                 ]
-            } else if team.billing_metadata.is_on_build_max_plan() {
+            } else if billing_metadata.is_on_build_max_plan() {
                 vec![
                     FormattedTextFragment::hyperlink(
                         "Switch to Business",
@@ -3138,8 +3132,8 @@ impl BillingAndUsagePageView {
                         " for security features like SSO and automatically applied zero data retention.",
                     ),
                 ]
-            } else if team.billing_metadata.is_on_build_business_plan()
-                || team.billing_metadata.is_on_legacy_business_plan()
+            } else if billing_metadata.is_on_build_business_plan()
+                || billing_metadata.is_on_legacy_business_plan()
             {
                 vec![
                     FormattedTextFragment::hyperlink(
@@ -3148,7 +3142,7 @@ impl BillingAndUsagePageView {
                     ),
                     FormattedTextFragment::plain_text(" for custom limits and dedicated support."),
                 ]
-            } else if !team.billing_metadata.is_usage_based_pricing_toggleable() {
+            } else if !billing_metadata.is_usage_based_pricing_toggleable() {
                 vec![
                     FormattedTextFragment::hyperlink("Contact support", "mailto:support@warp.dev"),
                     FormattedTextFragment::plain_text(" for more AI usage."),
@@ -3156,7 +3150,7 @@ impl BillingAndUsagePageView {
             } else {
                 vec![]
             }
-        } else {
+        } else if billing_metadata.is_none_or(BillingMetadata::can_upgrade_to_build_plan) {
             let user_id = auth_state.user_id().unwrap_or_default();
             let upgrade_url = UserWorkspaces::upgrade_link(user_id);
             let mut fragments = vec![FormattedTextFragment::hyperlink(
@@ -3174,6 +3168,8 @@ impl BillingAndUsagePageView {
                 " for more credits and access to more models.",
             ));
             fragments
+        } else {
+            vec![]
         };
 
         let mut upgrade_cta = FormattedTextElement::new(
@@ -3217,9 +3213,8 @@ impl BillingAndUsagePageView {
                 .finish(),
         );
 
-        let workspaces = UserWorkspaces::as_ref(app);
-        if let Some(team) = workspaces.current_team()
-            && team.billing_metadata.is_usage_based_pricing_toggleable()
+        if let (Some(team), Some(billing_metadata)) = (team, billing_metadata)
+            && billing_metadata.is_usage_based_pricing_toggleable()
         {
             let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
 
@@ -3230,11 +3225,11 @@ impl BillingAndUsagePageView {
             usage.add_child(
                 Container::new(self.render_usage_based_pricing_section(
                     enabled,
-                    team,
+                    billing_metadata,
+                    team.uid,
                     appearance,
                     app,
                     has_admin_permissions,
-                    self.usage_based_pricing_toggle_loading,
                 ))
                 .with_margin_bottom(16.)
                 .finish(),
@@ -3401,17 +3396,14 @@ impl BillingAndUsagePageView {
 
     fn render_team_admin_actions(
         &self,
-        team: &Team,
-        _current_user_id: UserUid,
+        team_uid: ServerId,
+        billing_metadata: &BillingMetadata,
+        has_billing_history: bool,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        if team.billing_metadata.customer_type == CustomerType::Enterprise
-            || !team.has_billing_history
-        {
+        if billing_metadata.customer_type == CustomerType::Enterprise || !has_billing_history {
             return None;
         }
-
-        let team_uid = team.uid;
         let content = Container::new(
             appearance
                 .ui_builder()
@@ -3446,16 +3438,16 @@ impl BillingAndUsagePageView {
         )
     }
 
-    fn render_plan_badge_for_team(
+    fn render_plan_badge(
         &self,
-        team: &Team,
+        customer_type: CustomerType,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        if team.billing_metadata.customer_type != CustomerType::Unknown {
+        if customer_type != CustomerType::Unknown {
             Some(
                 Container::new(render_customer_type_badge(
                     appearance,
-                    team.billing_metadata.customer_type.to_display_string(),
+                    customer_type.to_display_string(),
                 ))
                 .with_margin_right(12.)
                 .finish(),
@@ -3497,18 +3489,13 @@ impl BillingAndUsagePageView {
         .finish()
     }
 
-    fn render_non_team_user_actions(
+    fn render_personal_upgrade_action(
         &self,
         auth_state: &AuthState,
         appearance: &Appearance,
-    ) -> (Box<dyn Element>, Box<dyn Element>) {
+    ) -> Box<dyn Element> {
         let current_user_id = auth_state.user_id().unwrap_or_default();
-
-        let plan_badge = render_customer_type_badge(appearance, "Free".into());
-
-        let badge_element = Container::new(plan_badge).with_margin_right(16.).finish();
-
-        let compare_plans_button = Container::new(
+        Container::new(
             appearance
                 .ui_builder()
                 .button(ButtonVariant::Link, self.admin_panel_link.clone())
@@ -3533,9 +3520,7 @@ impl BillingAndUsagePageView {
                 .finish(),
         )
         .with_margin_left(12.)
-        .finish();
-
-        (badge_element, compare_plans_button)
+        .finish()
     }
 
     fn render_account_info(
@@ -3554,35 +3539,40 @@ impl BillingAndUsagePageView {
         let mut right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::End);
-
-        let current_user_id = auth_state.user_id().unwrap_or_default();
         let workspaces = UserWorkspaces::as_ref(app);
+        let workspace = workspaces.current_workspace();
+        let billing_metadata = workspaces.current_workspace_billing_metadata();
+        let customer_type = billing_metadata
+            .map(|billing_metadata| billing_metadata.customer_type)
+            .unwrap_or_default();
 
-        if let Some(team) = workspaces.current_team() {
-            if let Some(plan_badge) = self.render_plan_badge_for_team(team, appearance) {
-                right_side.add_child(plan_badge);
-            }
+        if let Some(plan_badge) = self.render_plan_badge(customer_type, appearance) {
+            right_side.add_child(plan_badge);
+        }
 
+        if let Some(team) = workspaces.team_for_view_handle(&self.self_handle, app) {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
 
             if has_admin_permissions {
-                if let Some(admin_actions) =
-                    self.render_team_admin_actions(team, current_user_id, appearance)
+                if let (Some(workspace), Some(billing_metadata)) = (workspace, billing_metadata)
+                    && let Some(admin_actions) = self.render_team_admin_actions(
+                        team.uid,
+                        billing_metadata,
+                        workspace.has_billing_history,
+                        appearance,
+                    )
                 {
                     right_side.add_child(admin_actions);
                 }
 
-                if team.billing_metadata.is_enterprise_plan() {
+                if billing_metadata.is_some_and(BillingMetadata::is_enterprise_plan) {
                     let admin_panel_button = self.render_admin_panel_button(team.uid, appearance);
                     right_side.add_child(admin_panel_button);
                 }
             }
-        } else {
-            let (plan_badge, compare_plans_button) =
-                self.render_non_team_user_actions(auth_state, appearance);
-            right_side.add_child(plan_badge);
-            right_side.add_child(compare_plans_button);
+        } else if billing_metadata.is_none_or(BillingMetadata::can_upgrade_to_build_plan) {
+            right_side.add_child(self.render_personal_upgrade_action(auth_state, appearance));
         }
 
         plan_header.add_child(right_side.finish());
