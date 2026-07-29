@@ -1,10 +1,15 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::io::{self, Write};
 use std::rc::Rc;
 use std::time::Duration;
 
 use ai::LLMProvider;
 use chrono::NaiveDate;
 use instant::Instant;
+use ratatui::crossterm::event::{
+    Event as CrosstermEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use tempfile::TempDir;
 use warp::appearance::Appearance;
 use warp::settings::{
@@ -33,34 +38,40 @@ use warpui::{
 use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{
     Color, TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement,
-    TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint,
-    TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText, TuiViewportPosition,
+    TuiEvent, TuiEventContext, TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
+    TuiPoint, TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
+    TuiViewportPosition,
 };
 use warpui_core::event::{KeyState, ModifiersState};
-use warpui_core::keymap::{Context, Keystroke, Trigger};
+use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::runtime::{TuiRuntime, TuiTerminal};
 use warpui_core::telemetry::{EventPayload, flush_events};
-use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
+use warpui_core::{
+    App, AppContext, Entity, TuiView, TypedActionView, ViewContext, WindowInvalidation,
+};
 
 use super::{
     ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME,
     AUTO_APPROVE_DISABLED_HINT, AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION,
     AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource, COST_CONVERSATION_IN_PROGRESS_HINT,
     COST_EMPTY_CONVERSATION_HINT, COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT,
-    CTRL_C_KILL_CHILD_HINT, ConversationRestoreState,
+    CTRL_C_KILL_CHILD_HINT, ContextWindowUsage, ConversationRestoreState,
     DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, FooterSegment, FooterSegments,
     INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
-    RUNNING_COMMAND_DETACH_HINT, SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
+    RUNNING_COMMAND_DETACH_HINT,
+    SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
     SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
     SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
-    SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
+    SHELL_MODE_HINT, STATUSLINE_RESET_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
     format_context_window_usage, format_statusline_date, format_statusline_time_12_hour,
     format_statusline_time_24_hour, format_todo_progress, log_bundle_success_message,
-    mcp_primary_action_hint, raw_prompt_if_not_blank, render_mcp_menu_footer,
-    render_status_footer_row, render_statusline_datetime, voice_argument_is_empty,
+    mcp_primary_action_hint, raw_prompt_if_not_blank, render_git_branch_status,
+    render_mcp_menu_footer, render_status_footer_row,
+    render_statusline_datetime, should_render_plain_git_branch, voice_argument_is_empty,
     voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
@@ -84,7 +95,7 @@ use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::statusline_config_view::TuiStatuslineConfigEvent;
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
-use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
+use crate::test_fixtures::{TestHostView, add_test_semantic_selection, add_test_terminal_session};
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
@@ -131,6 +142,129 @@ fn set_selected_todo_list(
     })
 }
 
+struct AutoApproveControlsTestView {
+    session: ViewHandle<TuiTerminalSessionView>,
+}
+
+impl Entity for AutoApproveControlsTestView {
+    type Event = ();
+}
+
+impl TuiView for AutoApproveControlsTestView {
+    fn ui_name() -> &'static str {
+        "AutoApproveControlsTestView"
+    }
+
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let session = self.session.as_ref(ctx);
+        let builder = TuiUiBuilder::from_app(ctx);
+        TuiFlex::column()
+            .child(session.render_warping_indicator("Warping...", Duration::ZERO, ctx))
+            .child(session.render_auto_approve_statusline(&builder, ctx))
+            .finish()
+    }
+}
+
+impl TypedActionView for AutoApproveControlsTestView {
+    type Action = TuiTerminalSessionAction;
+
+    fn handle_action(&mut self, action: &TuiTerminalSessionAction, ctx: &mut ViewContext<Self>) {
+        self.session
+            .update(ctx, |session, ctx| session.handle_action(action, ctx));
+    }
+}
+
+struct AutoApproveTestTerminal {
+    size: TuiSize,
+    events: VecDeque<CrosstermEvent>,
+    output: Vec<u8>,
+}
+
+impl AutoApproveTestTerminal {
+    fn with_click(size: TuiSize, position: (u16, u16)) -> Self {
+        let mouse_event = |kind| {
+            CrosstermEvent::Mouse(MouseEvent {
+                kind,
+                column: position.0,
+                row: position.1,
+                modifiers: KeyModifiers::empty(),
+            })
+        };
+        Self {
+            size,
+            events: VecDeque::from([
+                mouse_event(MouseEventKind::Down(MouseButton::Left)),
+                mouse_event(MouseEventKind::Up(MouseButton::Left)),
+            ]),
+            output: Vec::new(),
+        }
+    }
+}
+
+impl TuiTerminal for AutoApproveTestTerminal {
+    fn size(&self) -> io::Result<TuiSize> {
+        Ok(self.size)
+    }
+
+    fn poll_event(&mut self, _timeout: Duration) -> io::Result<Option<CrosstermEvent>> {
+        Ok(self.events.pop_front())
+    }
+
+    fn writer(&mut self) -> &mut dyn Write {
+        &mut self.output
+    }
+}
+fn render_auto_approve_controls(
+    app: &mut App,
+    controls: &ViewHandle<AutoApproveControlsTestView>,
+    size: TuiSize,
+) -> TuiBuffer {
+    let mut presenter = TuiPresenter::new();
+    app.update(|ctx| {
+        let mut invalidation = WindowInvalidation::default();
+        invalidation.updated.insert(controls.id());
+        presenter.invalidate(&invalidation, ctx, controls.window_id(ctx));
+        presenter
+            .present(ctx, controls, TuiRect::new(0, 0, size.width, size.height))
+            .buffer
+    })
+}
+
+fn run_auto_approve_click(
+    app: &mut App,
+    window_id: warpui_core::WindowId,
+    controls: &ViewHandle<AutoApproveControlsTestView>,
+    size: TuiSize,
+    position: (u16, u16),
+) {
+    let terminal = AutoApproveTestTerminal::with_click(size, position);
+    let mut runtime = TuiRuntime::with_terminal(app, window_id, controls.clone(), terminal);
+    let mut iterations = 0;
+    runtime
+        .run_until(app, |_| {
+            iterations += 1;
+            iterations > 2
+        })
+        .expect("auto-approve click should dispatch through the TUI runtime");
+}
+
+fn pending_auto_approve_mode(
+    app: &App,
+    view: &ViewHandle<TuiTerminalSessionView>,
+) -> AIConversationAutoexecuteMode {
+    view.read(app, |view, ctx| {
+        view.conversation_selection
+            .as_ref(ctx)
+            .pending_query_autoexecute_override(ctx)
+    })
+}
+
+fn label_column(line: &str, label: &str) -> u16 {
+    let byte_offset = line
+        .find(label)
+        .unwrap_or_else(|| panic!("label {label:?} should render in {line:?}"));
+    line[..byte_offset].chars().count() as u16
+}
 #[test]
 fn mcp_menu_footer_replaces_status_with_controls() {
     App::test((), |mut app| async move {
@@ -224,6 +358,38 @@ fn figma_statusline_metadata_formats_are_stable() {
     assert_eq!(format_statusline_time_24_hour(now), "13:08");
     assert_eq!(format_todo_progress(1, 10, false), "❒ 1/10");
     assert_eq!(format_todo_progress(10, 10, true), "✓ 10/10");
+    assert_eq!(
+        format_context_window_usage(0.0),
+        ContextWindowUsage {
+            bar: "████".to_owned(),
+            percentage_remaining: 100,
+            warning: false,
+        }
+    );
+    assert_eq!(
+        format_context_window_usage(0.25),
+        ContextWindowUsage {
+            bar: "███░".to_owned(),
+            percentage_remaining: 75,
+            warning: false,
+        }
+    );
+    assert_eq!(
+        format_context_window_usage(0.5),
+        ContextWindowUsage {
+            bar: "██░░".to_owned(),
+            percentage_remaining: 50,
+            warning: false,
+        }
+    );
+    assert_eq!(
+        format_context_window_usage(0.75),
+        ContextWindowUsage {
+            bar: "█░░░".to_owned(),
+            percentage_remaining: 25,
+            warning: true,
+        }
+    );
 }
 
 #[test]
@@ -252,7 +418,7 @@ fn footer_supports_arbitrary_order_and_figma_group_dividers() {
                     ordered: vec![
                         FooterSegment::ContextWindowUsage(format_context_window_usage(0.426)),
                         FooterSegment::GitBranch("feature/statusline".to_owned()),
-                        FooterSegment::ActiveIndicator("Auto-queue"),
+                        FooterSegment::AutoApproveIndicator(TuiText::new("▶▶").finish()),
                         FooterSegment::WorkingDirectory("/tmp/warp".to_owned()),
                         FooterSegment::DateTime(TuiText::new("July 20, 2026").finish()),
                     ],
@@ -263,7 +429,7 @@ fn footer_supports_arbitrary_order_and_figma_group_dividers() {
             assert_eq!(
                 render_element(row, ctx, 120).to_lines(),
                 vec![
-                    "43% context used | feature/statusline | Auto-queue | /tmp/warp | July 20, 2026"
+                    "██░░ 57% context remaining | ⊢ feature/statusline | ▶▶ | /tmp/warp | July 20, 2026"
                         .to_owned()
                 ],
             );
@@ -277,7 +443,7 @@ fn footer_supports_arbitrary_order_and_figma_group_dividers() {
             .finish();
             assert_eq!(
                 render_element(branch_only, ctx, 80).to_lines(),
-                vec!["main".to_owned()],
+                vec!["⊢ main".to_owned()],
             );
         });
     });
@@ -292,22 +458,29 @@ fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators(
             let row = render_status_footer_row(
                 FooterSegments {
                     ordered: vec![
-                        FooterSegment::ActiveIndicator("Auto-approve"),
-                        FooterSegment::ActiveIndicator("Auto-queue"),
+                        FooterSegment::AutoApproveIndicator(TuiText::new("▶▶").finish()),
                         FooterSegment::Model(TuiText::new("model").finish()),
                         FooterSegment::WorkingDirectory("/tmp/warp".to_owned()),
                         FooterSegment::GitBranch("main".to_owned()),
-                        FooterSegment::GitBranchStatus("↑1 ↓2".to_owned()),
+                        FooterSegment::GitBranchStatus(render_git_branch_status(
+                            "main",
+                            false,
+                            Some("1".to_owned()),
+                            Some("2".to_owned()),
+                            &builder,
+                        )),
                         FooterSegment::GitDiff {
+                            files_changed: 6,
                             additions: 31,
                             deletions: 12,
                         },
                         FooterSegment::CreditUsage(TuiText::new("40 credits").finish()),
-                        FooterSegment::ContextWindowUsage("43% context used".to_owned()),
+                        FooterSegment::GitHubPullRequest(TuiText::new("PR #123").finish()),
+                        FooterSegment::ContextWindowUsage(format_context_window_usage(0.426)),
                         FooterSegment::DateTime(TuiText::new("July 20, 2026").finish()),
                         FooterSegment::DateTime(TuiText::new("1:08pm").finish()),
                         FooterSegment::AgentTodoList(TuiText::new("❒ 1/10").finish()),
-                        FooterSegment::VoiceInput(TuiText::new("Voice").finish()),
+                        FooterSegment::VoiceInput(TuiText::new("◉ Voice").finish()),
                     ],
                 },
                 &builder,
@@ -316,12 +489,175 @@ fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators(
             assert_eq!(
                 render_element(row, ctx, 160).to_lines(),
                 vec![
-                    "Auto-approve • Auto-queue | model /tmp/warp ⊢ main | ↑1 ↓2 | +31 -12 | 40 credits | 43% context used | July 20, 2026 • 1:08pm | ❒ 1/10 | Voice"
+                    "▶▶ | model | /tmp/warp ⊢ main | ⊢ main • ↑1 ↓2 | ☰ 6 • +31 -12 | 40 credits | PR #123 | ██░░ 57% context remaining | July 20, 2026 • 1:08pm | ❒ 1/10 | ◉ Voice"
                         .to_owned()
                 ],
             );
         });
     });
+}
+
+#[test]
+fn git_diff_status_matches_figma_file_count_content_and_styles() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let row = render_status_footer_row(
+                FooterSegments {
+                    ordered: vec![FooterSegment::GitDiff {
+                        files_changed: 6,
+                        additions: 31,
+                        deletions: 12,
+                    }],
+                },
+                &builder,
+            )
+            .finish();
+            let buffer = render_element(row, ctx, 80);
+            assert_eq!(buffer.to_lines(), vec!["☰ 6 • +31 -12".to_owned()],);
+            assert_eq!(
+                buffer[(0, 0)].fg,
+                builder
+                    .muted_text_style()
+                    .fg
+                    .expect("file glyph should use the muted foreground"),
+            );
+            assert_eq!(
+                buffer[(
+                    (0..buffer.area().width)
+                        .find(|column| buffer[(*column, 0)].symbol() == "+")
+                        .expect("addition glyph should render"),
+                    0,
+                )]
+                    .fg,
+                builder
+                    .diff_added_style()
+                    .fg
+                    .expect("addition count should use the added foreground"),
+            );
+            assert_eq!(
+                buffer[(
+                    (0..buffer.area().width)
+                        .find(|column| buffer[(*column, 0)].symbol() == "-")
+                        .expect("deletion glyph should render"),
+                    0,
+                )]
+                    .fg,
+                builder
+                    .diff_removed_style()
+                    .fg
+                    .expect("deletion count should use the removed foreground"),
+            );
+
+            let file_only = render_status_footer_row(
+                FooterSegments {
+                    ordered: vec![FooterSegment::GitDiff {
+                        files_changed: 1,
+                        additions: 0,
+                        deletions: 0,
+                    }],
+                },
+                &builder,
+            )
+            .finish();
+            assert_eq!(
+                render_element(file_only, ctx, 80).to_lines(),
+                vec!["☰ 1".to_owned()],
+                "binary or zero-line changes should remain visible through their file count",
+            );
+        });
+    });
+}
+
+#[test]
+fn git_branch_status_matches_figma_content_styles_and_tracking_variants() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let status = render_element(
+                render_git_branch_status(
+                    "main",
+                    false,
+                    Some("1".to_owned()),
+                    Some("2".to_owned()),
+                    &builder,
+                ),
+                ctx,
+                80,
+            );
+            assert_eq!(status.to_lines(), vec!["⊢ main • ↑1 ↓2".to_owned()]);
+            let muted = builder
+                .muted_text_style()
+                .fg
+                .expect("muted status text has a foreground");
+            let accent = builder
+                .accent_text_style()
+                .fg
+                .expect("branch status arrows have a foreground");
+            assert_eq!(status[(0, 0)].fg, muted);
+            assert_eq!(status[(9, 0)].fg, accent);
+            assert_eq!(status[(10, 0)].fg, muted);
+            assert_eq!(status[(12, 0)].fg, accent);
+            assert_eq!(status[(13, 0)].fg, muted);
+
+            assert_eq!(
+                render_element(
+                    render_git_branch_status("main", false, Some("1".to_owned()), None, &builder,),
+                    ctx,
+                    80,
+                )
+                .to_lines(),
+                vec!["⊢ main • ↑1".to_owned()]
+            );
+            assert_eq!(
+                render_element(
+                    render_git_branch_status("main", false, None, Some("2".to_owned()), &builder,),
+                    ctx,
+                    80,
+                )
+                .to_lines(),
+                vec!["⊢ main • ↓2".to_owned()]
+            );
+            assert_eq!(
+                render_element(
+                    render_git_branch_status("main", true, None, None, &builder),
+                    ctx,
+                    80,
+                )
+                .to_lines(),
+                vec!["⊢ main • ⇅".to_owned()]
+            );
+            assert_eq!(
+                render_element(
+                    render_git_branch_status("main", false, None, None, &builder),
+                    ctx,
+                    80,
+                )
+                .to_lines(),
+                vec!["⊢ main".to_owned()]
+            );
+        });
+    });
+}
+
+#[test]
+fn composite_git_branch_status_suppresses_the_plain_branch_item() {
+    let branch_only = TuiStatuslineConfig {
+        order: TuiStatuslineItem::ALL.to_vec(),
+        enabled: vec![TuiStatuslineItem::GitBranch],
+    };
+    assert!(should_render_plain_git_branch(&branch_only));
+
+    let branch_and_status = TuiStatuslineConfig {
+        order: TuiStatuslineItem::ALL.to_vec(),
+        enabled: vec![
+            TuiStatuslineItem::GitBranch,
+            TuiStatuslineItem::GitBranchStatus,
+        ],
+    };
+    assert!(!should_render_plain_git_branch(&branch_and_status));
 }
 #[test]
 fn empty_configurable_footer_has_zero_height() {
@@ -342,60 +678,144 @@ fn empty_configurable_footer_has_zero_height() {
 }
 
 #[test]
-fn enabled_auto_indicators_render_only_while_their_effective_states_are_on() {
+fn enabled_auto_approve_indicator_is_always_visible_with_state_aware_color() {
     App::test((), |mut app| async move {
-        let _queue_flag =
-            warp_core::features::FeatureFlag::QueueSlashCommand.override_enabled(true);
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        let conversation_id = view.update(&mut app, |view, ctx| {
-            let conversation_id = view.conversation_selection.update(ctx, |selection, ctx| {
+        view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
                 selection
                     .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
                     .expect("test conversation should start")
-            });
-            view.conversation_selection.update(ctx, |selection, ctx| {
-                selection.toggle_pending_query_autoexecute(ctx);
-            });
-            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.toggle_queue_next_prompt(conversation_id, ctx);
             });
             AISettings::handle(ctx).update(ctx, |settings, ctx| {
                 settings
                     .tui_statusline
                     .set_value(
                         TuiStatuslineConfig {
-                            order: vec![
-                                TuiStatuslineItem::AutoApprove,
-                                TuiStatuslineItem::AutoQueue,
-                            ],
-                            enabled: vec![
-                                TuiStatuslineItem::AutoApprove,
-                                TuiStatuslineItem::AutoQueue,
-                            ],
+                            order: vec![TuiStatuslineItem::AutoApprove],
+                            enabled: vec![TuiStatuslineItem::AutoApprove],
                         }
                         .normalized(),
                         ctx,
                     )
                     .expect("statusline setting should persist");
             });
-            conversation_id
         });
 
+        let disabled = render_footer(&mut app, &view, 80);
+        assert_eq!(disabled.to_lines(), vec!["▶▶".to_owned()]);
         assert_eq!(
-            render_footer_lines(&mut app, &view, 80),
-            vec!["Auto-approve • Auto-queue".to_owned()],
+            disabled[(0, 0)].fg,
+            app.read(|ctx| {
+                TuiUiBuilder::from_app(ctx)
+                    .muted_text_style()
+                    .fg
+                    .expect("muted text style should have a foreground")
+            })
         );
 
         view.update(&mut app, |view, ctx| {
             view.conversation_selection.update(ctx, |selection, ctx| {
                 selection.toggle_pending_query_autoexecute(ctx);
             });
-            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.toggle_queue_next_prompt(conversation_id, ctx);
+        });
+        let enabled = render_footer(&mut app, &view, 80);
+        assert_eq!(enabled.to_lines(), vec!["▶▶".to_owned()]);
+        assert_eq!(
+            enabled[(0, 0)].fg,
+            app.read(|ctx| {
+                TuiUiBuilder::from_app(ctx)
+                    .success_glyph_style()
+                    .fg
+                    .expect("success glyph style should have a foreground")
+            })
+        );
+    });
+}
+
+#[test]
+fn auto_approve_controls_dispatch_clicks_independently_through_the_runtime() {
+    App::test((), |mut app| async move {
+        let view = add_auto_approve_runtime_test_session(&mut app);
+        view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection
+                    .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
+                    .expect("test conversation should start");
             });
         });
-        assert!(render_footer_lines(&mut app, &view, 80).is_empty());
+        let (controls_window_id, controls) = app.update(|ctx| {
+            let view = view.clone();
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| AutoApproveControlsTestView { session: view },
+            )
+        });
+        let size = TuiSize::new(80, 2);
+        let buffer = render_auto_approve_controls(&mut app, &controls, size);
+        let lines = buffer.to_lines();
+        let warping_row = lines
+            .iter()
+            .position(|line| line.contains("▶▶ Auto approve off"))
+            .expect("warping control should render") as u16;
+        let footer_row = lines
+            .iter()
+            .position(|line| line.trim_end() == "▶▶")
+            .expect("footer control should render") as u16;
+        let footer_col = label_column(&lines[usize::from(footer_row)], "▶▶");
+
+        run_auto_approve_click(
+            &mut app,
+            controls_window_id,
+            &controls,
+            size,
+            (footer_col, footer_row),
+        );
+        assert_eq!(
+            pending_auto_approve_mode(&app, &view),
+            AIConversationAutoexecuteMode::RunToCompletion,
+            "the footer click should dispatch its typed action even while the warping control renders"
+        );
+        view.read(&app, |view, _| {
+            assert!(!view.footer_auto_approve_mouse.lock().unwrap().is_clicked());
+            assert!(!view.warping_auto_approve_mouse.lock().unwrap().is_clicked());
+        });
+
+        run_auto_approve_click(
+            &mut app,
+            controls_window_id,
+            &controls,
+            size,
+            (footer_col + 3, footer_row),
+        );
+        assert_eq!(
+            pending_auto_approve_mode(&app, &view),
+            AIConversationAutoexecuteMode::RunToCompletion,
+            "clicking outside the footer glyph must not toggle auto-approve"
+        );
+        let enabled_buffer = render_auto_approve_controls(&mut app, &controls, size);
+        let enabled_lines = enabled_buffer.to_lines();
+        let warping_col = label_column(
+            &enabled_lines[usize::from(warping_row)],
+            "▶▶ Auto approve on",
+        );
+
+        run_auto_approve_click(
+            &mut app,
+            controls_window_id,
+            &controls,
+            size,
+            (warping_col, warping_row),
+        );
+        assert_eq!(
+            pending_auto_approve_mode(&app, &view),
+            AIConversationAutoexecuteMode::RespectUserSettings,
+            "the warping control should remain independently clickable"
+        );
     });
 }
 
@@ -1412,6 +1832,56 @@ fn saving_statusline_configuration_persists_and_restores_input_focus() {
 }
 
 #[test]
+fn reset_statusline_command_restores_default_items_and_ordering() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let custom = TuiStatuslineConfig {
+            order: vec![TuiStatuslineItem::CreditUsage, TuiStatuslineItem::Model],
+            enabled: vec![TuiStatuslineItem::CreditUsage],
+        }
+        .normalized();
+        assert_ne!(custom, TuiStatuslineConfig::default());
+
+        view.update(&mut app, |view, ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .tui_statusline
+                    .set_value(custom, ctx)
+                    .expect("custom statusline should persist");
+            });
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/reset-statusline", ctx);
+            });
+            view.execute_tui_slash_command(&slash_commands::RESET_STATUSLINE, None, ctx);
+        });
+
+        assert_eq!(
+            app.read(|ctx| AISettings::as_ref(ctx).tui_statusline.clone()),
+            TuiStatuslineConfig::default(),
+        );
+        view.read(&app, |view, ctx| {
+            assert!(view.statusline_config_view.is_none());
+            assert_eq!(
+                view.input_view
+                    .as_ref(ctx)
+                    .model()
+                    .as_ref(ctx)
+                    .content()
+                    .as_ref(ctx)
+                    .text()
+                    .into_string(),
+                ""
+            );
+            assert_eq!(
+                view.transient_hint.current().map(|(text, _)| text),
+                Some(STATUSLINE_RESET_HINT),
+            );
+        });
+    });
+}
+
+#[test]
 fn cost_slash_command_rejects_an_empty_conversation_like_the_gui() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -1603,6 +2073,33 @@ fn auto_approve_actions_control_visible_feedback() {
         });
     });
 }
+
+#[test]
+fn auto_queue_is_not_exposed_in_statusline_or_shortcuts() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
+        });
+
+        app.read(|ctx| {
+            assert!(
+                ctx.editable_bindings().all(|binding| {
+                    binding.description.in_context(DescriptionContext::Default)
+                        != "Toggle Auto Queue"
+                }),
+                "auto-queue toggle binding must not be registered"
+            );
+        });
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(!rendered.contains("toggle auto-queue"), "{rendered}");
+        assert!(!rendered.contains('↳'), "{rendered}");
+    });
+}
 #[test]
 fn footer_model_label_is_a_bounded_click_target() {
     App::test((), |mut app| async move {
@@ -1730,6 +2227,31 @@ fn add_focus_test_session(
     (view, session_id)
 }
 
+fn add_auto_approve_runtime_test_session(
+    app: &mut App,
+) -> ViewHandle<super::TuiTerminalSessionView> {
+    register_tui_session_view_test_singletons(app);
+    add_test_semantic_selection(app);
+    app.update(TuiAutoupdater::register);
+    let (window_id, _) = app.update(|ctx| {
+        ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        )
+    });
+    let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
+    let orchestration = app.update(TuiOrchestrationModel::register);
+    app.update(|ctx| TuiSessions::wire_orchestration(&sessions, &orchestration, ctx));
+    let (view, manager) = add_test_terminal_session(app, window_id);
+    app.update(|ctx| {
+        TuiSessions::register_session(&sessions, view.clone(), manager, true, ctx);
+    });
+    view
+}
+
 fn render_element(element: Box<dyn TuiElement>, ctx: &AppContext, width: u16) -> TuiBuffer {
     render_element_with_size(element, ctx, width, 1)
 }
@@ -1768,6 +2290,15 @@ fn render_session(
     width: u16,
     height: u16,
 ) -> Vec<String> {
+    render_session_buffer(app, view, width, height).to_lines()
+}
+
+fn render_session_buffer(
+    app: &mut App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    width: u16,
+    height: u16,
+) -> TuiBuffer {
     let mut presenter = TuiPresenter::new();
     app.update(|ctx| {
         let mut invalidation = WindowInvalidation::default();
@@ -1779,8 +2310,90 @@ fn render_session(
         presenter
             .present(ctx, view, TuiRect::new(0, 0, width, height))
             .buffer
-            .to_lines()
     })
+}
+
+fn first_visible_column(line: &str) -> usize {
+    line.chars()
+        .position(|character| !character.is_whitespace())
+        .unwrap_or_else(|| panic!("line must contain visible content: {line:?}"))
+}
+#[test]
+fn input_adjacent_surfaces_follow_figma_outer_edge_alignment() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let lines = render_session(&mut app, &view, 80, 24);
+        let input_border_column = lines
+            .iter()
+            .find(|line| line.contains('┌'))
+            .map(|line| first_visible_column(line))
+            .unwrap_or_else(|| panic!("input border must render:\n{}", lines.join("\n")));
+        let statusline_column = lines
+            .iter()
+            .find(|line| line.contains("auto (cost-efficient)"))
+            .map(|line| first_visible_column(line))
+            .unwrap_or_else(|| panic!("statusline must render:\n{}", lines.join("\n")));
+        assert_eq!(
+            statusline_column,
+            input_border_column,
+            "statusline must begin at the input border's outer edge:\n{}",
+            lines.join("\n")
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/", ctx);
+            });
+        });
+        futures_lite::future::yield_now().await;
+        let buffer = render_session_buffer(&mut app, &view, 80, 24);
+        let lines = buffer.to_lines();
+        let (slash_command_row, slash_command_column) = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| line.contains("/agent"))
+            .map(|(row, line)| (row, first_visible_column(line)))
+            .unwrap_or_else(|| panic!("slash-command menu must render:\n{}", lines.join("\n")));
+        assert_eq!(
+            slash_command_column,
+            input_border_column,
+            "inline-menu content must begin at the input border's outer edge:\n{}",
+            lines.join("\n")
+        );
+        assert_eq!(
+            buffer[(input_border_column as u16, slash_command_row as u16)].bg,
+            app.read(|ctx| TuiUiBuilder::from_app(ctx).slash_command_selection_background()),
+            "selected inline-menu background must begin at the input border's outer edge"
+        );
+
+        view.update(&mut app, |view, ctx| {
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+            });
+        });
+        let buffer = render_session_buffer(&mut app, &view, 80, 24);
+        let lines = buffer.to_lines();
+        let (shortcuts_row, shortcuts_column) = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| line.contains("Shortcuts"))
+            .map(|(row, line)| (row, first_visible_column(line)))
+            .unwrap_or_else(|| panic!("shortcuts surface must render:\n{}", lines.join("\n")));
+        assert_eq!(
+            shortcuts_column,
+            input_border_column + 1,
+            "shortcuts text keeps its designed one-cell internal padding:\n{}",
+            lines.join("\n")
+        );
+        assert_eq!(
+            buffer[(input_border_column as u16, shortcuts_row as u16)].bg,
+            app.read(|ctx| TuiUiBuilder::from_app(ctx).shortcuts_background()),
+            "shortcuts background must begin at the input border's outer edge"
+        );
+    });
 }
 
 #[test]
@@ -1805,6 +2418,7 @@ fn shortcuts_surface_renders_above_the_input() {
         assert!(rendered.contains("! shell mode"), "{rendered}");
         assert!(rendered.contains("← conversations"), "{rendered}");
         assert!(rendered.contains("↑ input history"), "{rendered}");
+        assert!(!rendered.contains("toggle auto-queue"), "{rendered}");
         assert!(rendered.contains("toggle auto-approve"), "{rendered}");
         // The shortcuts panel must NOT include the status section (that
         // lives in the dedicated status menu opened by /status).
@@ -3153,7 +3767,7 @@ fn configured_voice_item_renders_idle_listening_and_transcribing_states() {
         }));
 
         let idle_footer = render_footer(&mut app, &view, 80);
-        assert_eq!(idle_footer.to_lines(), vec!["Voice"]);
+        assert_eq!(idle_footer.to_lines(), vec!["◉ Voice"]);
 
         view.update(&mut app, |view, ctx| {
             let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
@@ -3162,14 +3776,14 @@ fn configured_voice_item_renders_idle_listening_and_transcribing_states() {
             });
         });
         let listening_footer = render_footer(&mut app, &view, 80);
-        assert_eq!(listening_footer.to_lines(), vec!["■ Listening"]);
+        assert_eq!(listening_footer.to_lines(), vec!["◉ Voice"]);
         assert_eq!(
             listening_footer[(0, 0)].fg,
             app.read(|ctx| {
                 TuiUiBuilder::from_app(ctx)
-                    .error_text_style()
+                    .success_glyph_style()
                     .fg
-                    .expect("error text style should have a foreground")
+                    .expect("success glyph style should have a foreground")
             })
         );
 
@@ -3214,9 +3828,9 @@ fn voice_click_is_interactive_only_within_the_segment_bounds() {
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::VoiceInput]);
         let (mut element, scene, buffer) = render_retained_session(&app, &view, 20, 20);
-        let (voice_col, voice_row) = footer_label_position(&buffer, "Voice");
+        let (voice_col, voice_row) = footer_label_position(&buffer, "◉ Voice");
         let inside = (voice_col + 1, voice_row);
-        let outside = (voice_col + 5, voice_row);
+        let outside = (voice_col + 7, voice_row);
 
         dispatch_session_event(
             &app,
@@ -3476,6 +4090,7 @@ fn footer_renders_agent_sections_left_aligned() {
                         FooterSegment::GitBranch("main".to_owned()),
                         FooterSegment::CreditUsage(usage),
                         FooterSegment::GitDiff {
+                            files_changed: 2,
                             additions: 3,
                             deletions: 1,
                         },
@@ -3489,7 +4104,7 @@ fn footer_renders_agent_sections_left_aligned() {
 
             assert_eq!(
                 lines,
-                vec!["TestModel /home/user/warp ⊢ main | 2.5 credits | +3 -1"],
+                vec!["TestModel | /home/user/warp ⊢ main | 2.5 credits | ☰ 2 • +3 -1"],
                 "agent footer is left-aligned in order model → cwd/branch → usage → diff"
             );
             assert!(
@@ -3533,6 +4148,7 @@ fn footer_renders_shell_mode_sections_without_model_or_usage() {
                         FooterSegment::WorkingDirectory("/home/user/warp".to_owned()),
                         FooterSegment::GitBranch("main".to_owned()),
                         FooterSegment::GitDiff {
+                            files_changed: 2,
                             additions: 3,
                             deletions: 1,
                         },
@@ -3554,7 +4170,9 @@ fn footer_renders_shell_mode_sections_without_model_or_usage() {
 
             assert_eq!(
                 lines,
-                vec![format!("{SHELL_MODE_HINT} /home/user/warp ⊢ main | +3 -1")],
+                vec![format!(
+                    "{SHELL_MODE_HINT} /home/user/warp ⊢ main | ☰ 2 • +3 -1"
+                )],
                 "shell footer leads with the shell-mode indicator and hides model/usage"
             );
             assert!(

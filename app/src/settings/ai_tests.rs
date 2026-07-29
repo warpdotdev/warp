@@ -43,6 +43,7 @@ fn tui_statusline_default_matches_figma() {
     assert_eq!(
         config.enabled,
         vec![
+            TuiStatuslineItem::AutoApprove,
             TuiStatuslineItem::VimModeIndicator,
             TuiStatuslineItem::Model,
             TuiStatuslineItem::WorkingDirectory,
@@ -74,11 +75,11 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::GitBranch,
             TuiStatuslineItem::Model,
             TuiStatuslineItem::AutoApprove,
-            TuiStatuslineItem::AutoQueue,
             TuiStatuslineItem::VimModeIndicator,
             TuiStatuslineItem::WorkingDirectory,
             TuiStatuslineItem::GitBranchStatus,
             TuiStatuslineItem::GitDiffStatus,
+            TuiStatuslineItem::GitHubPullRequest,
             TuiStatuslineItem::CreditUsage,
             TuiStatuslineItem::ContextWindowUsage,
             TuiStatuslineItem::Date,

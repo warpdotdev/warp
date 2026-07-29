@@ -58,6 +58,7 @@ pub enum SlashCommandKind {
     ClearApiKey,
     AutoApprove,
     Statusline,
+    ResetStatusline,
     Mcp,
     ViewLogs,
     Voice,
