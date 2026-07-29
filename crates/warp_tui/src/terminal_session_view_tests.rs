@@ -15,10 +15,11 @@ use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
     AIAgentActionId, AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId,
     AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel, ConversationStatus,
-    ConversationUsageTotals, Harness, LLMPreferences, LinkedWorkflowData,
-    LongRunningCommandControlState, PtyIntent, PtyIntentEvent, QueuedQueryModel, SizeInfo,
-    SizeUpdate, TaskId, TranscriptScope, TuiUpArrowHistoryItemKind, UserTakeOverReason,
-    export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
+    ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMPreferences,
+    LinkedWorkflowData, LongRunningCommandControlState, PtyIntent, PtyIntentEvent,
+    QueuedQueryModel, SizeInfo, SizeUpdate, TaskId, TranscriptScope, TuiUpArrowHistoryItemKind,
+    UserTakeOverReason, export_conversation_markdown, register_tui_session_view_test_singletons,
+    slash_commands,
 };
 use warp_core::channel::Channel;
 use warp_core::settings::Setting as _;
@@ -40,20 +41,23 @@ use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
 
 use super::{
-    ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, AUTO_APPROVE_DISABLED_HINT,
-    AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION, AUTO_APPROVE_TOGGLE_BINDING_NAME,
-    BlockingInputSource, COST_CONVERSATION_IN_PROGRESS_HINT, COST_EMPTY_CONVERSATION_HINT,
-    COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT, ConversationRestoreState, FooterSegment,
+    ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME,
+    AUTO_APPROVE_DISABLED_HINT, AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION,
+    AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource, COST_CONVERSATION_IN_PROGRESS_HINT,
+    COST_EMPTY_CONVERSATION_HINT, COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT,
+    ConversationRestoreState, DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, FooterSegment,
     FooterSegments, INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT,
-    LOG_BUNDLE_FAILED_HINT, SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
-    SESSION_COMPOSER_OWNS_INPUT_FLAG, SHELL_MODE_HINT, TuiConversationRestoreOrigin,
-    TuiTerminalSessionAction, TuiTerminalSessionEvent, TuiTerminalSessionView,
-    VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT, attachment_focus_available,
-    cost_command_unavailable_hint, export_file_success_message, format_context_window_usage,
-    format_statusline_date, format_statusline_time_12_hour, format_statusline_time_24_hour,
-    format_todo_progress, log_bundle_success_message, raw_prompt_if_not_blank,
-    render_status_footer_row, render_statusline_datetime, voice_argument_is_empty,
-    voice_command_argument,
+    LOG_BUNDLE_FAILED_HINT, RUNNING_COMMAND_DETACH_HINT,
+    SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
+    SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
+    SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
+    SHELL_MODE_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
+    TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
+    attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
+    format_context_window_usage, format_statusline_date, format_statusline_time_12_hour,
+    format_statusline_time_24_hour, format_todo_progress, log_bundle_success_message,
+    raw_prompt_if_not_blank, render_status_footer_row, render_statusline_datetime,
+    voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
@@ -1981,18 +1985,27 @@ fn accepted_prompt_history_submits_to_the_selected_ai_conversation() {
 #[test]
 fn long_running_command_keeps_input_hidden() {
     App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         view.update(&mut app, |view, ctx| {
-            view.terminal_model
-                .lock()
-                .simulate_long_running_block("cat", "");
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model
+                .block_list_mut()
+                .set_transcript_scope(TranscriptScope::Unfiltered);
+            terminal_model.simulate_block("echo ready", "ready\r\n");
+            terminal_model.simulate_long_running_block("cat", "");
+            drop(terminal_model);
             assert!(matches!(
                 view.session_state(ctx)
                     .expect("session state resolves")
                     .blocking_input_source(),
                 Some(&BlockingInputSource::LongRunningCommand)
             ));
+            assert!(
+                !view.transcript.as_ref(ctx).is_empty(),
+                "command output should make the transcript visible"
+            );
         });
 
         let lines = render_session(&mut app, &view, 80, 40);
@@ -2010,18 +2023,338 @@ fn long_running_command_keeps_input_hidden() {
             "LRC must keep the input editor hidden:\n{}",
             lines.join("\n")
         );
-        // The interrupt affordance renders as a ghosted row in the input's
-        // slot while the command owns input.
+        // Manual attachment remains advertised while the running command is visible.
+        let hint = view.read(&app, |view, ctx| {
+            view.running_command_hint(ctx)
+                .expect("visible running command should have an attachment hint")
+        });
+        assert!(
+            lines.iter().any(|line| line.trim() == hint),
+            "LRC must render the attach hint row:\n{}",
+            lines.join("\n")
+        );
+        assert_eq!(hint, "Ctrl + Shift + ⏎  to use agent");
         assert!(
             lines
                 .iter()
-                .any(|line| line.trim() == crate::input_hints::LONG_RUNNING_COMMAND_HINT),
-            "LRC must render the interrupt hint row:\n{}",
+                .all(|line| !line.contains(RUNNING_COMMAND_DETACH_HINT)),
+            "LRC must not show the detach hint before agent attachment:\n{}",
             lines.join("\n")
         );
     });
 }
 
+#[test]
+fn zero_state_running_command_hint_shows_attachment() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.simulate_long_running_block("cat", "");
+            terminal_model
+                .block_list_mut()
+                .active_block_mut()
+                .set_should_hide_command_grid(true);
+            drop(terminal_model);
+
+            assert!(
+                view.transcript.as_ref(ctx).is_empty(),
+                "hidden command without output should preserve zero state"
+            );
+            assert!(
+                view.session_state(ctx)
+                    .expect("session state resolves")
+                    .user_owns_running_command()
+            );
+        });
+
+        let lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            lines.iter().any(|line| line.contains("Warp Agent CLI")),
+            "zero state should remain visible:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("to use agent")),
+            "zero state should preserve manual attachment:\n{}",
+            lines.join("\n")
+        );
+    });
+}
+
+#[test]
+fn manual_attach_and_detach_switch_running_command_input_ownership() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let interrupt_count = Rc::new(RefCell::new(0));
+        let interrupt_count_for_events = interrupt_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiTerminalSessionEvent::InterruptPty) {
+                    *interrupt_count_for_events.borrow_mut() += 1;
+                }
+            });
+        });
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("stale draft", ctx);
+            });
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("cat", "");
+
+            let state = view.session_state(ctx).expect("session state resolves");
+            assert!(state.can_attach_agent_to_running_command());
+            assert!(
+                view.keymap_context(ctx)
+                    .set
+                    .contains(SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG)
+            );
+
+            assert!(view.try_attach_agent_to_running_command(ctx));
+
+            assert!(view.input_target().agent_editor_owns_input());
+            assert!(
+                view.terminal_model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .is_agent_tagged_in()
+            );
+            assert_eq!(
+                view.ai_input_model
+                    .as_ref(ctx)
+                    .last_ai_autodetection_source(),
+                Some(InputTypeAutoDetectionSource::AgentTerminalControl)
+            );
+            assert!(
+                view.keymap_context(ctx)
+                    .set
+                    .contains(SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG)
+            );
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                    ctx,
+                );
+            });
+            assert!(
+                !view
+                    .keymap_context(ctx)
+                    .set
+                    .contains(SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG)
+            );
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(TuiInputSuggestionsMode::Closed, ctx);
+            });
+            assert!(
+                view.keymap_context(ctx)
+                    .set
+                    .contains(SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG)
+            );
+        });
+        assert_eq!(app.read(|ctx| input_text(&view, ctx)), "");
+
+        let lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            lines.iter().any(|line| line.contains('┌')),
+            "tagging in should render the composer:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.trim() == RUNNING_COMMAND_DETACH_HINT),
+            "tagging in should replace the footer with the detach hint:\n{}",
+            lines.join("\n")
+        );
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("unsent agent prompt", ctx);
+            });
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+            assert!(
+                !view.exit_confirmation.is_armed(),
+                "leaving a tagged LRC must not arm TUI exit"
+            );
+
+            assert!(view.input_target().pty_owns_input());
+            assert!(
+                !view
+                    .terminal_model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .is_agent_tagged_in()
+            );
+            assert_ne!(
+                view.ai_input_model
+                    .as_ref(ctx)
+                    .last_ai_autodetection_source(),
+                Some(InputTypeAutoDetectionSource::AgentTerminalControl)
+            );
+            assert!(
+                !view.try_detach_agent_from_running_command(ctx),
+                "detaching an already-detached command should report no transition"
+            );
+        });
+        assert_eq!(
+            app.read(|ctx| input_text(&view, ctx)),
+            "",
+            "detaching must discard an unsent agent prompt"
+        );
+        assert_eq!(
+            *interrupt_count.borrow(),
+            0,
+            "leaving the tagged composer must not send ctrl-c to the running command"
+        );
+        let lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains(RUNNING_COMMAND_DETACH_HINT)),
+            "ctrl-c should remove the detach footer hint:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("to use agent")),
+            "detaching should restore the attach hint:\n{}",
+            lines.join("\n")
+        );
+        view.update(&mut app, |view, ctx| {
+            let block_id = {
+                let mut terminal_model = view.terminal_model.lock();
+                let block_id = terminal_model.block_list().active_block().id().clone();
+                terminal_model.finish_block();
+                block_id
+            };
+            view.handle_block_completed(&block_id, ctx);
+            assert!(view.input_target().agent_editor_owns_input());
+        });
+        assert_eq!(
+            app.read(|ctx| input_text(&view, ctx)),
+            "",
+            "the discarded prompt must not reappear after command completion"
+        );
+    });
+}
+
+#[test]
+fn running_command_completion_clears_transient_attachment_lock() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("sleep 1", "");
+            view.handle_action(&TuiTerminalSessionAction::AttachAgentToRunningCommand, ctx);
+            assert_eq!(
+                view.ai_input_model
+                    .as_ref(ctx)
+                    .last_ai_autodetection_source(),
+                Some(InputTypeAutoDetectionSource::AgentTerminalControl)
+            );
+
+            let block_id = {
+                let mut terminal_model = view.terminal_model.lock();
+                let block_id = terminal_model.block_list().active_block().id().clone();
+                terminal_model.finish_block();
+                block_id
+            };
+            view.handle_block_completed(&block_id, ctx);
+
+            assert_ne!(
+                view.ai_input_model
+                    .as_ref(ctx)
+                    .last_ai_autodetection_source(),
+                Some(InputTypeAutoDetectionSource::AgentTerminalControl)
+            );
+            assert!(view.input_target().agent_editor_owns_input());
+        });
+    });
+}
+
+#[test]
+fn tagged_in_alt_screen_keeps_output_and_composer_visible() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let interrupt_count = Rc::new(RefCell::new(0));
+        let interrupt_count_for_events = interrupt_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiTerminalSessionEvent::InterruptPty) {
+                    *interrupt_count_for_events.borrow_mut() += 1;
+                }
+            });
+        });
+        view.update(&mut app, |view, ctx| {
+            let mut terminal_model = view.terminal_model.lock();
+            terminal_model.simulate_long_running_block("vim", "");
+            terminal_model.set_mode(Mode::SwapScreen {
+                save_cursor_and_clear_screen: true,
+            });
+            for character in "TAGGED ALT SCREEN".chars() {
+                terminal_model.alt_screen_mut().input(character);
+            }
+            drop(terminal_model);
+            view.handle_action(&TuiTerminalSessionAction::AttachAgentToRunningCommand, ctx);
+        });
+
+        assert!(view.read(&app, |view, _| {
+            view.input_target().agent_editor_owns_input()
+        }));
+        let lines = render_session(&mut app, &view, 80, 12);
+        let compact_output = lines
+            .iter()
+            .flat_map(|line| line.chars())
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(
+            compact_output.contains("TAGGEDALTSCREEN"),
+            "tagged-in alternate-screen output should remain visible:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines.iter().any(|line| line.contains('┌')),
+            "tagged-in alternate screen should render the composer:\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.trim() == RUNNING_COMMAND_DETACH_HINT),
+            "tagged-in alternate screen should show the detach footer hint:\n{}",
+            lines.join("\n")
+        );
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+            assert!(
+                !view.exit_confirmation.is_armed(),
+                "leaving a tagged alternate-screen LRC must not arm TUI exit"
+            );
+            assert!(view.input_target().pty_owns_input());
+            assert!(
+                !view
+                    .terminal_model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .is_agent_tagged_in()
+            );
+        });
+        assert_eq!(
+            *interrupt_count.borrow(),
+            0,
+            "leaving the tagged composer must not send ctrl-c to the alternate-screen command"
+        );
+    });
+}
 #[test]
 fn agent_controlled_alt_screen_keeps_output_and_composer_visible() {
     App::test((), |mut app| async move {
@@ -2089,6 +2422,7 @@ fn agent_controlled_alt_screen_keeps_output_and_composer_visible() {
 #[test]
 fn user_controlled_alt_screen_keeps_full_session_input_on_the_pty() {
     App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         view.update(&mut app, |view, _| {
@@ -2118,7 +2452,16 @@ fn user_controlled_alt_screen_keeps_full_session_input_on_the_pty() {
             !lines
                 .iter()
                 .any(|line| line.contains('┌') || line.contains("auto (cost-efficient)")),
-            "user-controlled alternate screen should not reserve rows for agent input:\n{}",
+            "user-controlled alternate screen should not render the agent composer:\n{}",
+            lines.join("\n")
+        );
+        let hint = view.read(&app, |view, ctx| {
+            view.running_command_hint(ctx)
+                .expect("alternate screen should have a running-command hint")
+        });
+        assert!(
+            lines.iter().any(|line| line.trim() == hint),
+            "user-controlled alternate screen should render the attach hint:\n{}",
             lines.join("\n")
         );
     });
@@ -2182,20 +2525,40 @@ fn stale_user_pty_bytes_are_dropped_after_agent_takes_control_or_is_tagged_in() 
     });
 }
 /// Visible startup-script execution also routes input to the PTY, but it is
-/// not a user-controlled command: the interrupt hint row must not appear.
+/// not a user-controlled command: the running-command hint row must not appear.
 #[test]
-fn visible_startup_script_shows_no_interrupt_hint() {
+fn visible_startup_script_shows_no_running_command_hint() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        view.update(&mut app, |view, _| {
-            let mut terminal_model = view.terminal_model.lock();
-            terminal_model.block_list_mut().reinit_shell();
-            terminal_model.update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
-            // Advance past WarpInput, then leave an unfinished startup-script
-            // block with visible output owning PTY input.
-            terminal_model.simulate_block("bootstrap", "");
-            terminal_model.simulate_long_running_block("shell init", "startup output\r\n");
+        view.update(&mut app, |view, ctx| {
+            {
+                let mut terminal_model = view.terminal_model.lock();
+                terminal_model.block_list_mut().reinit_shell();
+                terminal_model
+                    .update_blockheight_items(TRANSCRIPT_BLOCK_SPACING.block_padding, 0.0);
+                // Advance past WarpInput, then leave an unfinished startup-script
+                // block with visible output owning PTY input.
+                terminal_model.simulate_block("bootstrap", "");
+                terminal_model.simulate_long_running_block("shell init", "startup output\r\n");
+            }
+            assert!(
+                !view
+                    .session_state(ctx)
+                    .expect("session state resolves")
+                    .can_attach_agent_to_running_command()
+            );
+            assert!(
+                !view
+                    .keymap_context(ctx)
+                    .set
+                    .contains(SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG)
+            );
+            assert!(
+                !view.try_attach_agent_to_running_command(ctx),
+                "startup-script input is not an attachable user LRC"
+            );
+            assert!(view.input_target().pty_owns_input());
         });
         assert!(
             view.read(&app, |view, _| view.input_target().pty_owns_input()),
@@ -2204,10 +2567,8 @@ fn visible_startup_script_shows_no_interrupt_hint() {
 
         let lines = render_session(&mut app, &view, 80, 40);
         assert!(
-            !lines
-                .iter()
-                .any(|line| line.trim() == crate::input_hints::LONG_RUNNING_COMMAND_HINT),
-            "startup-script execution must not advertise the interrupt hint:\n{}",
+            !lines.iter().any(|line| line.contains("to use agent")),
+            "startup-script execution must not advertise agent attachment:\n{}",
             lines.join("\n")
         );
     });
@@ -2992,6 +3353,50 @@ fn user_input_event_projects_to_raw_user_bytes() {
         panic!("user input event should map to raw PTY bytes");
     };
     assert_eq!(&*bytes, b"hello\r");
+}
+#[test]
+fn running_command_attachment_bindings_are_context_scoped() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let attach = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME)
+                .expect("running-command attach binding");
+            assert_eq!(
+                *attach.trigger,
+                Trigger::Keystrokes(vec![Keystroke::parse("ctrl-shift-enter").unwrap()])
+            );
+            let detach = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME)
+                .expect("running-command detach binding");
+            assert_eq!(
+                *detach.trigger,
+                Trigger::Keystrokes(vec![Keystroke::parse("escape").unwrap()])
+            );
+
+            let mut input_context = Context::default();
+            input_context.set.insert("TuiInputView");
+            assert!(!attach.in_context(&input_context));
+            assert!(!detach.in_context(&input_context));
+
+            input_context
+                .set
+                .insert(SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG);
+            assert!(attach.in_context(&input_context));
+            assert!(!detach.in_context(&input_context));
+
+            input_context
+                .set
+                .remove(SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG);
+            input_context
+                .set
+                .insert(SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG);
+            assert!(!attach.in_context(&input_context));
+            assert!(detach.in_context(&input_context));
+        });
+    });
 }
 #[test]
 fn plan_toggle_uses_contextual_ctrl_p_and_ctrl_shift_p() {

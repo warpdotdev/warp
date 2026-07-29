@@ -85,7 +85,7 @@ use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestions
 use crate::keybindings::{
     ATTACHMENTS_AVAILABLE_FLAG, CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME,
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
-    TUI_BINDING_GROUP,
+    TUI_BINDING_GROUP, binding_hint,
 };
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
@@ -156,6 +156,7 @@ const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
+const RUNNING_COMMAND_DETACH_HINT: &str = "ctrl-c to return to command";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
 
 /// Fallback strings for the /status status menu.
@@ -173,6 +174,10 @@ fn status_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
 }
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
+const SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG: &str =
+    "TuiSessionCanAttachAgentToRunningCommand";
+const SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG: &str =
+    "TuiSessionCanDetachAgentFromRunningCommand";
 const SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG: &str =
     "TuiSessionCanAcceptBlockedTerminalUseAction";
 pub(crate) const SESSION_COMPOSER_OWNS_INPUT_FLAG: &str = "TuiSessionComposerOwnsInput";
@@ -180,6 +185,10 @@ pub(crate) const PASTE_IMAGE_BINDING_NAME: &str = "tui:session:paste_image";
 pub(crate) const AUTO_APPROVE_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_auto_approve";
 pub(crate) const ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME: &str =
     "tui:session:accept_blocked_terminal_use_action";
+pub(crate) const ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME: &str =
+    "tui:session:attach_agent_to_running_command";
+pub(crate) const DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME: &str =
+    "tui:session:detach_agent_from_running_command";
 pub(crate) const VOICE_INPUT_BINDING_NAME: &str = "tui:session:start_voice_input";
 
 /// The current source preventing the normal session composer from owning input.
@@ -685,6 +694,10 @@ pub(crate) enum TuiTerminalSessionAction {
     CancelRestore,
     /// Return a user-controlled terminal-use command to the agent.
     HandBackTerminalUseControl,
+    /// Show the agent composer for an eligible user-started running command.
+    AttachAgentToRunningCommand,
+    /// Hide the composer before submission and return input to the running command.
+    DetachAgentFromRunningCommand,
     /// Accept the active terminal-use agent's blocked action.
     AcceptBlockedTerminalUseAction,
     /// Reject the active terminal-use agent's blocked action.
@@ -846,6 +859,28 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP),
     ]);
     app.register_editable_bindings([
+        EditableBinding::new(
+            ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME,
+            "Use the agent with the running command",
+            TuiTerminalSessionAction::AttachAgentToRunningCommand,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | view_context.clone())
+                & id!(SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-shift-enter"),
+        EditableBinding::new(
+            DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME,
+            "Return control to the running command",
+            TuiTerminalSessionAction::DetachAgentFromRunningCommand,
+        )
+        .with_context_predicate(
+            (id!(TuiInputView::ui_name()) | view_context.clone())
+                & id!(SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("escape"),
         EditableBinding::new(
             ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME,
             "Accept the blocked terminal-use action",
@@ -1103,6 +1138,14 @@ impl TuiTerminalSessionView {
             );
         });
     }
+    fn handle_block_completed(&mut self, block_id: &BlockId, ctx: &mut ViewContext<Self>) {
+        self.input_view.update(ctx, |input, ctx| {
+            input.reset_after_agent_control(ctx);
+        });
+        self.resume_after_user_controlled_command(block_id, ctx);
+        self.refresh_input_focus(ctx);
+        ctx.notify();
+    }
 
     fn detach_cli_subagent_view(
         &mut self,
@@ -1191,6 +1234,9 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_terminal_use_interrupt(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if self.try_detach_agent_from_running_command(ctx) {
+            return true;
+        }
         let control_state = self
             .cli_subagent_controller
             .as_ref(ctx)
@@ -1230,6 +1276,57 @@ impl TuiTerminalSessionView {
             controller.handoff_active_command_control_to_agent(ctx);
         });
         self.refresh_input_focus(ctx);
+    }
+    /// Attempts to expose the agent composer for the active user-controlled LRC.
+    ///
+    /// Returns false when a stale action no longer targets an eligible block.
+    fn try_attach_agent_to_running_command(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let did_attach = {
+            let mut terminal_model = self.terminal_model.lock();
+            let active_block = terminal_model.block_list_mut().active_block_mut();
+            if !active_block.is_eligible_to_tag_in_agent() {
+                false
+            } else {
+                active_block.set_is_agent_tagged_in(true);
+                true
+            }
+        };
+        if !did_attach {
+            return false;
+        }
+        self.input_view.update(ctx, |input, ctx| {
+            input.clear(ctx);
+            input.lock_for_agent_control(ctx);
+        });
+        self.refresh_input_focus(ctx);
+        ctx.notify();
+        true
+    }
+
+    /// Attempts to return input to the active manually tagged LRC.
+    ///
+    /// Discards any unsent agent prompt. Returns false when no active block has
+    /// a manually attached agent.
+    fn try_detach_agent_from_running_command(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let did_detach = {
+            let mut terminal_model = self.terminal_model.lock();
+            let active_block = terminal_model.block_list_mut().active_block_mut();
+            if !active_block.is_agent_tagged_in() {
+                false
+            } else {
+                active_block.set_is_agent_tagged_in(false);
+                true
+            }
+        };
+        if !did_detach {
+            return false;
+        }
+        self.input_view.update(ctx, |input, ctx| {
+            input.clear(ctx);
+        });
+        self.refresh_input_focus(ctx);
+        ctx.notify();
+        true
     }
 
     fn active_agent_controlled_target(&self, ctx: &AppContext) -> Option<CLISubagentTarget> {
@@ -1807,9 +1904,7 @@ impl TuiTerminalSessionView {
         // PTY output redraws are driven by `wakeups_rx` below.
         ctx.subscribe_to_model(&model_events, |view, _, event, ctx| match event {
             ModelEvent::BlockCompleted(completed) => {
-                view.resume_after_user_controlled_command(&completed.block_id, ctx);
-                view.refresh_input_focus(ctx);
-                ctx.notify();
+                view.handle_block_completed(&completed.block_id, ctx);
             }
             ModelEvent::AfterBlockStarted { .. } => {
                 view.refresh_input_focus(ctx);
@@ -2160,6 +2255,11 @@ impl TuiTerminalSessionView {
     /// Footer shown while orchestration tabs own keyboard focus.
     fn render_orchestration_tab_footer(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
         render_orchestration_tab_footer(builder)
+    }
+    fn running_command_hint(&self, ctx: &AppContext) -> Option<String> {
+        let context = self.keymap_context(ctx);
+        let attach_key = binding_hint(ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME, &context, ctx);
+        input_hints::long_running_command_hint(attach_key.as_deref())
     }
 
     fn render_input_area(
@@ -2952,6 +3052,12 @@ impl TuiTerminalSessionView {
             };
             return Some(FooterHint { text, style });
         }
+        if self
+            .session_state(ctx)
+            .is_ok_and(|state| state.agent_is_tagged_in())
+        {
+            return Some(FooterHint::muted(RUNNING_COMMAND_DETACH_HINT));
+        }
         if voice_statusline_visible {
             return None;
         }
@@ -2973,8 +3079,9 @@ impl TuiTerminalSessionView {
     /// the persisted item order and visibility; shell mode always leads with
     /// its mode label and resolves configured shell-relevant metadata. A
     /// replacing hint — the ctrl-c exit confirmation while armed, the
-    /// conversation-list loading hint, or an active transient notice — occupies
-    /// the whole row instead. An empty resolved configuration consumes no row.
+    /// conversation-list loading hint, an active transient notice, or the
+    /// interrupt hint for a manually attached running command — occupies the
+    /// whole row instead. An empty resolved configuration consumes no row.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
         let shell_mode = self.is_shell_mode(ctx);
@@ -4366,6 +4473,22 @@ impl TuiView for TuiTerminalSessionView {
         {
             context.set.insert(SESSION_CAN_HAND_BACK_CONTROL_FLAG);
         }
+        if state
+            .as_ref()
+            .is_some_and(|state| state.can_attach_agent_to_running_command())
+        {
+            context
+                .set
+                .insert(SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG);
+        }
+        if state
+            .as_ref()
+            .is_some_and(|state| state.agent_is_tagged_in() && state.composer_owns_input())
+        {
+            context
+                .set
+                .insert(SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG);
+        }
         if self
             .active_cli_subagent_view(ctx)
             .is_some_and(|view| view.as_ref(ctx).has_blocked_action(ctx))
@@ -4459,6 +4582,22 @@ impl TuiView for TuiTerminalSessionView {
                 terminal_content
             };
             let mut content = TuiFlex::column().flex_child(terminal_content.finish());
+            if input_target.pty_owns_input()
+                && state.user_owns_running_command()
+                && let Some(hint) = self.running_command_hint(ctx)
+            {
+                content = content.child(
+                    TuiContainer::new(
+                        TuiText::new(hint)
+                            .with_style(builder.muted_text_style())
+                            .truncate()
+                            .finish(),
+                    )
+                    .with_padding_x(2)
+                    .with_padding_bottom(1)
+                    .finish(),
+                );
+            }
             if input_target.agent_editor_owns_input() {
                 let mut agent_area = TuiFlex::column();
                 if let Some(cli_subagent_view) = cli_subagent_view {
@@ -4506,7 +4645,8 @@ impl TuiView for TuiTerminalSessionView {
         // slot; the first accepted submission produces a visible block, which
         // swaps the transcript back in.
         let mut content = TuiFlex::column();
-        if self.transcript.as_ref(ctx).is_empty() {
+        let transcript_is_empty = self.transcript.as_ref(ctx).is_empty();
+        if transcript_is_empty {
             content = content.flex_child(TuiChildView::new(&self.zero_state_view).finish());
         } else {
             content = content.flex_child(TuiChildView::new(&self.transcript).finish());
@@ -4600,16 +4740,19 @@ impl TuiView for TuiTerminalSessionView {
         }
         // While a user-controlled long-running command owns input, the input
         // box and footer stay hidden; a one-line ghosted hint row takes the
-        // input's slot so the interrupt affordance stays discoverable. Gated
-        // on the user-controlled-command predicate, not the broader PTY input
-        // target: visible startup-script execution also routes input to the
-        // PTY but is not a command the user should be told to interrupt.
-        // (Agent-driven terminal use keeps the composer, and its control
-        // hints come from the CLI-subagent status line.)
-        if !blocker_active && state.user_owns_running_command() {
+        // input's slot when manual attachment is available. Gated on the
+        // user-controlled-command predicate, not the broader PTY input target:
+        // visible startup-script execution also routes input to the PTY but
+        // does not support agent attachment. (Agent-driven terminal use keeps
+        // the composer, and its control hints come from the CLI-subagent status
+        // line.)
+        if !blocker_active
+            && state.user_owns_running_command()
+            && let Some(hint) = self.running_command_hint(ctx)
+        {
             content = content.child(
                 TuiContainer::new(
-                    TuiText::new(input_hints::LONG_RUNNING_COMMAND_HINT)
+                    TuiText::new(hint)
                         .with_style(builder.muted_text_style())
                         .truncate()
                         .finish(),
@@ -4713,6 +4856,12 @@ impl TypedActionView for TuiTerminalSessionView {
             }
             TuiTerminalSessionAction::HandBackTerminalUseControl => {
                 self.hand_back_terminal_use_control(ctx)
+            }
+            TuiTerminalSessionAction::AttachAgentToRunningCommand => {
+                let _ = self.try_attach_agent_to_running_command(ctx);
+            }
+            TuiTerminalSessionAction::DetachAgentFromRunningCommand => {
+                let _ = self.try_detach_agent_from_running_command(ctx);
             }
             TuiTerminalSessionAction::AcceptBlockedTerminalUseAction => {
                 self.accept_active_cli_subagent_action(ctx);
