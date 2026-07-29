@@ -45,6 +45,12 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView, WindowInvalidation};
 
+use super::statusline::{
+    ContextWindowUsage, FooterSegment, FooterSegments, format_context_window_usage,
+    format_statusline_date, format_statusline_time_12_hour, format_statusline_time_24_hour,
+    format_todo_progress, render_git_branch_status, render_status_footer_row,
+    render_statusline_datetime, should_render_plain_git_branch,
+};
 use super::{
     ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME,
     AUTO_APPROVE_DISABLED_HINT, AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION,
@@ -61,12 +67,6 @@ use super::{
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
     log_bundle_success_message, mcp_primary_action_hint, raw_prompt_if_not_blank,
     render_mcp_menu_footer, voice_argument_is_empty, voice_command_argument,
-};
-use super::statusline::{
-    ContextWindowUsage, FooterSegment, FooterSegments, format_context_window_usage,
-    format_statusline_date, format_statusline_time_12_hour, format_statusline_time_24_hour,
-    format_todo_progress, render_git_branch_status, render_status_footer_row,
-    render_statusline_datetime, should_render_plain_git_branch,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};

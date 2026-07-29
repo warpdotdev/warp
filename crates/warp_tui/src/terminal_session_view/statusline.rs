@@ -193,7 +193,10 @@ pub(super) struct FooterSegments {
 /// status owns its `⊢` glyph and follows working directory with one space.
 /// Items in different Figma groups use ` | `; other adjacent pairs use ` • `.
 /// The first item never receives a separator.
-pub(super) fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) -> TuiFlex {
+pub(super) fn render_status_footer_row(
+    segments: FooterSegments,
+    builder: &TuiUiBuilder,
+) -> TuiFlex {
     let muted = builder.muted_text_style();
     let mut row = TuiFlex::row();
     let mut segments = segments.ordered.into_iter().peekable();
