@@ -35,12 +35,12 @@ use warp::tui_export::{
     SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
     StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TerminalModel, TerminalSurface,
     TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiZeroStateDataSource,
-    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model,
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
-    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
-    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
+    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
+    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
+    export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event,
+    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, slash_commands, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -54,7 +54,7 @@ use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
-    TuiSize, TuiStyle, TuiText,
+    TuiSelectionHandle, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
@@ -74,6 +74,7 @@ use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuMode
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
 use crate::exit_confirmation::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
+use crate::grok_oauth::TuiGrokOAuthBlock;
 use crate::handoff::TuiHandoffBlock;
 use crate::inline_menu::{MAX_INLINE_MENU_ROWS, TuiInlineMenu, active_inline_menu};
 use crate::input::view::TuiInputAction;
@@ -99,6 +100,7 @@ use crate::platform::reveal_path_in_file_manager;
 use crate::prompt_and_command_history_menu::{
     TuiPromptAndCommandHistoryMenuEvent, TuiPromptAndCommandHistoryMenuModel,
 };
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
@@ -117,7 +119,10 @@ use crate::tui_ask_question_view::TuiAskQuestionView;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::tui_permission_prompt::TuiPermissionPrompt;
-use crate::ui::{compact_footer_path, conversation_restore_failed, conversation_restoring};
+use crate::ui::{
+    abbreviate_home_prefix, compact_footer_path, conversation_restore_failed,
+    conversation_restoring,
+};
 use crate::usage::UsageToggle;
 use crate::voice_input::{TuiVoiceInputEvent, TuiVoiceInputState, VoiceInputStartSource};
 use crate::warping_indicator::{render_response_summary, render_warping_indicator_row};
@@ -127,11 +132,14 @@ use crate::zero_state_animation::{
 };
 mod completions;
 
+#[path = "grok_oauth/session.rs"]
+mod grok_oauth_session;
 #[path = "handoff/session.rs"]
 mod handoff_session;
 mod input_detection;
 mod shortcuts;
 pub(crate) mod state;
+mod status_menu;
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
 use self::state::{
@@ -149,6 +157,20 @@ const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
+
+/// Fallback strings for the /status status menu.
+const STATUS_UNAVAILABLE: &str = "\u{2014}"; // em dash
+const STATUS_UNTITLED_SESSION: &str = "Untitled";
+const STATUS_DEV_BUILD: &str = "dev build";
+const STATUS_NOT_SIGNED_IN: &str = "Not signed in";
+const STATUS_SIGNED_IN: &str = "Signed in";
+
+fn status_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
+    matches!(
+        mode,
+        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
+    )
+}
 const SESSION_CAN_CANCEL_RESTORE_FLAG: &str = "TuiSessionCanCancelRestore";
 const SESSION_CAN_HAND_BACK_CONTROL_FLAG: &str = "TuiSessionCanHandBackControl";
 const SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG: &str =
@@ -173,6 +195,8 @@ pub(super) enum BlockingInputSource {
     Orchestration(ViewHandle<TuiOrchestrationBlock>),
     /// A local-to-cloud handoff configuration or result card.
     Handoff(ViewHandle<TuiHandoffBlock>),
+    /// An in-process Grok OAuth connection flow.
+    GrokOAuth(ViewHandle<TuiGrokOAuthBlock>),
 }
 
 impl BlockingInputSource {
@@ -187,6 +211,7 @@ impl BlockingInputSource {
             Self::Permission(view) => Some(TuiChildView::new(&view).finish()),
             Self::Orchestration(view) => Some(TuiChildView::new(&view).finish()),
             Self::Handoff(view) => Some(TuiChildView::new(&view).finish()),
+            Self::GrokOAuth(view) => Some(TuiChildView::new(&view).finish()),
         }
     }
 }
@@ -344,12 +369,6 @@ pub(crate) fn tui_resume_shell_command(channel: Channel, token: &str) -> String 
     tui_cli_shell_command(channel, &format!("--resume {token}"))
 }
 
-/// Shell command used by `/version` to print the binary version as a normal
-/// transcript block.
-fn version_shell_command(channel: Channel) -> String {
-    tui_cli_shell_command(channel, "--version")
-}
-
 #[derive(Clone, Copy)]
 enum ProviderApiKeyOperation {
     Set,
@@ -361,6 +380,9 @@ fn provider_api_key_shell_command(
     provider: LLMProvider,
     operation: ProviderApiKeyOperation,
 ) -> Option<String> {
+    if !provider.supports_pasted_api_key() {
+        return None;
+    }
     let provider = provider.api_key_slug()?;
     let flag = match operation {
         ProviderApiKeyOperation::Set => "--set-provider-api-key",
@@ -646,6 +668,35 @@ fn export_file_success_message(export: &ConversationFileExport) -> String {
     }
 }
 
+/// Resolves the Email field for the `/status` menu using the same fallback
+/// chain as `render_login_line`:
+/// 1. `email` when non-empty
+/// 2. `username` when non-empty (display name or email fallback from auth)
+/// 3. `STATUS_SIGNED_IN` when `is_logged_in` is true but no identifier
+/// 4. `STATUS_NOT_SIGNED_IN` when fully logged out
+fn resolve_status_email(
+    email: Option<String>,
+    username: Option<String>,
+    is_logged_in: bool,
+) -> String {
+    email
+        .filter(|e| !e.is_empty())
+        .or_else(|| username.filter(|u| !u.is_empty()))
+        .unwrap_or_else(|| {
+            if is_logged_in {
+                STATUS_SIGNED_IN.to_owned()
+            } else {
+                STATUS_NOT_SIGNED_IN.to_owned()
+            }
+        })
+}
+
+fn format_status_conversation_id(conversation_id: Option<AIConversationId>) -> String {
+    conversation_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "None".to_owned())
+}
+
 /// Typed actions handled by [`TuiTerminalSessionView`].
 #[derive(Debug, Clone)]
 pub(crate) enum TuiTerminalSessionAction {
@@ -702,6 +753,10 @@ pub(crate) enum TuiTerminalSessionAction {
     InlineMenuMouseScrollBy(isize),
     /// Start or stop voice input from the configured statusline control.
     ToggleVoiceInput,
+    /// A drag selection started inside the shared read-only menu.
+    ReadOnlyMenuSelectionStarted,
+    /// A non-empty read-only menu selection completed.
+    ReadOnlyMenuSelectionEnded(String),
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
@@ -711,6 +766,7 @@ pub(crate) struct TuiTerminalSessionView {
     attachment_bar: ViewHandle<TuiAttachmentBar>,
     inline_menus: Vec<TuiInlineMenu>,
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
+    read_only_menu_selection: TuiSelectionHandle,
     /// Session-owned live state model shared by this surface and its input view.
     session_state: ModelHandle<TuiTerminalSessionStateModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
@@ -774,6 +830,7 @@ pub(crate) struct TuiTerminalSessionView {
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
     handoff: Option<ViewHandle<TuiHandoffBlock>>,
+    grok_oauth: Option<ViewHandle<TuiGrokOAuthBlock>>,
     statusline_config_view: Option<ViewHandle<TuiStatuslineConfigView>>,
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
     orchestration_tabs_focused: bool,
@@ -954,7 +1011,9 @@ impl TuiTerminalSessionView {
         ctx: &AppContext,
     ) -> Result<TuiTerminalSessionState, TuiTerminalSessionStateResolveError> {
         let state = self.session_state.as_ref(ctx).resolve(ctx)?;
-        Ok(if let Some(handoff) = self.active_handoff(ctx) {
+        Ok(if let Some(grok_oauth) = self.active_grok_oauth(ctx) {
+            state.with_blocking_input_source(BlockingInputSource::GrokOAuth(grok_oauth))
+        } else if let Some(handoff) = self.active_handoff(ctx) {
             state.with_blocking_input_source(BlockingInputSource::Handoff(handoff))
         } else {
             state
@@ -977,6 +1036,7 @@ impl TuiTerminalSessionView {
             BlockingInputSource::Permission(view) => ctx.focus(&view),
             BlockingInputSource::Orchestration(view) => ctx.focus(&view),
             BlockingInputSource::Handoff(view) => ctx.focus(&view),
+            BlockingInputSource::GrokOAuth(view) => ctx.focus(&view),
         }
     }
 
@@ -1410,6 +1470,14 @@ impl TuiTerminalSessionView {
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+        let suggestions_mode_for_user_info = suggestions_mode.clone();
+        ctx.subscribe_to_model(&TuiUserInfoManager::handle(ctx), move |_, _, event, ctx| {
+            let TuiUserInfoManagerEvent::Updated = event;
+            if status_menu_is_open(suggestions_mode_for_user_info.as_ref(ctx).mode()) {
+                ctx.notify();
+            }
+        });
+        let read_only_menu_selection = TuiSelectionHandle::default();
         let slash_commands_source = ctx.add_model(|ctx| {
             TuiSlashCommandDataSource::new(
                 TuiSlashCommandDataSourceArgs {
@@ -1533,6 +1601,7 @@ impl TuiTerminalSessionView {
                 .as_ref(ctx)
                 .first_selection_is_single_cursor();
             if has_selection {
+                view.read_only_menu_selection.clear();
                 transcript_for_selection.update(ctx, |transcript, ctx| {
                     transcript.clear_selection(ctx);
                 });
@@ -1602,6 +1671,7 @@ impl TuiTerminalSessionView {
 
         ctx.subscribe_to_view(&transcript, |view, _, event, ctx| match event {
             TuiTranscriptViewEvent::SelectionStarted => {
+                view.read_only_menu_selection.clear();
                 view.input_view
                     .update(ctx, |input, ctx| input.clear_selection(ctx));
             }
@@ -1705,7 +1775,10 @@ impl TuiTerminalSessionView {
             view.handle_completion_editor_changed(ctx);
             ctx.notify();
         });
-        ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&suggestions_mode, |view, _, _, ctx| {
+            view.read_only_menu_selection.clear();
+            ctx.notify();
+        });
         // The warping indicator between the transcript and the input box
         // tracks the selected conversation: re-render when its status changes
         // or an exchange starts (the elapsed counter's anchor) on this
@@ -1901,6 +1974,7 @@ impl TuiTerminalSessionView {
             attachment_bar,
             inline_menus,
             suggestions_mode,
+            read_only_menu_selection,
             session_state,
             conversation_menu,
             model_menu,
@@ -1939,6 +2013,7 @@ impl TuiTerminalSessionView {
             next_restore_request_id: 0,
             exit_summary,
             handoff: None,
+            grok_oauth: None,
             statusline_config_view: None,
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
@@ -2135,10 +2210,32 @@ impl TuiTerminalSessionView {
                 .finish(),
             );
         }
-        if state.should_render_shortcuts() {
-            let keymap_context = self.keymap_context(ctx);
+        if let Some(menu) = state.read_only_menu() {
+            let menu = match menu {
+                TuiReadOnlyMenuKind::Shortcuts => {
+                    let keymap_context = self.keymap_context(ctx);
+                    shortcuts::menu(state, &keymap_context, builder, ctx)
+                }
+                TuiReadOnlyMenuKind::Status => {
+                    status_menu::menu(self.compute_status_info(ctx), builder)
+                }
+            };
+            let menu = menu.render(
+                self.read_only_menu_selection.clone(),
+                builder,
+                |event_ctx, _| {
+                    event_ctx.dispatch_typed_action(
+                        TuiTerminalSessionAction::ReadOnlyMenuSelectionStarted,
+                    );
+                },
+                |text, event_ctx, _| {
+                    event_ctx.dispatch_typed_action(
+                        TuiTerminalSessionAction::ReadOnlyMenuSelectionEnded(text),
+                    );
+                },
+            );
             content = content.child(
-                TuiContainer::new(shortcuts::render(state, &keymap_context, ctx))
+                TuiContainer::new(menu)
                     .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
                     .finish(),
             );
@@ -2197,6 +2294,50 @@ impl TuiTerminalSessionView {
         self.focus_current_owner(ctx);
         self.write_exit_summary(ctx);
         ctx.notify();
+    }
+
+    /// Computes the current session and account status fields for the dedicated
+    /// status menu (opened by the `/status` slash command). Always returns a
+    /// complete set of fields; individual fields fall back to their `STATUS_*`
+    /// placeholder constants when the underlying data is unavailable.
+    fn compute_status_info(&self, ctx: &AppContext) -> status_menu::TuiStatusInfo {
+        let user_info = TuiUserInfoManager::as_ref(ctx).snapshot(ctx);
+        let cwd = self
+            .active_session
+            .as_ref(ctx)
+            .current_working_directory()
+            .map(|cwd| abbreviate_home_prefix(cwd))
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|cwd| abbreviate_home_prefix(&cwd.display().to_string()))
+            });
+        let session_name = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation(ctx)
+            .and_then(|conversation| conversation.title())
+            .unwrap_or_else(|| STATUS_UNTITLED_SESSION.to_owned());
+        let conversation_id = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx);
+        let version = ChannelState::app_version()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| STATUS_DEV_BUILD.to_owned());
+        let org = user_info
+            .org
+            .unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned());
+        let email =
+            resolve_status_email(user_info.email, user_info.username, user_info.is_logged_in);
+        status_menu::TuiStatusInfo {
+            version,
+            session: session_name,
+            conversation_id: format_status_conversation_id(conversation_id),
+            working_directory: cwd.unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned()),
+            org,
+            email,
+        }
     }
 
     /// Whether this view projects the focused session.
@@ -2695,7 +2836,9 @@ impl TuiTerminalSessionView {
             return;
         }
         self.suggestions_mode.update(ctx, |mode, ctx| {
-            mode.close_if_active(TuiInputSuggestionsMode::Shortcuts, ctx);
+            if let Some(kind) = mode.mode().read_only_menu() {
+                mode.close_if_active(TuiInputSuggestionsMode::ReadOnlyMenu(kind), ctx);
+            }
         });
         if self.handle_terminal_use_interrupt(ctx) {
             self.exit_confirmation.disarm();
@@ -3258,21 +3401,31 @@ impl TuiTerminalSessionView {
             );
             return;
         };
-        let Some(command_text) =
-            provider_api_key_shell_command(ChannelState::channel(), provider, operation)
-        else {
-            self.show_error_hint(
-                format!(
-                    "Usage: {} <{}>",
-                    command.name,
-                    LLMProvider::API_KEY_PROVIDER_VALUE_NAME
-                ),
-                ctx,
-            );
-            return;
-        };
-        self.execute_user_command(&command_text, None, ctx);
-        record_static_slash_command_accepted(command.name, true, ctx);
+        match (provider, operation) {
+            (LLMProvider::Xai, ProviderApiKeyOperation::Set) => {
+                self.start_grok_oauth(command.name, ctx);
+            }
+            (LLMProvider::Xai, ProviderApiKeyOperation::Clear) => {
+                self.clear_grok_oauth(command.name, ctx);
+            }
+            (LLMProvider::OpenAI | LLMProvider::Anthropic | LLMProvider::Google, operation) => {
+                let command_text =
+                    provider_api_key_shell_command(ChannelState::channel(), provider, operation)
+                        .expect("pasted-key providers have canonical API-key slugs");
+                self.execute_user_command(&command_text, None, ctx);
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            (LLMProvider::Unknown, _) => {
+                self.show_error_hint(
+                    format!(
+                        "Usage: {} <{}>",
+                        command.name,
+                        LLMProvider::API_KEY_PROVIDER_VALUE_NAME
+                    ),
+                    ctx,
+                );
+            }
+        }
     }
 
     /// Routes a submission to shell execution or the agent conversation based
@@ -3821,6 +3974,16 @@ impl TuiTerminalSessionView {
                 self.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
+            SlashCommandKind::Status => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                self.suggestions_mode.update(ctx, |mode, ctx| {
+                    mode.set_mode(
+                        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status),
+                        ctx,
+                    );
+                });
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
             SlashCommandKind::Exit => {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -3828,13 +3991,6 @@ impl TuiTerminalSessionView {
             SlashCommandKind::Logout => {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 log_out_tui(ctx);
-            }
-            SlashCommandKind::Version => {
-                // Run as a normal user shell command so version output lands in
-                // the transcript as a regular shell block.
-                let command_text = version_shell_command(ChannelState::channel());
-                self.execute_user_command(&command_text, None, ctx);
-                record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::ViewLogs => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
@@ -4283,6 +4439,9 @@ impl TuiView for TuiTerminalSessionView {
         if let Some(handoff) = self.active_handoff(ctx) {
             view_ids.push(handoff.id());
         }
+        if let Some(grok_oauth) = self.active_grok_oauth(ctx) {
+            view_ids.push(grok_oauth.id());
+        }
         if let Some(statusline_config_view) = self.statusline_config_view.as_ref() {
             view_ids.push(statusline_config_view.id());
         }
@@ -4563,6 +4722,9 @@ impl TuiView for TuiTerminalSessionView {
         if let Some(BlockingInputSource::Handoff(handoff)) = state.blocking_input_source() {
             content = content.child(TuiChildView::new(handoff).finish());
         }
+        if let Some(BlockingInputSource::GrokOAuth(grok_oauth)) = state.blocking_input_source() {
+            content = content.child(TuiChildView::new(grok_oauth).finish());
+        }
         if !blocker_active
             && let Some(statusline_config_view) = self.statusline_config_view.as_ref()
         {
@@ -4715,6 +4877,21 @@ impl TypedActionView for TuiTerminalSessionView {
                 }
             }
             TuiTerminalSessionAction::ToggleVoiceInput => self.toggle_voice_input(ctx),
+            TuiTerminalSessionAction::ReadOnlyMenuSelectionStarted => {
+                self.transcript
+                    .update(ctx, |transcript, ctx| transcript.clear_selection(ctx));
+                self.input_view
+                    .update(ctx, |input, ctx| input.clear_selection(ctx));
+            }
+            TuiTerminalSessionAction::ReadOnlyMenuSelectionEnded(text) => {
+                match copy_to_clipboard(text) {
+                    Ok(()) => self.show_copy_hint(ctx),
+                    Err(error) => {
+                        log::warn!("Failed to copy TUI read-only menu selection: {error}");
+                        self.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
+                    }
+                }
+            }
         }
     }
 }

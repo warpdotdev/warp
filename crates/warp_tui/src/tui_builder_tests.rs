@@ -29,9 +29,25 @@ fn text_styles_follow_light_theme_foreground() {
             .blend(&theme.foreground().with_opacity(details.sub_text_opacity)),
     )
     .into();
+    let expected_read_only_menu_label: Color = CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(60)),
+    )
+    .into();
 
     assert_eq!(builder.primary_text_style().fg, Some(expected_primary));
     assert_eq!(builder.muted_text_style().fg, Some(expected_muted));
+    let read_only_menu_label_style = builder.read_only_menu_label_style();
+    assert_eq!(
+        read_only_menu_label_style.fg,
+        Some(expected_read_only_menu_label)
+    );
+    assert!(
+        !read_only_menu_label_style
+            .add_modifier
+            .contains(Modifier::DIM)
+    );
     assert_ne!(
         builder.primary_text_style().fg,
         Some(CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()),
@@ -59,10 +75,27 @@ fn text_styles_follow_light_theme_foreground() {
     )
     .into();
     let shortcut_accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-    let shortcuts_background: Color =
+    let read_only_menu_background: Color =
         CoreFill::from(theme.background().blend(&shortcut_accent.with_opacity(10))).into();
-    assert_eq!(builder.shortcuts_background(), shortcuts_background);
+    assert_eq!(
+        builder.read_only_menu_background(),
+        read_only_menu_background
+    );
     assert_eq!(builder.shell_command_background(), shell_command_background);
+    let grok_fill = ThemeFill::from(theme.terminal_colors().bright.blue);
+    let grok_accent: Color = CoreFill::from(grok_fill).into();
+    let grok_surface: Color =
+        CoreFill::from(theme.background().blend(&grok_fill.with_opacity(10))).into();
+    let grok_header: Color = CoreFill::from(
+        theme
+            .background()
+            .blend(&grok_fill.with_opacity(10))
+            .blend(&grok_fill.with_opacity(10)),
+    )
+    .into();
+    assert_eq!(builder.grok_oauth_accent_style().fg, Some(grok_accent));
+    assert_eq!(builder.grok_oauth_surface_background(), grok_surface);
+    assert_eq!(builder.grok_oauth_header_background(), grok_header);
     let shell_command_prefix_style = builder.shell_command_prefix_style();
     assert_eq!(
         shell_command_prefix_style.fg,

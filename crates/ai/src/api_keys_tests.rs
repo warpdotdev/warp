@@ -20,6 +20,7 @@ fn llm_provider_parses_supported_api_key_provider_names() {
         LLMProvider::from_api_key_slug("google"),
         Ok(LLMProvider::Google)
     );
+    assert_eq!(LLMProvider::from_api_key_slug("grok"), Ok(LLMProvider::Xai));
 }
 
 #[test]
@@ -77,7 +78,7 @@ fn persisted_provider_api_key_can_be_cleared() {
 fn llm_provider_rejects_unsupported_api_key_provider() {
     assert_eq!(
         LLMProvider::from_api_key_slug("openrouter"),
-        Err("provider must be one of: anthropic, openai, google".to_owned())
+        Err("provider must be one of: anthropic, openai, google, grok".to_owned())
     );
 }
 

@@ -88,7 +88,7 @@ impl OnboardingMainView {
             OnboardingModelInfo {
                 id: LLMId::from("auto"),
                 title: "Auto".to_string(),
-                icon: Icon::Oz,
+                icon: Icon::Agent,
                 is_default: true,
             },
             OnboardingModelInfo {

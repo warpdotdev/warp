@@ -134,13 +134,25 @@ pub fn run() -> Result<()> {
         Err(error) => return Err(anyhow::Error::new(error)),
     };
     let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
+        if !provider.supports_pasted_api_key() {
+            return Err(anyhow!(
+                "Grok credentials must be connected with /add-api-key grok in an active TUI"
+            ));
+        }
         let Some(api_key) = read_provider_api_key()? else {
             return Err(anyhow!("No provider API key was supplied"));
         };
         Some(ProviderApiKeyCommand::Set { provider, api_key })
     } else {
-        args.clear_provider_api_key
-            .map(|provider| ProviderApiKeyCommand::Clear { provider })
+        match args.clear_provider_api_key {
+            Some(LLMProvider::Xai) => {
+                return Err(anyhow!(
+                    "Grok credentials must be cleared with /clear-provider-api-key grok in an active TUI"
+                ));
+            }
+            Some(provider) => Some(ProviderApiKeyCommand::Clear { provider }),
+            None => None,
+        }
     };
     if let Some(command) = provider_api_key_command {
         return warp::run_tui_cli_command(Box::new(move |ctx| {

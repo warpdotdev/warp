@@ -3,11 +3,11 @@
 //!
 //! This is a plain composition of existing primitives: a [`TuiFlex`] column
 //! whose first child is the header (a [`TuiCollapsibleHeader`] — wrapping
-//! label spans with a reserved, non-wrapping disclosure chevron pinned to the
-//! first row, wrapped in a [`TuiHoverable`] for the click and hover tracking)
-//! and whose second child — built and present only when expanded — is the
-//! body. State is owned by the caller: `collapsed` and the hover state on
-//! `mouse_state` are read at composition time and `on_toggle` fires on a
+//! label spans with a reserved, non-wrapping disclosure chevron after the
+//! first rendered row, wrapped in a [`TuiHoverable`] for click and hover
+//! tracking) and whose second child — built and present only when expanded —
+//! is the body. State is owned by the caller: `collapsed` and the hover state
+//! on `mouse_state` are read at composition time and `on_toggle` fires on a
 //! header click, leaving the caller to flip its own state and re-render.
 //!
 //! The chevron is reserved as its own non-wrapping element rather than
@@ -43,24 +43,18 @@ fn disclosure_chevron(collapsed: bool) -> &'static str {
 ///
 /// The chevron is laid out first and its column reserved, then the label wraps
 /// into the remaining width. The chevron is pinned to the first row (its own
-/// one-row slot at the label's laid-out content edge), so it stays visible at
-/// narrow widths where the label text wraps onto later rows — unlike appending
-/// the chevron to a single `.truncate()`d label, which clips the chevron away
-/// once the label no longer fits. At wide widths the chevron sits right after
-/// the label, matching the single-line appearance.
+/// one-row slot after that row's rendered text), so it stays visible at narrow
+/// widths where the label text wraps onto later rows — unlike appending the
+/// chevron to a single `.truncate()`d label, which clips the chevron away once
+/// the label no longer fits. At wide widths the chevron sits right after the
+/// label, matching the single-line appearance.
 struct TuiCollapsibleHeader {
     /// The wrapping label text (header spans without the chevron).
     label: TuiText,
     /// The reserved, non-wrapping disclosure chevron (e.g. `"▸"`).
     chevron: TuiText,
-    /// Whether to leave a one-cell gap between the label and chevron.
-    ///
-    /// At the smallest widths the gap is omitted so the glyph itself remains
-    /// visible instead of truncating to a leading spacer.
-    chevron_gap: u16,
-    /// The label's size retained from the most recent layout, used to place
-    /// the chevron during render.
-    label_size: Option<TuiSize>,
+    /// Horizontal offset of the chevron after the first rendered label row.
+    chevron_offset: u16,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
@@ -70,8 +64,7 @@ impl TuiCollapsibleHeader {
         Self {
             label,
             chevron,
-            chevron_gap: 0,
-            label_size: None,
+            chevron_offset: 0,
             size: None,
             origin: None,
         }
@@ -100,7 +93,6 @@ impl TuiElement for TuiCollapsibleHeader {
         } else {
             0
         };
-        self.chevron_gap = chevron_gap;
         // The label wraps into whatever width remains after the chevron's
         // reserved column, so wrapping label text can never push the chevron
         // off the first row.
@@ -112,13 +104,15 @@ impl TuiElement for TuiCollapsibleHeader {
             TuiSize::new(label_max_width, constraint.max.height),
         );
         let label_size = self.label.layout(label_constraint, ctx, app);
-        self.label_size = Some(label_size);
 
-        let width = label_size
-            .width
-            .saturating_add(chevron_gap)
-            .saturating_add(chevron_size.width)
-            .min(available);
+        // Use row one's actual rendered width rather than the label's widest
+        // wrapped row, so a longer continuation row cannot right-align the
+        // chevron.
+        let first_row_width = self.label.first_rendered_line_width(label_max_width);
+        let chevron_offset = first_row_width.saturating_add(chevron_gap);
+        self.chevron_offset = chevron_offset;
+        let chevron_edge = chevron_offset.saturating_add(chevron_size.width);
+        let width = label_size.width.max(chevron_edge).min(available);
         let height = label_size.height.max(chevron_size.height);
         let size = TuiSize::new(width, height);
         self.size = Some(size);
@@ -137,17 +131,17 @@ impl TuiElement for TuiCollapsibleHeader {
         ctx: &mut TuiPaintContext,
     ) {
         self.origin = Some(ctx.scene_point(origin));
-        let Some(label_size) = self.label_size else {
+        if self.size.is_none() {
             return;
-        };
+        }
         // The label paints from the header's origin; the chevron is pinned to
-        // the first row, immediately after the label's laid-out content edge.
+        // the first row, immediately after that row's rendered text.
         self.label.render(origin, surface, ctx);
-        let chevron_origin = origin.offset(
-            i32::from(label_size.width.saturating_add(self.chevron_gap)),
-            0,
+        self.chevron.render(
+            origin.offset(i32::from(self.chevron_offset), 0),
+            surface,
+            ctx,
         );
-        self.chevron.render(chevron_origin, surface, ctx);
     }
 
     fn size(&self) -> Option<TuiSize> {
@@ -160,8 +154,8 @@ impl TuiElement for TuiCollapsibleHeader {
 }
 
 /// Composes a collapsible section: a clickable rich-text header (a wrapping
-/// label with a reserved disclosure chevron pinned to the first row) over a
-/// body that is built only when `collapsed` is `false`. `on_toggle` runs when
+/// label with a reserved disclosure chevron after its first rendered row) over
+/// a body that is built only when `collapsed` is `false`. `on_toggle` runs when
 /// the header is clicked. Callers own the header styles, including any
 /// hover-dependent styling; hover transitions are recorded on `mouse_state`,
 /// which the caller owns so it survives re-renders.

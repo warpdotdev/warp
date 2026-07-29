@@ -11,10 +11,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use ai::project_context::model::{
+    ProjectContextModel, ProjectContextModelEvent, ProjectRulesResult,
+};
 use warp::tui_export::{
     ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
     SkillManager, SkillManagerEvent, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
+    TuiUserInfoManager, TuiUserInfoManagerEvent,
 };
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -36,9 +39,12 @@ use crate::zero_state_animation::{
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
 const MAX_CHANGELOG_BULLETS: usize = 3;
 
-/// Fixed width for the text column. Using a pinned min=max keeps wrapping stable
-/// as content loads asynchronously at startup (changelog, MCP status, project
-/// context) while the animation paints beneath it as a separate stack layer.
+/// Fixed width for the two constrained sub-sections of the overlay column (top: title +
+/// version + changelog bullets; bottom: project context body + MCP). Pinning both axes
+/// to the same value keeps wrapping stable while those sections load asynchronously.
+///
+/// The project path *header* is rendered outside these constrained boxes so it can expand
+/// to the full available terminal width without being capped by this constant.
 const LEFT_COLUMN_COLS: u16 = 48;
 
 // ---------------------------------------------------------------------------
@@ -90,6 +96,10 @@ impl TuiZeroStateView {
             |_, _, SkillManagerEvent::SkillsChanged { .. }, ctx| ctx.notify(),
         );
         ctx.subscribe_to_model(&TuiMcpManager::handle(ctx), |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&TuiUserInfoManager::handle(ctx), |_, _, event, ctx| {
+            let TuiUserInfoManagerEvent::Updated = event;
+            ctx.notify();
+        });
         ctx.subscribe_to_model(&active_session, |_, _, event, ctx| {
             let ActiveSessionEvent::UpdatedPwd = event else {
                 return;
@@ -134,11 +144,6 @@ impl TuiView for TuiZeroStateView {
                 .ok()
                 .map(|cwd| cwd.to_string_lossy().into_owned())
         });
-        let text_column =
-            TuiConstrainedBox::new(render_left_column(cwd.as_deref(), &builder, ctx).finish())
-                .with_min_cols(LEFT_COLUMN_COLS)
-                .with_max_cols(LEFT_COLUMN_COLS)
-                .finish();
         let animation = ZeroStateAnimationElement::new(
             self.clock,
             self.animation_config.clone(),
@@ -150,12 +155,83 @@ impl TuiView for TuiZeroStateView {
             },
         )
         .finish();
-        TuiStack::new().child(animation).child(text_column).finish()
+        let overlay = build_zero_state_overlay(cwd.as_deref(), &builder, ctx);
+        TuiStack::new().child(animation).child(overlay).finish()
     }
 }
 
-/// The left text column: title, version, "What's new", and project context.
-fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
+/// Assembles the text-overlay column placed on top of the animation layer.
+///
+/// Both [`TuiZeroStateView::render`] and the regression tests call this function so
+/// that a change to how `render` composes the overlay (e.g. moving the path header
+/// back inside the `LEFT_COLUMN_COLS` constrained box) is caught by the test suite.
+fn build_zero_state_overlay(
+    cwd: Option<&str>,
+    builder: &TuiUiBuilder,
+    ctx: &AppContext,
+) -> Box<dyn TuiElement> {
+    // Compute project context once — find_applicable_project_rules walks the
+    // directory tree and clones rule file contents, so resolving it once
+    // avoids a redundant allocation on every zero-state re-render (pwd change,
+    // changelog load, MCP update, PathIndexed).
+    let (path_header_text, project_rules) = match cwd {
+        Some(cwd) => {
+            let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
+            let rules = ProjectContextModel::as_ref(ctx).find_applicable_project_rules(&cwd_path);
+            let header_text = project_section_header_text(cwd, rules.as_ref());
+            (Some(header_text), Some(rules))
+        }
+        None => (None, None),
+    };
+
+    // Title, version, and changelog — constrained to LEFT_COLUMN_COLS so changelog
+    // bullets (which lack `.truncate()`) do not wrap against the full terminal width.
+    let constrained_top = TuiConstrainedBox::new(render_top_section(builder, ctx).finish())
+        .with_min_cols(LEFT_COLUMN_COLS)
+        .with_max_cols(LEFT_COLUMN_COLS)
+        .finish();
+
+    // Project context body (rules / skills / placeholder) and MCP — also constrained
+    // to LEFT_COLUMN_COLS, keeping those rows stable.
+    // Pass the pre-computed rules so find_applicable_project_rules is not called twice.
+    let rules_ref = project_rules.flatten();
+    let constrained_bottom = TuiConstrainedBox::new(
+        render_bottom_section(cwd, rules_ref.as_ref(), builder, ctx).finish(),
+    )
+    .with_min_cols(LEFT_COLUMN_COLS)
+    .with_max_cols(LEFT_COLUMN_COLS)
+    .finish();
+
+    // The project path header lives *outside* the 48-column constrained boxes so it
+    // can expand to the full available terminal width. Give it a blank-row separator
+    // from the top section and place it directly above the constrained bottom section.
+    // Keep the full displayed path: it stays on one row when it fits and wraps only
+    // when the terminal is genuinely too narrow.
+    if let Some(path_header_text) = path_header_text {
+        let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+        let path_header = TuiText::new(path_header_text)
+            .with_style(header_style)
+            .finish();
+        TuiFlex::column()
+            .child(constrained_top)
+            .child(blank_row())
+            .child(path_header)
+            .child(constrained_bottom)
+            .finish()
+    } else {
+        TuiFlex::column()
+            .child(constrained_top)
+            .child(constrained_bottom)
+            .finish()
+    }
+}
+
+/// Top section of the overlay column: title, version, and changelog bullets.
+///
+/// This is wrapped in a [`TuiConstrainedBox`] with `min = max = LEFT_COLUMN_COLS` by the
+/// caller so that changelog bullets (which lack `.truncate()`) do not word-wrap against
+/// the full terminal width while still rendering stably during async content loads.
+fn render_top_section(builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
     let title_style = builder.accent_text_style().add_modifier(Modifier::BOLD);
     let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
     let muted = builder.muted_text_style();
@@ -167,7 +243,8 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
                 .truncate()
                 .finish(),
         )
-        .child(render_version_line(builder, app));
+        .child(render_version_line(builder, app))
+        .child(render_login_line(builder, app));
 
     let bullets = changelog_bullets(app);
     if !bullets.is_empty() {
@@ -188,11 +265,45 @@ fn render_left_column(cwd: Option<&str>, builder: &TuiUiBuilder, app: &AppContex
             );
         }
     }
+    column
+}
 
-    if let Some(cwd) = cwd {
-        column = render_project_section(cwd, column, builder, app);
-    }
+/// Bottom section of the overlay column: project context body (rules / skills / placeholder)
+/// when a `cwd` is present, followed by the MCP section.
+///
+/// The project path *header* is intentionally omitted here — it lives outside the constrained
+/// box so it can expand to the full available terminal width (see [`TuiZeroStateView::render`]).
+///
+/// `rules` must be the pre-computed [`ProjectRulesResult`] for `cwd`, resolved once in the
+/// caller to avoid a duplicate upward directory walk.
+fn render_bottom_section(
+    cwd: Option<&str>,
+    rules: Option<&ProjectRulesResult>,
+    builder: &TuiUiBuilder,
+    app: &AppContext,
+) -> TuiFlex {
+    let column = TuiFlex::column();
+    let column = if let Some(cwd) = cwd {
+        render_project_context_body(cwd, rules, column, builder, app)
+    } else {
+        column
+    };
     render_mcp_section(column, builder, app)
+}
+
+/// Returns the abbreviated path text displayed as the project section header.
+///
+/// Uses the project root from `rules` when available, falling back to the raw `cwd` string.
+/// This is the same text previously embedded inside the 48-column constrained box; it is now
+/// computed separately so the caller can render it outside that box.
+///
+/// `rules` must already be resolved by the caller (via [`ProjectContextModel`]) so the
+/// upward directory walk is not repeated for the project context body.
+fn project_section_header_text(cwd: &str, rules: Option<&ProjectRulesResult>) -> String {
+    let header = rules
+        .map(|rules| rules.root_path.display_path())
+        .unwrap_or_else(|| cwd.to_owned());
+    abbreviate_home_prefix(&header)
 }
 
 fn render_mcp_section(mut column: TuiFlex, builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
@@ -273,6 +384,28 @@ fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, boo
     }
 }
 
+/// The login-info line: the signed-in account (email, falling back to the
+/// display name) when authenticated, or a graceful "Not signed in" state when
+/// not. The zero state is normally only shown after login, but the unauthenticated
+/// branch keeps the surface honest if it is ever rendered before auth completes.
+fn render_login_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiElement> {
+    let muted = builder.muted_text_style();
+    let dim = builder.dim_text_style();
+    let user_info = TuiUserInfoManager::as_ref(app).snapshot(app);
+    let display = user_info
+        .email
+        .filter(|email| !email.is_empty())
+        .or(user_info.username.filter(|username| !username.is_empty()));
+    let (label, style) = if let Some(display) = display {
+        (format!("Signed in as {display}"), muted)
+    } else if user_info.is_logged_in {
+        ("Signed in".to_owned(), muted)
+    } else {
+        ("Not signed in".to_owned(), dim)
+    };
+    TuiText::new(label).with_style(style).truncate().finish()
+}
+
 /// The version line: the release version (or "dev build"), with the
 /// background auto-updater's status appended in parentheses. Dev builds
 /// never run the updater (and have no version), so they render plain; the
@@ -318,26 +451,29 @@ fn render_version_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiE
         .finish()
 }
 
-/// Appends the project section: the project root (or cwd) as a header, then
-/// one line per discovered rule file and a discovered-skill count. Discovery
-/// is asynchronous, so a placeholder shows until results land.
-fn render_project_section(
+/// Appends the project context body rows to `column`: the discovered rule files and
+/// skill count (or a placeholder while discovery is still in progress).
+///
+/// The project path *header* is intentionally omitted — it is rendered at the outer
+/// level outside the constrained box so it can use the full terminal width (see
+/// [`TuiZeroStateView::render`] and [`project_section_header_text`]).
+///
+/// `rules` must be the pre-computed [`ProjectRulesResult`] for `cwd`, resolved once in the
+/// caller to avoid a duplicate upward directory walk.
+fn render_project_context_body(
     cwd: &str,
+    rules: Option<&ProjectRulesResult>,
     mut column: TuiFlex,
     builder: &TuiUiBuilder,
     app: &AppContext,
 ) -> TuiFlex {
-    let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
     let muted = builder.muted_text_style();
     let check = builder.success_glyph_style();
 
-    let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
-    let rules = ProjectContextModel::as_ref(app).find_applicable_project_rules(&cwd_path);
-
-    // Rule files that actively apply to the cwd, deduplicated by file name
-    // (nested roots can contribute rules with the same name).
+    // Use the pre-computed rules from the render() call — find_applicable_project_rules
+    // is not called again here.
     let mut rule_files: Vec<String> = Vec::new();
-    if let Some(rules) = &rules {
+    if let Some(rules) = rules {
         for rule in &rules.active_rules {
             if let Some(name) = rule.path.file_name()
                 && !rule_files.iter().any(|file| file == name)
@@ -347,22 +483,12 @@ fn render_project_section(
         }
     }
 
+    let cwd_path = LocalOrRemotePath::Local(PathBuf::from(cwd));
     let project_skill_count = SkillManager::as_ref(app)
         .get_skills_for_working_directory(Some(&cwd_path), app)
         .iter()
         .filter(|skill| skill.is_project_skill())
         .count();
-
-    let header = rules
-        .as_ref()
-        .map(|rules| rules.root_path.display_path())
-        .unwrap_or_else(|| cwd.to_owned());
-    column = column.child(blank_row()).child(
-        TuiText::new(abbreviate_home_prefix(&header))
-            .with_style(header_style)
-            .truncate()
-            .finish(),
-    );
 
     if rule_files.is_empty() && project_skill_count == 0 {
         // Repo detection, metadata indexing, and skill scans are async, so

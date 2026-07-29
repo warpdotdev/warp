@@ -1265,8 +1265,8 @@ impl Input {
             | SlashCommandKind::VimMode
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout
-            | SlashCommandKind::Version
-            | SlashCommandKind::Clear => {
+            | SlashCommandKind::Clear
+            | SlashCommandKind::Status => {
                 debug_assert!(
                     false,
                     "Attempted to execute TUI-only slash command in the GUI: {}",

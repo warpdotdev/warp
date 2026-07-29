@@ -81,6 +81,10 @@ impl TuiUiBuilder {
     pub(crate) fn dim_text_style(&self) -> TuiStyle {
         self.muted_text_style().add_modifier(Modifier::DIM)
     }
+    /// Foreground-overlay-6 text used for read-only menu field labels.
+    pub(crate) fn read_only_menu_label_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(self.foreground_text_color(60))
+    }
 
     /// Style for error text (e.g. failed tool-call glyphs).
     pub(crate) fn error_text_style(&self) -> TuiStyle {
@@ -215,8 +219,8 @@ impl TuiUiBuilder {
         )
     }
 
-    /// Theme-accent overlay for the shortcut reference panel.
-    pub(crate) fn shortcuts_background(&self) -> Color {
+    /// Theme-accent overlay for shared read-only menus.
+    pub(crate) fn read_only_menu_background(&self) -> Color {
         let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
         cell_color(self.base_background().blend(&accent.with_opacity(10)))
     }
@@ -234,6 +238,30 @@ impl TuiUiBuilder {
             self.warp_theme.terminal_colors().bright.green,
         )))
     }
+
+    /// Themed light-blue accent for the Grok OAuth card and code field.
+    pub(crate) fn grok_oauth_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().bright.blue,
+        )))
+    }
+
+    /// Light-blue overlay behind the Grok OAuth card body.
+    pub(crate) fn grok_oauth_surface_background(&self) -> Color {
+        let blue = ThemeFill::from(self.warp_theme.terminal_colors().bright.blue);
+        cell_color(self.base_background().blend(&blue.with_opacity(10)))
+    }
+
+    /// Stronger light-blue overlay behind the Grok OAuth title row.
+    pub(crate) fn grok_oauth_header_background(&self) -> Color {
+        let blue = ThemeFill::from(self.warp_theme.terminal_colors().bright.blue);
+        cell_color(
+            self.base_background()
+                .blend(&blue.with_opacity(10))
+                .blend(&blue.with_opacity(10)),
+        )
+    }
+
     /// Background-independent bold pale-green `!` marker shared by shell-command surfaces.
     pub(crate) fn shell_command_prefix_style(&self) -> TuiStyle {
         self.shell_command_accent_style()

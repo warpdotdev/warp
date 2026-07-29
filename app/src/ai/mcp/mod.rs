@@ -519,10 +519,15 @@ impl MCPProvider {
 
     pub fn icon(&self) -> Icon {
         match self {
-            MCPProvider::Warp => Icon::Warp,
+            // Warp's own agent MCP config — use the Warp agent brand mark.
+            MCPProvider::Warp => Icon::Agent,
             MCPProvider::Claude => Icon::ClaudeLogo,
             MCPProvider::Codex => Icon::OpenAILogo,
-            MCPProvider::Agents => Icon::Warp,
+            // "Other Agents" is the cross-tool .agents/.mcp.json convention for
+            // third-party agent tooling (not Warp-branded). Use a neutral AI
+            // icon so this row never carries the Warp agent mark, and the two
+            // rows remain visually distinct once Icon::Agent gets its own asset.
+            MCPProvider::Agents => Icon::AiAssistant,
         }
     }
 

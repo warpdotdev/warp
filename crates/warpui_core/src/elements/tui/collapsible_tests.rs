@@ -160,6 +160,35 @@ fn narrow_header_keeps_chevron_on_first_row_while_label_wraps() {
 }
 
 #[test]
+fn wrapped_header_places_chevron_after_first_row_text() {
+    for (collapsed, glyph) in [(true, '▸'), (false, '▾')] {
+        let lines = render_collapsible_to_lines(
+            tui_collapsible(
+                collapsed,
+                [
+                    ("✓ ".to_owned(), TuiStyle::default()),
+                    ("Ran `print` ".to_owned(), TuiStyle::default()),
+                ],
+                TuiStyle::default(),
+                MouseStateHandle::default(),
+                || TuiText::new("body").finish(),
+                |_, _| {},
+            ),
+            TuiSize::new(12, 4),
+        );
+
+        // The continuation is longer than the first row. It must not push the
+        // chevron to the right edge; the disclosure gap follows the first
+        // row's rendered text instead.
+        assert_eq!(lines[0].trim_end(), format!("✓ Ran {glyph}"));
+        assert_eq!(lines[1].trim_end(), "`print`");
+        if !collapsed {
+            assert_eq!(lines[2].trim_end(), "body");
+        }
+    }
+}
+
+#[test]
 fn very_narrow_header_keeps_chevron_visible_without_a_truncated_spacer() {
     for (width, collapsed, glyph) in [
         (1, true, '▸'),

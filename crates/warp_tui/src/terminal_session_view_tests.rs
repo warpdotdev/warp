@@ -56,6 +56,7 @@ use super::{
     voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
+use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
@@ -68,6 +69,7 @@ use crate::orchestration_model::TuiOrchestrationModel;
 use crate::orchestration_tab_bar::{
     ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, orchestration_tab_icon, render_orchestration_tab_footer,
 };
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::statusline_config_view::TuiStatuslineConfigEvent;
@@ -430,8 +432,63 @@ fn provider_api_key_shell_command_uses_shared_tui_launcher() {
         ),
         None
     );
+    assert_eq!(
+        super::provider_api_key_shell_command(
+            Channel::Stable,
+            LLMProvider::Xai,
+            super::ProviderApiKeyOperation::Set,
+        ),
+        None,
+        "Grok OAuth must stay in the active TUI process"
+    );
 }
 
+#[test]
+fn grok_oauth_block_exclusively_owns_input_until_escape() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let block = view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/add-api-key grok", ctx);
+                input.clear(ctx);
+            });
+            let block = ctx.add_typed_action_tui_view(new_block);
+            view.install_grok_oauth_block(block.clone(), ctx);
+            block
+        });
+
+        view.read(&app, |session, ctx| {
+            let state = session.session_state(ctx).expect("session state resolves");
+            assert!(matches!(
+                state.blocking_input_source(),
+                Some(BlockingInputSource::GrokOAuth(active)) if active.id() == block.id()
+            ));
+            assert_eq!(state.input_target(), TuiInputTarget::Disabled);
+            assert!(session.child_view_ids(ctx).contains(&block.id()));
+            assert!(session.input_view.as_ref(ctx).is_empty(ctx));
+        });
+        let rendered = render_session(&mut app, &view, 80, 40).join("\n");
+        assert!(rendered.contains("Connect Grok"), "{rendered}");
+        assert!(rendered.contains("Esc to close"), "{rendered}");
+        assert!(!rendered.contains("Ask the agent anything"), "{rendered}");
+        assert!(!rendered.contains("for commands"), "{rendered}");
+
+        block.update(&mut app, |block, ctx| {
+            block.handle_action(&TuiGrokOAuthBlockAction::Cancel, ctx);
+        });
+        view.read(&app, |session, ctx| {
+            assert!(session.grok_oauth.is_none());
+            let state = session.session_state(ctx).expect("session state resolves");
+            assert!(!state.has_blocking_interaction());
+            assert_eq!(state.input_target(), TuiInputTarget::AgentEditor);
+            assert!(session.input_view.as_ref(ctx).is_empty(ctx));
+        });
+        let rendered = render_session(&mut app, &view, 80, 40).join("\n");
+        assert!(!rendered.contains("Connect Grok"), "{rendered}");
+    });
+}
 #[test]
 fn log_bundle_failure_hint_does_not_hardcode_a_frontend_path() {
     assert!(!LOG_BUNDLE_FAILED_HINT.contains("warp.log"));
@@ -1384,7 +1441,10 @@ fn shortcuts_surface_renders_above_the_input() {
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         view.update(&mut app, |view, ctx| {
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                    ctx,
+                );
             });
         });
 
@@ -1396,6 +1456,16 @@ fn shortcuts_surface_renders_above_the_input() {
         assert!(rendered.contains("← conversations"), "{rendered}");
         assert!(rendered.contains("↑ input history"), "{rendered}");
         assert!(rendered.contains("toggle auto-approve"), "{rendered}");
+        // The shortcuts panel must NOT include the status section (that
+        // lives in the dedicated status menu opened by /status).
+        assert!(
+            !rendered.contains("Version"),
+            "Shortcuts panel must not show Version:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Working directory"),
+            "Shortcuts panel must not show Working directory:\n{rendered}"
+        );
 
         view.update(&mut app, |view, ctx| {
             view.handle_action(
@@ -1575,6 +1645,120 @@ fn nld_slash_command_toggles_and_reports_its_effects() {
     });
 }
 
+#[test]
+fn status_slash_command_opens_dedicated_status_menu_via_shared_structure() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("/status", ctx);
+            });
+            view.execute_tui_slash_command(&slash_commands::STATUS, None, ctx);
+        });
+
+        // /status and ? select distinct projections of the shared read-only
+        // menu component.
+        assert!(
+            app.read(|ctx| {
+                matches!(
+                    view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
+                )
+            }),
+            "/status should open the dedicated status overlay (Status mode)"
+        );
+        assert!(
+            app.read(|ctx| {
+                !matches!(
+                    view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
+                )
+            }),
+            "/status must NOT open the shortcuts panel (Shortcuts mode)"
+        );
+
+        // The full session render must show the six status fields through the
+        // shared read-only panel structure.
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(
+            rendered.contains("Status"),
+            "Status section header:\n{rendered}"
+        );
+        assert!(rendered.contains("Version"), "Version row:\n{rendered}");
+        assert!(rendered.contains("Session"), "Session row:\n{rendered}");
+        assert!(
+            rendered.contains("Conversation ID"),
+            "Conversation ID row:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Working directory"),
+            "Working directory row:\n{rendered}"
+        );
+        assert!(rendered.contains("Org"), "Org row:\n{rendered}");
+        assert!(rendered.contains("Email"), "Email row:\n{rendered}");
+
+        // The fixture signs in as the test user, so the panel surfaces that
+        // email. No workspace is loaded (Org degrades to the em-dash placeholder)
+        // and there is no conversation yet (Session falls back to "Untitled").
+        assert!(
+            rendered.contains("test_user@warp.dev"),
+            "Email value:\n{rendered}"
+        );
+        assert!(rendered.contains("Untitled"), "Session value:\n{rendered}");
+        // Em dash (—) appears as the Org placeholder.
+        assert!(
+            rendered.contains("\u{2014}"),
+            "Org placeholder (em dash):\n{rendered}"
+        );
+
+        // The dedicated status menu does NOT include keyboard shortcut rows.
+        assert!(
+            !rendered.contains("? shortcuts"),
+            "Status menu must not include shortcuts rows:\n{rendered}"
+        );
+
+        // Dismissing the panel closes the Status overlay.
+        view.update(&mut app, |view, ctx| {
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.close_if_active(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status),
+                    ctx,
+                );
+            });
+        });
+        assert!(
+            !app.read(|ctx| matches!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
+            )),
+            "dismissing status mode should close the panel"
+        );
+    });
+}
+
+#[test]
+fn status_conversation_id_uses_the_selected_id_or_none() {
+    let conversation_id = AIConversationId::new();
+    assert_eq!(
+        super::format_status_conversation_id(Some(conversation_id)),
+        conversation_id.to_string()
+    );
+    assert_eq!(super::format_status_conversation_id(None), "None");
+}
+
+#[test]
+fn user_info_updates_only_require_an_open_status_menu_repaint() {
+    assert!(!super::status_menu_is_open(TuiInputSuggestionsMode::Closed));
+    assert!(!super::status_menu_is_open(
+        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
+    ));
+    assert!(super::status_menu_is_open(
+        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
+    ));
+}
 #[test]
 fn bootstrap_renders_starting_shell_above_input() {
     App::test((), |mut app| async move {
@@ -2772,7 +2956,10 @@ fn terminal_use_interrupt_closes_shortcuts_before_taking_control() {
                 )
                 .expect("command should become agent monitored");
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                    ctx,
+                );
             });
 
             view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
@@ -3592,31 +3779,44 @@ fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
 }
 
 #[test]
-fn version_and_resume_shell_commands_use_shared_tui_launcher() {
+fn status_email_fallback_chain_covers_username_and_signed_in_arms() {
+    // Arm 1: non-empty email wins regardless of username.
     assert_eq!(
-        super::version_shell_command(Channel::Stable),
-        "warp --version"
+        super::resolve_status_email(
+            Some("user@example.com".to_owned()),
+            Some("display_name".to_owned()),
+            true,
+        ),
+        "user@example.com"
+    );
+    // Arm 2a: empty email falls back to a non-empty username.
+    assert_eq!(
+        super::resolve_status_email(Some(String::new()), Some("display_name".to_owned()), true,),
+        "display_name"
+    );
+    // Arm 2b: None email falls back to a non-empty username.
+    assert_eq!(
+        super::resolve_status_email(None, Some("display_name".to_owned()), true),
+        "display_name"
+    );
+    // Arm 3: both email and username absent/empty but logged in → "Signed in".
+    assert_eq!(
+        super::resolve_status_email(None, None, true),
+        super::STATUS_SIGNED_IN
     );
     assert_eq!(
-        super::version_shell_command(Channel::Dev),
-        "warp-dev --version"
+        super::resolve_status_email(Some(String::new()), Some(String::new()), true,),
+        super::STATUS_SIGNED_IN
     );
+    // Arm 4: fully logged out → "Not signed in".
     assert_eq!(
-        super::version_shell_command(Channel::Local),
-        "./script/run-tui -- --version"
+        super::resolve_status_email(None, None, false),
+        super::STATUS_NOT_SIGNED_IN
     );
-    assert_eq!(
-        super::version_shell_command(Channel::Preview),
-        "warp-preview --version"
-    );
-    assert_eq!(
-        super::version_shell_command(Channel::Oss),
-        "warp-oss --version"
-    );
-    assert_eq!(
-        super::version_shell_command(Channel::Integration),
-        "warp-integration --version"
-    );
+}
+
+#[test]
+fn resume_shell_commands_use_shared_tui_launcher() {
     assert_eq!(
         super::tui_resume_shell_command(Channel::Local, "conversation-token"),
         "./script/run-tui -- --resume conversation-token"

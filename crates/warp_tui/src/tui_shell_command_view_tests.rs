@@ -352,6 +352,35 @@ fn terminal_block_is_collapsed_by_default_and_expands_inline() {
 }
 
 #[test]
+fn long_path_command_wraps_in_full_with_the_chevron_on_the_first_row() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let command = "ls -la /Users/moirahuang/.warp-dev/worktrees/warp/moira/pr-14381-combined/crates/warp_tui/src/tui_shell_command_view.rs";
+        let action = command_action("action-1", command);
+        let terminal_model = terminal_model_with_command(&action, command, "command output");
+        let view = add_shell_view(&mut app, action, terminal_model);
+
+        app.read(|app| {
+            let lines = render_non_empty_lines(&view, 48, app);
+            assert!(lines.len() > 1, "long command should wrap: {lines:?}");
+            assert!(
+                lines[0].ends_with('▸'),
+                "chevron should follow the first rendered row: {lines:?}"
+            );
+            assert!(
+                lines.iter().all(|line| !line.contains('…')),
+                "the command should not be pre-truncated: {lines:?}"
+            );
+            let reconstructed_label = lines.join("").replace('▸', "");
+            assert_eq!(
+                reconstructed_label,
+                format!("✓ Ran `{command}`"),
+                "joining the wrapped rows should recover the complete label"
+            );
+        });
+    });
+}
+#[test]
 fn shell_command_views_keep_independent_collapse_state() {
     let mut first = ShellCommandViewState::new_collapsed();
     let second = ShellCommandViewState::new_collapsed();

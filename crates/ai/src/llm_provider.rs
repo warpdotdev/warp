@@ -14,8 +14,9 @@ pub enum LLMProvider {
 }
 
 impl LLMProvider {
-    pub const API_KEY_PROVIDERS: [Self; 3] = [Self::OpenAI, Self::Anthropic, Self::Google];
-    pub const API_KEY_PROVIDER_VALUE_NAME: &'static str = "openai|anthropic|google";
+    pub const API_KEY_PROVIDERS: [Self; 4] =
+        [Self::OpenAI, Self::Anthropic, Self::Google, Self::Xai];
+    pub const API_KEY_PROVIDER_VALUE_NAME: &'static str = "openai|anthropic|google|grok";
 
     pub fn icon(self) -> Option<Icon> {
         match self {
@@ -24,6 +25,9 @@ impl LLMProvider {
             Self::Google => Some(Icon::GeminiLogo),
             Self::Xai | Self::Unknown => None,
         }
+    }
+    pub fn supports_pasted_api_key(self) -> bool {
+        matches!(self, Self::OpenAI | Self::Anthropic | Self::Google)
     }
 
     pub fn api_key_placeholder(self) -> Option<&'static str> {
@@ -50,7 +54,8 @@ impl LLMProvider {
             Self::OpenAI => Some("openai"),
             Self::Anthropic => Some("anthropic"),
             Self::Google => Some("google"),
-            Self::Xai | Self::Unknown => None,
+            Self::Xai => Some("grok"),
+            Self::Unknown => None,
         }
     }
 
@@ -59,7 +64,8 @@ impl LLMProvider {
             "openai" | "open-ai" => Ok(Self::OpenAI),
             "anthropic" => Ok(Self::Anthropic),
             "google" => Ok(Self::Google),
-            _ => Err("provider must be one of: anthropic, openai, google".to_owned()),
+            "grok" | "xai" | "x-ai" => Ok(Self::Xai),
+            _ => Err("provider must be one of: anthropic, openai, google, grok".to_owned()),
         }
     }
 

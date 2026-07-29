@@ -265,6 +265,16 @@ fn label_prefers_executed_command_over_streamed_command() {
     );
 }
 
+#[test]
+fn shell_command_label_preserves_a_long_path_without_an_ellipsis() {
+    let command = "ls -la /Users/moirahuang/.warp-dev/worktrees/warp/moira/pr-14381-combined/crates/warp_tui/src/tui_shell_command_view.rs";
+    let action = command_action(command);
+
+    assert_eq!(
+        tool_call_label(&action, None, false, None),
+        format!("Run `{command}`")
+    );
+}
 /// An MCP tool call's transcript label must surface both the tool name and its
 /// originating server across every lifecycle state, with a deterministic
 /// no-server fallback (legacy/flat MCP call or unknown server).

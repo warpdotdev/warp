@@ -65,7 +65,6 @@ pub enum SlashCommandKind {
     Theme,
     Exit,
     Logout,
-    Version,
     CreateEnvironment,
     CreateDockerSandbox,
     CreateNewProject,
@@ -113,6 +112,7 @@ pub enum SlashCommandKind {
     ExportToClipboard,
     ExportToFile,
     VimMode,
+    Status,
 }
 
 /// The application surfaces on which a static slash command is implemented.

@@ -15,7 +15,7 @@ impl From<&LLMInfo> for OnboardingModelInfo {
         Self {
             id: llm.id.clone(),
             title: llm.display_name.clone(),
-            icon: llm.provider.icon().unwrap_or(Icon::Oz),
+            icon: llm.provider.icon().unwrap_or(Icon::Agent),
             is_default: false,
         }
     }
