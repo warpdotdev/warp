@@ -27954,13 +27954,7 @@ impl Workspace {
 
         let working_directories_model = self.working_directories_model.clone();
         placeholder_pane_group.update(ctx, |pg, ctx| {
-            // The placeholder was created only so the preview window could have a tab
-            // while the real pane group was transferred in. It is never restored, so
-            // close it permanently instead of hiding it for undo-close. Otherwise a
-            // throwaway terminal can keep its PTY sender alive after the wakeup receiver
-            // is dropped, producing repeated `Failed to send Wakeup event: Closed(..)`
-            // warnings on the PTY read path.
-            pg.clean_up_panes_for_discard(&working_directories_model, ctx);
+            pg.detach_panes_for_close(&working_directories_model, ctx);
         });
         self.pending_pane_group_transfer = false;
         ctx.dispatch_global_action("workspace:save_app", ());
