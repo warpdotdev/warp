@@ -1,7 +1,10 @@
+use std::f64::consts::TAU;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use instant::Instant;
 use tempfile::TempDir;
 use warp::settings::{
     TuiZeroStateExtrusionDepthSetting, TuiZeroStateObject, TuiZeroStateObjectSetting,
@@ -9,9 +12,14 @@ use warp::settings::{
     TuiZeroStateSettings,
 };
 use warp_core::settings::Setting as _;
-use warpui::SingletonEntity as _;
+use warpui::{EntityIdMap, SingletonEntity as _};
 use warpui_core::elements::animation::AnimationClock;
-use warpui_core::elements::tui::{TuiBufferExt, TuiElement, TuiRect, TuiSize, TuiStyle};
+use warpui_core::elements::tui::{
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect,
+    TuiScreenPosition, TuiSize, TuiStyle,
+};
+use warpui_core::event::ModifiersState;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{AddWindowOptions, App, AppContext, Entity, TuiView, TypedActionView};
 
@@ -20,8 +28,10 @@ use super::config::{
     ZeroStateAnimationLoadFailure, ZeroStateShape, resolve_ascii_art_path,
 };
 use super::{
-    BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoSurface, WarpLogoStyles,
-    ZeroStateAnimationElement, fitted_logo_size, logo_frame_at, object_frame_at,
+    BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoSurface, MAX_INTERACTIVE_RADIANS_PER_SECOND,
+    MIN_ANIMATION_COLS, MIN_ANIMATION_ROWS, MOMENTUM_SETTLE_DURATION, WarpLogoStyles,
+    ZeroStateAnimationElement, ZeroStateInteractionHandle, configured_idle_velocity,
+    fitted_logo_size, idle_angle, logo_frame_at, object_frame_at, object_frame_at_angle,
     star_count_for_size, warp_logo_contains,
 };
 
@@ -89,6 +99,7 @@ impl TuiView for AnimationTestView {
         ZeroStateAnimationElement::new(
             AnimationClock::starting_at(Duration::ZERO),
             self.config.clone(),
+            super::ZeroStateInteractionHandle::default(),
             WarpLogoStyles {
                 front: style,
                 back: style,
@@ -451,6 +462,421 @@ fn settings_model_reloads_only_object_changes() {
             assert_eq!(mask.size(), (5, 6));
         });
     });
+}
+
+fn assert_approx_eq(left: f64, right: f64) {
+    assert!(
+        (left - right).abs() < 1e-9,
+        "expected {left} to approximately equal {right}"
+    );
+}
+
+fn left_mouse_down(position: TuiPoint) -> TuiEvent {
+    TuiEvent::LeftMouseDown {
+        position,
+        modifiers: ModifiersState::default(),
+        click_count: 1,
+        is_first_mouse: false,
+    }
+}
+
+fn left_mouse_dragged(position: TuiPoint) -> TuiEvent {
+    TuiEvent::LeftMouseDragged {
+        position,
+        modifiers: ModifiersState::default(),
+    }
+}
+
+fn left_mouse_up(position: TuiPoint) -> TuiEvent {
+    TuiEvent::LeftMouseUp {
+        position,
+        modifiers: ModifiersState::default(),
+    }
+}
+
+#[test]
+fn idle_frames_are_unchanged_without_interaction() {
+    for config in [
+        ZeroStateAnimationConfig::default(),
+        custom_config(ROCKET_ART, 4.0, 0.18),
+    ] {
+        for elapsed in [
+            Duration::ZERO,
+            Duration::from_millis(775),
+            Duration::from_secs(3),
+        ] {
+            let idle = object_frame_at(elapsed, PANEL_SIZE, &config).unwrap();
+            let explicit = object_frame_at_angle(
+                elapsed,
+                PANEL_SIZE,
+                &config,
+                idle_angle(elapsed, configured_idle_velocity(&config)),
+            )
+            .unwrap();
+            assert_eq!(idle, explicit);
+        }
+    }
+}
+
+#[test]
+fn background_stars_ignore_interactive_object_phase() {
+    let elapsed = Duration::from_millis(850);
+    let mut before_interaction = super::LogoFrame::new(PANEL_SIZE);
+    let mut during_interaction = super::LogoFrame::new(PANEL_SIZE);
+    super::draw_background_stars(&mut before_interaction, elapsed);
+    super::draw_background_stars(&mut during_interaction, elapsed);
+    assert_eq!(before_interaction, during_interaction);
+}
+
+#[test]
+fn press_and_click_without_horizontal_motion_preserve_phase_and_velocity() {
+    let interaction = ZeroStateInteractionHandle::default();
+    let now = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    let before = interaction.resolve_at(Duration::from_secs(1), idle_velocity, now);
+
+    assert!(interaction.press_at(TuiPoint::new(20, 10), now));
+    let pressed = interaction.resolve_at(Duration::from_secs(1), idle_velocity, now);
+    assert_approx_eq(pressed.angle, before.angle);
+    assert_approx_eq(pressed.velocity, before.velocity);
+
+    let released_at = now + Duration::from_millis(40);
+    assert!(interaction.release_at(Duration::from_millis(1040), idle_velocity, released_at));
+    let released = interaction.resolve_at(Duration::from_millis(1040), idle_velocity, released_at);
+    assert_approx_eq(
+        released.angle,
+        idle_angle(Duration::from_millis(1040), idle_velocity),
+    );
+    assert_approx_eq(released.velocity, idle_velocity);
+}
+
+#[test]
+fn horizontal_drag_scrubs_forward_without_reversal() {
+    let interaction = ZeroStateInteractionHandle::default();
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    assert!(interaction.press_at(TuiPoint::new(1, 1), start));
+    let drag_at = start + Duration::from_millis(100);
+    assert!(interaction.drag_at(
+        TuiPoint::new(33, 1),
+        Duration::from_millis(100),
+        idle_velocity,
+        drag_at,
+    ));
+    let after_forward = interaction.resolve_at(Duration::from_millis(100), idle_velocity, drag_at);
+    assert_approx_eq(
+        after_forward.angle,
+        idle_angle(Duration::from_millis(100), idle_velocity) + TAU,
+    );
+
+    assert!(interaction.drag_at(
+        TuiPoint::new(20, 1),
+        Duration::from_millis(110),
+        idle_velocity,
+        start + Duration::from_millis(110),
+    ));
+    assert!(interaction.drag_at(
+        TuiPoint::new(20, 8),
+        Duration::from_millis(120),
+        idle_velocity,
+        start + Duration::from_millis(120),
+    ));
+    let after_opposite = interaction.resolve_at(
+        Duration::from_millis(120),
+        idle_velocity,
+        start + Duration::from_millis(120),
+    );
+    assert_approx_eq(after_opposite.angle, after_forward.angle);
+}
+
+#[test]
+fn release_velocity_clamps_to_zero_and_playful_maximum() {
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+
+    let zero = ZeroStateInteractionHandle::default();
+    assert!(zero.press_at(TuiPoint::new(10, 1), start));
+    assert!(zero.drag_at(
+        TuiPoint::new(9, 1),
+        Duration::from_millis(20),
+        idle_velocity,
+        start + Duration::from_millis(20),
+    ));
+    assert!(zero.release_at(
+        Duration::from_millis(40),
+        idle_velocity,
+        start + Duration::from_millis(40),
+    ));
+    assert_approx_eq(
+        zero.resolve_at(
+            Duration::from_millis(40),
+            idle_velocity,
+            start + Duration::from_millis(40),
+        )
+        .velocity,
+        0.0,
+    );
+
+    let maximum = ZeroStateInteractionHandle::default();
+    assert!(maximum.press_at(TuiPoint::new(1, 1), start));
+    assert!(maximum.drag_at(
+        TuiPoint::new(200, 1),
+        Duration::from_millis(1),
+        idle_velocity,
+        start + Duration::from_millis(1),
+    ));
+    assert!(maximum.release_at(
+        Duration::from_millis(2),
+        idle_velocity,
+        start + Duration::from_millis(2),
+    ));
+    assert_approx_eq(
+        maximum
+            .resolve_at(
+                Duration::from_millis(2),
+                idle_velocity,
+                start + Duration::from_millis(2),
+            )
+            .velocity,
+        MAX_INTERACTIVE_RADIANS_PER_SECOND,
+    );
+}
+
+#[test]
+fn released_velocity_smoothly_settles_to_idle_in_three_seconds() {
+    for period in [Duration::from_secs(1), Duration::from_secs(60)] {
+        let interaction = ZeroStateInteractionHandle::default();
+        let start = Instant::now();
+        let idle_velocity = TAU / period.as_secs_f64();
+        assert!(interaction.press_at(TuiPoint::new(1, 1), start));
+        let release_at = start + Duration::from_millis(40);
+        assert!(interaction.drag_at(
+            TuiPoint::new(40, 1),
+            Duration::from_millis(20),
+            idle_velocity,
+            start + Duration::from_millis(20),
+        ));
+        let angle_before_release =
+            interaction.resolve_at(Duration::from_millis(40), idle_velocity, release_at);
+        assert!(interaction.release_at(Duration::from_millis(40), idle_velocity, release_at,));
+        let released = interaction.resolve_at(Duration::from_millis(40), idle_velocity, release_at);
+        assert_approx_eq(released.angle, angle_before_release.angle);
+
+        let halfway = interaction.resolve_at(
+            Duration::from_millis(1540),
+            idle_velocity,
+            release_at + Duration::from_millis(1500),
+        );
+        assert_approx_eq(halfway.velocity, (released.velocity + idle_velocity) * 0.5);
+        let settled = interaction.resolve_at(
+            Duration::from_millis(3040),
+            idle_velocity,
+            release_at + MOMENTUM_SETTLE_DURATION,
+        );
+        assert_approx_eq(settled.velocity, idle_velocity);
+        let after = interaction.resolve_at(
+            Duration::from_millis(4040),
+            idle_velocity,
+            release_at + MOMENTUM_SETTLE_DURATION + Duration::from_secs(1),
+        );
+        assert_approx_eq(after.velocity, idle_velocity);
+        assert_approx_eq(after.angle - settled.angle, idle_velocity);
+    }
+}
+
+fn interaction_after_flick(start: Instant) -> (ZeroStateInteractionHandle, Instant, f64) {
+    let interaction = ZeroStateInteractionHandle::default();
+    let idle_velocity = TAU / 5.0;
+    assert!(interaction.press_at(TuiPoint::new(1, 1), start));
+    assert!(interaction.drag_at(
+        TuiPoint::new(9, 1),
+        Duration::from_millis(80),
+        idle_velocity,
+        start + Duration::from_millis(80),
+    ));
+    let release_at = start + Duration::from_millis(100);
+    assert!(interaction.release_at(Duration::from_millis(100), idle_velocity, release_at,));
+    (interaction, release_at, idle_velocity)
+}
+
+#[test]
+fn interaction_phase_is_independent_of_repaint_schedule() {
+    let start = Instant::now();
+    let schedules = [
+        Duration::from_millis(66),
+        Duration::from_millis(33),
+        Duration::from_millis(417),
+    ];
+    let mut results = Vec::new();
+    for cadence in schedules {
+        let (interaction, release_at, idle_velocity) = interaction_after_flick(start);
+        let mut elapsed = cadence;
+        while elapsed < Duration::from_secs(2) {
+            let _ = interaction.resolve_at(
+                Duration::from_millis(100) + elapsed,
+                idle_velocity,
+                release_at + elapsed,
+            );
+            elapsed += cadence;
+        }
+        results.push(interaction.resolve_at(
+            Duration::from_millis(2100),
+            idle_velocity,
+            release_at + Duration::from_secs(2),
+        ));
+    }
+    for result in &results[1..] {
+        assert_approx_eq(result.angle, results[0].angle);
+        assert_approx_eq(result.velocity, results[0].velocity);
+    }
+}
+
+#[test]
+fn interaction_survives_resize_and_rebuild_then_resets_on_zero_state_exit() {
+    let interaction = ZeroStateInteractionHandle::default();
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    assert!(interaction.press_at(TuiPoint::new(1, 1), start));
+    assert!(interaction.drag_at(
+        TuiPoint::new(8, 1),
+        Duration::from_millis(80),
+        idle_velocity,
+        start + Duration::from_millis(80),
+    ));
+    let before_resize = interaction.resolve_at(
+        Duration::from_millis(80),
+        idle_velocity,
+        start + Duration::from_millis(80),
+    );
+    let config = ZeroStateAnimationConfig::default();
+    let small = object_frame_at_angle(
+        Duration::from_millis(80),
+        TuiSize::new(52, 20),
+        &config,
+        before_resize.angle,
+    )
+    .unwrap();
+    let large = object_frame_at_angle(
+        Duration::from_millis(80),
+        TuiSize::new(100, 35),
+        &config,
+        before_resize.angle,
+    )
+    .unwrap();
+    assert!(small.object_bounds().is_some());
+    assert!(large.object_bounds().is_some());
+    let after_resize = interaction.resolve_at(
+        Duration::from_millis(80),
+        idle_velocity,
+        start + Duration::from_millis(80),
+    );
+    assert_approx_eq(after_resize.angle, before_resize.angle);
+    assert_approx_eq(after_resize.velocity, before_resize.velocity);
+
+    interaction.set_visible(false);
+    interaction.set_visible(true);
+    let returned = interaction.resolve_at(
+        Duration::from_secs(2),
+        idle_velocity,
+        start + Duration::from_secs(2),
+    );
+    assert_approx_eq(
+        returned.angle,
+        idle_angle(Duration::from_secs(2), idle_velocity),
+    );
+    assert_approx_eq(returned.velocity, idle_velocity);
+}
+
+#[test]
+fn drag_starts_only_inside_current_object_bounds_and_captures_through_release() {
+    App::test((), |mut app| async move {
+        let config = Arc::new(ZeroStateAnimationConfig::default());
+        let interaction = ZeroStateInteractionHandle::default();
+        let (_, view) = app.update(|ctx| {
+            ctx.add_tui_window(AddWindowOptions::default(), {
+                let config = config.clone();
+                move |_| AnimationTestView { config }
+            })
+        });
+
+        app.read(|ctx| {
+            let style = TuiStyle::default();
+            let mut element = ZeroStateAnimationElement::new(
+                AnimationClock::starting_at(Duration::ZERO),
+                config,
+                interaction,
+                WarpLogoStyles {
+                    front: style,
+                    back: style,
+                    side: style,
+                    background: style,
+                },
+            );
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = element.layout(TuiConstraint::loose(PANEL_SIZE), &mut layout_ctx, ctx);
+            let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            {
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+            }
+            let bounds = element.object_bounds.expect("rendered object target");
+            let inside = TuiPoint::new(
+                ((bounds.min_x + bounds.max_x) / 2) as u16,
+                ((bounds.min_y + bounds.max_y) / 2) as u16,
+            );
+            let outside = TuiPoint::new(PANEL_SIZE.width + 10, PANEL_SIZE.height + 10);
+            let mut event_views = EntityIdMap::default();
+            let mut event_ctx =
+                TuiEventContext::new(Rc::new(paint_ctx.scene.clone()), &mut event_views);
+            event_ctx.set_origin_view(Some(view.id()));
+
+            assert!(element.dispatch_event(&left_mouse_down(inside), &mut event_ctx, ctx));
+            assert!(element.dispatch_event(&left_mouse_dragged(outside), &mut event_ctx, ctx));
+            assert!(element.dispatch_event(&left_mouse_up(outside), &mut event_ctx, ctx));
+            assert!(!element.dispatch_event(&left_mouse_down(outside), &mut event_ctx, ctx));
+            assert!(!element.dispatch_event(&left_mouse_dragged(outside), &mut event_ctx, ctx));
+            assert!(!element.dispatch_event(&left_mouse_up(outside), &mut event_ctx, ctx));
+        });
+    });
+}
+
+#[test]
+fn object_bounds_cover_custom_and_edge_on_objects_but_not_background_stars() {
+    for (config, angle) in [
+        (ZeroStateAnimationConfig::default(), TAU * 0.25),
+        (custom_config(ROCKET_ART, 4.0, 0.18), 0.0),
+    ] {
+        let frame =
+            object_frame_at_angle(Duration::from_millis(400), PANEL_SIZE, &config, angle).unwrap();
+        let bounds = frame.object_bounds().expect("object bounds");
+        assert!(bounds.contains(TuiLocalPoint::new(
+            ((bounds.min_x + bounds.max_x) / 2) as i32,
+            ((bounds.min_y + bounds.max_y) / 2) as i32,
+        )));
+        assert!(frame.iter_cells().any(|(x, y, cell)| {
+            cell.surface == LogoSurface::Background
+                && !bounds.contains(TuiLocalPoint::new(x as i32, y as i32))
+        }));
+    }
+}
+
+#[test]
+fn hidden_or_too_small_animation_has_no_drag_target() {
+    let interaction = ZeroStateInteractionHandle::default();
+    interaction.set_visible(false);
+    assert!(!interaction.press_at(TuiPoint::new(1, 1), Instant::now()));
+    assert!(
+        object_frame_at(
+            Duration::ZERO,
+            TuiSize::new(MIN_ANIMATION_COLS - 1, MIN_ANIMATION_ROWS),
+            &ZeroStateAnimationConfig::default(),
+        )
+        .is_none()
+    );
 }
 
 #[test]

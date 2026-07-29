@@ -33,7 +33,7 @@ use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 use crate::zero_state_animation::{
     WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent,
-    ZeroStateAnimationElement,
+    ZeroStateAnimationElement, ZeroStateInteractionHandle,
 };
 
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
@@ -58,12 +58,14 @@ const LEFT_COLUMN_COLS: u16 = 48;
 pub(crate) struct TuiZeroStateView {
     clock: AnimationClock,
     animation_config: Arc<ZeroStateAnimationConfig>,
+    interaction: ZeroStateInteractionHandle,
     active_session: ModelHandle<ActiveSession>,
 }
 
 impl TuiZeroStateView {
     pub(crate) fn new(
         active_session: ModelHandle<ActiveSession>,
+        interaction: ZeroStateInteractionHandle,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         // Subscribe to events that change what the zero state displays so
@@ -122,6 +124,7 @@ impl TuiZeroStateView {
         Self {
             clock: AnimationClock::starting_at(Duration::ZERO),
             animation_config: animation_config_snapshot,
+            interaction,
             active_session,
         }
     }
@@ -147,6 +150,7 @@ impl TuiView for TuiZeroStateView {
         let animation = ZeroStateAnimationElement::new(
             self.clock,
             self.animation_config.clone(),
+            self.interaction.clone(),
             WarpLogoStyles {
                 front: builder.accent_text_style(),
                 back: builder.primary_text_style(),

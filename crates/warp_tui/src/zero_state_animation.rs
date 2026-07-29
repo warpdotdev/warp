@@ -6,14 +6,16 @@
 //! each cell, while directional ASCII edges and sparse stippling retain depth
 //! without a solid fill.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use instant::Instant;
 use warpui_core::AppContext;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
-    TuiScreenPosition, TuiSize, TuiStyle,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPoint, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
 
 #[path = "zero_state_animation_config.rs"]
@@ -48,6 +50,12 @@ const STAR_TRAVEL_SECS: f64 = 7.0;
 const MAX_ASCII_ART_BYTES: u64 = 64 * 1024;
 const MAX_ASCII_ART_COLS: usize = 128;
 const MAX_ASCII_ART_ROWS: usize = 64;
+const DRAG_RADIANS_PER_COLUMN: f64 = std::f64::consts::TAU / 32.0;
+const RELEASE_SAMPLE_WINDOW: Duration = Duration::from_millis(120);
+const MAX_INTERACTIVE_REVOLUTIONS_PER_SECOND: f64 = 1.5;
+const MAX_INTERACTIVE_RADIANS_PER_SECOND: f64 =
+    MAX_INTERACTIVE_REVOLUTIONS_PER_SECOND * std::f64::consts::TAU;
+const MOMENTUM_SETTLE_DURATION: Duration = Duration::from_secs(3);
 
 /// Approximate visible bounds of the bundled Warp logo SVG.
 const SVG_MIN_X: f64 = 35.0;
@@ -85,6 +93,277 @@ pub(crate) struct WarpLogoStyles {
     pub(crate) back: TuiStyle,
     pub(crate) side: TuiStyle,
     pub(crate) background: TuiStyle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ObjectBounds {
+    min_x: usize,
+    min_y: usize,
+    max_x: usize,
+    max_y: usize,
+}
+
+impl ObjectBounds {
+    fn contains(self, point: warpui_core::elements::tui::TuiLocalPoint) -> bool {
+        point.x >= self.min_x as i32
+            && point.y >= self.min_y as i32
+            && point.x <= self.max_x as i32
+            && point.y <= self.max_y as i32
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ResolvedMotion {
+    angle: f64,
+    velocity: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InteractionMotion {
+    Idle,
+    Settling {
+        release_at: Instant,
+        release_angle: f64,
+        release_velocity: f64,
+        idle_velocity: f64,
+    },
+}
+
+impl InteractionMotion {
+    fn resolve(self, idle_angle: f64, idle_velocity: f64, now: Instant) -> ResolvedMotion {
+        let Self::Settling {
+            release_at,
+            release_angle,
+            release_velocity,
+            idle_velocity: settling_idle_velocity,
+        } = self
+        else {
+            return ResolvedMotion {
+                angle: idle_angle,
+                velocity: idle_velocity,
+            };
+        };
+        let elapsed = now.saturating_duration_since(release_at);
+        let settle_secs = MOMENTUM_SETTLE_DURATION.as_secs_f64();
+        let elapsed_secs = elapsed.as_secs_f64();
+        if elapsed >= MOMENTUM_SETTLE_DURATION {
+            return ResolvedMotion {
+                angle: release_angle
+                    + (release_velocity + settling_idle_velocity) * settle_secs * 0.5
+                    + settling_idle_velocity * (elapsed_secs - settle_secs),
+                velocity: settling_idle_velocity,
+            };
+        }
+
+        let progress = elapsed_secs / settle_secs;
+        let smoothstep = progress * progress * (3.0 - 2.0 * progress);
+        let smoothstep_integral = progress.powi(3) - 0.5 * progress.powi(4);
+        ResolvedMotion {
+            angle: release_angle
+                + release_velocity * elapsed_secs
+                + (settling_idle_velocity - release_velocity) * settle_secs * smoothstep_integral,
+            velocity: release_velocity + (settling_idle_velocity - release_velocity) * smoothstep,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DragSample {
+    at: Instant,
+    forward_radians: f64,
+}
+
+#[derive(Debug)]
+struct ActivePress {
+    last_position: TuiPoint,
+    drag_angle: Option<f64>,
+    forward_radians: f64,
+    samples: VecDeque<DragSample>,
+}
+
+impl ActivePress {
+    fn new(position: TuiPoint, now: Instant) -> Self {
+        Self {
+            last_position: position,
+            drag_angle: None,
+            forward_radians: 0.0,
+            samples: VecDeque::from([DragSample {
+                at: now,
+                forward_radians: 0.0,
+            }]),
+        }
+    }
+
+    fn record_sample(&mut self, now: Instant) {
+        self.samples.push_back(DragSample {
+            at: now,
+            forward_radians: self.forward_radians,
+        });
+        let cutoff = now.checked_sub(RELEASE_SAMPLE_WINDOW).unwrap_or(now);
+        while self.samples.len() > 2 && self.samples.get(1).is_some_and(|sample| sample.at < cutoff)
+        {
+            self.samples.pop_front();
+        }
+    }
+
+    fn release_velocity(&mut self, now: Instant) -> f64 {
+        self.record_sample(now);
+        let Some(first) = self.samples.front().copied() else {
+            return 0.0;
+        };
+        let Some(last) = self.samples.back().copied() else {
+            return 0.0;
+        };
+        let cutoff = now.checked_sub(RELEASE_SAMPLE_WINDOW).unwrap_or(now);
+        let (start_at, start_radians) = if first.at >= cutoff {
+            (first.at, first.forward_radians)
+        } else {
+            let Some(second) = self.samples.get(1).copied() else {
+                return 0.0;
+            };
+            let span = second.at.saturating_duration_since(first.at).as_secs_f64();
+            let interpolation = if span == 0.0 {
+                1.0
+            } else {
+                (cutoff.saturating_duration_since(first.at).as_secs_f64() / span).clamp(0.0, 1.0)
+            };
+            (
+                cutoff,
+                first.forward_radians
+                    + (second.forward_radians - first.forward_radians) * interpolation,
+            )
+        };
+        let elapsed = last.at.saturating_duration_since(start_at).as_secs_f64();
+        if elapsed == 0.0 {
+            return 0.0;
+        }
+        ((last.forward_radians - start_radians) / elapsed)
+            .clamp(0.0, MAX_INTERACTIVE_RADIANS_PER_SECOND)
+    }
+}
+
+#[derive(Debug)]
+struct ZeroStateInteractionState {
+    visible: bool,
+    motion: InteractionMotion,
+    active_press: Option<ActivePress>,
+}
+
+impl Default for ZeroStateInteractionState {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            motion: InteractionMotion::Idle,
+            active_press: None,
+        }
+    }
+}
+
+/// Session-owned interaction state shared across zero-state element rebuilds.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ZeroStateInteractionHandle(Arc<Mutex<ZeroStateInteractionState>>);
+
+impl ZeroStateInteractionHandle {
+    pub(crate) fn set_visible(&self, visible: bool) {
+        let mut state = self.0.lock().expect("zero-state interaction lock poisoned");
+        if state.visible && !visible {
+            state.motion = InteractionMotion::Idle;
+            state.active_press = None;
+        }
+        state.visible = visible;
+    }
+
+    fn press_at(&self, position: TuiPoint, now: Instant) -> bool {
+        let mut state = self.0.lock().expect("zero-state interaction lock poisoned");
+        if !state.visible {
+            return false;
+        }
+        state.active_press = Some(ActivePress::new(position, now));
+        true
+    }
+
+    fn drag_at(
+        &self,
+        position: TuiPoint,
+        idle_elapsed: Duration,
+        idle_velocity: f64,
+        now: Instant,
+    ) -> bool {
+        let mut state = self.0.lock().expect("zero-state interaction lock poisoned");
+        if !state.visible || state.active_press.is_none() {
+            return false;
+        }
+        let motion = state.motion;
+        let press = state.active_press.as_mut().expect("checked above");
+        let horizontal_delta = i32::from(position.x) - i32::from(press.last_position.x);
+        if horizontal_delta != 0 && press.drag_angle.is_none() {
+            press.drag_angle = Some(
+                motion
+                    .resolve(idle_angle(idle_elapsed, idle_velocity), idle_velocity, now)
+                    .angle,
+            );
+        }
+        if horizontal_delta > 0 {
+            let radians = f64::from(horizontal_delta) * DRAG_RADIANS_PER_COLUMN;
+            press.forward_radians += radians;
+            *press.drag_angle.get_or_insert_with(|| {
+                motion
+                    .resolve(idle_angle(idle_elapsed, idle_velocity), idle_velocity, now)
+                    .angle
+            }) += radians;
+        }
+        press.last_position = position;
+        press.record_sample(now);
+        true
+    }
+
+    fn release_at(&self, _idle_elapsed: Duration, idle_velocity: f64, now: Instant) -> bool {
+        let mut state = self.0.lock().expect("zero-state interaction lock poisoned");
+        if !state.visible {
+            return false;
+        }
+        let Some(mut press) = state.active_press.take() else {
+            return false;
+        };
+        let Some(release_angle) = press.drag_angle else {
+            return true;
+        };
+        state.motion = InteractionMotion::Settling {
+            release_at: now,
+            release_angle,
+            release_velocity: press.release_velocity(now),
+            idle_velocity,
+        };
+        true
+    }
+
+    fn resolve_at(
+        &self,
+        idle_elapsed: Duration,
+        idle_velocity: f64,
+        now: Instant,
+    ) -> ResolvedMotion {
+        let state = self.0.lock().expect("zero-state interaction lock poisoned");
+        if !state.visible {
+            return ResolvedMotion {
+                angle: idle_angle(idle_elapsed, idle_velocity),
+                velocity: idle_velocity,
+            };
+        }
+        if let Some(angle) = state
+            .active_press
+            .as_ref()
+            .and_then(|press| press.drag_angle)
+        {
+            return ResolvedMotion {
+                angle,
+                velocity: 0.0,
+            };
+        }
+        state
+            .motion
+            .resolve(idle_angle(idle_elapsed, idle_velocity), idle_velocity, now)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +437,26 @@ impl LogoFrame {
             .filter_map(move |(index, cell)| cell.map(|cell| (index % width, index / width, cell)))
     }
 
+    fn object_bounds(&self) -> Option<ObjectBounds> {
+        let mut cells = self
+            .iter_cells()
+            .filter(|(_, _, cell)| cell.surface != LogoSurface::Background);
+        let (first_x, first_y, _) = cells.next()?;
+        let mut bounds = ObjectBounds {
+            min_x: first_x,
+            min_y: first_y,
+            max_x: first_x,
+            max_y: first_y,
+        };
+        for (x, y, _) in cells {
+            bounds.min_x = bounds.min_x.min(x);
+            bounds.min_y = bounds.min_y.min(y);
+            bounds.max_x = bounds.max_x.max(x);
+            bounds.max_y = bounds.max_y.max(y);
+        }
+        Some(bounds)
+    }
+
     #[cfg(test)]
     fn to_lines(&self) -> Vec<String> {
         let width = usize::from(self.size.width);
@@ -175,23 +474,28 @@ impl LogoFrame {
 pub struct ZeroStateAnimationElement {
     clock: AnimationClock,
     config: Arc<ZeroStateAnimationConfig>,
+    interaction: ZeroStateInteractionHandle,
     styles: WarpLogoStyles,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
+    object_bounds: Option<ObjectBounds>,
 }
 
 impl ZeroStateAnimationElement {
     pub(crate) fn new(
         clock: AnimationClock,
         config: Arc<ZeroStateAnimationConfig>,
+        interaction: ZeroStateInteractionHandle,
         styles: WarpLogoStyles,
     ) -> Self {
         Self {
             clock,
             config,
+            interaction,
             styles,
             size: None,
             origin: None,
+            object_bounds: None,
         }
     }
 }
@@ -222,9 +526,17 @@ impl TuiElement for ZeroStateAnimationElement {
     ) {
         self.origin = Some(ctx.scene_point(origin));
         let Some(size) = self.size else { return };
-        let Some(frame) = object_frame_at(self.clock.elapsed(), size, &self.config) else {
+        let elapsed = self.clock.elapsed();
+        let idle_velocity = configured_idle_velocity(&self.config);
+        let resolved = self
+            .interaction
+            .resolve_at(elapsed, idle_velocity, Instant::now());
+        debug_assert!(resolved.velocity.is_finite());
+        let Some(frame) = object_frame_at_angle(elapsed, size, &self.config, resolved.angle) else {
+            self.object_bounds = None;
             return;
         };
+        self.object_bounds = frame.object_bounds();
 
         for (x, y, logo_cell) in frame.iter_cells() {
             let style = match logo_cell.surface {
@@ -248,6 +560,38 @@ impl TuiElement for ZeroStateAnimationElement {
     fn origin(&self) -> Option<TuiScreenPoint> {
         self.origin
     }
+
+    fn dispatch_event(
+        &mut self,
+        event: &TuiEvent,
+        event_ctx: &mut TuiEventContext<'_>,
+        _app: &AppContext,
+    ) -> bool {
+        let Some(origin) = self.origin else {
+            return false;
+        };
+        let elapsed = self.clock.elapsed();
+        let idle_velocity = configured_idle_velocity(&self.config);
+        let now = Instant::now();
+        let handled = match event {
+            TuiEvent::LeftMouseDown { position, .. } => self.object_bounds.is_some_and(|bounds| {
+                bounds.contains(event_ctx.local_point(origin, *position))
+                    && self.interaction.press_at(*position, now)
+            }),
+            TuiEvent::LeftMouseDragged { position, .. } => {
+                self.interaction
+                    .drag_at(*position, elapsed, idle_velocity, now)
+            }
+            TuiEvent::LeftMouseUp { .. } => {
+                self.interaction.release_at(elapsed, idle_velocity, now)
+            }
+            _ => false,
+        };
+        if handled {
+            event_ctx.notify();
+        }
+        handled
+    }
 }
 
 #[cfg(test)]
@@ -255,15 +599,36 @@ pub(crate) fn logo_frame_at(elapsed: Duration, size: TuiSize) -> Option<LogoFram
     object_frame_at(elapsed, size, &ZeroStateAnimationConfig::default())
 }
 
+#[cfg(test)]
 fn object_frame_at(
     elapsed: Duration,
     size: TuiSize,
     config: &ZeroStateAnimationConfig,
 ) -> Option<LogoFrame> {
+    object_frame_at_angle(
+        elapsed,
+        size,
+        config,
+        idle_angle(elapsed, configured_idle_velocity(config)),
+    )
+}
+
+fn configured_idle_velocity(config: &ZeroStateAnimationConfig) -> f64 {
+    std::f64::consts::TAU / config.rotation_period.as_secs_f64()
+}
+
+fn idle_angle(elapsed: Duration, idle_velocity: f64) -> f64 {
+    (elapsed.as_secs_f64() * idle_velocity).rem_euclid(std::f64::consts::TAU)
+}
+
+fn object_frame_at_angle(
+    elapsed: Duration,
+    size: TuiSize,
+    config: &ZeroStateAnimationConfig,
+    angle: f64,
+) -> Option<LogoFrame> {
     let cell_aspect_ratio = config.shape.cell_aspect_ratio();
     let (logo_cols, logo_rows) = fitted_logo_size(size, cell_aspect_ratio)?;
-    let revolution_secs = config.rotation_period.as_secs_f64();
-    let angle = (elapsed.as_secs_f64() % revolution_secs) / revolution_secs * std::f64::consts::TAU;
     let (sin, cos) = angle.sin_cos();
     let mut frame = LogoFrame::new(size);
     draw_background_stars(&mut frame, elapsed);
