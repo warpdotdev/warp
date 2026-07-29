@@ -971,6 +971,38 @@ pub struct WorkspaceSettings {
     pub default_host_slug: Option<String>,
 }
 
+/// The effective settings that apply to a team, combining the workspace layer
+/// with the team's own configuration.
+///
+/// This is intentionally a distinct type from [`WorkspaceSettings`] rather than
+/// an alias: it is sourced from the server's effective `Team.settings` (reading
+/// the effective `value` out of each workspace-governable group) and, unlike
+/// `WorkspaceSettings`, does not carry the workspace-scoped
+/// `is_invite_link_enabled` / `is_discoverable` flags (those live on
+/// [`WorkspaceSettings`] and are surfaced directly on [`super::team::Team`]).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSettings {
+    pub llm_settings: LlmSettings,
+    pub team_byo: Option<TeamByoSettings>,
+    pub telemetry_settings: TelemetrySettings,
+    pub ugc_collection_settings: UgcCollectionSettings,
+    pub cloud_conversation_storage_settings: CloudConversationStorageSettings,
+    pub link_sharing_settings: LinkSharingSettings,
+    pub secret_redaction_settings: SecretRedactionSettings,
+    pub ai_permissions_settings: AiPermissionsSettings,
+    pub ai_autonomy_settings: AiAutonomySettings,
+    pub usage_based_pricing_settings: UsageBasedPricingSettings,
+    pub addon_credits_settings: AddonCreditsSettings,
+    pub codebase_context_settings: CodebaseContextSettings,
+    pub sandboxed_agent_settings: Option<SandboxedAgentSettings>,
+    /// The team-level agent attribution setting. When `Enable` or `Disable`, the
+    /// user toggle is locked. When `RespectUserSetting` (or absent), the user can choose.
+    #[serde(default)]
+    pub enable_warp_attribution: AdminEnablementSetting,
+    #[serde(default)]
+    pub default_host_slug: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamByoSettings {
     pub first_party_enabled: bool,

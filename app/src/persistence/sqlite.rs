@@ -110,7 +110,7 @@ use crate::terminal::history::PersistedCommand;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workflows::WorkflowId;
 use crate::workspace::tab_group::TabGroupId;
-use crate::workspaces::team::Team as TeamMetadata;
+use crate::workspaces::team::{Team as TeamMetadata, TeamSettingsCache};
 use crate::workspaces::user_profiles::{UserProfileWithUID, user_profile_from_persistence};
 use crate::workspaces::workspace::{Workspace as WorkspaceMetadata, WorkspaceUid};
 use crate::{safe_info, send_telemetry_from_app_ctx};
@@ -2079,8 +2079,12 @@ fn save_workspaces(
         .into_iter()
         .flat_map(|workspace| {
             workspace.teams.into_iter().filter_map(|team| {
-                let serialized_settings_json =
-                    serde_json::to_string(&team.organization_settings).ok()?;
+                let serialized_settings_json = serde_json::to_string(&TeamSettingsCache {
+                    settings: team.settings.clone(),
+                    is_invite_link_enabled: team.is_invite_link_enabled,
+                    is_discoverable: team.is_discoverable,
+                })
+                .ok()?;
                 let team_id_match = teams_by_server_uid.get(&team.uid.uid())?;
                 Some(NewTeamSettings {
                     team_id: *team_id_match,

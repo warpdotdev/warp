@@ -151,7 +151,9 @@ fn team_for_test() -> Team {
         invite_link_domain_restrictions: vec![],
         billing_metadata: Default::default(),
         stripe_customer_id: None,
-        organization_settings: Default::default(),
+        settings: Default::default(),
+        is_invite_link_enabled: false,
+        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     }

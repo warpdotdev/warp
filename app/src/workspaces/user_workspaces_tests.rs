@@ -123,7 +123,9 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         invite_link_domain_restrictions: vec![],
         billing_metadata: Default::default(),
         stripe_customer_id: None,
-        organization_settings: Default::default(),
+        settings: Default::default(),
+        is_invite_link_enabled: false,
+        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     };
@@ -254,7 +256,9 @@ fn team_for_test() -> Team {
         invite_link_domain_restrictions: vec![],
         billing_metadata: Default::default(),
         stripe_customer_id: None,
-        organization_settings: Default::default(),
+        settings: Default::default(),
+        is_invite_link_enabled: false,
+        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     }
@@ -673,7 +677,7 @@ fn workspace_for_test(team: &Team) -> Workspace {
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
         has_billing_history: false,
-        settings: team.organization_settings.clone(),
+        settings: Default::default(),
         invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
@@ -934,14 +938,12 @@ fn test_unassigned_window_is_initialized_after_workspace_metadata_loads() {
 
 #[test]
 fn test_codebase_context_enabled_by_team_disabled_by_user() {
-    // Enable codebase context on a team level
-    let mut team = team_for_test();
-    team.organization_settings.codebase_context_settings.setting = AdminEnablementSetting::Enable;
+    let team = team_for_test();
 
-    // Disable codebase context on the user level
+    // Codebase context is governed by the workspace-level effective settings.
     let mut workspace = workspace_for_test(&team);
     workspace.settings.codebase_context_settings = CodebaseContextSettings {
-        setting: AdminEnablementSetting::Enable, // This doesn't matter since team setting overrides
+        setting: AdminEnablementSetting::Enable,
     };
 
     App::test((), |mut app| async move {
@@ -965,9 +967,7 @@ fn test_codebase_context_enabled_by_team_disabled_by_user() {
 
 #[test]
 fn test_codebase_context_enabled_by_team_and_user() {
-    // Enable codebase context on a team level
-    let mut team = team_for_test();
-    team.organization_settings.codebase_context_settings.setting = AdminEnablementSetting::Enable;
+    let team = team_for_test();
 
     let mut workspace = workspace_for_test(&team);
     workspace.settings.codebase_context_settings = CodebaseContextSettings {
@@ -997,8 +997,7 @@ fn test_codebase_context_enabled_by_team_and_user() {
 
 #[test]
 fn test_codebase_context_disabled_by_workspace() {
-    let mut team = team_for_test();
-    team.organization_settings.codebase_context_settings.setting = AdminEnablementSetting::Enable;
+    let team = team_for_test();
 
     let mut workspace = workspace_for_test(&team);
     workspace.settings.codebase_context_settings = CodebaseContextSettings {
@@ -1028,12 +1027,12 @@ fn test_codebase_context_disabled_by_workspace() {
 
 #[test]
 fn test_codebase_context_respect_user_setting() {
-    // Set team to respect user setting
-    let mut team = team_for_test();
-    team.organization_settings.codebase_context_settings.setting =
-        AdminEnablementSetting::RespectUserSetting;
+    let team = team_for_test();
 
-    let workspace = workspace_for_test(&team);
+    // Workspace defers codebase context to the user setting.
+    let mut workspace = workspace_for_test(&team);
+    workspace.settings.codebase_context_settings.setting =
+        AdminEnablementSetting::RespectUserSetting;
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -1079,7 +1078,9 @@ fn test_joining_team_moves_objects() {
         invite_link_domain_restrictions: vec![],
         billing_metadata: Default::default(),
         stripe_customer_id: None,
-        organization_settings: Default::default(),
+        settings: Default::default(),
+        is_invite_link_enabled: false,
+        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     };
@@ -1173,9 +1174,9 @@ fn test_agent_attribution_default_with_no_workspace() {
 
 #[test]
 fn test_agent_attribution_forced_on_by_team() {
-    let mut team = team_for_test();
-    team.organization_settings.enable_warp_attribution = AdminEnablementSetting::Enable;
-    let workspace = workspace_for_test(&team);
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.settings.enable_warp_attribution = AdminEnablementSetting::Enable;
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -1200,9 +1201,9 @@ fn test_agent_attribution_forced_on_by_team() {
 
 #[test]
 fn test_agent_attribution_forced_off_by_team() {
-    let mut team = team_for_test();
-    team.organization_settings.enable_warp_attribution = AdminEnablementSetting::Disable;
-    let workspace = workspace_for_test(&team);
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.settings.enable_warp_attribution = AdminEnablementSetting::Disable;
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -1227,9 +1228,9 @@ fn test_agent_attribution_forced_off_by_team() {
 
 #[test]
 fn test_agent_attribution_respects_user_setting() {
-    let mut team = team_for_test();
-    team.organization_settings.enable_warp_attribution = AdminEnablementSetting::RespectUserSetting;
-    let workspace = workspace_for_test(&team);
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.settings.enable_warp_attribution = AdminEnablementSetting::RespectUserSetting;
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -1265,7 +1266,9 @@ fn test_leaving_team_moves_objects() {
         invite_link_domain_restrictions: vec![],
         billing_metadata: Default::default(),
         stripe_customer_id: None,
-        organization_settings: Default::default(),
+        settings: Default::default(),
+        is_invite_link_enabled: false,
+        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     };

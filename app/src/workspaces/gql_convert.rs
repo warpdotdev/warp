@@ -38,7 +38,7 @@ use warp_graphql::workspace::{
     HostEnablementSetting as GqlHostEnablementSetting,
     InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
     MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings,
-    TeamMember as GqlTeamMember,
+    TeamMember as GqlTeamMember, TeamSettings as GqlTeamSettings,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
     WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
     WorkspaceSettings as GqlWorkspaceSettings,
@@ -55,11 +55,11 @@ use super::workspace::{
     DelinquencyStatus, EmailInvite, EnterpriseSecretRegex, HostEnablementSetting, InstanceShape,
     InviteLinkDomainRestriction, LinkSharingSettings, LlmSettings, MaxPriorCycles,
     SandboxedAgentSettings, SecretRedactionSettings, SessionSharingPolicy, SharedNotebooksPolicy,
-    SharedWorkflowsPolicy, TeamByoSettings, TelemetryDataCollectionPolicy, TelemetrySettings, Tier,
-    UgcCollectionEnablementSetting, UgcCollectionSettings, UgcDataCollectionPolicy,
-    UsageBasedPricingPolicy, UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy,
-    Workspace, WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
-    WorkspaceSizePolicy,
+    SharedWorkflowsPolicy, TeamByoSettings, TeamSettings, TelemetryDataCollectionPolicy,
+    TelemetrySettings, Tier, UgcCollectionEnablementSetting, UgcCollectionSettings,
+    UgcDataCollectionPolicy, UsageBasedPricingPolicy, UsageVisibilityGranularity,
+    UsageVisibilityPolicy, WarpAiPolicy, Workspace, WorkspaceInviteCode, WorkspaceMember,
+    WorkspaceMemberUsageInfo, WorkspaceSettings, WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
 use crate::ai::execution_profiles::{
@@ -1017,6 +1017,150 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
     }
 }
 
+impl From<GqlTeamSettings> for TeamSettings {
+    fn from(gql_team_settings: GqlTeamSettings) -> TeamSettings {
+        Self {
+            llm_settings: gql_team_settings.llm_settings.into(),
+            team_byo: gql_team_settings.team_byo.map(From::from),
+            telemetry_settings: TelemetrySettings {
+                force_enabled: gql_team_settings.telemetry_settings.force_enabled,
+            },
+            ugc_collection_settings: UgcCollectionSettings {
+                setting: UgcCollectionEnablementSetting::from(
+                    gql_team_settings.ugc_collection.value,
+                ),
+            },
+            cloud_conversation_storage_settings: CloudConversationStorageSettings {
+                setting: gql_team_settings.cloud_conversation_storage.value.into(),
+            },
+            link_sharing_settings: LinkSharingSettings {
+                anyone_with_link_sharing_enabled: gql_team_settings
+                    .link_sharing
+                    .anyone_with_link_sharing_enabled
+                    .value,
+                direct_link_sharing_enabled: gql_team_settings
+                    .link_sharing
+                    .direct_link_sharing_enabled
+                    .value,
+            },
+            secret_redaction_settings: SecretRedactionSettings {
+                enabled: gql_team_settings.secret_redaction.enabled.value,
+                regexes: gql_team_settings
+                    .secret_redaction
+                    .regexes
+                    .values
+                    .into_iter()
+                    .map(|gql_regex| EnterpriseSecretRegex {
+                        pattern: gql_regex.pattern,
+                        name: gql_regex.name,
+                    })
+                    .collect(),
+            },
+            ai_permissions_settings: AiPermissionsSettings {
+                allow_ai_in_remote_sessions: gql_team_settings
+                    .ai_permissions
+                    .allow_ai_in_remote_sessions
+                    .value,
+                remote_session_regex_list: gql_team_settings
+                    .ai_permissions
+                    .remote_session_regex_list
+                    .values
+                    .iter()
+                    .filter_map(|r| match Regex::new(r) {
+                        Ok(regex) => Some(regex),
+                        Err(_) => {
+                            report_error!(
+                                "Invalid regex pattern for remote session detection",
+                                extra: { "pattern" => %r }
+                            );
+                            None
+                        }
+                    })
+                    .collect(),
+            },
+            ai_autonomy_settings: AiAutonomySettings {
+                apply_code_diffs_setting: convert_gql_ai_autonomy_value_to_action_permission(
+                    gql_team_settings.ai_autonomy.apply_code_diffs.value,
+                ),
+                read_files_setting: convert_gql_ai_autonomy_value_to_action_permission(
+                    gql_team_settings.ai_autonomy.read_files.value,
+                ),
+                read_files_allowlist: Some(
+                    gql_team_settings
+                        .ai_autonomy
+                        .read_files_allowlist
+                        .values
+                        .to_path_bufs(),
+                ),
+                execute_commands_setting: convert_gql_ai_autonomy_value_to_action_permission(
+                    gql_team_settings.ai_autonomy.execute_commands.value,
+                ),
+                execute_commands_allowlist: Some(
+                    gql_team_settings
+                        .ai_autonomy
+                        .execute_commands_allowlist
+                        .values
+                        .to_predicates(),
+                ),
+                execute_commands_denylist: Some(
+                    gql_team_settings
+                        .ai_autonomy
+                        .execute_commands_denylist
+                        .values
+                        .to_predicates(),
+                ),
+                write_to_pty_setting:
+                    convert_gql_write_to_pty_autonomy_value_to_write_to_pty_permission(
+                        gql_team_settings.ai_autonomy.write_to_pty.value,
+                    ),
+                computer_use_setting:
+                    convert_gql_computer_use_autonomy_value_to_computer_use_permission(
+                        gql_team_settings.ai_autonomy.computer_use.value,
+                    ),
+            },
+            usage_based_pricing_settings: UsageBasedPricingSettings {
+                enabled: gql_team_settings.usage_based_pricing_settings.enabled,
+                max_monthly_spend_cents: gql_team_settings
+                    .usage_based_pricing_settings
+                    .max_monthly_spend_cents
+                    .and_then(|cents| {
+                        if cents < 0 {
+                            report_error!(
+                                "Usage-based pricing has a negative max monthly spend",
+                                extra: { "cents" => %cents }
+                            );
+                            None
+                        } else {
+                            Some(cents as u32)
+                        }
+                    }),
+            },
+            addon_credits_settings: gql_team_settings.addon_credits_settings.into(),
+            codebase_context_settings: CodebaseContextSettings {
+                setting: gql_team_settings.codebase_context.value.into(),
+            },
+            sandboxed_agent_settings: Some(SandboxedAgentSettings {
+                execute_commands_denylist: Some(
+                    gql_team_settings
+                        .sandboxed_agent
+                        .execute_commands_denylist
+                        .values
+                        .to_predicates(),
+                ),
+            }),
+            enable_warp_attribution: gql_team_settings
+                .ambient_agent_settings
+                .as_ref()
+                .map(|s| s.enable_warp_attribution.clone().into())
+                .unwrap_or_default(),
+            default_host_slug: gql_team_settings
+                .ambient_agent_settings
+                .as_ref()
+                .and_then(|s| s.default_host_slug.clone()),
+        }
+    }
+}
+
 impl Team {
     pub fn from_gql(gql_workspace: GqlWorkspace, gql_team: GqlTeam) -> Team {
         Self {
@@ -1057,7 +1201,14 @@ impl Team {
                 .stripe_customer_id
                 .as_ref()
                 .map(|id| id.clone().into_inner()),
-            organization_settings: gql_workspace.settings.clone().into(),
+            // Team-effective settings come from the team payload, not from a
+            // clone of the workspace settings.
+            settings: gql_team.settings.into(),
+            // Invite-link and discoverability are workspace-level settings; the
+            // server does not expose them on TeamSettings, so surface them on the
+            // team directly from the workspace settings.
+            is_invite_link_enabled: gql_workspace.settings.is_invite_link_enabled,
+            is_discoverable: gql_workspace.settings.is_discoverable,
             is_eligible_for_discovery: gql_workspace.is_eligible_for_discovery,
             has_billing_history: gql_workspace.has_billing_history,
         }

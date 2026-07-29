@@ -3,8 +3,7 @@ use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
 
 use super::workspace::{
-    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, WorkspaceInviteCode,
-    WorkspaceSettings,
+    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings, WorkspaceInviteCode,
 };
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
@@ -86,20 +85,42 @@ pub struct Team {
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub billing_metadata: BillingMetadata,
     pub stripe_customer_id: Option<String>,
-    pub organization_settings: WorkspaceSettings,
+    /// The team's effective settings, sourced from the server's `Team.settings`.
+    pub settings: TeamSettings,
+    /// Whether invite links are enabled for the team. This is a workspace-level
+    /// setting (`WorkspaceSettings::is_invite_link_enabled`) surfaced on the team.
+    pub is_invite_link_enabled: bool,
+    /// Whether the team is discoverable. This is a workspace-level setting
+    /// (`WorkspaceSettings::is_discoverable`) surfaced on the team.
+    pub is_discoverable: bool,
     /// If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
     pub is_eligible_for_discovery: bool,
     pub has_billing_history: bool,
+}
+
+/// Serialized shape of the team settings stored in the local sqlite cache.
+///
+/// Wraps the effective [`TeamSettings`] together with the two workspace-level
+/// flags surfaced on [`Team`] so a cache round-trip preserves them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSettingsCache {
+    #[serde(default)]
+    pub settings: TeamSettings,
+    #[serde(default)]
+    pub is_invite_link_enabled: bool,
+    #[serde(default)]
+    pub is_discoverable: bool,
 }
 
 impl Team {
     pub fn from_local_cache(
         uid: ServerId,
         name: String,
-        workspace_settings: Option<WorkspaceSettings>,
+        settings_cache: Option<TeamSettingsCache>,
         billing_metadata: Option<BillingMetadata>,
         members: Option<Vec<TeamMember>>,
     ) -> Self {
+        let settings_cache = settings_cache.unwrap_or_default();
         Self {
             uid,
             name,
@@ -109,7 +130,9 @@ impl Team {
             invite_link_domain_restrictions: Default::default(),
             billing_metadata: billing_metadata.unwrap_or_default(),
             stripe_customer_id: Default::default(),
-            organization_settings: workspace_settings.unwrap_or_default(),
+            settings: settings_cache.settings,
+            is_invite_link_enabled: settings_cache.is_invite_link_enabled,
+            is_discoverable: settings_cache.is_discoverable,
             is_eligible_for_discovery: false,
             has_billing_history: false,
         }
@@ -161,6 +184,6 @@ impl Team {
     }
 
     pub fn is_custom_llm_enabled(&self) -> bool {
-        self.organization_settings.llm_settings.enabled
+        self.settings.llm_settings.enabled
     }
 }

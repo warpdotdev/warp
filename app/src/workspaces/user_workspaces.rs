@@ -1716,7 +1716,9 @@ impl UserWorkspaces {
             teams: vec![Team {
                 uid: ServerId::from(2),
                 name: "Test Team".to_string(),
-                organization_settings: workspace_settings.clone(),
+                settings: Default::default(),
+                is_invite_link_enabled: false,
+                is_discoverable: false,
                 billing_metadata: BillingMetadata::default(),
                 members: vec![],
                 invite_code: None,
