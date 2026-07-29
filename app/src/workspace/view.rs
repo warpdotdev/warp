@@ -283,8 +283,8 @@ use crate::experiments::{BlockOnboarding, Experiment};
 use crate::launch_configs::launch_config::WindowTemplate;
 use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::menu::{
-    CustomMenuItemLabelFn, Event as MenuEvent, MENU_VERTICAL_PADDING, Menu, MenuItem,
-    MenuItemFields, MenuSelectionSource, MenuVariant,
+    Event as MenuEvent, MENU_VERTICAL_PADDING, Menu, MenuItem, MenuItemFields, MenuSelectionSource,
+    MenuVariant,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -6126,58 +6126,22 @@ impl Workspace {
             return;
         };
         let current_team_uid = user_workspaces.team_uid_for_window(window_id);
-        let items: Vec<MenuItem<WorkspaceAction>> = workspace
-            .teams
-            .iter()
-            .map(|team| {
-                let uid = team.uid;
-                let team_name = team.name.clone();
-                let team_color_hex = team.color.clone();
-                let is_current = Some(uid) == current_team_uid;
-                // Render each item as [color dot] {team name}, matching the pill style.
-                let label_text = team_name.clone();
-                let builder: CustomMenuItemLabelFn =
-                    Arc::new(move |_selected, _hovered, appearance, _ctx| {
-                        let theme = appearance.theme();
-                        let dot_color = team_color_hex
-                            .as_deref()
-                            .and_then(|hex| {
-                                warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok()
-                            })
-                            .unwrap_or_else(|| internal_colors::neutral_5(theme));
-                        let dot = ConstrainedBox::new(
-                            Rect::new()
-                                .with_background(Fill::Solid(dot_color))
-                                .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-                                .finish(),
-                        )
-                        .with_width(8.)
-                        .with_height(8.)
-                        .finish();
-                        let text_color = theme.foreground();
-                        let name_text = Text::new_inline(
-                            team_name.clone(),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .with_color(text_color.into())
-                        .finish();
-                        Flex::row()
-                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                            .with_spacing(6.)
-                            .with_child(dot)
-                            .with_child(name_text)
-                            .finish()
-                    });
-                let mut fields = MenuItemFields::new_with_custom_label(builder, Some(label_text))
-                    .with_on_select_action(WorkspaceAction::OpenNewWindowForTeam { team_uid: uid });
-                if is_current {
-                    // Leading check mark for the currently-active team.
-                    fields = fields.with_icon(icons::Icon::Check);
-                }
-                fields.into_item()
-            })
-            .collect();
+        let mut items: Vec<MenuItem<WorkspaceAction>> = vec![
+            MenuItemFields::new("Switch team")
+                .with_disabled(true)
+                .into_item(),
+        ];
+        items.extend(workspace.teams.iter().map(|team| {
+            let uid = team.uid;
+            let mut fields = MenuItemFields::new(team.name.clone())
+                .with_on_select_action(WorkspaceAction::OpenNewWindowForTeam { team_uid: uid });
+            fields = if Some(uid) == current_team_uid {
+                fields.with_icon(icons::Icon::Check)
+            } else {
+                fields.with_indent()
+            };
+            fields.into_item()
+        }));
         self.team_switcher_menu
             .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.show_team_switcher_menu = true;
@@ -6252,7 +6216,7 @@ impl Workspace {
                 } else {
                     pill_bg_normal
                 })
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
                 .with_padding_left(8.)
                 .with_padding_right(8.)
                 .with_padding_top(4.)
@@ -11820,6 +11784,7 @@ impl Workspace {
         WindowSnapshot {
             tabs,
             active_tab_index,
+            team_uid: UserWorkspaces::as_ref(app).team_uid_for_window(window_id),
             bounds: window_bounds,
             fullscreen_state: window_fullscreen_state,
             quake_mode,

@@ -1647,8 +1647,12 @@ impl NewWorkspaceSource {
             | Self::AgentSession { .. }
             | Self::AmbientAgent => None,
             Self::TeamSwitched { team_uid } => return Some(*team_uid),
-            Self::Restored { .. } => {
-                // TODO: Store the team UID in WindowSnapshot and restore it here.
+            Self::Restored {
+                window_snapshot, ..
+            } => {
+                if let Some(team_uid) = window_snapshot.team_uid {
+                    return Some(team_uid);
+                }
                 None
             }
         };
