@@ -18,7 +18,7 @@ use warp::tui_export::{
     AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals,
     Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
-    LongRunningCommandControlState, PtyIntent, PtyIntentEvent, QueuedQueryModel, SizeInfo,
+    LongRunningCommandControlState, PtyIntent, PtyIntentEvent, SizeInfo,
     SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope,
     TuiMcpAction, TuiMcpServerId, TuiUpArrowHistoryItemKind, UserTakeOverReason,
     export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
@@ -91,6 +91,7 @@ use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
+use crate::transient_hint::TransientHintTone;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
 use crate::voice_input::{TuiVoiceInputState, requires_modifier_key_reporting};
@@ -957,7 +958,7 @@ fn zero_state_reload_failure_renders_as_an_error_footer_hint() {
             }),
             Some((
                 super::ZERO_STATE_ASCII_RELOAD_FAILED_HINT.to_owned(),
-                super::TransientHintTone::Error
+                TransientHintTone::Error
             ))
         );
 
@@ -1074,7 +1075,7 @@ fn zero_state_initial_load_failure_shows_an_error_footer_hint() {
             }),
             Some((
                 super::ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT.to_owned(),
-                super::TransientHintTone::Error
+                TransientHintTone::Error
             ))
         );
     });
@@ -2397,7 +2398,7 @@ fn nld_slash_command_toggles_and_reports_its_effects() {
             }),
             Some((
                 "Natural language detection enabled.".to_owned(),
-                super::TransientHintTone::Success
+                TransientHintTone::Success
             ))
         );
 
@@ -2423,7 +2424,7 @@ fn nld_slash_command_toggles_and_reports_its_effects() {
             }),
             Some((
                 "Natural language detection disabled.".to_owned(),
-                super::TransientHintTone::Success
+                TransientHintTone::Success
             ))
         );
 

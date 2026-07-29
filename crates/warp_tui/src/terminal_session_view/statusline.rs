@@ -4,10 +4,7 @@ use std::time::Duration;
 
 use chrono::{Local, NaiveDateTime};
 use warp::settings::{AISettings, TuiStatuslineConfig, TuiStatuslineItem};
-use warp::tui_export::{
-    BlocklistAIHistoryModel, ConversationUsageTotals, GitRepoModels, GitStatusMetadata,
-    LLMPreferences,
-};
+use warp::tui_export::{ConversationUsageTotals, GitRepoModels, GitStatusMetadata, LLMPreferences};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
