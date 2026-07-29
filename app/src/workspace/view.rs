@@ -21345,35 +21345,27 @@ impl Workspace {
         let is_multi_team = UserWorkspaces::as_ref(ctx).can_switch_teams();
         if FeatureFlag::NewTabStyling.is_enabled() {
             let mut fill = internal_colors::fg_overlay_1(appearance.theme());
-            if is_multi_team {
-                if let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id) {
-                    if let Some(hex) = team.color.as_deref() {
-                        if let Ok(mut team_color) =
-                            warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
-                        {
-                            // Blend a subtle semi-transparent tint (~25% alpha) over the
-                            // fg_overlay_1 base so the tint doesn't discard it.
-                            team_color.a = 64;
-                            fill = fill.blend(&Fill::Solid(team_color));
-                        }
-                    }
-                }
+            if is_multi_team
+                && let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id)
+                && let Some(hex) = team.color.as_deref()
+                && let Ok(mut team_color) =
+                    warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
+            {
+                // Blend a subtle semi-transparent tint (~25% alpha) over the
+                // fg_overlay_1 base so the tint doesn't discard it.
+                team_color.a = 64;
+                fill = fill.blend(&Fill::Solid(team_color));
             }
             tab_bar_container = tab_bar_container.with_background(fill);
-        } else if is_multi_team {
+        } else if is_multi_team
+            && let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id)
+            && let Some(hex) = team.color.as_deref()
+            && let Ok(mut team_color) = warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
+        {
             // NewTabStyling is off: still apply the team tint, but as its own
             // background pass (no fg_overlay_1 to preserve in this branch).
-            if let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id) {
-                if let Some(hex) = team.color.as_deref() {
-                    if let Ok(mut team_color) =
-                        warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
-                    {
-                        team_color.a = 64;
-                        tab_bar_container =
-                            tab_bar_container.with_background(Fill::Solid(team_color));
-                    }
-                }
-            }
+            team_color.a = 64;
+            tab_bar_container = tab_bar_container.with_background(Fill::Solid(team_color));
         }
         let tab_bar_element = tab_bar_container.finish();
 
