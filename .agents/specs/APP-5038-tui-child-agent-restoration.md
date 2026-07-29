@@ -14,7 +14,7 @@
 2. Selecting the same parent from the TUI conversations menu produces the same restored session tree as `--resume`; the entry point changes neither descendant selection nor hydration behavior.
 3. Restored descendants appear in the existing orchestration tab bar in the same recursive spawn/status order used by live TUI orchestration. The parent remains focused after restoration, and existing keyboard navigation switches to each restored child session without a new UI affordance.
 4. A local Oz descendant is restored into a retained local terminal session with its persisted transcript, name, status, parent linkage, task/run identity, action results, and working directory metadata. Restoration does not send its original prompt again or create a new server task.
-5. A remote/cloud descendant is restored into the existing lightweight cloud-run session. Its state starts as restored/spawned—not dispatching—and the existing view shows the persisted status and run link. This applies to task-backed remote children regardless of the remote harness because the TUI cloud view is harness-agnostic.
+5. A remote/cloud descendant is restored into the existing lightweight cloud-run session. Its state starts as restored/spawned—not dispatching—and the existing view shows the authoritative remote task status and run link. Restoration fetches the task status once, then existing orchestration events keep the status current. This applies to task-backed remote children regardless of the remote harness because the TUI cloud view is harness-agnostic.
 6. Descendants are restored transitively, not only one level deep. A grandchild remains linked to its actual parent conversation, while all descendants use the root session's window as their TUI host.
 7. Restoring the same tree more than once never creates duplicate sessions or duplicate orchestration tabs. Replacing a parent conversation removes retained child-session projections belonging to the replaced tree without cancelling or deleting the underlying cloud tasks.
 8. A parent with no children restores exactly as it does today: one focused parent session, no tab bar, and no additional network or session work.
@@ -38,6 +38,7 @@
 - `app/src/ai/blocklist/history_model/conversation_loader.rs:526-620` eagerly indexes parent-to-child topology and hydrates orchestration children into `conversations_by_id` during local startup. Other historical conversations stay lazy.
 - `app/src/ai/blocklist/orchestration_topology.rs:142-181` already provides the recursive spawn-order walker used by TUI navigation and lifecycle operations.
 - `app/src/ai/blocklist/history_model/conversation_loader.rs:235-310` loads one server-token conversation. It does not reconstruct child UI conversations. `app/src/ai/blocklist/orchestration_event_streamer.rs:1348-1558` consumes `AmbientAgentTask.children` to restore event-watching run IDs, not UI sessions.
+- `ServerApiProvider::get_ai_client` exposes the existing `get_ambient_agent_task` request used to read authoritative task state. Remote TUI restoration can issue that request once after session materialization and guard its completion with the retained conversation/session/task mapping, without adding lifecycle state to local persistence or persistent restoration bookkeeping.
 
 *Root cause and reproduction:* The defect is a missing TUI materialization step, not missing tab rendering. Both restore entry points insert only the requested parent into one surface. The orchestration snapshot correctly omits descendants that have no retained session. A real end-to-end reproduction could not be run in the spec environment because no seeded parent token with local and cloud children was available. The equivalent code-level reproduction was run with:
 
@@ -71,7 +72,7 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 - *Eager sessions versus lazy sessions.*
   - Eager session materialization is selected because the existing TUI tab snapshot intentionally requires a session before showing a child. Lazy sessions would require changing tab/navigability semantics, adding loading/error tabs, and splitting identity from session availability—a TUI UI behavior change.
   - Eager local transcript restoration is selected because current TUI conversation restore already constructs the complete block-restoration plan before rendering. Historical child rows are already eagerly hydrated specifically for orchestration.
-  - Remote children are eagerly represented by lightweight cloud sessions, but no new remote transcript renderer is added. Persisted conversation status plus stable task/run identity is sufficient for the current cloud view; any existing task metadata fetch remains best-effort background enrichment.
+  - Remote children are eagerly represented by lightweight cloud sessions, but no new remote transcript renderer is added. Stable persisted task/run identity creates the session immediately; a one-time task request then reconciles lifecycle status from the authoritative remote task, and existing orchestration events keep it current.
 
 - *Direct children versus recursive descendants.*
   - Recursive pre-order restoration is selected. It matches the GUI's effective recursive behavior, matches the TUI snapshot and kill-descendants prior art, and avoids a visible but non-navigable grandchild. A single TUI traversal is preferred over relying on child-view re-entry callbacks because it is deterministic and does not duplicate parent restore logic.
@@ -104,7 +105,9 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 4. *Materialize restored remote/cloud children in the current cloud view.*
    - Add `TuiCloudRunState::new_restored` (or an equivalent explicit constructor) requiring conversation ID, task ID, run ID, and run URL. It starts in `Spawned`; it must never render “Starting cloud run…” for a restored child.
    - Add a restore-only `TuiSessions` cloud-session constructor that accepts the restored state, creates an unfocused `TuiCloudRunView`, restores the child conversation onto that surface, marks it active there, and registers the conversation/session mapping.
-   - Derive the current Oz run URL with the existing `oz_run_url` helper. Continue to derive displayed lifecycle status from the restored `AIConversation`, as `TuiCloudRunView` does today.
+   - Derive the current Oz run URL with the existing `oz_run_url` helper. Issue one `get_ambient_agent_task` request after materialization, map its `AgentRunDisplayStatus` to `ConversationStatus`, and update the restored placeholder through `BlocklistAIHistoryModel`; subsequent orchestration events continue using the existing live status path.
+   - After applying a fetched status change, emit a restoration-specific `TuiOrchestrationEvent`. Only agent blocks that render received-agent messages subscribe; a block whose sender matches the restored child calls `ctx.notify()` so its cached glyph redraws without invalidating transcript layout or subscribing every block to general history updates.
+   - The request completion must verify that the conversation still maps to the same retained session, remains a remote child, and retains the same task identity. A late completion for a replaced tree becomes a no-op; the model does not retain a separate set of restored conversations.
    - If stable task/run identity is missing or invalid, skip the remote child. Do not invent a new task or leave a permanently dispatching placeholder.
 
 5. *Clean up replaced tree projections and async races.*
@@ -125,7 +128,7 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 *Open questions resolved:*
 - *Which descendants?* All locally known descendants, recursively. This matches the GUI's effective recursion and the existing TUI topology model.
 - *When are tabs/sessions created?* Eagerly during parent restore. Lazy session creation would require a new tab loading contract and is outside the no-UI-change scope.
-- *When is heavy state hydrated?* Local Oz transcripts are eager. Remote children eagerly create only the lightweight cloud session from persisted identity/status; the current TUI does not display their transcript.
+- *When is heavy state hydrated?* Local Oz transcripts are eager. Remote children eagerly create only the lightweight cloud session from persisted identity, then reconcile status with one remote task request; the current TUI does not display their transcript.
 - *Which child kinds?* Local Oz (including legacy unspecified-harness local rows) and task-backed cloud children are supported. Explicit local non-Oz and shared-session-viewer children are skipped because the TUI has no corresponding retained view.
 - *What is shared?* The existing history loaders/index, `AIConversation` metadata, topology walker, and block-restoration plan. No new child-specific shared abstraction is required; UI lifecycle orchestration stays per frontend.
 - *Do server-only run IDs create tabs?* No. The existing GUI does not reconstruct UI children solely from `AmbientAgentTask.children`, and those IDs are not a complete conversation restoration record.
@@ -140,6 +143,7 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 - Legacy or malformed records may lack harness/task/run metadata. Fail per child, retain the parent, and verify supported siblings still restore.
 - Recursive data may contain cycles. Reuse the existing topology walker only after adding/retaining cycle protection or validate that the history index cannot recurse indefinitely; a malformed-cycle test must fail closed.
 - Restore races can orphan sessions when users select another conversation before background work completes. Request/root mapping checks must gate late updates.
+- Remote task status hydration can fail while offline. The lightweight session and run link remain available, and later orchestration events can still correct the placeholder status; restoration does not fail the parent or write remote lifecycle state into local persistence.
 
 *Validation & verification criteria* (must ALL pass before merge):
 
@@ -153,7 +157,7 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 
 3. *Local Oz hydration* — Add a test that restores a local child with at least one exchange, action result, agent name, task/run ID, status, parent ID, and working directory. Assert the child has a full terminal session, the transcript renders the exchange, restored action results exist, metadata is preserved, and no launch/start-agent executor receives a request. Run with `cargo nextest run -p warp_tui restored_local_oz_child_hydrates_transcript_without_relaunch`. Verifies behavior 4.
 
-4. *Remote/cloud hydration* — Add tests for at least one remote Oz child and one remote non-Oz harness child. Assert both use `TuiSessionView::Cloud`, begin in `TuiCloudRunStartup::Spawned`, retain conversation/task/run IDs, render the persisted terminal status and run link, and never display “Starting cloud run…”. Run with `cargo nextest run -p warp_tui restored_remote_child`. Verifies behavior 5.
+4. *Remote/cloud hydration* — Add tests for at least one remote Oz child and one remote non-Oz harness child. Assert both use `TuiSessionView::Cloud`, begin in `TuiCloudRunStartup::Spawned`, retain conversation/task/run IDs, reconcile the authoritative terminal task status through the one-time task request, render that status and run link, and never display “Starting cloud run…”. Include a regression where the restored local placeholder begins `InProgress` while the fetched remote task is terminal. Run with `cargo nextest run -p warp_tui restored_remote_child`. Verifies behavior 5.
 
 5. *Nested descendants* — Seed parent → child → grandchild with mixed local/cloud kinds. Assert all supported descendants get sessions, keep their immediate parent linkage, appear in recursive spawn order, and remain navigable from parent and child snapshots. Run with `cargo nextest run -p warp_tui restored_nested_descendants`. Verifies behavior 6.
 

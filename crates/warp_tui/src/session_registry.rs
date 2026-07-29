@@ -527,6 +527,7 @@ impl TuiSessions {
                     orchestration.register_restored_remote_child_session(
                         session_id,
                         conversation_id,
+                        *task_id,
                         ctx,
                     );
                 });
@@ -536,6 +537,7 @@ impl TuiSessions {
                     sessions.remove_session(*session_id, ctx);
                 });
             }
+            TuiOrchestrationEvent::RestoredRemoteChildStatusUpdated { .. } => {}
         });
     }
 

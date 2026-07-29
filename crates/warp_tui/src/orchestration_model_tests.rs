@@ -785,7 +785,6 @@ fn seed_remote_child(
         })
     })
 }
-
 fn restore_descendants(
     app: &mut App,
     parent_conversation_id: AIConversationId,
@@ -873,6 +872,78 @@ fn restoring_parent_materializes_supported_descendant_sessions() {
     });
 }
 
+#[test]
+fn restored_remote_child_uses_authoritative_task_status() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
+        let run_id = "00000000-0000-0000-0000-000000000001";
+        let child_id = seed_remote_child(&mut app, parent_conversation_id, "cloud-child", run_id);
+        let task_id = run_id.parse().expect("hardcoded task ID parses");
+
+        restore_descendants(&mut app, parent_conversation_id, parent_session_id);
+        app.update(|ctx| {
+            let session_id = {
+                let history = BlocklistAIHistoryModel::as_ref(ctx);
+                TuiSessions::as_ref(ctx)
+                    .session_ids_by_conversation(history)
+                    .get(&child_id)
+                    .copied()
+                    .expect("restored remote child has a session")
+            };
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.apply_restored_remote_child_status(
+                    session_id,
+                    child_id,
+                    task_id,
+                    ConversationStatus::Success,
+                    ctx,
+                );
+            });
+        });
+
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(
+                history
+                    .conversation(&child_id)
+                    .expect("restored remote child")
+                    .status(),
+                &ConversationStatus::Success
+            );
+            let session_id = TuiSessions::as_ref(ctx)
+                .session_ids_by_conversation(history)
+                .get(&child_id)
+                .copied()
+                .expect("restored remote child has a session");
+            let TuiSessionView::Cloud(view) = TuiSessions::as_ref(ctx)
+                .session(session_id)
+                .expect("restored remote child session")
+                .view()
+            else {
+                panic!("restored remote child uses a cloud view");
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                view.as_ref(ctx).render(ctx),
+                TuiRect::new(0, 0, 112, 24),
+                ctx,
+            );
+            let lines = frame.buffer.to_lines();
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Cloud run succeeded"))
+            );
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| !line.contains("Cloud run in progress"))
+            );
+        });
+    });
+}
 #[test]
 fn restoring_parent_without_children_is_noop() {
     App::test((), |mut app| async move {

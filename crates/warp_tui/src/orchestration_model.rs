@@ -17,15 +17,16 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use warp::tui_export::{
-    AIConversation, AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, CloudAgentStartupIssue, CloudConversationData, ConversationStatus,
-    Harness, OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
-    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, RenderableAIError, ServerApiProvider,
-    StartAgentExecutionMode, StartAgentRequest, apply_child_agent_model_override,
-    classify_cloud_agent_startup_error, descendant_conversation_ids_in_spawn_order,
-    descendant_conversations_in_pill_order, inherit_child_agent_settings,
-    orchestration_root_conversation_id, oz_run_url, prepare_local_oz_child_launch,
-    prepare_remote_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
+    AIConversation, AIConversationId, AgentRunDisplayStatus, AmbientAgentTaskId,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudAgentStartupIssue,
+    CloudConversationData, ConversationStatus, Harness, OrchestrationEventStreamer,
+    OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,
+    RenderableAIError, ServerApiProvider, StartAgentExecutionMode, StartAgentRequest,
+    apply_child_agent_model_override, classify_cloud_agent_startup_error,
+    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
+    inherit_child_agent_settings, orchestration_root_conversation_id, oz_run_url,
+    prepare_local_oz_child_launch, prepare_remote_child_launch, register_agent_event_consumer,
+    unregister_agent_event_consumer,
 };
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
@@ -100,6 +101,9 @@ pub(crate) enum TuiOrchestrationEvent {
         conversation: Box<AIConversation>,
         task_id: AmbientAgentTaskId,
         run_id: String,
+    },
+    RestoredRemoteChildStatusUpdated {
+        conversation_id: AIConversationId,
     },
 }
 
@@ -234,6 +238,77 @@ impl TuiOrchestrationModel {
     ) {
         self.tab_bar_paging.set_explicit_anchor(page_anchor);
         ctx.notify();
+    }
+
+    /// Fetches the authoritative lifecycle for a restored remote child once.
+    /// The completion validates the retained session and task identity, so a
+    /// late response cannot update a child whose restored tree was replaced.
+    fn fetch_restored_remote_child_status(
+        &mut self,
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move { ai_client.get_ambient_agent_task(&task_id).await },
+            move |me, result, ctx| match result {
+                Ok(task) => {
+                    let status =
+                        AgentRunDisplayStatus::from_task(&task, ctx).to_conversation_status();
+                    me.apply_restored_remote_child_status(
+                        session_id,
+                        conversation_id,
+                        task_id,
+                        status,
+                        ctx,
+                    );
+                }
+                Err(error) => {
+                    log::warn!(
+                        "TUI restore: failed to fetch remote child status for \
+                         {conversation_id:?}: {error:#}"
+                    );
+                }
+            },
+        );
+    }
+
+    fn apply_restored_remote_child_status(
+        &mut self,
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        status: ConversationStatus,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.child_session_by_conversation.get(&conversation_id) != Some(&session_id)
+            || TuiSessions::as_ref(ctx).session(session_id).is_none()
+        {
+            return;
+        }
+        let should_update = {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let Some(conversation) = history.conversation(&conversation_id) else {
+                return;
+            };
+            if !conversation.is_remote_child() || conversation.task_id() != Some(task_id) {
+                return;
+            }
+            conversation.status() != &status
+        };
+        if should_update {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.update_conversation_status(
+                    session_id.surface_id(),
+                    conversation_id,
+                    status,
+                    ctx,
+                );
+            });
+            ctx.emit(TuiOrchestrationEvent::RestoredRemoteChildStatusUpdated { conversation_id });
+        }
     }
 
     /// Focuses the retained session for a conversation and resumes automatic reveal.
@@ -845,12 +920,14 @@ impl TuiOrchestrationModel {
         &mut self,
         session_id: TuiSessionId,
         conversation_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
         // Remote placeholders stay passive; the root parent watches descendant
         // status (registered in `restore_descendant_sessions`).
         self.child_session_by_conversation
             .insert(conversation_id, session_id);
+        self.fetch_restored_remote_child_status(session_id, conversation_id, task_id, ctx);
         ctx.notify();
     }
 
