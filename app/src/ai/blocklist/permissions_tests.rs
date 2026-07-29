@@ -863,7 +863,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
 }
 
 #[test]
-fn test_can_autoexecute_command_auto_approve_bypasses_local_denylists() {
+fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_workspace_denylist() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
             convo_id,
@@ -900,25 +900,39 @@ fn test_can_autoexecute_command_auto_approve_bypasses_local_denylists() {
             history.toggle_autoexecute_override(&convo_id, terminal_view_id, ctx);
         });
 
-        for command in ["rm important.txt", "git status"] {
-            permissions.read(&app, |model, ctx| {
-                let result = model.can_autoexecute_command(
-                    &convo_id,
-                    command,
-                    EscapeChar::Backslash,
-                    false,
-                    None,
-                    Some(terminal_view_id),
-                    ctx,
-                );
-                assert!(matches!(
-                    result,
-                    CommandExecutionPermission::Allowed(
-                        CommandExecutionPermissionAllowedReason::RunToCompletion
-                    )
-                ));
-            });
-        }
+        permissions.read(&app, |model, ctx| {
+            let user_denylisted = model.can_autoexecute_command(
+                &convo_id,
+                "rm important.txt",
+                EscapeChar::Backslash,
+                false,
+                None,
+                Some(terminal_view_id),
+                ctx,
+            );
+            assert!(matches!(
+                user_denylisted,
+                CommandExecutionPermission::Allowed(
+                    CommandExecutionPermissionAllowedReason::RunToCompletion
+                )
+            ));
+
+            let workspace_denylisted = model.can_autoexecute_command(
+                &convo_id,
+                "git status",
+                EscapeChar::Backslash,
+                false,
+                None,
+                Some(terminal_view_id),
+                ctx,
+            );
+            assert!(matches!(
+                workspace_denylisted,
+                CommandExecutionPermission::Denied(
+                    CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted
+                )
+            ));
+        });
     })
 }
 
