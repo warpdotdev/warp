@@ -145,8 +145,6 @@ impl UploadArtifactExecutor {
                         conversation_id: Some(server_conversation_token),
                         title: None,
                         description,
-                        mime_type: None,
-                        thumbnail_for_artifact_uid: None,
                     };
                     let association = uploader.resolve_upload_association(&request).await?;
                     uploader.upload_with_association(request, association).await

@@ -125,11 +125,4 @@ pub struct CreateFileArtifactUploadTargetInput {
     pub mime_type: Option<String>,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<i32>,
-    /// Back-reference to the video `FILE` artifact this thumbnail represents.
-    /// Set only for PR video thumbnail uploads; the server stores it on the
-    /// thumbnail's `FileArtifactData` and uses it to exclude thumbnails from
-    /// internal surfaces and the per-conversation file cap. Added by the
-    /// warp-server GraphQL PR (`thumbnailForArtifactUid` input field).
-    #[cynic(skip_serializing_if = "Option::is_none")]
-    pub thumbnail_for_artifact_uid: Option<cynic::Id>,
 }

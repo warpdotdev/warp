@@ -34,6 +34,7 @@ fn cancellation_finalization_skips_upload_even_without_actions() {
             actions: Vec::new(),
             summary: None,
             description: None,
+            capture_thumbnail: false,
             pending_group: None,
         };
 
@@ -77,6 +78,7 @@ fn agent_discard_finalization_skips_upload() {
             actions: Vec::new(),
             summary: None,
             description: None,
+            capture_thumbnail: false,
             pending_group: None,
         };
 
@@ -121,6 +123,7 @@ fn empty_actions_finalization_is_an_error_without_upload() {
             actions: Vec::new(),
             summary: None,
             description: None,
+            capture_thumbnail: false,
             pending_group: None,
         };
 

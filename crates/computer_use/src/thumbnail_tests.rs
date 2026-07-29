@@ -88,14 +88,14 @@ fn play_button_diameter_scales_with_floor() {
     assert_eq!(play_button_diameter(50, 50), 48);
 }
 
-/// The thumbnail path gets a distinct `.thumb.png` suffix that cannot collide
-/// with the video's filepath.
+/// The thumbnail basename follows the `{artifact_uid}-thumb.png` convention the
+/// server uses to link a thumbnail back to its video, as a sibling of the video.
 #[test]
-fn thumbnail_path_appends_suffix() {
+fn thumbnail_path_uses_uid_naming_convention() {
     let video = PathBuf::from("/tmp/warp-recording-abc.mp4");
     assert_eq!(
-        thumbnail_path(&video),
-        PathBuf::from("/tmp/warp-recording-abc.mp4.thumb.png")
+        thumbnail_path(&video, "vid-uid-123"),
+        PathBuf::from("/tmp/vid-uid-123-thumb.png")
     );
 }
 
@@ -106,6 +106,7 @@ async fn generate_thumbnail_for_missing_video_errors() {
     let result = generate_video_thumbnail(
         &PathBuf::from("/nonexistent/warp-recording-missing.mp4"),
         DEFAULT_THUMBNAIL_MAX_WIDTH,
+        "vid-uid-missing",
     )
     .await;
     assert!(
@@ -155,7 +156,7 @@ async fn generate_thumbnail_for_synthetic_video() {
         .expect("ffmpeg should be available");
     assert!(status.success(), "synthetic video creation failed");
 
-    let thumb_path = generate_video_thumbnail(&video, DEFAULT_THUMBNAIL_MAX_WIDTH)
+    let thumb_path = generate_video_thumbnail(&video, DEFAULT_THUMBNAIL_MAX_WIDTH, "synthetic-uid")
         .await
         .expect("thumbnail generation should succeed");
 
@@ -188,4 +189,43 @@ async fn generate_thumbnail_for_synthetic_video() {
         center.0[0] > 200 && center.0[1] > 200 && center.0[2] > 200,
         "frame center should be the white triangle, got {center:?}"
     );
+}
+
+/// Eye-test evidence (requires ffmpeg): fabricates a `testsrc` clip, generates
+/// the thumbnail, and copies the resulting PNG to a fixed path so the burned-in
+/// play glyph can be eyeballed by a reviewer.
+///
+/// Run with:
+/// ```
+/// cargo test -p computer_use -- --ignored thumbnail
+/// ```
+#[tokio::test]
+#[ignore]
+async fn eyetest_thumbnail_glyph_render() {
+    let video = PathBuf::from("/tmp/warp-testsrc.mp4");
+    let status = tokio::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=2:size=1280x720:rate=15",
+        ])
+        .arg(&video)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .expect("ffmpeg should be available");
+    assert!(status.success(), "synthetic clip creation failed");
+
+    let thumb_path = generate_video_thumbnail(&video, DEFAULT_THUMBNAIL_MAX_WIDTH, "eyetest-uid")
+        .await
+        .expect("thumbnail generation should succeed");
+
+    let eyetest_path = PathBuf::from("/tmp/warp-thumb-eyetest.png");
+    std::fs::copy(&thumb_path, &eyetest_path).expect("copy thumbnail for eye-test");
+    let _ = std::fs::remove_file(&thumb_path);
+    assert!(eyetest_path.exists(), "eye-test PNG should exist");
+    println!("Eye-test thumbnail written to: {}", eyetest_path.display());
 }

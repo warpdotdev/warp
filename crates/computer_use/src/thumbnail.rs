@@ -28,8 +28,8 @@ pub(crate) const DEFAULT_THUMBNAIL_MAX_WIDTH: u32 = 1280;
 const PLAY_BUTTON_SUPER: u32 = 4;
 
 /// Generates a PR video thumbnail for `video` and returns the path to the
-/// written PNG (a sibling of `video` with a `.thumb.png` suffix). The caller
-/// owns cleanup of both the video and the thumbnail.
+/// written PNG (a sibling of `video` named `{artifact_uid}-thumb.png`). The
+/// caller owns cleanup of both the video and the thumbnail.
 ///
 /// The frame is chosen by ffmpeg's `thumbnail` filter (the frame whose
 /// histogram is closest to the average — deterministic for a given input) and
@@ -39,9 +39,10 @@ const PLAY_BUTTON_SUPER: u32 = 4;
 pub async fn generate_video_thumbnail(
     video: &Path,
     max_width: u32,
+    artifact_uid: &str,
 ) -> Result<PathBuf, RecordingError> {
     let frame_path = extract_representative_frame(video, max_width).await?;
-    let result = build_thumbnail_png(&frame_path, video);
+    let result = build_thumbnail_png(&frame_path, video, artifact_uid);
     // The extracted frame is an intermediate; drop it regardless of outcome.
     let _ = std::fs::remove_file(&frame_path);
     result
@@ -93,8 +94,12 @@ async fn extract_representative_frame(
 }
 
 /// Loads the extracted frame, composites the play-button glyph, and writes the
-/// final PNG to `<video>.thumb.png`.
-fn build_thumbnail_png(frame_path: &Path, video: &Path) -> Result<PathBuf, RecordingError> {
+/// final PNG to the sibling `{artifact_uid}-thumb.png`.
+fn build_thumbnail_png(
+    frame_path: &Path,
+    video: &Path,
+    artifact_uid: &str,
+) -> Result<PathBuf, RecordingError> {
     let frame = ImageReader::open(frame_path)
         .map_err(|error| RecordingError::Finalize {
             reason: format!("failed to open extracted thumbnail frame: {error}"),
@@ -105,7 +110,7 @@ fn build_thumbnail_png(frame_path: &Path, video: &Path) -> Result<PathBuf, Recor
         })?;
     let mut rgba = frame.to_rgba8();
     composite_play_button(&mut rgba);
-    let out_path = thumbnail_path(video);
+    let out_path = thumbnail_path(video, artifact_uid);
     rgba.save(&out_path)
         .map_err(|error| RecordingError::Finalize {
             reason: format!("failed to write thumbnail PNG: {error}"),
@@ -113,19 +118,15 @@ fn build_thumbnail_png(frame_path: &Path, video: &Path) -> Result<PathBuf, Recor
     Ok(out_path)
 }
 
-/// The path the finalized thumbnail PNG is written to.
-fn thumbnail_path(video: &Path) -> PathBuf {
-    // `with_extension` would replace only the final extension; append a
-    // distinct `.thumb.png` suffix so the filepath never collides with the
-    // video's (the server enforces per-conversation filepath uniqueness).
-    let mut path = video.to_path_buf();
-    let mut new_name = video
-        .file_name()
-        .map(|name| name.to_os_string())
-        .unwrap_or_default();
-    new_name.push(".thumb.png");
-    path.set_file_name(new_name);
-    path
+/// The path the finalized thumbnail PNG is written to: a sibling of `video`
+/// whose basename is `{artifact_uid}-thumb.png`. The server links a thumbnail
+/// to its video by this filename convention.
+fn thumbnail_path(video: &Path, artifact_uid: &str) -> PathBuf {
+    let file_name = format!("{artifact_uid}-thumb.png");
+    match video.parent() {
+        Some(parent) => parent.join(file_name),
+        None => PathBuf::from(file_name),
+    }
 }
 
 /// Composites a centered, semi-transparent play-button glyph (a dark disc with

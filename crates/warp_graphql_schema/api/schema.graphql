@@ -923,7 +923,6 @@ input CreateFileArtifactUploadTargetInput {
   mimeType: String
   runId: ID
   sizeBytes: Int
-  thumbnailForArtifactUid: ID
   title: String
 }
 

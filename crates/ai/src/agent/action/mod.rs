@@ -156,6 +156,11 @@ pub enum AIAgentActionType {
         /// -window_id` on the foreground-visible window. Applied by the client
         /// only when background computer use is enabled.
         window: Option<computer_use::Target>,
+        /// Whether the client should capture a PR video thumbnail on stop.
+        /// Derived from the server-owned `StartRecording.attachment_setting`
+        /// (true only for `EMBED`); the client produces a thumbnail frame on a
+        /// non-discarding stop when it is set.
+        capture_thumbnail: bool,
     },
 
     /// AI requested to stop an in-progress recording. When `should_persist` is

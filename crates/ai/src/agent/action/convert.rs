@@ -5,6 +5,7 @@ use itertools::Itertools as _;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
+use warp_multi_agent_api::message::tool_call::start_recording::AttachmentSetting;
 
 use crate::agent::FileLocations;
 use crate::agent::action::{
@@ -511,6 +512,8 @@ impl TryFrom<api::message::tool_call::StartRecording> for AIAgentActionType {
             Some(target @ computer_use::Target::Window { .. }) => Some(target),
             Some(computer_use::Target::Screen) | None => None,
         };
+        let capture_thumbnail =
+            AttachmentSetting::try_from(value.attachment_setting) == Ok(AttachmentSetting::Embed);
         Ok(AIAgentActionType::StartRecording {
             frame_rate: value.frame_rate.max(0) as u32,
             max_duration: limits
@@ -526,6 +529,7 @@ impl TryFrom<api::message::tool_call::StartRecording> for AIAgentActionType {
             description: (!value.description.trim().is_empty()).then_some(value.description),
             playback_speed_multiplier,
             window,
+            capture_thumbnail,
         })
     }
 }
@@ -807,3 +811,7 @@ impl From<api::message::tool_call::insert_review_comments::Comment> for InsertRe
         }
     }
 }
+
+#[cfg(test)]
+#[path = "convert_tests.rs"]
+mod tests;

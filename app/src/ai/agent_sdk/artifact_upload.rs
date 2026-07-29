@@ -31,15 +31,6 @@ pub(crate) struct FileArtifactUploadRequest {
     /// Short badge-visible title for the artifact (e.g. a recording title).
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
-    /// Explicit MIME type override. When set, it is sent to the server instead
-    /// of the type inferred from the file's magic bytes (e.g. forcing
-    /// `image/png` for a generated thumbnail whose temp path suffix is not a
-    /// plain `.png`). `None` lets the uploader infer the type from the file.
-    pub(crate) mime_type: Option<String>,
-    /// Back-reference to the video `FILE` artifact a thumbnail represents. Set
-    /// only for PR video thumbnail uploads; the server stores it on the
-    /// thumbnail's file artifact data. `None` for every other upload.
-    pub(crate) thumbnail_for_artifact_uid: Option<String>,
 }
 
 impl TryFrom<UploadArtifactArgs> for FileArtifactUploadRequest {
@@ -57,8 +48,6 @@ impl TryFrom<UploadArtifactArgs> for FileArtifactUploadRequest {
             conversation_id: value.conversation_id.map(ServerConversationToken::new),
             title: None,
             description: value.description,
-            mime_type: None,
-            thumbnail_for_artifact_uid: None,
         })
     }
 }
@@ -125,21 +114,12 @@ impl FileArtifactUploader {
             path,
             title,
             description,
-            mime_type,
-            thumbnail_for_artifact_uid,
             ..
         } = request;
 
         let artifact = self.prepare_upload_artifact(path).await?;
         let create_response = self
-            .create_upload_target(
-                association,
-                title,
-                description,
-                mime_type,
-                thumbnail_for_artifact_uid,
-                &artifact,
-            )
+            .create_upload_target(association, title, description, &artifact)
             .await?;
 
         let checksum = self
@@ -166,8 +146,6 @@ impl FileArtifactUploader {
         association: ResolvedUploadAssociation,
         title: Option<String>,
         description: Option<String>,
-        mime_type_override: Option<String>,
-        thumbnail_for_artifact_uid: Option<String>,
         artifact: &PreparedUploadArtifact,
     ) -> Result<CreateFileArtifactUploadResponse> {
         self.ai_client
@@ -180,9 +158,8 @@ impl FileArtifactUploader {
                 filepath: artifact.filepath.clone(),
                 title,
                 description,
-                mime_type: Some(mime_type_override.unwrap_or_else(|| artifact.mime_type.clone())),
+                mime_type: Some(artifact.mime_type.clone()),
                 size_bytes: artifact.graphql_size_bytes(),
-                thumbnail_for_artifact_uid,
             })
             .await
             .context("Failed to create file artifact upload target")

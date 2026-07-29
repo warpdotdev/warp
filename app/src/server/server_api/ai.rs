@@ -640,11 +640,6 @@ pub struct CreateFileArtifactUploadRequest {
     pub description: Option<String>,
     pub mime_type: Option<String>,
     pub size_bytes: Option<i32>,
-    /// Back-reference to the video `FILE` artifact this thumbnail represents.
-    /// `Some` only for PR video thumbnail uploads; the server stores it on the
-    /// thumbnail's file artifact data and uses it to hide thumbnails from
-    /// internal surfaces and the per-conversation file cap.
-    pub thumbnail_for_artifact_uid: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -2670,7 +2665,6 @@ impl AIClient for ServerApi {
                 description: request.description,
                 mime_type: request.mime_type,
                 size_bytes: request.size_bytes,
-                thumbnail_for_artifact_uid: request.thumbnail_for_artifact_uid.map(cynic::Id::new),
             },
             request_context: get_request_context(),
         };

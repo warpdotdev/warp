@@ -64,10 +64,10 @@ fn format_upload_error(err: &anyhow::Error) -> String {
 ///
 /// Generates a thumbnail PNG from the finalized `video_path` (a representative,
 /// downscaled frame with a play-button glyph burned in), then uploads it as a
-/// separate `FILE` artifact that back-references `video_artifact_uid` via the
-/// `thumbnailForArtifactUid` input. The thumbnail uses a distinct `.thumb.png`
-/// filepath and an explicit `image/png` MIME type. The local thumbnail file is
-/// removed whether the upload succeeds or fails.
+/// separate `FILE` artifact. The server links the thumbnail to its video by the
+/// `{video_artifact_uid}-thumb.png` filename convention rather than a schema
+/// back-reference. The local thumbnail file is removed whether the upload
+/// succeeds or fails.
 ///
 /// Any error is returned to the caller, which logs and discards it so the video
 /// upload and PR creation are never blocked by a missing or failed thumbnail.
@@ -77,7 +77,8 @@ async fn upload_recording_thumbnail(
     uploader: &FileArtifactUploader,
     conversation_id: Option<ServerConversationToken>,
 ) -> anyhow::Result<()> {
-    let thumbnail_path = computer_use::generate_video_thumbnail(video_path).await?;
+    let thumbnail_path =
+        computer_use::generate_video_thumbnail(video_path, video_artifact_uid).await?;
     let upload_result = async {
         let request = FileArtifactUploadRequest {
             path: thumbnail_path.clone(),
@@ -85,8 +86,6 @@ async fn upload_recording_thumbnail(
             conversation_id,
             title: None,
             description: None,
-            mime_type: Some("image/png".to_string()),
-            thumbnail_for_artifact_uid: Some(video_artifact_uid.to_string()),
         };
         let association = uploader.resolve_upload_association(&request).await?;
         uploader.upload_with_association(request, association).await
@@ -131,6 +130,7 @@ async fn finalize_recording(
         handle,
         actions,
         frame_rate,
+        capture_thumbnail,
         ..
     } = recording;
     let recorder = computer_use::create_recorder();
@@ -186,22 +186,20 @@ async fn finalize_recording(
         conversation_id: server_conversation_token.clone(),
         title: recording.summary.clone(),
         description: recording.description.clone(),
-        mime_type: None,
-        thumbnail_for_artifact_uid: None,
     };
     let upload_result = async {
         let association = uploader.resolve_upload_association(&request).await?;
         uploader.upload_with_association(request, association).await
     }
     .await;
-    // Best-effort PR video thumbnail: always attempt to generate and upload a
-    // thumbnail frame after the video uploads. The thumbnail is a play-button
-    // composite uploaded as a separate PNG file artifact that back-references the
-    // video. The server-side feature flag and EMBED-mode setting gate whether it
-    // is ever published or rendered in PRs, so unconditional capture here is safe.
-    // A missing/failed thumbnail must never block the video upload or PR creation,
-    // so any error is logged and dropped.
-    if let Ok(upload) = &upload_result
+    // Best-effort PR video thumbnail: when the server requested one
+    // (`capture_thumbnail`) and the video uploaded, extract a representative
+    // frame, composite a play-button glyph, and upload it as a separate PNG file
+    // artifact linked to the video by the filename convention. A missing/failed
+    // thumbnail must never block the video upload or PR creation, so any error is
+    // logged and dropped.
+    if capture_thumbnail
+        && let Ok(upload) = &upload_result
         && let Err(error) = upload_recording_thumbnail(
             &thumbnail_source_path,
             &upload.artifact.artifact_uid,
