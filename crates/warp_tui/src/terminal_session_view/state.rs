@@ -403,8 +403,7 @@ impl TuiTerminalSessionState {
                     BlockingInputSource::AskQuestion(_)
                     | BlockingInputSource::Permission(_)
                     | BlockingInputSource::Orchestration(_)
-                    | BlockingInputSource::Handoff(_)
-                    | BlockingInputSource::GrokOAuth(_) => TuiInputTarget::Disabled,
+                    | BlockingInputSource::Handoff(_) => TuiInputTarget::Disabled,
                 },
                 TuiInteractionState::StartingShell => TuiInputTarget::Disabled,
                 TuiInteractionState::AgentEditor(_) => TuiInputTarget::AgentEditor,
@@ -497,8 +496,7 @@ impl TuiTerminalSessionState {
                 BlockingInputSource::AskQuestion(_)
                 | BlockingInputSource::Permission(_)
                 | BlockingInputSource::Orchestration(_)
-                | BlockingInputSource::Handoff(_)
-                | BlockingInputSource::GrokOAuth(_),
+                | BlockingInputSource::Handoff(_),
             )
             | TuiInteractionState::StartingShell
             | TuiInteractionState::Pty(TuiPtyState::Process) => return Vec::new(),

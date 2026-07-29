@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai::LLMProvider;
+use ai::api_keys::ApiKeyManager;
 use chrono::NaiveDate;
 use instant::Instant;
 use tempfile::TempDir;
@@ -71,7 +72,6 @@ use super::{
     render_mcp_menu_footer, voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
-use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
@@ -160,6 +160,7 @@ fn mcp_menu_footer_replaces_status_with_controls() {
         });
     });
 }
+
 #[test]
 fn mcp_menu_footer_hides_unavailable_primary_control() {
     App::test((), |mut app| async move {
@@ -177,6 +178,34 @@ fn mcp_menu_footer_hides_unavailable_primary_control() {
                 vec!["Esc to close".to_owned()],
             );
         });
+    });
+}
+
+#[test]
+fn api_keys_slash_command_opens_inline_and_clears_the_input() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.input_view
+                .update(ctx, |input, ctx| input.set_text("/api-keys", ctx));
+            view.execute_tui_slash_command(&slash_commands::API_KEYS, None, ctx);
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(view.api_keys_menu.as_ref(ctx).is_open(ctx));
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ApiKeys
+            );
+            assert!(view.input_view.as_ref(ctx).is_empty(ctx));
+        });
+        let rendered = render_session(&mut app, &view, 100, 40).join("\n");
+        assert!(rendered.contains("API keys"), "{rendered}");
+        assert!(rendered.contains("Anthropic API key"), "{rendered}");
+        assert!(rendered.contains("enter to set api key"), "{rendered}");
+        assert!(!rendered.contains("ctrl + x"), "{rendered}");
+        assert!(!rendered.contains("/api-keys"), "{rendered}");
     });
 }
 
@@ -218,6 +247,53 @@ fn mcp_menu_footer_hides_unavailable_logout_control() {
                 vec!["Enter to start  Esc to close".to_owned()],
             );
         });
+    });
+}
+
+#[test]
+fn ctrl_x_clears_the_selected_api_key_through_the_real_keymap() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        ApiKeyManager::handle(&app)
+            .update(&mut app, |manager, ctx| {
+                manager.persist_provider_key(
+                    LLMProvider::Anthropic,
+                    Some("test-secret".to_owned()),
+                    ctx,
+                )
+            })
+            .unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::API_KEYS, None, ctx);
+            ctx.focus(&view.input_view);
+        });
+        let before_clear = render_session(&mut app, &view, 100, 40).join("\n");
+        assert!(before_clear.contains("ctrl + x"), "{before_clear}");
+
+        let (window_id, responder_chain) = app.read(|ctx| {
+            let window_id = view.window_id(ctx);
+            let focused = ctx.focused_view_id(window_id).unwrap();
+            assert_eq!(focused, view.as_ref(ctx).input_view.id());
+            (window_id, ctx.view_ancestors(window_id, focused))
+        });
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &responder_chain,
+                &Keystroke::parse("ctrl-x").unwrap(),
+                false,
+            )
+            .unwrap();
+
+        assert!(handled);
+        app.read(|ctx| {
+            assert_eq!(ApiKeyManager::as_ref(ctx).keys().anthropic, None);
+            assert!(view.as_ref(ctx).api_keys_menu.as_ref(ctx).is_open(ctx));
+        });
+        let after_clear = render_session(&mut app, &view, 100, 40).join("\n");
+        assert!(!after_clear.contains("ctrl + x"), "{after_clear}");
     });
 }
 
@@ -820,89 +896,6 @@ fn tui_cli_shell_command_uses_channel_entry_points() {
     );
 }
 
-#[test]
-fn provider_api_key_shell_command_uses_shared_tui_launcher() {
-    assert_eq!(
-        super::provider_api_key_shell_command(
-            Channel::Local,
-            LLMProvider::Anthropic,
-            super::ProviderApiKeyOperation::Set,
-        ),
-        Some("./script/run-tui -- --set-provider-api-key anthropic".to_owned())
-    );
-    assert_eq!(
-        super::provider_api_key_shell_command(
-            Channel::Local,
-            LLMProvider::Anthropic,
-            super::ProviderApiKeyOperation::Clear,
-        ),
-        Some("./script/run-tui -- --clear-provider-api-key anthropic".to_owned())
-    );
-    assert_eq!(
-        super::provider_api_key_shell_command(
-            Channel::Stable,
-            LLMProvider::Unknown,
-            super::ProviderApiKeyOperation::Set,
-        ),
-        None
-    );
-    assert_eq!(
-        super::provider_api_key_shell_command(
-            Channel::Stable,
-            LLMProvider::Xai,
-            super::ProviderApiKeyOperation::Set,
-        ),
-        None,
-        "Grok OAuth must stay in the active TUI process"
-    );
-}
-
-#[test]
-fn grok_oauth_block_exclusively_owns_input_until_escape() {
-    App::test((), |mut app| async move {
-        app.update(crate::keybindings::init);
-        let fixture = focus_test_fixture(&mut app);
-        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        let block = view.update(&mut app, |view, ctx| {
-            view.input_view.update(ctx, |input, ctx| {
-                input.set_text("/add-api-key grok", ctx);
-                input.clear(ctx);
-            });
-            let block = ctx.add_typed_action_tui_view(new_block);
-            view.install_grok_oauth_block(block.clone(), ctx);
-            block
-        });
-
-        view.read(&app, |session, ctx| {
-            let state = session.session_state(ctx).expect("session state resolves");
-            assert!(matches!(
-                state.blocking_input_source(),
-                Some(BlockingInputSource::GrokOAuth(active)) if active.id() == block.id()
-            ));
-            assert_eq!(state.input_target(), TuiInputTarget::Disabled);
-            assert!(session.child_view_ids(ctx).contains(&block.id()));
-            assert!(session.input_view.as_ref(ctx).is_empty(ctx));
-        });
-        let rendered = render_session(&mut app, &view, 80, 40).join("\n");
-        assert!(rendered.contains("Connect Grok"), "{rendered}");
-        assert!(rendered.contains("Esc to close"), "{rendered}");
-        assert!(!rendered.contains("Ask the agent anything"), "{rendered}");
-        assert!(!rendered.contains("for commands"), "{rendered}");
-
-        block.update(&mut app, |block, ctx| {
-            block.handle_action(&TuiGrokOAuthBlockAction::Cancel, ctx);
-        });
-        view.read(&app, |session, ctx| {
-            assert!(session.grok_oauth.is_none());
-            let state = session.session_state(ctx).expect("session state resolves");
-            assert!(!state.has_blocking_interaction());
-            assert_eq!(state.input_target(), TuiInputTarget::AgentEditor);
-            assert!(session.input_view.as_ref(ctx).is_empty(ctx));
-        });
-        let rendered = render_session(&mut app, &view, 80, 40).join("\n");
-        assert!(!rendered.contains("Connect Grok"), "{rendered}");
-    });
-}
 #[test]
 fn log_bundle_failure_hint_does_not_hardcode_a_frontend_path() {
     assert!(!LOG_BUNDLE_FAILED_HINT.contains("warp.log"));
