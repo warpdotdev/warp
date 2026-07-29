@@ -62,6 +62,7 @@ fn caps_lock_and_shift_apply_xor_casing_to_ascii_text() {
 #[test]
 fn backend_produced_text_is_not_recased() {
     let cases = [
+        (KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT), "A"),
         (KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SHIFT), "a"),
         (
             KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()),
@@ -152,12 +153,17 @@ fn non_shift_modifiers_are_preserved_from_the_key_event() {
 
 #[test]
 fn shifted_letter_preserves_case_and_base_key() {
+    // Backends disagree on which character a shifted letter reports: terminals
+    // speaking the Kitty protocol send the unshifted codepoint and leave the
+    // casing to the decoder, while the Windows console sends the character the
+    // layout already produced. Both must decode to the same keystroke.
+    let reported = if cfg!(windows) { 'A' } else { 'a' };
     let Some(TuiEvent::KeyDown {
         keystroke,
         chars,
         details,
         ..
-    }) = key(KeyCode::Char('a'), KeyModifiers::SHIFT)
+    }) = key(KeyCode::Char(reported), KeyModifiers::SHIFT)
     else {
         panic!("expected KeyDown");
     };
