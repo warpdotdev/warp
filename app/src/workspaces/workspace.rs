@@ -910,7 +910,7 @@ pub struct LinkSharingSettings {
     pub direct_link_sharing_enabled: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EnterpriseSecretRegex {
     pub pattern: String,
     #[serde(default)]
@@ -971,36 +971,219 @@ pub struct WorkspaceSettings {
     pub default_host_slug: Option<String>,
 }
 
+/// A workspace-governable setting carried on [`TeamSettings`]: the effective
+/// `value` plus whether the workspace layer enforces it (mirrors the server's
+/// `*SettingInfo` wrappers). The enforcement bit is preserved so future admin UI
+/// can distinguish workspace-enforced values from team-owned ones.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EnforceableSetting<T> {
+    pub value: T,
+    #[serde(default)]
+    pub is_enforced_by_workspace: bool,
+}
+
+/// A list setting split by the layer that contributed each entry (mirrors the
+/// server's `StringListSettingInfo` / `SecretRedactionRegexListInfo`). `values`
+/// is the authoritative merged result; `workspace_entries` / `team_entries` are
+/// preserved so future admin UI can present the layers separately.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SplitListSetting<T> {
+    pub values: Vec<T>,
+    #[serde(default)]
+    pub workspace_entries: Vec<T>,
+    #[serde(default)]
+    pub team_entries: Vec<T>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamAiPermissionsSettings {
+    pub allow_ai_in_remote_sessions: EnforceableSetting<bool>,
+    pub remote_session_regex_list: SplitListSetting<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSecretRedactionSettings {
+    pub enabled: EnforceableSetting<bool>,
+    pub regexes: SplitListSetting<EnterpriseSecretRegex>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamAiAutonomySettings {
+    pub apply_code_diffs: EnforceableSetting<Option<ActionPermission>>,
+    pub read_files: EnforceableSetting<Option<ActionPermission>>,
+    pub create_plans: EnforceableSetting<Option<ActionPermission>>,
+    pub execute_commands: EnforceableSetting<Option<ActionPermission>>,
+    pub write_to_pty: EnforceableSetting<Option<WriteToPtyPermission>>,
+    pub computer_use: EnforceableSetting<Option<ComputerUsePermission>>,
+    pub read_files_allowlist: SplitListSetting<String>,
+    pub execute_commands_allowlist: SplitListSetting<String>,
+    pub execute_commands_denylist: SplitListSetting<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamLinkSharingSettings {
+    pub anyone_with_link_sharing_enabled: EnforceableSetting<bool>,
+    pub direct_link_sharing_enabled: EnforceableSetting<bool>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSandboxedAgentSettings {
+    pub execute_commands_denylist: SplitListSetting<String>,
+}
+
 /// The effective settings that apply to a team, combining the workspace layer
 /// with the team's own configuration.
 ///
 /// This is intentionally a distinct type from [`WorkspaceSettings`] rather than
-/// an alias: it is sourced from the server's effective `Team.settings` (reading
-/// the effective `value` out of each workspace-governable group) and, unlike
-/// `WorkspaceSettings`, does not carry the workspace-scoped
-/// `is_invite_link_enabled` / `is_discoverable` flags (those live on
-/// [`WorkspaceSettings`] and are surfaced directly on [`super::team::Team`]).
+/// an alias: it is sourced from the server's effective `Team.settings`. Each
+/// workspace-governable group keeps both its effective value **and** the
+/// `is_enforced_by_workspace` / workspace-vs-team split metadata (via
+/// [`EnforceableSetting`] / [`SplitListSetting`]) so future admin UI can recover
+/// those details. Unlike `WorkspaceSettings`, it does not carry the
+/// workspace-scoped `is_invite_link_enabled` / `is_discoverable` flags (those
+/// live on [`WorkspaceSettings`] and are surfaced directly on
+/// [`super::team::Team`]).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamSettings {
+    pub ugc_collection: EnforceableSetting<UgcCollectionEnablementSetting>,
+    pub cloud_conversation_storage: EnforceableSetting<AdminEnablementSetting>,
+    pub codebase_context: EnforceableSetting<AdminEnablementSetting>,
+    pub ai_permissions: TeamAiPermissionsSettings,
+    pub secret_redaction: TeamSecretRedactionSettings,
+    pub ai_autonomy: TeamAiAutonomySettings,
+    pub link_sharing: TeamLinkSharingSettings,
+    pub sandboxed_agent: TeamSandboxedAgentSettings,
     pub llm_settings: LlmSettings,
-    pub team_byo: Option<TeamByoSettings>,
     pub telemetry_settings: TelemetrySettings,
-    pub ugc_collection_settings: UgcCollectionSettings,
-    pub cloud_conversation_storage_settings: CloudConversationStorageSettings,
-    pub link_sharing_settings: LinkSharingSettings,
-    pub secret_redaction_settings: SecretRedactionSettings,
-    pub ai_permissions_settings: AiPermissionsSettings,
-    pub ai_autonomy_settings: AiAutonomySettings,
     pub usage_based_pricing_settings: UsageBasedPricingSettings,
     pub addon_credits_settings: AddonCreditsSettings,
-    pub codebase_context_settings: CodebaseContextSettings,
-    pub sandboxed_agent_settings: Option<SandboxedAgentSettings>,
     /// The team-level agent attribution setting. When `Enable` or `Disable`, the
     /// user toggle is locked. When `RespectUserSetting` (or absent), the user can choose.
     #[serde(default)]
     pub enable_warp_attribution: AdminEnablementSetting,
     #[serde(default)]
     pub default_host_slug: Option<String>,
+    pub team_byo: Option<TeamByoSettings>,
+}
+
+impl From<WorkspaceSettings> for TeamSettings {
+    /// Migrates a legacy cached `WorkspaceSettings` (the shape the team settings
+    /// cache stored before teams had their own effective settings) into a
+    /// `TeamSettings`. The workspace layer had no enforcement/split metadata, so
+    /// enforcement bits default to `false` and the split entry lists are empty;
+    /// the merged values are carried over so cached LLM/policy values survive
+    /// until the next metadata refresh.
+    fn from(ws: WorkspaceSettings) -> Self {
+        let path_strings = |paths: Option<Vec<PathBuf>>| SplitListSetting {
+            values: paths
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+            ..Default::default()
+        };
+        let predicate_strings =
+            |predicates: Option<Vec<AgentModeCommandExecutionPredicate>>| SplitListSetting {
+                values: predicates
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| p.to_string())
+                    .collect(),
+                ..Default::default()
+            };
+        Self {
+            ugc_collection: EnforceableSetting {
+                value: ws.ugc_collection_settings.setting,
+                is_enforced_by_workspace: false,
+            },
+            cloud_conversation_storage: EnforceableSetting {
+                value: ws.cloud_conversation_storage_settings.setting,
+                is_enforced_by_workspace: false,
+            },
+            codebase_context: EnforceableSetting {
+                value: ws.codebase_context_settings.setting,
+                is_enforced_by_workspace: false,
+            },
+            ai_permissions: TeamAiPermissionsSettings {
+                allow_ai_in_remote_sessions: EnforceableSetting {
+                    value: ws.ai_permissions_settings.allow_ai_in_remote_sessions,
+                    is_enforced_by_workspace: false,
+                },
+                remote_session_regex_list: SplitListSetting {
+                    values: ws
+                        .ai_permissions_settings
+                        .remote_session_regex_list
+                        .iter()
+                        .map(|r| r.as_str().to_string())
+                        .collect(),
+                    ..Default::default()
+                },
+            },
+            secret_redaction: TeamSecretRedactionSettings {
+                enabled: EnforceableSetting {
+                    value: ws.secret_redaction_settings.enabled,
+                    is_enforced_by_workspace: false,
+                },
+                regexes: SplitListSetting {
+                    values: ws.secret_redaction_settings.regexes,
+                    ..Default::default()
+                },
+            },
+            ai_autonomy: TeamAiAutonomySettings {
+                apply_code_diffs: EnforceableSetting {
+                    value: ws.ai_autonomy_settings.apply_code_diffs_setting,
+                    is_enforced_by_workspace: false,
+                },
+                read_files: EnforceableSetting {
+                    value: ws.ai_autonomy_settings.read_files_setting,
+                    is_enforced_by_workspace: false,
+                },
+                create_plans: EnforceableSetting::default(),
+                execute_commands: EnforceableSetting {
+                    value: ws.ai_autonomy_settings.execute_commands_setting,
+                    is_enforced_by_workspace: false,
+                },
+                write_to_pty: EnforceableSetting {
+                    value: ws.ai_autonomy_settings.write_to_pty_setting,
+                    is_enforced_by_workspace: false,
+                },
+                computer_use: EnforceableSetting {
+                    value: ws.ai_autonomy_settings.computer_use_setting,
+                    is_enforced_by_workspace: false,
+                },
+                read_files_allowlist: path_strings(ws.ai_autonomy_settings.read_files_allowlist),
+                execute_commands_allowlist: predicate_strings(
+                    ws.ai_autonomy_settings.execute_commands_allowlist,
+                ),
+                execute_commands_denylist: predicate_strings(
+                    ws.ai_autonomy_settings.execute_commands_denylist,
+                ),
+            },
+            link_sharing: TeamLinkSharingSettings {
+                anyone_with_link_sharing_enabled: EnforceableSetting {
+                    value: ws.link_sharing_settings.anyone_with_link_sharing_enabled,
+                    is_enforced_by_workspace: false,
+                },
+                direct_link_sharing_enabled: EnforceableSetting {
+                    value: ws.link_sharing_settings.direct_link_sharing_enabled,
+                    is_enforced_by_workspace: false,
+                },
+            },
+            sandboxed_agent: TeamSandboxedAgentSettings {
+                execute_commands_denylist: predicate_strings(
+                    ws.sandboxed_agent_settings
+                        .and_then(|s| s.execute_commands_denylist),
+                ),
+            },
+            llm_settings: ws.llm_settings,
+            telemetry_settings: ws.telemetry_settings,
+            usage_based_pricing_settings: ws.usage_based_pricing_settings,
+            addon_credits_settings: ws.addon_credits_settings,
+            enable_warp_attribution: ws.enable_warp_attribution,
+            default_host_slug: ws.default_host_slug,
+            team_byo: ws.team_byo,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

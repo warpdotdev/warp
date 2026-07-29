@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::workspace::{
     BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings, WorkspaceInviteCode,
+    WorkspaceSettings,
 };
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
@@ -110,6 +111,33 @@ pub struct TeamSettingsCache {
     pub is_invite_link_enabled: bool,
     #[serde(default)]
     pub is_discoverable: bool,
+}
+
+impl TeamSettingsCache {
+    /// Decodes a cached team-settings JSON row, handling both the current shape
+    /// and the legacy shape.
+    ///
+    /// Rows written by releases before teams had their own effective settings
+    /// serialized the team's `WorkspaceSettings` directly at the top level, which
+    /// has no `settings` key. Deserializing those directly into
+    /// `TeamSettingsCache` would "succeed" (every field is `#[serde(default)]`)
+    /// but silently drop all cached LLM/policy values. This detects the legacy
+    /// shape by the absence of the `settings` key and migrates it — including the
+    /// `is_invite_link_enabled` / `is_discoverable` flags — so cached values
+    /// survive until the next metadata refresh.
+    pub fn from_cached_json(json: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(json).ok()?;
+        if value.get("settings").is_some() {
+            serde_json::from_value(value).ok()
+        } else {
+            let legacy: WorkspaceSettings = serde_json::from_value(value).ok()?;
+            Some(Self {
+                is_invite_link_enabled: legacy.is_invite_link_enabled,
+                is_discoverable: legacy.is_discoverable,
+                settings: legacy.into(),
+            })
+        }
+    }
 }
 
 impl Team {
