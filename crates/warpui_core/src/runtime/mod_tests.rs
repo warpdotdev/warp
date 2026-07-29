@@ -784,6 +784,17 @@ fn terminal_screen_lifecycle_can_skip_all_key_reporting() {
 }
 
 #[test]
+fn terminal_screen_lifecycle_reconfigures_modifier_reporting() {
+    let mut output = Vec::new();
+    set_terminal_keyboard_enhancement_flags(&mut output, false).unwrap();
+    assert_eq!(output, b"\x1b[=3;1u");
+
+    output.clear();
+    set_terminal_keyboard_enhancement_flags(&mut output, true).unwrap();
+    assert_eq!(output, b"\x1b[=15;1u");
+}
+
+#[test]
 fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
     let mut enter_output = Vec::new();
     enter_terminal_screen(&mut enter_output, false, true).unwrap();

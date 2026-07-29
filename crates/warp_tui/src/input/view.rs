@@ -36,8 +36,10 @@ use warpui::SingletonEntity as _;
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
+use warpui_core::event::KeyState;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, Keystroke};
+use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, TuiView, TypedActionView,
@@ -59,7 +61,9 @@ use crate::keybindings::{
 use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
-use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource};
+use crate::voice_input::{
+    TuiVoiceInputEvent, TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource,
+};
 
 /// Keymap-context flag set while the input has contextual Escape behavior.
 ///
@@ -69,6 +73,8 @@ use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStart
 /// after the menu branch.
 const INPUT_HANDLES_ESCAPE_FLAG: &str = "TuiInputHandlesEscape";
 const SHELL_COMPLETION_AVAILABLE_FLAG: &str = "TuiShellCompletionAvailable";
+pub(crate) const MCP_MENU_ACTIVE_FLAG: &str = "TuiMcpMenuActive";
+pub(crate) const MCP_LOGOUT_BINDING_NAME: &str = "tui:input:mcp_logout";
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,6 +110,14 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("TuiInputView") & id!(INPUT_HANDLES_ESCAPE_FLAG))
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("escape"),
+        EditableBinding::new(
+            MCP_LOGOUT_BINDING_NAME,
+            "Log out of the selected MCP server and remove its credentials",
+            TuiInputAction::LogOutSelectedMcp,
+        )
+        .with_context_predicate(id!("TuiInputView") & id!(MCP_MENU_ACTIVE_FLAG))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("ctrl-r"),
         EditableBinding::new(
             "tui:input:complete_shell_command",
             "Complete the shell command",
@@ -170,6 +184,8 @@ pub enum TuiInputAction {
     Submit,
     /// Handle contextual input Escape behavior, prioritizing an open inline menu.
     HandleEscape,
+    /// Log out of the selected MCP server and remove its stored credentials.
+    LogOutSelectedMcp,
     /// Request or advance shell-command completion.
     Complete,
     /// Apply an editing command shared with generic TUI editors.
@@ -316,7 +332,16 @@ impl TuiInputView {
         // on the config (shell-mode gutter/border), so every event re-renders.
         ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
-        ctx.subscribe_to_model(&voice_input, |_, _, _, ctx| ctx.notify());
+        // Only the voice lifecycle state reaches this view's render (the
+        // suppressed shell gutter and the Escape keymap flag). Transcribed text
+        // arrives through `insert_text`, and failure or cancellation notices
+        // render in the session footer, so neither repaints the input.
+        ctx.subscribe_to_model(&voice_input, |_, _, event, ctx| {
+            if matches!(event, TuiVoiceInputEvent::StateChanged(_)) {
+                ctx.notify();
+            }
+        });
+
         Self {
             model,
             input_mode,
@@ -409,6 +434,12 @@ impl TuiInputView {
         self.voice_input.as_ref(ctx).animation_clock()
     }
 
+    /// The physical modifier holding the current recording open, set only while
+    /// a hold-to-talk press started it.
+    pub(crate) fn voice_hold_key(&self, ctx: &AppContext) -> Option<KeyCode> {
+        self.voice_input.as_ref(ctx).hold_key()
+    }
+
     pub(crate) fn start_voice_input(
         &mut self,
         available: bool,
@@ -423,6 +454,23 @@ impl TuiInputView {
     pub(crate) fn stop_voice_input(&mut self, ctx: &mut ViewContext<Self>) {
         self.voice_input
             .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+    }
+
+    pub(crate) fn stop_active_voice_hold(&mut self, ctx: &mut ViewContext<Self>) {
+        self.voice_input
+            .update(ctx, |voice_input, ctx| voice_input.stop_hold(ctx));
+    }
+
+    pub(crate) fn handle_voice_hold_key(
+        &mut self,
+        key: KeyCode,
+        state: KeyState,
+        available: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.voice_input.update(ctx, |voice_input, ctx| {
+            voice_input.handle_hold_key(key, state, available, ctx);
+        });
     }
 
     /// Returns a handle to the backing [`CodeEditorModel`].
@@ -621,6 +669,7 @@ impl TuiView for TuiInputView {
                 || (vim_mode_enabled
                     && (!matches!(vim_state.mode, VimMode::Normal)
                         || !vim_state.showcmd.is_empty())),
+            mcp_menu_active: suggestions_mode == TuiInputSuggestionsMode::Mcp,
             plan_toggle_available: self.plan_toggle_available(ctx),
             keyboard_enhancement_supported: self.keyboard_enhancement_supported,
             shell_completion_available: self.is_shell_mode(ctx),
@@ -648,6 +697,7 @@ impl TuiView for TuiInputView {
 #[derive(Clone, Copy, Debug, Default)]
 struct InputKeymapContextConfig {
     input_handles_escape: bool,
+    mcp_menu_active: bool,
     plan_toggle_available: bool,
     keyboard_enhancement_supported: bool,
     shell_completion_available: bool,
@@ -658,6 +708,9 @@ fn input_keymap_context(config: InputKeymapContextConfig) -> keymap::Context {
     context.set.insert(TuiInputView::ui_name());
     if config.input_handles_escape {
         context.set.insert(INPUT_HANDLES_ESCAPE_FLAG);
+    }
+    if config.mcp_menu_active {
+        context.set.insert(MCP_MENU_ACTIVE_FLAG);
     }
     if config.plan_toggle_available {
         context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
@@ -749,6 +802,7 @@ impl TypedActionView for TuiInputView {
                 self.handle_escape(ctx);
                 TuiEditorInteractionOutcome::FollowCursor
             }
+            TuiInputAction::LogOutSelectedMcp => TuiEditorInteractionOutcome::PreserveViewport,
             TuiInputAction::Complete => {
                 if self.is_shell_mode(ctx) {
                     ctx.emit(TuiInputViewEvent::RequestShellCompletion);
@@ -1180,6 +1234,7 @@ impl TuiInputView {
             TuiInputAction::EditorCommand(TuiEditorCommand::MoveUp | TuiEditorCommand::MoveDown)
                 | TuiInputAction::Submit
                 | TuiInputAction::HandleEscape
+                | TuiInputAction::LogOutSelectedMcp
                 | TuiInputAction::Complete
         ) {
             return false;
@@ -1212,6 +1267,12 @@ impl TuiInputView {
             TuiInputAction::Submit => {
                 if let Some(accepted) = inline_menu.accept(ctx) {
                     self.route_inline_menu_acceptance(accepted, ctx);
+                }
+            }
+            TuiInputAction::LogOutSelectedMcp => {
+                if let Some(TuiInlineMenuAccepted::Mcp(action)) = inline_menu.accept_secondary(ctx)
+                {
+                    ctx.emit(TuiInputViewEvent::AcceptedMcp(action));
                 }
             }
             TuiInputAction::HandleEscape => return self.handle_escape(ctx),

@@ -74,8 +74,8 @@ impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
         None
     }
 
-    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
-        None
+    fn input_argument_hint_text(&self, ctx: &AppContext) -> Option<&'static str> {
+        self.as_ref(ctx).input_hint_text(ctx)
     }
 
     fn select_previous(&self, ctx: &mut AppContext) {
@@ -87,7 +87,13 @@ impl TuiInlineMenuHandle for ModelHandle<TuiMcpMenuModel> {
     }
 
     fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
-        self.update(ctx, |model, ctx| model.accept_selected(ctx))
+        self.as_ref(ctx)
+            .accept_selected(ctx)
+            .map(TuiInlineMenuAccepted::Mcp)
+    }
+    fn accept_secondary(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.as_ref(ctx)
+            .logout_selected(ctx)
             .map(TuiInlineMenuAccepted::Mcp)
     }
 
@@ -381,6 +387,10 @@ pub(crate) trait TuiInlineMenuHandle {
     fn select_next(&self, ctx: &mut AppContext);
     /// Accepts the selected row.
     fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted>;
+    /// Accepts the selected row's optional secondary action.
+    fn accept_secondary(&self, _ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        None
+    }
     /// Dismisses the menu.
     fn dismiss(&self, ctx: &mut AppContext);
     /// Returns the menu's presentation snapshot.
@@ -488,6 +498,13 @@ impl TuiInlineMenu {
 
     pub(crate) fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
         let result = self.handle.accept(ctx);
+        if result.is_some() {
+            reset_hover_states(&self.item_mouse_states);
+        }
+        result
+    }
+    pub(crate) fn accept_secondary(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        let result = self.handle.accept_secondary(ctx);
         if result.is_some() {
             reset_hover_states(&self.item_mouse_states);
         }
@@ -1146,15 +1163,10 @@ pub(crate) fn keep_selected_visible(
 }
 
 fn menu_status_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
-    TuiContainer::new(
-        TuiText::new(label.to_owned())
-            .with_style(builder.dim_text_style())
-            .truncate()
-            .finish(),
-    )
-    .with_padding_left(1)
-    .with_padding_right(1)
-    .finish()
+    TuiText::new(label.to_owned())
+        .with_style(builder.dim_text_style())
+        .truncate()
+        .finish()
 }
 
 fn menu_scroll_indicator_row(label: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {

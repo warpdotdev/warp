@@ -534,16 +534,16 @@ impl TuiTerminalSessionState {
                 description: "agent mode",
             }),
         }
-        if let Some(key) = binding_hint(AUTO_APPROVE_TOGGLE_BINDING_NAME, context, ctx) {
-            shortcuts.push(TuiShortcut {
-                key,
-                description: "toggle auto-approve",
-            });
-        }
         if matches!(composer.mode, TuiComposerMode::Agent { .. }) {
             shortcuts.push(TuiShortcut {
                 key: "↑".to_owned(),
                 description: "input history",
+            });
+        }
+        if let Some(key) = binding_hint(AUTO_APPROVE_TOGGLE_BINDING_NAME, context, ctx) {
+            shortcuts.push(TuiShortcut {
+                key,
+                description: "toggle auto-approve",
             });
         }
         if state.plan_available

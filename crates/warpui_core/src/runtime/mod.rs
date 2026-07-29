@@ -466,6 +466,24 @@ impl TuiTerminalGuard {
     pub fn modifier_key_lifecycle_enabled(&self) -> bool {
         self.modifier_key_lifecycle_enabled
     }
+    /// Reconfigures standalone modifier reporting on the live terminal.
+    pub fn set_modifier_key_lifecycle_enabled(
+        &mut self,
+        report_modifier_key_lifecycle: bool,
+    ) -> io::Result<()> {
+        let modifier_key_lifecycle_enabled =
+            self.keyboard_enhancement_supported && report_modifier_key_lifecycle;
+        if self.modifier_key_lifecycle_enabled == modifier_key_lifecycle_enabled {
+            // Without enhancement support the effective state is always
+            // disabled, so this absorbs every call and nothing is written.
+            return Ok(());
+        }
+        // The process shares one buffered stdout, so writing through a fresh
+        // handle stays ordered with the frames the renderer writes.
+        set_terminal_keyboard_enhancement_flags(&mut stdout(), report_modifier_key_lifecycle)?;
+        self.modifier_key_lifecycle_enabled = modifier_key_lifecycle_enabled;
+        Ok(())
+    }
 }
 
 /// Keeps a headless TUI session alive. Store it for the lifetime of the app
@@ -480,25 +498,35 @@ impl TuiTerminalGuard {
 ///   thread exits on its own once the receiver above is gone (its next `send`
 ///   fails) or when the process exits. The handle is held so the session owns
 ///   the thread it spawned.
-/// - `_guard`: restores raw mode + the alternate screen on drop.
+/// - `guard`: owns the terminal's raw mode + alternate screen and reconfigures
+///   keyboard reporting while the session runs; restores both on drop.
 pub struct TuiDriverHandle {
     _task: ForegroundTask,
     /// The pending element-requested repaint timer, if any (see
     /// [`draw_and_schedule_repaint`]). Dropping it cancels the timer.
     _repaint_timer: Rc<RefCell<Option<ForegroundTask>>>,
     _reader: thread::JoinHandle<()>,
-    _guard: TuiTerminalGuard,
+    guard: TuiTerminalGuard,
 }
 
 impl TuiDriverHandle {
     /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
     pub fn keyboard_enhancement_supported(&self) -> bool {
-        self._guard.keyboard_enhancement_supported()
+        self.guard.keyboard_enhancement_supported()
     }
 
     /// Whether standalone modifier press/release reporting is active.
     pub fn modifier_key_lifecycle_enabled(&self) -> bool {
-        self._guard.modifier_key_lifecycle_enabled()
+        self.guard.modifier_key_lifecycle_enabled()
+    }
+
+    /// Reconfigures standalone modifier reporting for the active TUI.
+    pub fn set_modifier_key_lifecycle_enabled(
+        &mut self,
+        report_modifier_key_lifecycle: bool,
+    ) -> io::Result<()> {
+        self.guard
+            .set_modifier_key_lifecycle_enabled(report_modifier_key_lifecycle)
     }
 }
 
@@ -616,7 +644,7 @@ pub fn spawn_tui_driver<T: TuiView>(
         _task: task,
         _repaint_timer: repaint_timer,
         _reader: reader,
-        _guard: guard,
+        guard,
     })
 }
 
@@ -697,15 +725,35 @@ fn enter_terminal_screen(
     // reader starts because crossterm's query cannot run concurrently with
     // event polling.
     if keyboard_enhancement_supported {
-        let mut flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
-        if report_modifier_key_lifecycle {
-            flags |= KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
-        }
+        let flags = keyboard_enhancement_flags(report_modifier_key_lifecycle);
         let _ = execute!(out, PushKeyboardEnhancementFlags(flags));
     }
     Ok(())
+}
+
+fn keyboard_enhancement_flags(report_modifier_key_lifecycle: bool) -> KeyboardEnhancementFlags {
+    let mut flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
+    if report_modifier_key_lifecycle {
+        flags |= KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+    }
+    flags
+}
+
+/// Replaces the terminal's active Kitty keyboard flags in place.
+///
+/// Crossterm has no command for the protocol's set form, so this writes it
+/// directly: `CSI = flags ; 1 u` makes exactly `flags` active. Unlike push/pop
+/// it leaves the mode stack alone, so the entry pushed on entry is still what
+/// [`leave_terminal_screen`] pops to restore the host terminal's own mode.
+fn set_terminal_keyboard_enhancement_flags(
+    out: &mut impl Write,
+    report_modifier_key_lifecycle: bool,
+) -> io::Result<()> {
+    let flags = keyboard_enhancement_flags(report_modifier_key_lifecycle);
+    write!(out, "\x1b[={};1u", flags.bits())?;
+    out.flush()
 }
 
 fn leave_terminal_screen(

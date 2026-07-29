@@ -24,7 +24,7 @@ fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
         status,
         tool_count: 2,
         resource_count: 0,
-        has_credentials: false,
+        can_log_out: false,
         authorization_url: None,
     }
 }

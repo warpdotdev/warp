@@ -74,12 +74,22 @@ fn lightweight_cloud_view_renders_startup_and_blocker_without_terminal_state() {
             assert!(
                 lines
                     .iter()
-                    .any(|line| line.contains("GitHub authentication required"))
+                    .any(|line| line.contains("GitHub Authentication Required"))
             );
             assert!(
                 lines
                     .iter()
                     .any(|line| line.contains("https://example.com/auth"))
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Authenticate with GitHub"))
+            );
+            assert!(
+                !lines
+                    .iter()
+                    .any(|line| line.contains("GitHub authentication required Authenticate"))
             );
         });
     });

@@ -1025,6 +1025,7 @@ impl Team {
             // rolling out workspaces.
             uid: ServerId::from_string_lossy(gql_team.uid.inner()),
             name: gql_team.name.clone(),
+            color: gql_team.color.clone(),
             members: gql_team
                 .members
                 .clone()

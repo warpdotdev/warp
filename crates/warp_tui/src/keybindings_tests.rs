@@ -6,6 +6,7 @@ use warpui_core::{App, TuiView};
 use super::{ATTACHMENTS_AVAILABLE_FLAG, TUI_BINDING_GROUP, is_tui_owned};
 use crate::attachment_bar::{FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar};
 use crate::input::TuiInputView;
+use crate::input::view::{MCP_LOGOUT_BINDING_NAME, MCP_MENU_ACTIVE_FLAG};
 use crate::terminal_session_view::{
     PASTE_IMAGE_BINDING_NAME, SESSION_COMPOSER_OWNS_INPUT_FLAG, TuiTerminalSessionView,
 };
@@ -32,6 +33,38 @@ fn tui_ownership_is_by_name_prefix_or_group() {
 fn tui_binding_registration_passes_the_cross_surface_validators() {
     App::test((), |mut app| async move {
         app.update(super::init);
+    });
+}
+
+#[test]
+fn mcp_logout_binding_uses_ctrl_r_only() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            crate::input::init(ctx);
+            let bindings = ctx
+                .editable_bindings()
+                .filter(|binding| binding.name == MCP_LOGOUT_BINDING_NAME)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                bindings
+                    .iter()
+                    .filter_map(|binding| match binding.trigger {
+                        Trigger::Keystrokes(keys) => keys.first().map(|key| key.normalized()),
+                        Trigger::Empty | Trigger::Standard(_) | Trigger::Custom(_) => None,
+                    })
+                    .collect::<HashSet<_>>(),
+                HashSet::from(["ctrl-r".to_owned()])
+            );
+
+            let mut mcp_context = Context::default();
+            mcp_context.set.insert(TuiInputView::ui_name());
+            mcp_context.set.insert(MCP_MENU_ACTIVE_FLAG);
+            let mut plain_input_context = Context::default();
+            plain_input_context.set.insert(TuiInputView::ui_name());
+            assert_eq!(bindings.len(), 1);
+            assert!(bindings[0].in_context(&mcp_context));
+            assert!(!bindings[0].in_context(&plain_input_context));
+        });
     });
 }
 

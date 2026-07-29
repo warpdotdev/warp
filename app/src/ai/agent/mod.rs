@@ -726,12 +726,16 @@ pub enum RenderableAIError {
         is_user_error: bool,
     },
     /// An agent-issued command caused the shell process to exit, so the run
-    /// cannot continue. Surfaced as a terminal failure (FAILED) rather than a
-    /// user cancellation. `command` is the (secret-redacted) command that
-    /// exited the shell.
+    /// cannot continue. Surfaced as a terminal failure (FAILED).
+    /// `command` is the (secret-redacted) command that exited the shell.
     AgentExitedShell {
         command: String,
     },
+    /// A cloud-mode startup failure. Carries the raw server error message and
+    /// surfaces it without the generic apology prefix, matching the dedicated
+    /// GUI error card (`render_cloud_mode_error_screen`) which shows the
+    /// message directly.
+    CloudStartupFailed(String),
 }
 
 impl RenderableAIError {
@@ -920,6 +924,7 @@ impl Display for RenderableAIError {
                  could not continue. Ensure the agent is not asked to run commands or source \
                  scripts that can exit the shell."
             ),
+            Self::CloudStartupFailed(msg) => write!(f, "{msg}"),
         }
     }
 }
