@@ -1,6 +1,7 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
+use crate::ai::agent::RenderableAIError;
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 
@@ -160,6 +161,19 @@ fn environment_setup_failed_is_failed() {
         AgentDriverError::EnvironmentSetupFailed("bad repo".into()),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
+fn agent_exited_shell_is_failed_with_same_message_as_conversation_path() {
+    let (state, update) = classify_driver_error(&AgentDriverError::AgentExitedShell);
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InvalidRequest));
+    // A shell exit during a setup command must report the exact same
+    // user-facing message as an agent-issued command exiting the shell.
+    assert_eq!(
+        update.message,
+        RenderableAIError::AGENT_EXITED_SHELL_MESSAGE
     );
 }
 

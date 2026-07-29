@@ -145,12 +145,22 @@ pub(crate) struct TerminalDriver {
     /// and `wait_for_session_shared` has not yet been called.
     session_share_rx: Option<oneshot::Receiver<Result<(), ShareSessionError>>>,
     pending_share_requests: Vec<ShareRequest>,
-    waiting_command: Option<oneshot::Sender<ExitCode>>,
+    /// Resolves the in-flight command's exit status. Sent `Ok` when the
+    /// command's block completes, or `Err(AgentDriverError::AgentExitedShell)`
+    /// if the shell process exits while the command is still running.
+    waiting_command: Option<oneshot::Sender<Result<ExitCode, AgentDriverError>>>,
 
     /// State for the pending command we're expecting to start executing.
     /// The `String` is the expected command text, and the sender is used
-    /// to send the block ID to the waiting caller.
-    pending_command_start: Option<(String, oneshot::Sender<BlockId>)>,
+    /// to send the block ID to the waiting caller (or a shell-exit error if
+    /// the shell dies before the command starts).
+    pending_command_start: Option<(String, oneshot::Sender<Result<BlockId, AgentDriverError>>)>,
+
+    /// True once the shell process backing this session has exited
+    /// post-bootstrap. No further commands can execute, so
+    /// [`Self::execute_command`] fails fast with
+    /// [`AgentDriverError::AgentExitedShell`].
+    shell_exited: bool,
 }
 
 impl Entity for TerminalDriver {
@@ -303,6 +313,7 @@ impl TerminalDriver {
             pending_share_requests: Vec::new(),
             waiting_command: None,
             pending_command_start: None,
+            shell_exited: false,
         }
     }
 
@@ -474,8 +485,16 @@ impl TerminalDriver {
         impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>,
         AgentDriverError,
     > {
-        let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
-        let (start_tx, start_rx) = oneshot::channel::<BlockId>();
+        // The shell process has exited, so no further commands can run in
+        // this session. Fail fast with the canonical shell-exit error so
+        // callers (e.g. environment setup) report the failure instead of
+        // waiting forever on a command that can never start.
+        if self.shell_exited {
+            return Err(AgentDriverError::AgentExitedShell);
+        }
+
+        let (exit_tx, exit_rx) = oneshot::channel::<Result<ExitCode, AgentDriverError>>();
+        let (start_tx, start_rx) = oneshot::channel::<Result<BlockId, AgentDriverError>>();
 
         // We should not be able to execute a command while we are still waiting on another one.
         // This is enforced by the caller by waiting on rx before continuing.
@@ -493,7 +512,7 @@ impl TerminalDriver {
         Ok(async move {
             let block_id = start_rx
                 .await
-                .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
+                .map_err(|_| AgentDriverError::InvalidRuntimeState)??;
             Ok(CommandHandle {
                 exit_status_rx: exit_rx,
                 block_id,
@@ -689,7 +708,7 @@ pub(crate) struct BlockOutputMatch {
 /// Also carries the [`BlockId`] so callers can retrieve the block snapshot
 /// after completion.
 pub(crate) struct CommandHandle {
-    exit_status_rx: oneshot::Receiver<ExitCode>,
+    exit_status_rx: oneshot::Receiver<Result<ExitCode, AgentDriverError>>,
     block_id: BlockId,
 }
 
@@ -706,7 +725,10 @@ impl Future for CommandHandle {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.exit_status_rx)
             .poll(cx)
-            .map(|result| result.map_err(|_| AgentDriverError::InvalidRuntimeState))
+            .map(|result| match result {
+                Ok(exit_status) => exit_status,
+                Err(_) => Err(AgentDriverError::InvalidRuntimeState),
+            })
     }
 }
 
@@ -741,6 +763,19 @@ impl TerminalDriver {
                 // point; the logs will have details.
                 if let Some(tx) = self.bootstrap_tx.take() {
                     let _ = tx.send(Err(BootstrapError::PtySpawnFailed { reason: None }));
+                }
+
+                // The shell is gone: no further command can start or finish.
+                // Fail any in-flight command (e.g. an environment setup
+                // command) with the canonical shell-exit error so the run
+                // reports the failure instead of hanging until the sandbox
+                // is killed.
+                self.shell_exited = true;
+                if let Some((_, sender)) = self.pending_command_start.take() {
+                    let _ = sender.send(Err(AgentDriverError::AgentExitedShell));
+                }
+                if let Some(sender) = self.waiting_command.take() {
+                    let _ = sender.send(Err(AgentDriverError::AgentExitedShell));
                 }
             }
             crate::terminal::view::Event::SlowBootstrap => {
@@ -777,7 +812,7 @@ impl TerminalDriver {
                     let block_id = self.terminal_view.read(ctx, |terminal, _| {
                         terminal.model.lock().block_list().active_block_id().clone()
                     });
-                    let _ = sender.send(block_id);
+                    let _ = sender.send(Ok(block_id));
                 }
             }
             crate::terminal::view::Event::BlockCompleted { block, .. } => {
@@ -796,7 +831,7 @@ impl TerminalDriver {
                     // we instead simply make sure it was not a background block.
                     bootstrapping_done && !block.is_background
                 }) {
-                    let _ = sender.send(block.exit_code);
+                    let _ = sender.send(Ok(block.exit_code));
                 }
             }
             _ => (),

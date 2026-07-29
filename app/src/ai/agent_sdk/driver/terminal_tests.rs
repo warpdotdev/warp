@@ -5,6 +5,7 @@ use session_sharing_protocol::sharer::SessionRetentionReason;
 use warpui::App;
 
 use super::TerminalDriver;
+use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::Event;
 use crate::test_util::add_window_with_terminal;
@@ -54,5 +55,48 @@ fn extend_shared_session_retention_emits_event_for_active_sharer() {
             emitted_reasons[0],
             SessionRetentionReason::SetupFailed
         ));
+    });
+}
+
+#[test]
+fn shell_exit_fails_in_flight_and_subsequent_commands() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let terminal_driver =
+            app.update(|ctx| TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx));
+
+        // Start a command (e.g. an environment setup command) so the driver
+        // has an in-flight command waiting on the terminal session.
+        let command_future = terminal_driver
+            .update(&mut app, |driver, ctx| {
+                driver.execute_command("echo hi", ctx)
+            })
+            .expect("command should be accepted before the shell exits");
+
+        // The shell process dies (e.g. the command ran `exit 1`).
+        terminal_view.update(&mut app, |_, ctx| ctx.emit(Event::Exited));
+
+        // The in-flight command must resolve with the shell-exit error
+        // instead of hanging forever, regardless of whether it had already
+        // started executing.
+        let result = match command_future.await {
+            Ok(handle) => handle.await,
+            Err(error) => Err(error),
+        };
+        assert!(
+            matches!(result, Err(AgentDriverError::AgentExitedShell)),
+            "in-flight command should fail with AgentExitedShell, got {result:?}"
+        );
+
+        // Any further command must fail fast with the same error.
+        let fail_fast = terminal_driver.update(&mut app, |driver, ctx| {
+            driver.execute_command("echo again", ctx).err()
+        });
+        assert!(
+            matches!(fail_fast, Some(AgentDriverError::AgentExitedShell)),
+            "commands after shell exit should fail fast with AgentExitedShell, got {fail_fast:?}"
+        );
     });
 }
