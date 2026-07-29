@@ -9,9 +9,10 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    AIConversation, AIConversationId, AmbientAgentTaskId, BannerState, BlocklistAIHistoryModel,
-    IsSharedSessionCreator, LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken,
-    TerminalManagerTrait, TerminalSurfaceResult, oz_run_url,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, AmbientAgentTaskId,
+    BannerState, BlocklistAIHistoryModel, IsSharedSessionCreator, LocalTtyTerminalManager,
+    PersistenceWriter, ServerConversationToken, TerminalManagerTrait, TerminalSurfaceResult,
+    oz_run_url,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -135,6 +136,7 @@ pub(crate) struct TuiSessions {
     sessions: Vec<TuiSession>,
     focused_session_id: Option<TuiSessionId>,
     resume_token: Option<ServerConversationToken>,
+    default_autoexecute_mode: AIConversationAutoexecuteMode,
 }
 
 impl Entity for TuiSessions {
@@ -152,12 +154,14 @@ impl TuiSessions {
         startup_directory: Option<PathBuf>,
         ctx: &mut AppContext,
     ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
-        let (exit_summary, keyboard_enhancement_supported) = sessions.read(ctx, |sessions, _| {
-            (
-                sessions.exit_summary.clone(),
-                sessions.keyboard_enhancement_supported,
-            )
-        });
+        let (exit_summary, keyboard_enhancement_supported, default_autoexecute_mode) = sessions
+            .read(ctx, |sessions, _| {
+                (
+                    sessions.exit_summary.clone(),
+                    sessions.keyboard_enhancement_supported,
+                    sessions.default_autoexecute_mode,
+                )
+            });
         // The manager uses this internal model for unsupported-shell state; the
         // TUI does not render a separate banner surface.
         let banner = ctx.add_model(|_| BannerState::default());
@@ -179,6 +183,7 @@ impl TuiSessions {
                         surface_init,
                         exit_summary,
                         keyboard_enhancement_supported,
+                        default_autoexecute_mode,
                         ctx,
                     )
                 });
@@ -546,6 +551,7 @@ impl TuiSessions {
         driver: TuiDriverHandle,
         exit_summary: TuiExitSummaryHandle,
         resume_token: Option<ServerConversationToken>,
+        default_autoexecute_mode: AIConversationAutoexecuteMode,
     ) -> Self {
         let keyboard_enhancement_supported = driver.keyboard_enhancement_supported();
         Self {
@@ -555,6 +561,7 @@ impl TuiSessions {
             sessions: Vec::new(),
             focused_session_id: None,
             resume_token,
+            default_autoexecute_mode,
         }
     }
 
@@ -568,6 +575,7 @@ impl TuiSessions {
             sessions: Vec::new(),
             focused_session_id: None,
             resume_token: None,
+            default_autoexecute_mode: AIConversationAutoexecuteMode::RespectUserSettings,
         }
     }
 

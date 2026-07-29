@@ -13,7 +13,7 @@ use clap::Parser;
 use clap::error::ErrorKind;
 use inquire::{InquireError, Password, PasswordDisplayMode};
 use warp::settings::{TuiThemeSettings, TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
-use warp::tui_export::{Appearance, ServerConversationToken};
+use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
 use warp_core::telemetry::TelemetryEvent as _;
@@ -47,6 +47,10 @@ struct TuiArgs {
     /// Resume an Oz/Warp conversation by server token.
     #[arg(long)]
     resume: Option<String>,
+
+    /// Enable auto-approve by default for new conversations.
+    #[arg(long)]
+    auto_approve: bool,
 
     /// API key for non-interactive authentication.
     #[arg(long, env = "WARP_API_KEY")]
@@ -180,11 +184,23 @@ pub fn run() -> Result<()> {
         }));
     }
     let resume_token = args.resume.map(parse_resume_token).transpose()?;
+    let default_autoexecute_mode = if args.auto_approve {
+        AIConversationAutoexecuteMode::RunToCompletion
+    } else {
+        AIConversationAutoexecuteMode::RespectUserSettings
+    };
     let exit_summary = TuiExitSummaryHandle::default();
     let exit_summary_for_app = exit_summary.clone();
     let result = warp::run_tui(
         args.api_key,
-        Box::new(move |ctx| init(resume_token, exit_summary_for_app, ctx)),
+        Box::new(move |ctx| {
+            init(
+                resume_token,
+                default_autoexecute_mode,
+                exit_summary_for_app,
+                ctx,
+            )
+        }),
     );
     if result.is_ok()
         && let Some(token) = exit_summary.token()
@@ -200,6 +216,7 @@ pub fn run() -> Result<()> {
 /// Creates the login-gated root and starts the headless draw and input driver.
 fn init(
     resume_token: Option<ServerConversationToken>,
+    default_autoexecute_mode: AIConversationAutoexecuteMode,
     exit_summary: TuiExitSummaryHandle,
     ctx: &mut AppContext,
 ) {
@@ -238,8 +255,9 @@ fn init(
         requires_modifier_key_reporting(ctx),
     ) {
         Ok(driver) => {
-            let sessions =
-                ctx.add_singleton_model(|_| TuiSessions::new(driver, exit_summary, resume_token));
+            let sessions = ctx.add_singleton_model(|_| {
+                TuiSessions::new(driver, exit_summary, resume_token, default_autoexecute_mode)
+            });
             let sessions_for_voice_settings = sessions.clone();
             ctx.subscribe_to_model(&TuiVoiceSettings::handle(ctx), move |_, event, ctx| {
                 let TuiVoiceSettingsChangedEvent::TuiVoiceInputHoldKeySetting { .. } = event;
