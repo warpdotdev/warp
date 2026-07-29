@@ -1,13 +1,33 @@
 use warp::appearance::Appearance;
 use warpui_core::App;
-use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{TuiBufferExt, TuiElement, TuiRect, TuiText};
 use warpui_core::presenter::tui::TuiPresenter;
 
-use super::{compact_footer_path, conversation_restoring, login_placeholder};
+use super::{
+    compact_footer_path, conversation_restoring, horizontally_centered, login_placeholder,
+};
 
 #[test]
 fn compact_footer_path_preserves_short_paths() {
     assert_eq!(compact_footer_path("/erica/project"), "/erica/project");
+}
+
+#[test]
+fn horizontally_centered_balances_available_space() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                horizontally_centered(TuiText::new("center").finish()),
+                TuiRect::new(0, 0, 20, 1),
+                ctx,
+            );
+            let line = &frame.buffer.to_lines()[0];
+            let left = line.find("center").expect("centered text renders");
+            let right = 20 - left - "center".len();
+            assert!(left.abs_diff(right) <= 1, "{line:?}");
+        });
+    });
 }
 
 #[test]

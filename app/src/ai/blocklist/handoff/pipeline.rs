@@ -658,10 +658,15 @@ struct SnapshotSettledHandoff {
 /// Consumes a prepared handoff and begins its execution lifecycle.
 ///
 /// Mutable feature, environment, model, and snapshot settings are re-read
-/// synchronously before the returned future can perform external work.
+/// synchronously before the returned future can perform external work. A
+/// headless frontend may supply `caller_cancellation`; a materialized frontend
+/// instead receives its cancellation sender through
+/// [`HandoffTargetMaterialization`]. These cancellation paths are mutually
+/// exclusive.
 pub fn execute_handoff(
     mut pending: PendingHandoff,
     ai_client: Arc<dyn AIClient>,
+    caller_cancellation: Option<oneshot::Receiver<()>>,
     materialize_handoff_target: Option<MaterializeHandoffTarget>,
     ctx: &AppContext,
 ) -> Pin<Box<dyn Future<Output = HandoffCommitOutcome> + Send>> {
@@ -691,6 +696,7 @@ pub fn execute_handoff(
     Box::pin(execute_validated_handoff(
         pending,
         ai_client,
+        caller_cancellation,
         materialize_handoff_target,
     ))
 }
@@ -698,14 +704,19 @@ pub fn execute_handoff(
 async fn execute_validated_handoff(
     pending: PendingHandoff,
     ai_client: Arc<dyn AIClient>,
+    caller_cancellation: Option<oneshot::Receiver<()>>,
     materialize_handoff_target: Option<MaterializeHandoffTarget>,
 ) -> HandoffCommitOutcome {
     let mut forked = match fork_source_conversation(pending, &ai_client).await {
         Ok(forked) => forked,
         Err(failure) => return HandoffCommitOutcome::Failed(failure),
     };
-    let mut cancellation = None;
+    let mut cancellation = caller_cancellation;
     if let Some(materialize_handoff_target) = materialize_handoff_target {
+        debug_assert!(
+            cancellation.is_none(),
+            "caller cancellation and target materialization cancellation are mutually exclusive"
+        );
         let (cancel, receiver) = oneshot::channel();
         let materialization = HandoffTargetMaterialization {
             source_conversation: forked.pending.source_conversation.clone(),

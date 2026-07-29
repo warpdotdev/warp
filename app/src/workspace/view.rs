@@ -15566,7 +15566,7 @@ impl Workspace {
             })
         });
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let execution = execute_handoff(pending, ai_client, Some(materialize), ctx);
+        let execution = execute_handoff(pending, ai_client, None, Some(materialize), ctx);
         ctx.spawn(execution, move |workspace, outcome, ctx| match outcome {
             HandoffCommitOutcome::Rejected { mut pending, error } => {
                 let restoration = pending.take_restoration();
