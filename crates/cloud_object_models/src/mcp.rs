@@ -50,6 +50,10 @@ pub struct MCPServer {
 pub enum MCPServerState {
     NotRunning,
     Starting,
+    /// Another Warp process is running the interactive OAuth flow for this
+    /// server; this process is waiting for the shared credentials it publishes
+    /// and must not open its own authorization page.
+    WaitingForAuthentication,
     Authenticating,
     Running,
     ShuttingDown,

@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{Json, State};
 use axum::routing::{get, post};
+use instant::Instant;
 use rmcp::transport::auth::OAuthTokenResponse;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
@@ -196,22 +199,26 @@ async fn loopback_oauth_completes_dcr_and_code_exchange() {
             .expect("fake OAuth server should run");
     });
 
-    let (persisted_tx, persisted_rx) = async_channel::bounded(1);
+    // The coordinator writes lock/owner-metadata files into a per-user runtime
+    // directory; point it at a temp dir so the test never touches real state.
+    // Hold the shared env lock so parallel tests don't race on the global var.
+    let _env_guard = env_lock().await;
+    let coord_dir = tempfile::TempDir::with_prefix("mcp-oauth-loopback").expect("temp dir");
+    // SAFETY: the `ENV_LOCK` guard serializes all tests touching this env var.
+    unsafe {
+        std::env::set_var("WARP_MCP_OAUTH_COORDINATION_DIR", coord_dir.path());
+    }
+    let backend = std::sync::Arc::new(SharedMemoryBackend::default());
+    let uuid = Uuid::new_v4();
     let context = AuthContext {
         callback_mode: OAuthCallbackMode::Loopback,
-        uuid: Uuid::new_v4(),
+        uuid,
         persisted_credentials: None,
         is_headless: false,
         is_file_based: true,
-        persist_credentials: Box::new(move |_, credentials| {
-            let persisted_tx = persisted_tx.clone();
-            Box::pin(async move {
-                persisted_tx
-                    .send(credentials)
-                    .await
-                    .map_err(anyhow::Error::new)
-            })
-        }),
+        credential_namespace: CredentialNamespace::Templatable,
+        credential_key: CredentialKey::Uuid(uuid),
+        credential_backend: backend.clone(),
         requires_authentication: Box::new(move |_, state, auth_url| {
             Box::pin(async move {
                 let auth_url = Url::parse(&auth_url)?;
@@ -230,6 +237,8 @@ async fn loopback_oauth_completes_dcr_and_code_exchange() {
                 Ok(())
             })
         }),
+        became_waiter: None,
+        owner_relay: None,
         authenticated: None,
     };
 
@@ -246,10 +255,12 @@ async fn loopback_oauth_completes_dcr_and_code_exchange() {
         "test-loopback-access-token"
     );
 
-    let persisted = persisted_rx
-        .recv()
+    // The leader persists credentials through the coordinator's serialized
+    // merge into the shared backend. Poll until the entry appears.
+    let persisted = backend
+        .wait_for_entry(uuid, std::time::Duration::from_secs(2))
         .await
-        .expect("credentials should be persisted");
+        .expect("credentials should be persisted to the shared store");
     assert_eq!(persisted.credentials.client_id, "test-public-client");
     let redirect_uri = registered_redirect_uri
         .lock()
@@ -260,6 +271,10 @@ async fn loopback_oauth_completes_dcr_and_code_exchange() {
     assert!(redirect_uri.ends_with("/mcp/oauth2callback"));
 
     server.abort();
+    // SAFETY: see above.
+    unsafe {
+        std::env::remove_var("WARP_MCP_OAUTH_COORDINATION_DIR");
+    }
 }
 
 /// Constructs a fresh `PersistingCredentialStore` plus the receiver side of its
@@ -416,4 +431,327 @@ async fn save_carries_forward_refresh_token_and_preserves_received_at() {
         Some("prior-refresh-token".to_string()),
         "prior refresh token carried forward"
     );
+}
+
+/// An in-memory `SecureCredentialBackend` shared across concurrent
+/// `make_authenticated_client` calls in tests, simulating the shared secure
+/// storage that multiple Warp processes read/write.
+#[derive(Clone, Default)]
+struct SharedMemoryBackend {
+    map_json: Arc<Mutex<Option<String>>>,
+}
+
+#[async_trait::async_trait]
+impl SecureCredentialBackend for SharedMemoryBackend {
+    async fn read_raw(&self) -> anyhow::Result<Option<String>> {
+        Ok(self.map_json.lock().expect("map lock").clone())
+    }
+
+    async fn write_raw(&self, json: &str) -> anyhow::Result<()> {
+        *self.map_json.lock().expect("map lock") = Some(json.to_string());
+        Ok(())
+    }
+
+    async fn notify_changed(&self) {}
+}
+
+impl SharedMemoryBackend {
+    /// Polls the shared store until the entry for `uuid` appears or `timeout`.
+    async fn wait_for_entry(&self, uuid: Uuid, timeout: Duration) -> Option<PersistedCredentials> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(json) = self.map_json.lock().expect("map lock").clone()
+                && let Ok(map) = serde_json::from_str::<HashMap<Uuid, PersistedCredentials>>(&json)
+                && let Some(creds) = map.get(&uuid).cloned()
+            {
+                return Some(creds);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+/// Starts a minimal fake OAuth provider (DCR + token exchange) and returns its
+/// origin URL plus the server task handle.
+async fn start_fake_oauth_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("fake OAuth server should bind");
+    let origin = format!(
+        "http://{}",
+        listener
+            .local_addr()
+            .expect("fake OAuth address should resolve")
+    );
+    let state = FakeOAuthState {
+        origin: origin.clone(),
+        ..Default::default()
+    };
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            get(protected_resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(protected_resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(authorization_server_metadata),
+        )
+        .route("/register", post(register_client))
+        .route("/token", post(exchange_token))
+        .with_state(state);
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (origin, server)
+}
+
+/// Regression test for APP-4959: with N concurrent Warp processes starting the
+/// same MCP installation with no credentials, exactly one opens an OAuth
+/// authorization page. Before the coordinator, every process independently
+/// called `requires_authentication` (opened a page); this test fails against
+/// the pre-change implementation because all N tasks invoke the callback.
+#[tokio::test]
+async fn only_one_process_opens_mcp_oauth_authorization() {
+    let _env_guard = env_lock().await;
+    let coord_dir = tempfile::TempDir::with_prefix("mcp-oauth-multi").expect("temp dir");
+    // SAFETY: the `ENV_LOCK` guard serializes all tests touching this env var.
+    unsafe {
+        std::env::set_var("WARP_MCP_OAUTH_COORDINATION_DIR", coord_dir.path());
+    }
+    let (origin, server) = start_fake_oauth_server().await;
+    let backend = Arc::new(SharedMemoryBackend::default());
+    let uuid = Uuid::new_v4();
+    let open_url_count = Arc::new(AtomicU32::new(0));
+    let waiter_count = Arc::new(AtomicU32::new(0));
+    let n: u32 = 3;
+
+    let mut handles = Vec::new();
+    for _ in 0..n {
+        let backend = backend.clone();
+        let open_url_count = open_url_count.clone();
+        let waiter_count = waiter_count.clone();
+        let origin = origin.clone();
+        handles.push(tokio::spawn(async move {
+            let open_url_count = open_url_count.clone();
+            let context = AuthContext {
+                callback_mode: OAuthCallbackMode::Loopback,
+                uuid,
+                persisted_credentials: None,
+                is_headless: false,
+                is_file_based: false,
+                credential_namespace: CredentialNamespace::Templatable,
+                credential_key: CredentialKey::Uuid(uuid),
+                credential_backend: backend.clone(),
+                requires_authentication: Box::new(move |_, state, auth_url| {
+                    let open_url_count = open_url_count.clone();
+                    Box::pin(async move {
+                        // The leader is the only process that reaches here. Count
+                        // it as one "open authorization page" event.
+                        open_url_count.fetch_add(1, Ordering::SeqCst);
+                        let auth_url = Url::parse(&auth_url)?;
+                        let params: HashMap<_, _> = auth_url.query_pairs().into_owned().collect();
+                        let redirect_uri =
+                            params.get("redirect_uri").cloned().ok_or_else(|| {
+                                anyhow::anyhow!("authorization URL missing redirect_uri")
+                            })?;
+                        assert!(redirect_uri.starts_with("http://127.0.0.1:"));
+                        tokio::spawn(async move {
+                            let callback_url =
+                                format!("{redirect_uri}?code=test-code&state={state}");
+                            let _ = reqwest::get(callback_url).await;
+                        });
+                        Ok(())
+                    })
+                }),
+                became_waiter: Some(Box::new(move || {
+                    let waiter_count = waiter_count.clone();
+                    Box::pin(async move {
+                        waiter_count.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                })),
+                owner_relay: None,
+                authenticated: None,
+            };
+            let (client, _) = make_authenticated_client(
+                &format!("{origin}/mcp"),
+                reqwest::Client::new(),
+                context,
+            )
+            .await?;
+            anyhow::Ok(client.get_access_token().await?)
+        }));
+    }
+
+    let mut tokens = Vec::new();
+    for handle in handles {
+        tokens.push(
+            handle
+                .await
+                .expect("task joins")
+                .expect("each process should produce a usable client"),
+        );
+    }
+
+    assert_eq!(
+        open_url_count.load(Ordering::SeqCst),
+        1,
+        "exactly one process opens an authorization page"
+    );
+    assert!(
+        waiter_count.load(Ordering::SeqCst) >= n - 1,
+        "at least N-1 processes enter the waiting state"
+    );
+    // Every process becomes usable from the shared credentials.
+    for token in &tokens {
+        assert_eq!(token, "test-loopback-access-token");
+    }
+
+    server.abort();
+    // SAFETY: see above.
+    unsafe {
+        std::env::remove_var("WARP_MCP_OAUTH_COORDINATION_DIR");
+    }
+}
+
+/// A follower never opens a page or prepares a callback. This drives the
+/// coordinator directly with a held leader lease and asserts the follower
+/// resolves to shared credentials (not leadership) without any
+/// `requires_authentication` callback.
+#[tokio::test]
+async fn followers_wait_without_preparing_callbacks() {
+    let _env_guard = env_lock().await;
+    let coord_dir = tempfile::TempDir::with_prefix("mcp-oauth-followers").expect("temp dir");
+    // SAFETY: the `ENV_LOCK` guard serializes all tests touching this env var.
+    unsafe {
+        std::env::set_var("WARP_MCP_OAUTH_COORDINATION_DIR", coord_dir.path());
+    }
+    let backend = Arc::new(SharedMemoryBackend::default());
+    let uuid = Uuid::new_v4();
+
+    // Hold the leader lease so the follower cannot become a leader.
+    let leader = OAuthCoordinator::new(
+        "test-channel",
+        CredentialNamespace::Templatable,
+        uuid,
+        CredentialKey::Uuid(uuid),
+        backend.clone(),
+        CoordinatorConfig {
+            wait_deadline: Duration::from_secs(2),
+            poll_interval: Duration::from_millis(10),
+            cred_store_lock_timeout: Duration::from_secs(2),
+        },
+        None,
+    )
+    .expect("leader coordinator");
+    let ResolveOutcome::Leader(_lease) = leader.resolve_or_wait().await.expect("resolve leader")
+    else {
+        panic!("should lead");
+    };
+
+    let open_url_count = Arc::new(AtomicU32::new(0));
+    let waiter_count = Arc::new(AtomicU32::new(0));
+    let waiter_count_for_closure = waiter_count.clone();
+    let follower = OAuthCoordinator::new(
+        "test-channel",
+        CredentialNamespace::Templatable,
+        uuid,
+        CredentialKey::Uuid(uuid),
+        backend.clone(),
+        CoordinatorConfig {
+            wait_deadline: Duration::from_secs(2),
+            poll_interval: Duration::from_millis(10),
+            cred_store_lock_timeout: Duration::from_secs(2),
+        },
+        Some(Box::new(move || {
+            let waiter_count = waiter_count_for_closure.clone();
+            Box::pin(async move {
+                waiter_count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        })),
+    )
+    .expect("follower coordinator");
+
+    // Publish credentials so the follower converges.
+    let publish_backend = backend.clone();
+    let publish_uuid = uuid;
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let coord = OAuthCoordinator::new(
+            "test-channel",
+            CredentialNamespace::Templatable,
+            publish_uuid,
+            CredentialKey::Uuid(publish_uuid),
+            publish_backend,
+            CoordinatorConfig {
+                wait_deadline: Duration::from_secs(2),
+                poll_interval: Duration::from_millis(10),
+                cred_store_lock_timeout: Duration::from_secs(2),
+            },
+            None,
+        )
+        .expect("publish coordinator");
+        // Use the leader's existing lease-holding coordinator path to merge.
+        coord
+            .merge_and_write(make_test_persisted_credentials(publish_uuid))
+            .await
+            .expect("publish");
+    });
+
+    let outcome = follower.resolve_or_wait().await.expect("follower resolves");
+    match outcome {
+        ResolveOutcome::Credentials(creds) => {
+            assert_eq!(
+                creds.credentials.client_id,
+                format!("client-{uuid}"),
+                "follower loads shared credentials"
+            );
+        }
+        other => panic!("follower must not become leader, got {other:?}"),
+    }
+    // The follower never opened a page (no requires_authentication callback in
+    // this direct-coordinator test) and entered the waiting state.
+    assert_eq!(
+        open_url_count.load(Ordering::SeqCst),
+        0,
+        "follower opens no page"
+    );
+    assert_eq!(
+        waiter_count.load(Ordering::SeqCst),
+        1,
+        "follower entered waiting state"
+    );
+
+    // SAFETY: see above.
+    unsafe {
+        std::env::remove_var("WARP_MCP_OAUTH_COORDINATION_DIR");
+    }
+}
+
+/// Build a `PersistedCredentials` for the integration follower test.
+fn make_test_persisted_credentials(installation: Uuid) -> PersistedCredentials {
+    let json = serde_json::json!({
+        "access_token": format!("access-{installation}"),
+        "token_type": "bearer",
+        "expires_in": 3600,
+        "refresh_token": format!("refresh-{installation}"),
+    });
+    let token_response: OAuthTokenResponse = serde_json::from_value(json).expect("token response");
+    PersistedCredentials {
+        credentials: StoredCredentials::new(
+            format!("client-{installation}"),
+            Some(token_response),
+            Vec::new(),
+            Some(1_700_000_500),
+        ),
+        client_secret: Some(format!("secret-{installation}")),
+    }
 }

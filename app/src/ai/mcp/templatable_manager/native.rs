@@ -2,10 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_compat::CompatExt as _;
+use async_trait::async_trait;
 use mcp::oauth::{
-    self, AuthContext, CallbackResult, FILE_BASED_MCP_CREDENTIALS_KEY,
-    FileBasedPersistedCredentialsMap, OAuthCallbackMode, PersistedCredentials,
-    PersistedCredentialsMap, TEMPLATABLE_MCP_CREDENTIALS_KEY, load_credentials_from_secure_storage,
+    self, AuthContext, CallbackResult, CoordinatorConfig, CredentialKey, CredentialNamespace,
+    FILE_BASED_MCP_CREDENTIALS_KEY, FileBasedPersistedCredentialsMap, OAuthCallbackMode,
+    OAuthCoordinator, OwnerRelay, PersistedCredentialsMap, SecureCredentialBackend,
+    TEMPLATABLE_MCP_CREDENTIALS_KEY, WaiterCallback, load_credentials_from_secure_storage,
     write_to_secure_storage,
 };
 use mcp::runtime::{error_to_user_message, spawn_server};
@@ -21,13 +23,15 @@ use warp_core::settings::Setting as _;
 use warp_errors::report_error;
 use warp_server_client::auth::AuthEvent;
 use warpui::windowing::WindowManager;
-use warpui::{AppContext, ModelContext, SingletonEntity};
+use warpui::{AppContext, ModelContext, ModelSpawner, SingletonEntity};
+use warpui_extras::secure_storage::{AppContextExt as _, Error as SecureStorageError};
 
 use super::{
     MCPServerState, SpawnedServerInfo, TemplatableMCPServerInfo, TemplatableMCPServerManager,
     TemplatableMCPServerManagerEvent,
 };
 use crate::ai::mcp::file_based_manager::FileBasedMCPManagerEvent;
+use crate::ai::mcp::oauth_relay::DesktopOwnerRelay;
 use crate::ai::mcp::parsing::resolve_json;
 use crate::ai::mcp::templatable::{CloudTemplatableMCPServer, GalleryData};
 use crate::ai::mcp::templatable_installation::VariableValue;
@@ -108,6 +112,71 @@ pub enum McpIntegration {
     Figma,
 }
 
+/// [`SecureCredentialBackend`] backed by the app's secure storage and the
+/// `TemplatableMCPServerManager` singleton. The coordinator calls these
+/// methods while holding the credential-store file lock, so they only touch
+/// secure storage and the manager's in-memory credential cache — never the
+/// coordination directory.
+#[derive(Clone)]
+struct ManagerCredentialBackend {
+    spawner: ModelSpawner<TemplatableMCPServerManager>,
+    namespace: CredentialNamespace,
+    secure_storage_key: &'static str,
+    installation_uuid: Uuid,
+}
+
+#[async_trait]
+impl SecureCredentialBackend for ManagerCredentialBackend {
+    async fn read_raw(&self) -> anyhow::Result<Option<String>> {
+        let key = self.secure_storage_key;
+        let value = self
+            .spawner
+            .spawn(move |_, ctx| match ctx.secure_storage().read_value(key) {
+                Ok(value) => Ok(Some(value)),
+                Err(SecureStorageError::NotFound) => Ok(None),
+                Err(err) => Err(anyhow::Error::new(err)),
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to read MCP credentials: {err:?}"))??;
+        Ok(value)
+    }
+
+    async fn write_raw(&self, json: &str) -> anyhow::Result<()> {
+        let key = self.secure_storage_key;
+        let json = json.to_string();
+        self.spawner
+            .spawn(move |_, ctx| {
+                ctx.secure_storage()
+                    .write_value_with_owner_only_fallback(key, &json)
+                    .map_err(anyhow::Error::new)
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to write MCP credentials: {err:?}"))??;
+        Ok(())
+    }
+
+    async fn notify_changed(&self) {
+        let key = self.secure_storage_key;
+        let uuid = self.installation_uuid;
+        let namespace = self.namespace;
+        let _ = self
+            .spawner
+            .spawn(move |manager, ctx| {
+                match namespace {
+                    CredentialNamespace::Templatable => {
+                        manager.server_credentials = load_credentials_from_secure_storage(ctx, key);
+                    }
+                    CredentialNamespace::FileBased => {
+                        manager.file_based_server_credentials =
+                            load_credentials_from_secure_storage(ctx, key);
+                    }
+                }
+                ctx.emit(TemplatableMCPServerManagerEvent::CredentialsChanged { uuid });
+            })
+            .await;
+    }
+}
+
 impl TemplatableMCPServerManager {
     /// Returns `true` if the given MCP integration is currently running.
     pub fn is_mcp_server_running(&self, integration: McpIntegration) -> bool {
@@ -169,76 +238,77 @@ impl TemplatableMCPServerManager {
         Ok(())
     }
 
-    fn save_credentials_to_secure_storage(
-        &mut self,
-        app: &mut ModelContext<Self>,
-        installation_uuid: Uuid,
-        credentials: PersistedCredentials,
-    ) {
-        if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
-            self.file_based_server_credentials.insert(hash, credentials);
-            write_to_secure_storage(
-                app,
-                FILE_BASED_MCP_CREDENTIALS_KEY,
-                &self.file_based_server_credentials,
-            );
-            app.emit(TemplatableMCPServerManagerEvent::CredentialsChanged {
-                uuid: installation_uuid,
-            });
-            return;
-        }
-
-        if let Some(template_uuid) = self.get_template_uuid(installation_uuid) {
-            self.server_credentials.insert(template_uuid, credentials);
-            write_to_secure_storage(
-                app,
-                TEMPLATABLE_MCP_CREDENTIALS_KEY,
-                &self.server_credentials,
-            );
-            app.emit(TemplatableMCPServerManagerEvent::CredentialsChanged {
-                uuid: installation_uuid,
-            });
-        } else {
-            report_error!(
-                "Corresponding file or cloud-based server not found for installation UUID",
-                extra: { "installation_uuid" => %installation_uuid }
-            );
-        }
-    }
-
     pub fn delete_credentials_from_secure_storage(
         &mut self,
         installation_uuid: Uuid,
         app: &mut ModelContext<Self>,
     ) {
-        if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
+        // Update the in-memory credential cache immediately so the UI reflects
+        // the removal without waiting for the async durable write. The durable
+        // removal goes through the cross-process coordinator's serialized
+        // `remove_and_write` (read → remove → serialize → secure write under the
+        // exclusive credential-store lock) so a concurrent leader's
+        // just-published entry for another installation is not clobbered by a
+        // whole-map write from this process's stale in-memory cache (spec
+        // invariant #9). The coordinator's `notify_changed` reloads the
+        // durable map into the in-memory cache and emits `CredentialsChanged`
+        // once the shared write succeeds.
+        let (namespace, key, secure_storage_key) = if let Some(hash) =
+            FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid)
+        {
             self.file_based_server_credentials.remove(&hash);
-            write_to_secure_storage(
-                app,
+            (
+                CredentialNamespace::FileBased,
+                CredentialKey::Hash(hash),
                 FILE_BASED_MCP_CREDENTIALS_KEY,
-                &self.file_based_server_credentials,
-            );
-            app.emit(TemplatableMCPServerManagerEvent::CredentialsChanged {
-                uuid: installation_uuid,
-            });
-            return;
-        }
-        if let Some(template_uuid) = self.get_template_uuid(installation_uuid) {
+            )
+        } else if let Some(template_uuid) = self.get_template_uuid(installation_uuid) {
             self.server_credentials.remove(&template_uuid);
-            write_to_secure_storage(
-                app,
+            (
+                CredentialNamespace::Templatable,
+                CredentialKey::Uuid(template_uuid),
                 TEMPLATABLE_MCP_CREDENTIALS_KEY,
-                &self.server_credentials,
-            );
-            app.emit(TemplatableMCPServerManagerEvent::CredentialsChanged {
-                uuid: installation_uuid,
-            });
+            )
         } else {
             report_error!(
                 "No template UUID found for installation UUID",
                 extra: { "installation_uuid" => %installation_uuid }
             );
-        }
+            return;
+        };
+
+        let channel = format!("{:?}", ChannelState::channel());
+        let backend = Arc::new(ManagerCredentialBackend {
+            spawner: app.spawner(),
+            namespace,
+            secure_storage_key,
+            installation_uuid,
+        }) as Arc<dyn SecureCredentialBackend>;
+        let executor = app.background_executor().clone();
+        executor
+            .spawn(async move {
+                match OAuthCoordinator::new(
+                    &channel,
+                    namespace,
+                    installation_uuid,
+                    key,
+                    backend,
+                    CoordinatorConfig::default(),
+                    None,
+                ) {
+                    Ok(coordinator) => {
+                        if let Err(err) = coordinator.remove_and_write().await {
+                            log::warn!(
+                                "Failed to remove MCP credentials from shared storage: {err:#}"
+                            );
+                        }
+                    }
+                    Err(err) => log::warn!(
+                        "Failed to build MCP OAuth coordinator for credential removal: {err:#}"
+                    ),
+                }
+            })
+            .detach();
     }
 
     /// Creates a new [`TemplatableMCPServerManager`] instance.
@@ -1013,22 +1083,80 @@ impl TemplatableMCPServerManager {
                 .get_hash_by_uuid(installation_uuid)
                 .is_some();
 
+        // Resolve the shared credential namespace/key for cross-process
+        // coordination. File-based installations are keyed by their stable hash;
+        // templatable installations by the template UUID.
+        let file_based_hash = FileBasedMCPManager::as_ref(ctx).get_hash_by_uuid(installation_uuid);
+        let (credential_namespace, credential_key, secure_storage_key) = if is_file_based {
+            let hash = file_based_hash
+                .expect("file-based installation hash must be present when is_file_based is true");
+            (
+                CredentialNamespace::FileBased,
+                CredentialKey::Hash(hash),
+                FILE_BASED_MCP_CREDENTIALS_KEY,
+            )
+        } else {
+            (
+                CredentialNamespace::Templatable,
+                CredentialKey::Uuid(template_uuid),
+                TEMPLATABLE_MCP_CREDENTIALS_KEY,
+            )
+        };
+
         let server_name = server.name.clone();
         let description = installation.templatable_mcp_server().description.clone();
         let auth_context = FeatureFlag::McpOauth.is_enabled().then(|| {
-            let persist_spawner = ctx.spawner();
             let requires_authentication_spawner = ctx.spawner();
             let authenticated_spawner = ctx.spawner();
+            let became_waiter_spawner = ctx.spawner();
             let callback_mode = if use_tui_loopback {
                 OAuthCallbackMode::Loopback
             } else {
                 OAuthCallbackMode::CustomScheme {
-                    redirect_uri: format!(
-                        "{}://mcp/oauth2callback",
-                        ChannelState::url_scheme()
-                    ),
+                    redirect_uri: format!("{}://mcp/oauth2callback", ChannelState::url_scheme()),
                     result_rx: oauth_result_rx,
                 }
+            };
+
+            let credential_backend = Arc::new(ManagerCredentialBackend {
+                spawner: ctx.spawner(),
+                namespace: credential_namespace,
+                secure_storage_key,
+                installation_uuid,
+            }) as Arc<dyn SecureCredentialBackend>;
+
+            // When this process becomes a follower, show the waiting state with
+            // no authorization URL. The leader's `requires_authentication`
+            // closure below sets `Authenticating` and opens the single page.
+            let became_waiter: Option<WaiterCallback> = Some(Box::new(move || {
+                let spawner = became_waiter_spawner.clone();
+                let uuid = installation_uuid;
+                Box::pin(async move {
+                    spawner
+                        .spawn(move |manager, ctx| {
+                            manager.change_server_state(
+                                uuid,
+                                MCPServerState::WaitingForAuthentication,
+                                ctx,
+                            );
+                        })
+                        .await
+                        .map_err(|err| anyhow::anyhow!("failed to set MCP waiting state: {err:?}"))?;
+                    Ok(())
+                })
+            }));
+
+            // Desktop (custom-scheme) callbacks may be delivered to a follower
+            // process; the relay forwards them to the leader. The TUI loopback
+            // path receives callbacks on the leader's own socket, so no relay is
+            // needed.
+            let owner_relay: Option<Arc<dyn OwnerRelay>> = if !use_tui_loopback {
+                Some(Arc::new(DesktopOwnerRelay::new(
+                    ctx.spawner(),
+                    ctx.background_executor().clone(),
+                )))
+            } else {
+                None
             };
 
             AuthContext {
@@ -1037,26 +1165,9 @@ impl TemplatableMCPServerManager {
                 persisted_credentials,
                 is_headless,
                 is_file_based,
-                persist_credentials: Box::new(move |installation_uuid, credentials| {
-                    let spawner = persist_spawner.clone();
-                    Box::pin(async move {
-                        spawner
-                            .spawn(move |manager, ctx| {
-                                manager.save_credentials_to_secure_storage(
-                                    ctx,
-                                    installation_uuid,
-                                    credentials,
-                                );
-                            })
-                            .await
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "Failed to persist auto-refreshed MCP credentials: {err:?}"
-                                )
-                            })?;
-                        Ok(())
-                    })
-                }),
+                credential_namespace,
+                credential_key,
+                credential_backend,
                 requires_authentication: Box::new(move |uuid, csrf_state, auth_url| {
                     let spawner = requires_authentication_spawner.clone();
                     Box::pin(async move {
@@ -1083,6 +1194,8 @@ impl TemplatableMCPServerManager {
                         Ok(())
                     })
                 }),
+                became_waiter,
+                owner_relay,
                 authenticated: Some(Box::new(move |server_name| {
                     let spawner = authenticated_spawner.clone();
                     Box::pin(async move {

@@ -33,6 +33,8 @@ warpui.workspace = true
 warpui_extras = { workspace = true, features = ["default", "user_preferences-toml"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+fs4.workspace = true
+instant.workspace = true
 rmcp = { workspace = true, features = ["client", "client-side-sse", "auth", "transport-streamable-http-client-reqwest", "transport-child-process"] }
 tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "process", "io-util", "net"] }
 
@@ -41,3 +43,4 @@ windows = { workspace = true, features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
 axum.workspace = true
+tempfile.workspace = true

@@ -150,6 +150,9 @@ pub enum ServerCardStatus {
     SavedToDrive,
     Installed,
     StartingServer,
+    /// Another Warp instance is performing authentication; this instance is
+    /// waiting for the shared credentials and has not opened a page.
+    WaitingForAuthentication,
     Authenticating,
     Running,
     ShuttingDown,
@@ -162,6 +165,7 @@ impl From<MCPServerState> for ServerCardStatus {
         match state {
             MCPServerState::NotRunning => ServerCardStatus::Installed,
             MCPServerState::Starting => ServerCardStatus::StartingServer,
+            MCPServerState::WaitingForAuthentication => ServerCardStatus::WaitingForAuthentication,
             MCPServerState::Authenticating => ServerCardStatus::Authenticating,
             MCPServerState::Running => ServerCardStatus::Running,
             MCPServerState::ShuttingDown => ServerCardStatus::ShuttingDown,
@@ -244,6 +248,26 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     color: StatusColor::Yellow,
                 }),
                 status_line: Some("Starting server...".to_string()),
+                background: Background::Filled,
+                full_card_clickable: false,
+            },
+            ServerCardStatus::WaitingForAuthentication => ServerCardOptions {
+                show_view_logs_icon_button: true,
+                show_log_out_icon_button: false,
+                show_share_icon_button: false,
+                show_edit_config_icon_button: true,
+                show_update_available_icon_button: false,
+                show_view_logs_text_button: false,
+                show_edit_config_text_button: false,
+                show_setup_text_button: false,
+                show_add_icon: false,
+
+                server_running_switch_state: Some(true),
+                status_indicator: Some(StatusElement {
+                    indicator_type: StatusElementTypes::Circle,
+                    color: StatusColor::Yellow,
+                }),
+                status_line: Some("Waiting for auth in another Warp instance…".to_string()),
                 background: Background::Filled,
                 full_card_clickable: false,
             },

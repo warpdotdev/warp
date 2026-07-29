@@ -1,4 +1,6 @@
 pub mod manager;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod oauth_relay;
 pub mod templatable_manager;
 
 #[cfg(not(target_family = "wasm"))]

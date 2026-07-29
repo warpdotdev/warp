@@ -491,8 +491,26 @@ impl UriHost {
             UriHost::Mcp => {
                 #[cfg(not(target_family = "wasm"))]
                 {
-                    let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
-                        .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
+                    use crate::ai::mcp::oauth_relay::{
+                        process_has_local_oauth_flow, spawn_forward_oauth_callback,
+                    };
+                    // If this process is the leader for the callback's CSRF
+                    // state, handle it locally (the existing path validates the
+                    // state and delivers the result to the leader's OAuth
+                    // channel). Otherwise forward it to the current leader over
+                    // the cross-process relay so a callback delivered to a
+                    // follower still reaches the leader.
+                    let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx).update(
+                        ctx,
+                        |manager, ctx| {
+                            if process_has_local_oauth_flow(manager, url) {
+                                manager.handle_oauth_callback(url)
+                            } else {
+                                spawn_forward_oauth_callback(url.clone(), ctx);
+                                Ok(())
+                            }
+                        },
+                    );
                     if let Err(e) = result {
                         report_error!(e.context("Failed to handle MCP OAuth callback"));
                     }

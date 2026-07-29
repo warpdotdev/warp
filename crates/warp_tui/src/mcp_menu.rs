@@ -215,6 +215,13 @@ impl TuiMcpMenuModel {
                     ("offline".to_string(), Some(TuiMcpAction::Start(server.id)))
                 }
                 TuiMcpServerStatus::Starting => ("starting…".to_string(), None),
+                // Another Warp instance owns the interactive OAuth flow; this
+                // follower has no reopenable authorization URL, so the row is
+                // informational only (not selectable). `ReopenAuthorization` is
+                // a no-op for this state per spec invariant #8.
+                TuiMcpServerStatus::WaitingForAuthentication => {
+                    ("waiting for auth in another instance…".to_string(), None)
+                }
                 TuiMcpServerStatus::Authenticating => (
                     "authentication required".to_string(),
                     server
@@ -259,3 +266,7 @@ impl TuiMcpMenuModel {
 impl Entity for TuiMcpMenuModel {
     type Event = TuiMcpMenuEvent;
 }
+
+#[cfg(test)]
+#[path = "mcp_menu_tests.rs"]
+mod tests;

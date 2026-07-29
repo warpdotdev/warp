@@ -235,6 +235,15 @@ impl TemplatableMCPServerManager {
     pub fn authorization_url(&self, uuid: Uuid) -> Option<&str> {
         self.authorization_urls.get(&uuid).map(String::as_str)
     }
+
+    /// Returns `true` if this process has a pending OAuth flow for the given
+    /// CSRF `state` (i.e. it is the leader for that flow). The desktop URI
+    /// handler uses this to decide whether to handle a callback locally or
+    /// forward it to the leader in another process.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn has_pending_oauth_csrf_state(&self, state: &str) -> bool {
+        self.pending_oauth_csrf.contains_key(state)
+    }
     #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
     pub fn has_credentials(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
         if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {

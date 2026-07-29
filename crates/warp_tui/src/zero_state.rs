@@ -346,6 +346,7 @@ fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, boo
         TuiMcpConfigState::Ready => {
             let mut running = 0;
             let mut starting = 0;
+            let mut waiting = 0;
             let mut authenticating = 0;
             let mut stopping = 0;
             let mut failed = 0;
@@ -354,6 +355,7 @@ fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, boo
                 match &server.status {
                     TuiMcpServerStatus::Offline => offline += 1,
                     TuiMcpServerStatus::Starting => starting += 1,
+                    TuiMcpServerStatus::WaitingForAuthentication => waiting += 1,
                     TuiMcpServerStatus::Authenticating => authenticating += 1,
                     TuiMcpServerStatus::Running => running += 1,
                     TuiMcpServerStatus::Stopping => stopping += 1,
@@ -366,6 +368,9 @@ fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, boo
             }
             if starting > 0 {
                 parts.push(format!("{starting} starting"));
+            }
+            if waiting > 0 {
+                parts.push(format!("{waiting} waiting for auth"));
             }
             if authenticating > 0 {
                 parts.push(format!("{authenticating} needs auth"));
