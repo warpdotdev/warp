@@ -476,6 +476,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);
+    register_test!(test_ctrl_slash_emits_unit_separator_in_legacy_mode);
     register_test!(test_keyboard_protocol_enabled_shift_enter);
     register_test!(test_keyboard_protocol_enabled_shifted_symbol_uses_unshifted_keycode);
     register_test!(test_keyboard_protocol_query_and_apply_modes);

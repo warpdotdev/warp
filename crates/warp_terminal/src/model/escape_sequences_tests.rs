@@ -58,6 +58,101 @@ fn test_keystroke_to_c0_control_code() {
 }
 
 #[test]
+fn test_ctrl_slash_emits_unit_separator_with_a_dedicated_slash_key() {
+    let keystroke = Keystroke::parse("ctrl-/").unwrap();
+    let terminal_model_mock = TerminalModelMock::new();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &keystroke,
+            key_without_modifiers: Some("/"),
+            chars: Some("/"),
+        }
+        .to_escape_sequence(&terminal_model_mock),
+        Some(vec![C0::US])
+    );
+}
+
+#[test]
+fn test_ctrl_slash_emits_unit_separator_when_the_layout_requires_shift() {
+    // macOS reports these values for Ctrl+Shift+7 on Turkish-QWERTY-PC: the logical key from
+    // `charactersIgnoringModifiers` is "/", while both the physical base key and `characters`
+    // are "7".
+    let keystroke = Keystroke::parse("ctrl-shift-/").unwrap();
+    let terminal_model_mock = TerminalModelMock::new();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &keystroke,
+            key_without_modifiers: Some("7"),
+            chars: Some("7"),
+        }
+        .to_escape_sequence(&terminal_model_mock),
+        Some(vec![C0::US])
+    );
+}
+
+#[test]
+fn test_ctrl_slash_legacy_mapping_preserves_other_modified_keys() {
+    let terminal_model_mock = TerminalModelMock::new();
+    let unit_separator = Some(vec![C0::US]);
+
+    // On a US layout, Shift changes the logical slash key to "?"; the OS-provided DEL character
+    // must remain available to the caller instead of being replaced with Unit Separator.
+    let ctrl_question_mark = Keystroke::parse("ctrl-shift-?").unwrap();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &ctrl_question_mark,
+            key_without_modifiers: Some("/"),
+            chars: Some("\x7f"),
+        }
+        .to_escape_sequence(&terminal_model_mock),
+        None
+    );
+
+    for keystroke in [
+        Keystroke::parse("ctrl-alt-/").unwrap(),
+        Keystroke::parse("ctrl-cmd-/").unwrap(),
+        Keystroke::parse("ctrl-meta-/").unwrap(),
+    ] {
+        assert_ne!(
+            KeystrokeWithDetails {
+                keystroke: &keystroke,
+                key_without_modifiers: Some("/"),
+                chars: Some("/"),
+            }
+            .to_escape_sequence(&terminal_model_mock),
+            unit_separator
+        );
+    }
+}
+
+#[test]
+fn test_ctrl_slash_uses_kitty_encoding_when_the_protocol_is_enabled() {
+    let terminal_model_mock = mock_with_all_keys_as_escape();
+
+    let dedicated_slash = Keystroke::parse("ctrl-/").unwrap();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &dedicated_slash,
+            key_without_modifiers: Some("/"),
+            chars: Some("/"),
+        }
+        .to_escape_sequence(&terminal_model_mock),
+        Some(b"\x1b[47;5u".to_vec())
+    );
+
+    let shifted_layout_slash = Keystroke::parse("ctrl-shift-/").unwrap();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &shifted_layout_slash,
+            key_without_modifiers: Some("7"),
+            chars: Some("7"),
+        }
+        .to_escape_sequence(&terminal_model_mock),
+        Some(b"\x1b[55;6u".to_vec())
+    );
+}
+
+#[test]
 fn test_shift_backspace_emits_del_sequence() {
     // Regression test: Shift+Backspace must emit DEL (0x7f), not BS (0x08).
     // 0x08 is Ctrl+H, which readline-style TUIs interpret as backward-kill-word.

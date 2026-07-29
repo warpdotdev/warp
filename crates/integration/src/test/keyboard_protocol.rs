@@ -140,6 +140,82 @@ pub fn test_keyboard_protocol_disabled_shift_enter() -> Builder {
         )
 }
 
+/// Test that Ctrl+/ sends Unit Separator in legacy terminal mode. These synthetic events model the
+/// output of the platform event conversion for both dedicated and shifted slash keys; native
+/// NSEvent conversion itself is covered by platform-level probes rather than this hermetic runner.
+pub fn test_ctrl_slash_emits_unit_separator_in_legacy_mode() -> Builder {
+    new_builder()
+        .with_setup(setup_python_script!(
+            "read_keys.py",
+            "../../assets/read_keys.py"
+        ))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            TestStep::new("Execute read_keys.py")
+                .with_typed_characters(&["python3 ~/read_keys.py"])
+                .with_keystrokes(&["enter"])
+                .add_assertion(
+                    assert_long_running_block_executing_for_single_terminal_in_tab(true, 0),
+                ),
+        )
+        .with_step(
+            TestStep::new("Wait for script to be ready")
+                .add_assertion(assert_output_contains(
+                    "Ready",
+                    "Expected the key reader to be ready",
+                ))
+                .set_timeout(Duration::from_secs(5)),
+        )
+        .with_step(
+            TestStep::new("Send Ctrl+/ from a layout with a dedicated slash key")
+                .with_event(Event::KeyDown {
+                    keystroke: Keystroke::parse("ctrl-/").unwrap(),
+                    chars: "/".to_string(),
+                    details: KeyEventDetails {
+                        key_without_modifiers: Some("/".to_string()),
+                        ..Default::default()
+                    },
+                    is_composing: false,
+                })
+                .set_timeout(Duration::from_secs(5))
+                .add_assertion(assert_output_contains(
+                    "0x1f",
+                    "Expected Ctrl+/ to send Unit Separator (0x1f)",
+                )),
+        )
+        .with_step(
+            TestStep::new("Send Ctrl+/ from a layout that requires Shift for slash")
+                .with_event(Event::KeyDown {
+                    // macOS Turkish-QWERTY-PC reports:
+                    // - charactersIgnoringModifiers (the logical key): "/"
+                    // - the physical base key: "7"
+                    // - characters with Control held: "7"
+                    keystroke: Keystroke::parse("ctrl-shift-/").unwrap(),
+                    chars: "7".to_string(),
+                    details: KeyEventDetails {
+                        key_without_modifiers: Some("7".to_string()),
+                        ..Default::default()
+                    },
+                    is_composing: false,
+                })
+                .set_timeout(Duration::from_secs(5))
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, _ctx| {
+                        let model = view.model.lock();
+                        let output = model.block_list().active_block().output_to_string();
+                        async_assert!(
+                            output.matches("0x1f").count() >= 2,
+                            "Expected both Ctrl+/ events to send Unit Separator (0x1f), but output was: {output}"
+                        )
+                    })
+                }),
+        )
+        .with_step(
+            new_step_with_default_assertions("Send Ctrl+C to exit").with_keystrokes(&["ctrl-c"]),
+        )
+}
+
 /// Test that when keyboard protocol is enabled, Shift+Enter sends CSI u sequence
 pub fn test_keyboard_protocol_enabled_shift_enter() -> Builder {
     FeatureFlag::KittyKeyboardProtocol.set_enabled(true);

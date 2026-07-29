@@ -3,7 +3,10 @@ use warpui::keymap::{EditableBinding, Keystroke, Trigger};
 use warpui::platform::OperatingSystem;
 
 use crate::terminal;
-use crate::util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke};
+use crate::util::bindings::{
+    CONTROL_CHARACTER_KEY_REGEX, CustomAction, custom_tag_to_keystroke,
+    keybinding_name_to_display_string, trigger_to_keystroke,
+};
 use crate::workspace::WorkspaceAction;
 
 #[test]
@@ -71,6 +74,21 @@ fn test_keybinding_name_to_display_string() {
             );
         });
     });
+}
+
+#[test]
+fn test_ctrl_slash_is_reserved_for_pty_input() {
+    assert!(CONTROL_CHARACTER_KEY_REGEX.is_match("ctrl-/"));
+}
+
+#[test]
+fn test_toggle_keybindings_page_default_is_mac_only() {
+    let keystroke = custom_tag_to_keystroke(CustomAction::ToggleKeybindingsPage.into());
+    if OperatingSystem::get().is_mac() {
+        assert_eq!(keystroke, Keystroke::parse("cmd-/").ok());
+    } else {
+        assert_eq!(keystroke, None);
+    }
 }
 
 #[test]

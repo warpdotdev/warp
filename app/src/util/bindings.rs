@@ -186,13 +186,14 @@ lazy_static! {
     /// * `^]`: Group Separator
     /// * `^^`: Record Separator
     /// * `^_`: Unit Separator
+    /// * `^/`: Unit Separator (legacy alias)
     /// * `^?`: Delete
     ///
     /// ## Note
     /// Though caret notation uses uppercase letters (`^C` instead of `^c`), we validate using
     /// _lowercase_ characters because it is impossible to create a [`Keystroke`] of the form
     /// `ctrl-[A-Z]`. See [`Keystroke::parse`].
-    pub static ref CONTROL_CHARACTER_KEY_REGEX: Regex = Regex::new(r"^ctrl-[a-z@\[\\\]^_?]$").expect("should be able to construct regex");
+    pub static ref CONTROL_CHARACTER_KEY_REGEX: Regex = Regex::new(r"^ctrl-[a-z@\[\\\]^_/?]$").expect("should be able to construct regex");
 
     /// Set of actions on Mac that should be considered valid bindings even though they aren't PTY
     /// compliant. We weren't always diligent about avoiding bindings that could conflict with
@@ -363,7 +364,7 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         // differently compared to the app which saves the resulting character used with shift
         // TODO: resolve these keybinding differences
         CustomAction::ToggleResourceCenter => Keystroke::parse("ctrl-shift-/").ok(),
-        CustomAction::ToggleKeybindingsPage => Keystroke::parse("cmdorctrl-/").ok(),
+        CustomAction::ToggleKeybindingsPage => mac_only_keystroke("cmd-/"),
         CustomAction::ScrollToTopOfSelectedBlocks => Keystroke::parse("cmdorctrl-shift-up").ok(),
         CustomAction::ScrollToBottomOfSelectedBlocks => {
             Keystroke::parse("cmdorctrl-shift-down").ok()
@@ -836,7 +837,7 @@ impl BindingGroup {
 /// of using `cmdorctrl-XX` to construct a platform agnostic keybinding does not work here because
 /// `ctrl-XX` would conflict with the PTY because it is reserved as a control character.
 ///
-/// Bindings of the form `ctrl-[a-z@[\]^_?]` are reserved as control characters. We don't want to
+/// Bindings of the form `ctrl-[a-z@[\]^_/?]` are reserved as control characters. We don't want to
 /// create bindings for in-app actions that would conflict with these control characters because we
 /// would end up preventing the user from sending these control characters to the PTY. To avoid
 /// this, we follow other terminals and use `ctrl-shift-XX` for in-app bindings if the binding would
@@ -886,7 +887,7 @@ pub fn cmd_or_ctrl_shift(key: &str) -> String {
 /// Returns whether the given [`BindingLens`] is compliant with the PTY.
 /// A binding is considered PTY compliant if it does not interfere with a control character that
 /// needs to be sent to the PTY. A binding is considered to be a control character if the only
-/// modifier set is `ctrl` and the key is one of `a-z@[\]^_?`.
+/// modifier set is `ctrl` and the key is one of `a-z@[\]^_/?`.
 pub fn is_binding_pty_compliant(binding: BindingLens) -> IsBindingValid {
     let trigger = binding.original_trigger.unwrap_or(binding.trigger);
     let Some(keystroke) = trigger_to_keystroke(trigger) else {

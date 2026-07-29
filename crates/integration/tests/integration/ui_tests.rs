@@ -350,6 +350,7 @@ integration_tests! {
 
     // Keyboard protocol tests
     test_keyboard_protocol_disabled_shift_enter,
+    test_ctrl_slash_emits_unit_separator_in_legacy_mode,
     test_keyboard_protocol_enabled_shift_enter,
     test_keyboard_protocol_enabled_shifted_symbol_uses_unshifted_keycode,
     test_keyboard_protocol_query_and_apply_modes,

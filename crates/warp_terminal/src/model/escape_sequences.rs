@@ -588,6 +588,16 @@ fn keystroke_to_c0_control_code(
         ]);
     }
 
+    // Legacy terminal input encodes logical Ctrl+/ as Unit Separator. The Kitty legacy mapping
+    // likewise distinguishes "/" (31) from "?" (127), so matching the semantic key does not
+    // consume Ctrl+? on layouts where Shift changes slash to question mark. Other layouts require
+    // Shift to produce the logical "/" character, so do not reject Shift here. Enhanced keyboard
+    // protocols are handled before this legacy fallback and retain the complete modifier state.
+    if keystroke.ctrl && !keystroke.alt && !keystroke.cmd && !keystroke.meta && keystroke.key == "/"
+    {
+        return Some(vec![C0::US]);
+    }
+
     // Only emit C0 codes on ctrl-modified keystrokes, without other modifiers, per the VT-220
     // spec.
     if !(keystroke.ctrl && !keystroke.alt && !keystroke.shift && !keystroke.meta) {
