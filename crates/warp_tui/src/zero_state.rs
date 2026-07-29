@@ -16,8 +16,8 @@ use ai::project_context::model::{
 };
 use warp::tui_export::{
     ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
-    SkillManager, SkillManagerEvent, TuiMcpConfigState, TuiMcpManager, TuiMcpServerStatus,
-    TuiUserInfoManager, TuiUserInfoManagerEvent,
+    SkillManager, SkillManagerEvent, TuiMcpManager, TuiMcpServerStatus, TuiUserInfoManager,
+    TuiUserInfoManagerEvent,
 };
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -368,16 +368,6 @@ fn render_mcp_section(mut column: TuiFlex, builder: &TuiUiBuilder, app: &AppCont
             .truncate()
             .finish(),
     );
-    if matches!(snapshot.config_state, TuiMcpConfigState::Missing) {
-        column = column.child(
-            TuiText::new(abbreviate_home_prefix(
-                &snapshot.config_path.display().to_string(),
-            ))
-            .with_style(builder.dim_text_style())
-            .truncate()
-            .finish(),
-        );
-    }
 
     let (label, is_error) = mcp_status_label(snapshot);
     let style = if is_error {
@@ -387,53 +377,77 @@ fn render_mcp_section(mut column: TuiFlex, builder: &TuiUiBuilder, app: &AppCont
     };
     column.child(TuiText::new(label).with_style(style).truncate().finish())
 }
+#[derive(Default)]
+struct McpStatusCounts {
+    running: usize,
+    starting: usize,
+    authenticating: usize,
+    stopping: usize,
+    failed: usize,
+    offline: usize,
+    available: usize,
+}
 
-fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, bool) {
-    match &snapshot.config_state {
-        TuiMcpConfigState::Invalid { .. } => ("Config error · run /mcp".to_string(), true),
-        TuiMcpConfigState::Missing => ("Not configured · /mcp".to_string(), false),
-        TuiMcpConfigState::Ready if snapshot.servers.is_empty() => {
-            ("No servers configured · run /mcp".to_string(), false)
-        }
-        TuiMcpConfigState::Ready => {
-            let mut running = 0;
-            let mut starting = 0;
-            let mut authenticating = 0;
-            let mut stopping = 0;
-            let mut failed = 0;
-            let mut offline = 0;
-            for server in &snapshot.servers {
-                match &server.status {
-                    TuiMcpServerStatus::Offline => offline += 1,
-                    TuiMcpServerStatus::Starting => starting += 1,
-                    TuiMcpServerStatus::Authenticating => authenticating += 1,
-                    TuiMcpServerStatus::Running => running += 1,
-                    TuiMcpServerStatus::Stopping => stopping += 1,
-                    TuiMcpServerStatus::Failed { .. } => failed += 1,
-                }
-            }
-            let mut parts = Vec::new();
-            if running > 0 {
-                parts.push(format!("{running} connected"));
-            }
-            if starting > 0 {
-                parts.push(format!("{starting} starting"));
-            }
-            if authenticating > 0 {
-                parts.push(format!("{authenticating} needs auth"));
-            }
-            if stopping > 0 {
-                parts.push(format!("{stopping} stopping"));
-            }
-            if failed > 0 {
-                parts.push(format!("{failed} failed"));
-            }
-            if offline > 0 {
-                parts.push(format!("{offline} offline"));
-            }
-            (format!("{} · /mcp", parts.join(" · ")), false)
+impl McpStatusCounts {
+    fn record(&mut self, status: &TuiMcpServerStatus) {
+        match status {
+            TuiMcpServerStatus::Available => self.available += 1,
+            TuiMcpServerStatus::Offline => self.offline += 1,
+            TuiMcpServerStatus::Starting => self.starting += 1,
+            TuiMcpServerStatus::Authenticating => self.authenticating += 1,
+            TuiMcpServerStatus::Running => self.running += 1,
+            TuiMcpServerStatus::Stopping => self.stopping += 1,
+            TuiMcpServerStatus::Failed { .. } => self.failed += 1,
         }
     }
+}
+
+fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, bool) {
+    if snapshot.servers.is_empty() && snapshot.diagnostics.is_empty() {
+        return ("No servers available · run /mcp".to_owned(), false);
+    }
+    let mut counts = McpStatusCounts::default();
+    for server in &snapshot.servers {
+        counts.record(&server.status);
+    }
+    let McpStatusCounts {
+        running,
+        starting,
+        authenticating,
+        stopping,
+        failed,
+        offline,
+        available,
+    } = counts;
+    let mut parts = Vec::new();
+    if running > 0 {
+        parts.push(format!("{running} connected"));
+    }
+    if starting > 0 {
+        parts.push(format!("{starting} starting"));
+    }
+    if authenticating > 0 {
+        parts.push(format!("{authenticating} needs auth"));
+    }
+    if stopping > 0 {
+        parts.push(format!("{stopping} stopping"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    if offline > 0 {
+        parts.push(format!("{offline} offline"));
+    }
+    if available > 0 {
+        parts.push(format!("{available} available"));
+    }
+    if !snapshot.diagnostics.is_empty() {
+        parts.push(format!("{} config errors", snapshot.diagnostics.len()));
+    }
+    (
+        format!("{} · /mcp", parts.join(" · ")),
+        !snapshot.diagnostics.is_empty(),
+    )
 }
 
 /// The login-info line: the signed-in account (email, falling back to the

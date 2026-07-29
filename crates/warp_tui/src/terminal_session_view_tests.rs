@@ -71,7 +71,8 @@ use super::{
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
     log_bundle_success_message, mcp_primary_action_hint, raw_prompt_if_not_blank,
-    render_mcp_menu_footer, voice_argument_is_empty, voice_command_argument,
+    render_mcp_install_footer, render_mcp_menu_footer, voice_argument_is_empty,
+    voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -119,6 +120,24 @@ fn only_conversation_list_restores_emit_restore_telemetry() {
     assert!(TuiConversationRestoreOrigin::ConversationList.records_telemetry());
 }
 
+#[test]
+fn mcp_install_footer_labels_final_value_as_install_and_enable() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let footer = render_mcp_install_footer(
+                &TuiUiBuilder::from_app(ctx),
+                Some("to install and enable"),
+            )
+            .finish();
+            assert_eq!(
+                render_element(footer, ctx, 120).to_lines(),
+                vec!["Enter to install and enable  Esc to cancel".to_owned()],
+            );
+        });
+    });
+}
+
 fn todo(id: &str, title: &str) -> AIAgentTodo {
     AIAgentTodo::new(id.to_owned().into(), title.to_owned(), String::new())
 }
@@ -158,7 +177,7 @@ fn mcp_menu_footer_replaces_status_with_controls() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let footer = render_mcp_menu_footer(
                 &TuiUiBuilder::from_app(ctx),
-                Some(TuiMcpAction::Stop(TuiMcpServerId(1))),
+                Some(TuiMcpAction::Stop(TuiMcpServerId::FileBased(1))),
                 true,
             )
             .finish();
@@ -269,7 +288,11 @@ fn api_keys_slash_command_opens_inline_and_clears_the_input() {
 
 #[test]
 fn mcp_primary_action_hints_match_available_actions() {
-    let id = TuiMcpServerId(1);
+    let id = TuiMcpServerId::FileBased(1);
+    assert_eq!(
+        mcp_primary_action_hint(TuiMcpAction::Enable(id)),
+        Some("to install and enable")
+    );
     assert_eq!(
         mcp_primary_action_hint(TuiMcpAction::Start(id)),
         Some("to start")
@@ -296,7 +319,7 @@ fn mcp_menu_footer_hides_unavailable_logout_control() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let footer = render_mcp_menu_footer(
                 &TuiUiBuilder::from_app(ctx),
-                Some(TuiMcpAction::Start(TuiMcpServerId(1))),
+                Some(TuiMcpAction::Start(TuiMcpServerId::FileBased(1))),
                 false,
             )
             .finish();

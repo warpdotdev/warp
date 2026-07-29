@@ -1154,7 +1154,7 @@ fn ctrl_r_dispatches_selected_mcp_credential_removal() {
             let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
             let input_mode = BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx);
             let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::Mcp);
-            let expected = TuiMcpAction::LogOut(TuiMcpServerId(7));
+            let expected = TuiMcpAction::LogOut(TuiMcpServerId::FileBased(7));
             let menu = TuiInlineMenu::new(TestMcpMenu { action: expected });
             let (window_id, view) = ctx.add_tui_window(
                 AddWindowOptions {
@@ -1347,6 +1347,7 @@ fn enter_and_escape_stop_listening_while_escape_cancels_transcribing() {
                 | TuiInputViewEvent::AcceptedConversation(_)
                 | TuiInputViewEvent::AcceptedModel(_)
                 | TuiInputViewEvent::AcceptedMcp(_)
+                | TuiInputViewEvent::AcceptedMcpInstall(_)
                 | TuiInputViewEvent::MoveFocusUp
                 | TuiInputViewEvent::AcceptedPromptAndCommandHistory { .. }
                 | TuiInputViewEvent::RequestShellCompletion
@@ -2225,6 +2226,7 @@ fn multiline_paste_emits_once_and_fallback_inserts_without_submitting() {
                 | TuiInputViewEvent::AcceptedConversation(_)
                 | TuiInputViewEvent::AcceptedModel(_)
                 | TuiInputViewEvent::AcceptedMcp(_)
+                | TuiInputViewEvent::AcceptedMcpInstall(_)
                 | TuiInputViewEvent::AcceptedPromptAndCommandHistory { .. }
                 | TuiInputViewEvent::RequestShellCompletion
                 | TuiInputViewEvent::BackspaceAtEmptyInput
