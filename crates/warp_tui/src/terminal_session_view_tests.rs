@@ -999,6 +999,39 @@ fn todo_updates_preserve_scroll_and_close_the_menu_when_the_list_disappears() {
                 view.read_only_menu_viewport.position(),
                 TuiViewportPosition::RowsFromTop(4)
             );
+            view.handle_action(
+                &TuiTerminalSessionAction::ToggleAutoApprove {
+                    show_feedback: false,
+                },
+                ctx,
+            );
+            assert_eq!(
+                view.read_only_menu_viewport.position(),
+                TuiViewportPosition::RowsFromTop(4)
+            );
+
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history
+                    .conversation_mut(&conversation_id)
+                    .unwrap()
+                    .set_todo_lists_for_test(vec![
+                        AIAgentTodoList::default()
+                            .with_pending_items(vec![todo("old", "Old task")]),
+                        AIAgentTodoList::default()
+                            .with_completed_items(vec![todo("done", "Completed task")])
+                            .with_pending_items(vec![todo("new", "New current task")]),
+                    ]);
+            });
+            view.handle_history_event(
+                &BlocklistAIHistoryEvent::UpdatedTodoList {
+                    terminal_surface_id: view.terminal_surface_id,
+                },
+                ctx,
+            );
+            assert_eq!(
+                view.read_only_menu_viewport.position(),
+                TuiViewportPosition::RowsFromTop(2)
+            );
 
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
                 history

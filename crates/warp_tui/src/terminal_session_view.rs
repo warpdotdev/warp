@@ -769,6 +769,9 @@ pub(crate) struct TuiTerminalSessionView {
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     read_only_menu_selection: TuiSelectionHandle,
     read_only_menu_viewport: TuiViewportedListState,
+    /// The selected conversation and active TODO-list generation currently
+    /// displayed by an open TODO menu.
+    todo_menu_list_key: Option<(AIConversationId, usize)>,
     /// Session-owned live state model shared by this surface and its input view.
     session_state: ModelHandle<TuiTerminalSessionStateModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
@@ -1862,6 +1865,10 @@ impl TuiTerminalSessionView {
         });
         ctx.subscribe_to_model(&suggestions_mode, |view, _, event, ctx| {
             view.read_only_menu_selection.clear();
+            view.todo_menu_list_key = match event.mode.read_only_menu() {
+                Some(TuiReadOnlyMenuKind::Todos) => view.active_todo_menu_list_key(ctx),
+                Some(TuiReadOnlyMenuKind::Shortcuts | TuiReadOnlyMenuKind::Status) | None => None,
+            };
             let scroll_top = event
                 .mode
                 .read_only_menu()
@@ -1884,13 +1891,7 @@ impl TuiTerminalSessionView {
             if view.is_focused_session(ctx) {
                 view.refresh_orchestration_tab_state(ctx);
             }
-            if todo_menu_is_open(view.suggestions_mode.as_ref(ctx).mode()) {
-                let scroll_top =
-                    view.read_only_menu_initial_scroll_top(TuiReadOnlyMenuKind::Todos, ctx);
-                view.read_only_menu_viewport
-                    .scroll_to_rows_from_top(scroll_top);
-                view.close_todo_menu_if_unavailable(ctx);
-            }
+            view.sync_open_todo_menu_list(ctx);
             ctx.notify();
         });
         ctx.subscribe_to_model(
@@ -2074,6 +2075,7 @@ impl TuiTerminalSessionView {
             suggestions_mode,
             read_only_menu_selection,
             read_only_menu_viewport,
+            todo_menu_list_key: None,
             session_state,
             conversation_menu,
             model_menu,
@@ -2788,7 +2790,7 @@ impl TuiTerminalSessionView {
             ctx.notify();
         }
         if matches!(event, BlocklistAIHistoryEvent::UpdatedTodoList { .. }) {
-            self.close_todo_menu_if_unavailable(ctx);
+            self.sync_open_todo_menu_list(ctx);
         }
 
         if matches!(
@@ -3439,11 +3441,17 @@ impl TuiTerminalSessionView {
     }
 
     fn has_active_todo_list(&self, ctx: &AppContext) -> bool {
-        self.conversation_selection
-            .as_ref(ctx)
-            .selected_conversation(ctx)
-            .and_then(AIConversation::active_todo_list)
-            .is_some_and(|todo_list| !todo_list.is_empty())
+        self.active_todo_menu_list_key(ctx).is_some()
+    }
+
+    fn active_todo_menu_list_key(&self, ctx: &AppContext) -> Option<(AIConversationId, usize)> {
+        let selection = self.conversation_selection.as_ref(ctx);
+        let conversation_id = selection.selected_conversation_id(ctx)?;
+        let conversation = selection.selected_conversation(ctx)?;
+        conversation
+            .active_todo_list()
+            .filter(|todo_list| !todo_list.is_empty())?;
+        Some((conversation_id, conversation.todo_lists().len()))
     }
 
     fn read_only_menu_initial_scroll_top(
@@ -3474,6 +3482,26 @@ impl TuiTerminalSessionView {
                 ctx,
             );
         });
+    }
+
+    fn sync_open_todo_menu_list(&mut self, ctx: &mut ViewContext<Self>) {
+        if !todo_menu_is_open(self.suggestions_mode.as_ref(ctx).mode()) {
+            self.todo_menu_list_key = None;
+            return;
+        }
+        let key = self.active_todo_menu_list_key(ctx);
+        let Some(key) = key else {
+            self.todo_menu_list_key = None;
+            self.close_todo_menu_if_unavailable(ctx);
+            return;
+        };
+        if self.todo_menu_list_key.as_ref() != Some(&key) {
+            self.todo_menu_list_key = Some(key);
+            let scroll_top =
+                self.read_only_menu_initial_scroll_top(TuiReadOnlyMenuKind::Todos, ctx);
+            self.read_only_menu_viewport
+                .scroll_to_rows_from_top(scroll_top);
+        }
     }
 
     fn toggle_todo_menu(&mut self, ctx: &mut ViewContext<Self>) {
