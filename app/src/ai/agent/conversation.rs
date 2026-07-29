@@ -187,10 +187,28 @@ pub struct ConversationUsageTotals {
     /// server did not provide a historical baseline; it must not be rendered
     /// as `$0.00` or as an incremental-only total.
     pub cost_in_cents: Option<f32>,
-    /// Whether the conversation has any usage metadata. This distinguishes a
-    /// new conversation with no usage (hide the footer entry) from a restored
-    /// legacy conversation whose historical cost is unknown.
+    /// Whether the conversation has reported any usage. Derived from the
+    /// contents of the usage metadata (not its mere presence), so a restored
+    /// conversation that never ran a request keeps the footer entry hidden,
+    /// while a restored legacy conversation with real usage but an unknown
+    /// historical cost still shows it.
     pub has_usage: bool,
+}
+
+/// Whether persisted or server usage metadata carries evidence that the
+/// conversation actually incurred usage. Metadata presence alone is not
+/// enough: the local persistence path always writes a (possibly all-default)
+/// metadata blob, and a restored conversation that never ran a request must
+/// keep the footer's usage entry hidden.
+fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool {
+    metadata.credits_spent != 0.0
+        || metadata.platform_credits_spent != 0.0
+        || metadata
+            .total_provider_cost_in_cents
+            .is_some_and(|cost| cost != 0.0)
+        || !metadata.token_usage.is_empty()
+        || metadata.context_window_usage != 0.0
+        || metadata.was_summarized
 }
 
 // basic info for creating a dummy command block based on an exchange's inputs
@@ -322,8 +340,9 @@ pub struct AIConversation {
     /// conversations start at a known zero; restored legacy conversations can
     /// remain `None` until a server snapshot is available.
     total_provider_cost_in_cents: Option<f32>,
-    /// True once usage metadata has been hydrated or a live response reports
-    /// usage, even when all numeric totals are zero.
+    /// True once hydrated usage metadata shows evidence of usage (see
+    /// [`usage_metadata_indicates_usage`]) or a live response reports usage
+    /// (even when its numeric totals are zero).
     has_usage_metadata: bool,
 
     /// Fallback title used when no task description or initial query exists.
@@ -566,7 +585,10 @@ impl AIConversation {
             let server_conversation_token = data
                 .server_conversation_token
                 .map(ServerConversationToken::new);
-            let has_usage_metadata = data.conversation_usage_metadata.is_some();
+            let has_usage_metadata = data
+                .conversation_usage_metadata
+                .as_ref()
+                .is_some_and(usage_metadata_indicates_usage);
             let conversation_usage_metadata = data.conversation_usage_metadata.unwrap_or_default();
             let reverted_action_ids: HashSet<AIAgentActionId> = data
                 .reverted_action_ids
@@ -1104,12 +1126,17 @@ impl AIConversation {
     }
 
     pub fn set_server_metadata(&mut self, metadata: ServerAIConversationMetadata) {
+        // An absent field (legacy server or conversation) must not erase a
+        // known baseline.
         if let Some(total_provider_cost_in_cents) = metadata.usage.total_provider_cost_in_cents {
             self.total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
             self.conversation_usage_metadata
                 .total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
-            self.has_usage_metadata = true;
         }
+        // Usage evidence is derived from the metadata's contents (not its
+        // presence) so a zero-usage conversation keeps the footer entry
+        // hidden.
+        self.has_usage_metadata |= usage_metadata_indicates_usage(&metadata.usage);
         self.server_metadata = Some(metadata);
     }
 

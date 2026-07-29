@@ -111,6 +111,74 @@ fn test_convert_conversation_data_to_ai_conversation_sets_restored_run_id() {
     assert!(conversation.usage_totals().has_usage);
 }
 
+/// A later server-metadata snapshot without the provider-cost field (legacy
+/// server or conversation) must not erase a known baseline, and usage
+/// evidence must be derived from the metadata's contents.
+#[test]
+#[allow(deprecated)]
+fn set_server_metadata_keeps_known_baseline_when_cost_field_is_absent() {
+    let conversation_data = api::ConversationData {
+        tasks: vec![api::Task {
+            id: "root".to_string(),
+            messages: vec![],
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ordered_message_ids: vec![],
+    };
+    let mut conversation = convert_conversation_data_to_ai_conversation(
+        AIConversationId::new(),
+        &conversation_data,
+        test_server_metadata("server-token", None),
+        RestorationMode::Continue,
+    )
+    .expect("conversation should restore");
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+
+    let mut legacy_snapshot = test_server_metadata("server-token", None);
+    legacy_snapshot.usage.total_provider_cost_in_cents = None;
+    legacy_snapshot.usage.credits_spent = 2.0;
+    conversation.set_server_metadata(legacy_snapshot);
+
+    let totals = conversation.usage_totals();
+    assert_eq!(totals.cost_in_cents, Some(3.2));
+    assert!(totals.has_usage);
+}
+
+/// A server-metadata snapshot whose usage contents are all-default carries no
+/// usage evidence, so the footer's usage entry stays hidden.
+#[test]
+#[allow(deprecated)]
+fn set_server_metadata_with_zero_usage_keeps_footer_usage_hidden() {
+    let conversation_data = api::ConversationData {
+        tasks: vec![api::Task {
+            id: "root".to_string(),
+            messages: vec![],
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ordered_message_ids: vec![],
+    };
+    let mut zero_usage_metadata = test_server_metadata("server-token", None);
+    zero_usage_metadata.usage.total_provider_cost_in_cents = None;
+
+    let conversation = convert_conversation_data_to_ai_conversation(
+        AIConversationId::new(),
+        &conversation_data,
+        zero_usage_metadata,
+        RestorationMode::Continue,
+    )
+    .expect("conversation should restore");
+
+    let totals = conversation.usage_totals();
+    assert!(!totals.has_usage);
+    assert_eq!(totals.cost_in_cents, None);
+}
+
 #[test]
 fn test_convert_tool_call_result_to_input_transfer_control_snapshot() {
     let task_id = crate::ai::agent::task::TaskId::new("task".to_string());
