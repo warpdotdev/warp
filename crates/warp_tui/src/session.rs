@@ -40,6 +40,9 @@ const CLI_VERSION: &str = match option_env!("GIT_RELEASE_TAG") {
     None => "v0.0.0.0.0.0",
 };
 
+// Crossterm 0.29 drops associated text in all-key mode, which breaks AltGr and dead-key input.
+const REPORT_MODIFIER_KEY_LIFECYCLE: bool = false;
+
 #[derive(Debug, Parser)]
 #[command(name = "warp", version = CLI_VERSION)]
 struct TuiArgs {
@@ -230,7 +233,7 @@ fn init(
         },
         |_| RootTuiView::new(),
     );
-    match spawn_tui_driver(ctx, window_id, root.clone()) {
+    match spawn_tui_driver(ctx, window_id, root.clone(), REPORT_MODIFIER_KEY_LIFECYCLE) {
         Ok(driver) => {
             let sessions =
                 ctx.add_singleton_model(|_| TuiSessions::new(driver, exit_summary, resume_token));

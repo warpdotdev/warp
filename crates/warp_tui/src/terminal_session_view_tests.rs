@@ -18,10 +18,12 @@ use warp::tui_export::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals,
     Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
     LongRunningCommandControlState, PtyIntent, PtyIntentEvent, QueuedQueryModel, SizeInfo,
-    SizeUpdate, TaskId, TranscriptScope, TuiUpArrowHistoryItemKind, UserTakeOverReason,
-    export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
+    SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope,
+    TuiUpArrowHistoryItemKind, UserTakeOverReason, export_conversation_markdown,
+    register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::channel::Channel;
+use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -4288,6 +4290,111 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
             assert!(
                 ctx.check_view_or_child_focused(fixture.window_id, &parent_view.id()),
                 "root session input should own focus after escape"
+            );
+        });
+    });
+}
+
+/// Verifies that `/copy-debugging-id` is available for the TUI's eagerly-created blank
+/// conversation, matching the GUI's active-conversation semantics.
+#[test]
+fn copy_debugging_id_available_in_active_commands_at_zero_state() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.read(&app, |view, ctx| {
+            let has_copy_debugging_id = view
+                .slash_commands_source
+                .as_ref(ctx)
+                .active_commands()
+                .any(|(_, cmd)| cmd.kind == SlashCommandKind::CopyDebuggingId);
+            assert!(
+                has_copy_debugging_id,
+                "/copy-debugging-id must be available for the blank active conversation",
+            );
+        });
+    });
+}
+
+/// Verifies that `/handoff` remains available for the TUI's blank active conversation.
+#[test]
+fn handoff_is_available_at_zero_state() {
+    App::test((), |mut app| async move {
+        let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
+        let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.read(&app, |view, ctx| {
+            let active_names: Vec<&str> = view
+                .slash_commands_source
+                .as_ref(ctx)
+                .active_commands()
+                .map(|(_, cmd)| cmd.name)
+                .collect();
+
+            assert!(
+                active_names.contains(&slash_commands::MOVE_TO_CLOUD.name),
+                "/handoff must be active at zero state",
+            );
+        });
+    });
+}
+
+/// Verifies that the full TUI session renders the no-token error hint in its footer.
+#[test]
+fn copy_debugging_id_footer_hint_renders_in_session() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text(slash_commands::COPY_DEBUGGING_ID.name, ctx);
+            });
+            view.handle_submitted_input(slash_commands::COPY_DEBUGGING_ID.name, ctx);
+        });
+
+        // Render the full session and verify the error hint appears in the
+        // rendered output (footer_hint() feeds transient_hint.current() into
+        // the footer row at the bottom of the session canvas).
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(
+            rendered.contains(super::COPY_DEBUGGING_ID_NO_TOKEN_HINT),
+            "rendered session must contain the no-token hint in the footer; got:\n{rendered}",
+        );
+    });
+}
+
+/// Verifies that the footer hint slot shows an error-toned notice after
+/// `/copy-debugging-id` is executed when the conversation has no server token.
+/// `transient_hint.current()` is the canonical source read by `footer_hint()`
+/// when rendering the footer row, so asserting it covers the rendered behavior.
+#[test]
+fn copy_debugging_id_shows_error_hint_when_no_server_token() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_ID, None, ctx);
+        });
+
+        // The hint slot must carry the no-token error text with Error tone.
+        // `footer_hint()` reads `transient_hint.current()` verbatim when
+        // present, so this assertion covers what the footer renders.
+        view.read(&app, |view, _| {
+            let hint = view.transient_hint.current();
+            assert_eq!(
+                hint.map(|(text, _)| text),
+                Some(super::COPY_DEBUGGING_ID_NO_TOKEN_HINT),
+                "/copy-debugging-id with no server token must set the no-token error hint",
+            );
+            assert_eq!(
+                hint.map(|(_, tone)| tone),
+                Some(super::super::transient_hint::TransientHintTone::Error),
+                "the no-token hint must use the error tone",
             );
         });
     });
