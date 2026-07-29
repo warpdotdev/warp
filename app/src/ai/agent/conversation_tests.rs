@@ -300,6 +300,7 @@ fn custom_endpoint_usage_metadata(
         context_window_usage: 0.0,
         credits_spent: 0.0,
         platform_credits_spent: 0.0,
+        total_provider_cost_in_cents: None,
         summarized: false,
         token_usage: vec![],
         tool_usage_metadata: None,
@@ -686,6 +687,74 @@ fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
     });
 }
 
+/// Spec behavior #4: a `StreamFinished` carrying the server's cumulative
+/// provider cost is authoritative for that turn. A 3.2¢ baseline plus a
+/// response reporting a 1.2¢ per-request cost AND a 4.4¢ cumulative snapshot
+/// must display 4.4¢ — never 5.6¢ (snapshot plus the already-included
+/// per-request cost).
+#[test]
+fn stream_cumulative_snapshot_supersedes_local_accumulation_without_double_count() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation =
+            restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+        let mut usage_metadata = credits_usage_metadata(1.0, 0.0);
+        usage_metadata.total_provider_cost_in_cents = Some(4.4);
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![stream_token_usage("model-a", 10, 2, 1.2)],
+                    Some(usage_metadata),
+                    false,
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let totals = conversation.usage_totals();
+        let cost = totals
+            .cost_in_cents
+            .expect("a cumulative snapshot makes the total known");
+        assert!(
+            (cost - 4.4).abs() < 1e-6,
+            "the snapshot already includes the response's 1.2¢; expected 4.4¢ (never 5.6¢), got {cost}"
+        );
+    });
+}
+
+/// A restored legacy conversation with an unknown baseline becomes known as
+/// soon as a stream reports the server's cumulative provider cost.
+#[test]
+fn stream_cumulative_snapshot_recovers_unknown_legacy_baseline() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation =
+            restored_conversation(Some(conversation_data_with_provider_cost(None)));
+        let mut usage_metadata = credits_usage_metadata(1.0, 0.0);
+        usage_metadata.total_provider_cost_in_cents = Some(4.4);
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![stream_token_usage("model-a", 10, 2, 1.2)],
+                    Some(usage_metadata),
+                    false,
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let totals = conversation.usage_totals();
+        assert_eq!(totals.cost_in_cents, Some(4.4));
+        assert!(totals.has_usage);
+    });
+}
+
 /// A restored conversation whose persisted metadata shows no usage evidence
 /// must keep the footer's usage entry hidden — local persistence always
 /// writes a metadata blob, so presence alone is not usage.
@@ -700,8 +769,7 @@ fn restored_zero_usage_metadata_keeps_footer_usage_hidden() {
 
 #[test]
 fn restored_known_zero_cost_without_other_usage_keeps_footer_usage_hidden() {
-    let conversation =
-        restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
 
     let totals = conversation.usage_totals();
     assert!(!totals.has_usage);
@@ -860,6 +928,7 @@ fn credits_usage_metadata(
         context_window_usage: 0.0,
         credits_spent,
         platform_credits_spent,
+        total_provider_cost_in_cents: None,
         summarized: false,
         token_usage: vec![],
         tool_usage_metadata: None,
@@ -952,6 +1021,7 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             summarized: false,
             #[allow(deprecated)]
             token_usage: vec![],
@@ -1017,6 +1087,7 @@ fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fall
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             summarized: false,
             #[allow(deprecated)]
             token_usage: vec![],

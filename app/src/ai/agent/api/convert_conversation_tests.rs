@@ -147,6 +147,47 @@ fn set_server_metadata_keeps_known_baseline_when_cost_field_is_absent() {
     assert!(totals.has_usage);
 }
 
+/// Asynchronous GraphQL metadata snapshots can be stale relative to live
+/// stream accounting: a snapshot may seed or advance the known total but
+/// never regress it.
+#[test]
+#[allow(deprecated)]
+fn stale_server_metadata_snapshot_never_regresses_known_total() {
+    let conversation_data = api::ConversationData {
+        tasks: vec![api::Task {
+            id: "root".to_string(),
+            messages: vec![],
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ordered_message_ids: vec![],
+    };
+    let mut conversation = convert_conversation_data_to_ai_conversation(
+        AIConversationId::new(),
+        &conversation_data,
+        test_server_metadata("server-token", None),
+        RestorationMode::Continue,
+    )
+    .expect("conversation should restore");
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+
+    let mut newer_snapshot = test_server_metadata("server-token", None);
+    newer_snapshot.usage.total_provider_cost_in_cents = Some(4.4);
+    conversation.set_server_metadata(newer_snapshot);
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(4.4));
+
+    let mut stale_snapshot = test_server_metadata("server-token", None);
+    stale_snapshot.usage.total_provider_cost_in_cents = Some(3.2);
+    conversation.set_server_metadata(stale_snapshot);
+    assert_eq!(
+        conversation.usage_totals().cost_in_cents,
+        Some(4.4),
+        "a stale snapshot must never regress the displayed total"
+    );
+}
+
 /// A server-metadata snapshot whose usage contents are all-default carries no
 /// usage evidence, so the footer's usage entry stays hidden.
 #[test]

@@ -169,6 +169,7 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
             total_input_tokens: 0,
             credits_spent: conversation.inference_credits_spent(),
             platform_credits_spent: conversation.platform_credits_spent(),
+            total_provider_cost_in_cents: conversation.usage_totals().cost_in_cents,
             summarized: conversation.was_summarized(),
             #[allow(deprecated)]
             token_usage: conversation

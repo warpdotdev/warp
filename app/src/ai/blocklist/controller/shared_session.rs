@@ -518,6 +518,7 @@ impl BlocklistAIController {
                     context_window_usage: conversation.context_window_usage(),
                     credits_spent: conversation.inference_credits_spent(),
                     platform_credits_spent: conversation.platform_credits_spent(),
+                    total_provider_cost_in_cents: conversation.usage_totals().cost_in_cents,
                     summarized: conversation.was_summarized(),
                     total_input_tokens: 0,
                     #[allow(deprecated)]
