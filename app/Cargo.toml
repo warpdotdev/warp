@@ -696,6 +696,7 @@ default = [
     "solo_user_byok",
     "custom_model_routers",
     "supergrok",
+    "gemini_enterprise",
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
