@@ -129,10 +129,11 @@ impl InlineModelSelectorView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|_| {
+        let window_id = ctx.window_id();
+        let data_source = ctx.add_model(move |_| {
             // Built without the ambient model; the setter (called below for construction and by
             // the lazy shared-session viewer path) is the single point that attaches it.
-            ModelSelectorDataSource::new(terminal_view_id, None)
+            ModelSelectorDataSource::new(terminal_view_id, window_id, None)
         });
 
         let tab_configs = TAB_CONFIGS.clone();

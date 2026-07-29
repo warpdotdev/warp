@@ -6,9 +6,9 @@ use warp_cli::agent::OutputFormat;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::user::PrincipalType;
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
 
@@ -120,26 +120,20 @@ struct WhoamiOutput {
 }
 
 impl WhoamiOutput {
-    fn set_workspace(&mut self, workspace: Option<&Workspace>) {
+    fn set_workspace(&mut self, workspace: Option<&Workspace>, user_uid: UserUid) {
         let Some(workspace) = workspace else {
             return;
         };
-
-        self.team_uids = workspace
+        let teams: Vec<_> = workspace
             .teams
             .iter()
-            .map(|team| team.uid.to_string())
-            .collect();
-        self.team_names = workspace
-            .teams
-            .iter()
-            .map(|team| team.name.clone())
+            .filter(|team| team.members.iter().any(|member| member.uid == user_uid))
             .collect();
 
-        if workspace.teams.len() > 1 {
-            self.workspace_uid = Some(workspace.uid.into());
-            self.workspace_name = (!workspace.name.is_empty()).then(|| workspace.name.clone());
-        }
+        self.team_uids = teams.iter().map(|team| team.uid.to_string()).collect();
+        self.team_names = teams.iter().map(|team| team.name.clone()).collect();
+        self.workspace_uid = Some(workspace.uid.into());
+        self.workspace_name = (!workspace.name.is_empty()).then(|| workspace.name.clone());
     }
 
     fn pretty(&self, principal_type: PrincipalType) -> String {
@@ -155,19 +149,21 @@ impl WhoamiOutput {
             lines.push(format!("Email: {email}"));
         }
 
-        for (team_uid, team_name) in self.team_uids.iter().zip(&self.team_names) {
-            lines.push(format!("Team ID: {team_uid}"));
-            if !team_name.is_empty() {
-                lines.push(format!("Team Name: {team_name}"));
-            }
+        if let Some(workspace_uid) = &self.workspace_uid {
+            lines.push(format!("Workspace UID: {workspace_uid}"));
+        }
+        if let Some(workspace_name) = &self.workspace_name {
+            lines.push(format!("Workspace Name: {workspace_name}"));
+        }
+        if self.team_uids.len() > 1 {
+            lines.push("Teams:".to_string());
         }
 
-        if self.team_uids.len() > 1 {
-            if let Some(workspace_uid) = &self.workspace_uid {
-                lines.push(format!("Workspace UID: {workspace_uid}"));
-            }
-            if let Some(workspace_name) = &self.workspace_name {
-                lines.push(format!("Workspace Name: {workspace_name}"));
+        for (team_uid, team_name) in self.team_uids.iter().zip(&self.team_names) {
+            let indent = if self.team_uids.len() > 1 { "  " } else { "" };
+            lines.push(format!("{indent}Team ID: {team_uid}"));
+            if !team_name.is_empty() {
+                lines.push(format!("{indent}Team Name: {team_name}"));
             }
         }
 
@@ -189,15 +185,14 @@ pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
     let auth_state = AuthStateProvider::as_ref(ctx).get();
     let principal_type = auth_state.principal_type().unwrap_or_default();
 
-    let uid = auth_state
+    let user_uid = auth_state
         .user_id()
-        .map(|id| {
-            let s = id.as_string();
-            s.strip_prefix("serviceAccount:")
-                .map(String::from)
-                .unwrap_or(s)
-        })
         .ok_or_else(|| anyhow::anyhow!("Could not determine user ID. Are you logged in?"))?;
+    let uid = user_uid.as_string();
+    let uid = uid
+        .strip_prefix("serviceAccount:")
+        .map(String::from)
+        .unwrap_or(uid);
 
     let mut info = WhoamiOutput {
         uid,
@@ -227,7 +222,7 @@ pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
                 log::warn!("Failed to refresh team metadata for whoami: {err:#}");
             }
 
-            info.set_workspace(UserWorkspaces::as_ref(ctx).current_workspace());
+            info.set_workspace(UserWorkspaces::as_ref(ctx).current_workspace(), user_uid);
 
             match output_format {
                 OutputFormat::Json => {

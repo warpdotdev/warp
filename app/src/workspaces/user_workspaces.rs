@@ -16,8 +16,8 @@ use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
-    AdminEnablementSetting, CustomerType, EnterpriseSecretRegex, HostEnablementSetting,
-    UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    AdminEnablementSetting, BillingMetadata, CustomerType, EnterpriseSecretRegex,
+    HostEnablementSetting, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
 };
 use crate::ai::llms::LLMModelHost;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -35,9 +35,7 @@ use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
 };
 #[cfg(test)]
-use crate::workspaces::workspace::{
-    AIAutonomyPolicy, BillingMetadata, WorkspaceMember, WorkspaceSettings,
-};
+use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
 use crate::workspaces::workspace::{
     AiAutonomySettings, AiOverages, SandboxedAgentSettings, UsageBasedPricingSettings,
 };
@@ -219,17 +217,27 @@ impl UserWorkspaces {
         self.current_workspace()
             .and_then(|w| w.teams.iter().find(|t| t.uid == team_uid))
     }
+
     pub fn register_window(
         &mut self,
         window_id: WindowId,
-        source_window_id: Option<WindowId>,
+        team_uid: Option<ServerId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let team_uid = source_window_id
-            .and_then(|source_window_id| self.team_uid_for_window(source_window_id))
-            .or_else(|| self.self_serve_team_uid());
         self.window_team_uids.entry(window_id).or_insert(team_uid);
         ctx.notify();
+    }
+    pub fn inherited_or_default_team_uid(
+        &self,
+        source_window_id: Option<WindowId>,
+    ) -> Option<ServerId> {
+        source_window_id
+            .and_then(|source_window_id| self.team_uid_for_window(source_window_id))
+            .or_else(|| {
+                self.current_workspace()
+                    .and_then(|workspace| workspace.teams.first())
+                    .map(|team| team.uid)
+            })
     }
 
     pub fn set_team_for_window(
@@ -258,28 +266,6 @@ impl UserWorkspaces {
             .unwrap_or(false)
     }
 
-    /// Registers a new window pre-assigned to a specific team.
-    /// Unlike `register_window`, this bypasses the source-window / self-serve fallback
-    /// and always uses the provided `team_uid`. Used when the user explicitly requests
-    /// a new window scoped to a chosen team via the team switcher.
-    pub fn register_window_for_team(
-        &mut self,
-        window_id: WindowId,
-        team_uid: ServerId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        // Mirror `set_team_for_window`: insert a default (None) entry if absent, then
-        // set only when no team has been assigned yet.  Using `or_insert(Some(uid))`
-        // would silently no-op when the entry already exists as `None` (which
-        // `register_window` stores when there is no source window and no self-serve
-        // team), causing the explicit team choice to be discarded.
-        let window_team_uid = self.window_team_uids.entry(window_id).or_default();
-        if window_team_uid.is_none() {
-            *window_team_uid = Some(team_uid);
-        }
-        ctx.notify();
-    }
-
     pub fn team_for_window(&self, window_id: WindowId) -> Option<&Team> {
         self.team_uid_for_window(window_id)
             .and_then(|team_uid| self.team_from_uid(team_uid))
@@ -298,13 +284,23 @@ impl UserWorkspaces {
             .and_then(|window_id| self.team_for_window(window_id))
     }
 
-    fn initialize_unassigned_windows(&mut self) {
-        let Some(team_uid) = self.self_serve_team_uid() else {
-            return;
-        };
+    fn reconcile_window_team_assignments(&mut self) {
+        let team_uids = self
+            .current_workspace()
+            .map(|workspace| {
+                workspace
+                    .teams
+                    .iter()
+                    .map(|team| team.uid)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let fallback_team_uid = team_uids.first().copied();
 
         for window_team_uid in self.window_team_uids.values_mut() {
-            window_team_uid.get_or_insert(team_uid);
+            if window_team_uid.is_none_or(|team_uid| !team_uids.contains(&team_uid)) {
+                *window_team_uid = fallback_team_uid;
+            }
         }
     }
 
@@ -425,14 +421,6 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn self_serve_team(&self) -> Option<&Team> {
-        self.current_workspace().and_then(|w| w.teams.first())
-    }
-
-    pub fn self_serve_team_uid(&self) -> Option<ServerId> {
-        self.self_serve_team().map(|team| team.uid)
-    }
-
     pub fn sole_team(&self) -> Option<&Team> {
         let [team] = self.current_workspace()?.teams.as_slice() else {
             return None;
@@ -453,6 +441,10 @@ impl UserWorkspaces {
         self.current_workspace_uid
             .and_then(|workspace_uid| self.workspace_from_uid(workspace_uid))
     }
+    pub fn current_workspace_billing_metadata(&self) -> Option<&BillingMetadata> {
+        self.current_workspace()
+            .map(|workspace| &workspace.billing_metadata)
+    }
 
     pub fn current_workspace_mut(&mut self) -> Option<&mut Workspace> {
         self.current_workspace_uid
@@ -469,7 +461,7 @@ impl UserWorkspaces {
         ctx: &mut ModelContext<Self>,
     ) {
         *self.current_workspace_uid = Some(workspace_uid);
-        self.initialize_unassigned_windows();
+        self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
     }
 
@@ -819,7 +811,7 @@ impl UserWorkspaces {
         {
             return vec![Space::Shared];
         }
-        let mut spaces = vec![Space::Personal];
+        let mut spaces = vec![];
         if let Some(team) = self.team_for_window(window_id) {
             spaces.push(Space::Team { team_uid: team.uid });
         }
@@ -829,6 +821,7 @@ impl UserWorkspaces {
         {
             spaces.push(Space::Shared);
         }
+        spaces.push(Space::Personal);
 
         spaces
     }
@@ -897,7 +890,7 @@ impl UserWorkspaces {
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
         *self.workspaces = workspaces;
-        self.initialize_unassigned_windows();
+        self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
 
         if sunsetted_to_build_changed {
