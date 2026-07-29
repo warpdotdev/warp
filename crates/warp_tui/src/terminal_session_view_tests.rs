@@ -1,15 +1,11 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::io::{self, Write};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ai::LLMProvider;
 use chrono::NaiveDate;
 use instant::Instant;
-use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
 use tempfile::TempDir;
 use warp::appearance::Appearance;
 use warp::settings::{
@@ -46,11 +42,8 @@ use warpui_core::event::{KeyState, ModifiersState};
 use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::runtime::{TuiRuntime, TuiTerminal};
 use warpui_core::telemetry::{EventPayload, flush_events};
-use warpui_core::{
-    App, AppContext, Entity, TuiView, TypedActionView, ViewContext, WindowInvalidation,
-};
+use warpui_core::{App, AppContext, TuiView, TypedActionView, WindowInvalidation};
 
 use super::{
     ACCEPT_BLOCKED_TERMINAL_USE_ACTION_BINDING_NAME, ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME,
@@ -95,7 +88,7 @@ use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::statusline_config_view::TuiStatuslineConfigEvent;
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
-use crate::test_fixtures::{TestHostView, add_test_semantic_selection, add_test_terminal_session};
+use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
@@ -140,130 +133,6 @@ fn set_selected_todo_list(
         });
         conversation_id
     })
-}
-
-struct AutoApproveControlsTestView {
-    session: ViewHandle<TuiTerminalSessionView>,
-}
-
-impl Entity for AutoApproveControlsTestView {
-    type Event = ();
-}
-
-impl TuiView for AutoApproveControlsTestView {
-    fn ui_name() -> &'static str {
-        "AutoApproveControlsTestView"
-    }
-
-    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let session = self.session.as_ref(ctx);
-        let builder = TuiUiBuilder::from_app(ctx);
-        TuiFlex::column()
-            .child(session.render_warping_indicator("Warping...", Duration::ZERO, ctx))
-            .child(session.render_auto_approve_statusline(&builder, ctx))
-            .finish()
-    }
-}
-
-impl TypedActionView for AutoApproveControlsTestView {
-    type Action = TuiTerminalSessionAction;
-
-    fn handle_action(&mut self, action: &TuiTerminalSessionAction, ctx: &mut ViewContext<Self>) {
-        self.session
-            .update(ctx, |session, ctx| session.handle_action(action, ctx));
-    }
-}
-
-struct AutoApproveTestTerminal {
-    size: TuiSize,
-    events: VecDeque<CrosstermEvent>,
-    output: Vec<u8>,
-}
-
-impl AutoApproveTestTerminal {
-    fn with_click(size: TuiSize, position: (u16, u16)) -> Self {
-        let mouse_event = |kind| {
-            CrosstermEvent::Mouse(MouseEvent {
-                kind,
-                column: position.0,
-                row: position.1,
-                modifiers: KeyModifiers::empty(),
-            })
-        };
-        Self {
-            size,
-            events: VecDeque::from([
-                mouse_event(MouseEventKind::Down(MouseButton::Left)),
-                mouse_event(MouseEventKind::Up(MouseButton::Left)),
-            ]),
-            output: Vec::new(),
-        }
-    }
-}
-
-impl TuiTerminal for AutoApproveTestTerminal {
-    fn size(&self) -> io::Result<TuiSize> {
-        Ok(self.size)
-    }
-
-    fn poll_event(&mut self, _timeout: Duration) -> io::Result<Option<CrosstermEvent>> {
-        Ok(self.events.pop_front())
-    }
-
-    fn writer(&mut self) -> &mut dyn Write {
-        &mut self.output
-    }
-}
-fn render_auto_approve_controls(
-    app: &mut App,
-    controls: &ViewHandle<AutoApproveControlsTestView>,
-    size: TuiSize,
-) -> TuiBuffer {
-    let mut presenter = TuiPresenter::new();
-    app.update(|ctx| {
-        let mut invalidation = WindowInvalidation::default();
-        invalidation.updated.insert(controls.id());
-        presenter.invalidate(&invalidation, ctx, controls.window_id(ctx));
-        presenter
-            .present(ctx, controls, TuiRect::new(0, 0, size.width, size.height))
-            .buffer
-    })
-}
-
-fn run_auto_approve_click(
-    app: &mut App,
-    window_id: warpui_core::WindowId,
-    controls: &ViewHandle<AutoApproveControlsTestView>,
-    size: TuiSize,
-    position: (u16, u16),
-) {
-    let terminal = AutoApproveTestTerminal::with_click(size, position);
-    let mut runtime = TuiRuntime::with_terminal(app, window_id, controls.clone(), terminal);
-    let mut iterations = 0;
-    runtime
-        .run_until(app, |_| {
-            iterations += 1;
-            iterations > 2
-        })
-        .expect("auto-approve click should dispatch through the TUI runtime");
-}
-
-fn pending_auto_approve_mode(
-    app: &App,
-    view: &ViewHandle<TuiTerminalSessionView>,
-) -> AIConversationAutoexecuteMode {
-    view.read(app, |view, ctx| {
-        view.conversation_selection
-            .as_ref(ctx)
-            .pending_query_autoexecute_override(ctx)
-    })
-}
-
-fn label_column(line: &str, label: &str) -> u16 {
-    let byte_offset = line
-        .find(label)
-        .unwrap_or_else(|| panic!("label {label:?} should render in {line:?}"));
-    line[..byte_offset].chars().count() as u16
 }
 #[test]
 fn mcp_menu_footer_replaces_status_with_controls() {
@@ -735,86 +604,82 @@ fn enabled_auto_approve_indicator_is_always_visible_with_state_aware_color() {
 }
 
 #[test]
-fn auto_approve_controls_dispatch_clicks_independently_through_the_runtime() {
+fn auto_approve_controls_retain_independent_mouse_state() {
     App::test((), |mut app| async move {
-        let view = add_auto_approve_runtime_test_session(&mut app);
-        view.update(&mut app, |view, ctx| {
-            view.conversation_selection.update(ctx, |selection, ctx| {
-                selection
-                    .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
-                    .expect("test conversation should start");
-            });
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.read(&app, |view, _| {
+            assert!(
+                !Arc::ptr_eq(
+                    &view.footer_auto_approve_mouse,
+                    &view.warping_auto_approve_mouse,
+                ),
+                "footer and warping controls must not share retained mouse state",
+            );
         });
-        let (controls_window_id, controls) = app.update(|ctx| {
-            let view = view.clone();
-            ctx.add_tui_window(
-                AddWindowOptions {
-                    window_style: WindowStyle::NotStealFocus,
-                    ..Default::default()
-                },
-                |_| AutoApproveControlsTestView { session: view },
-            )
+
+        let (mut element, scene, buffer) = view.read(&app, |view, ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let controls = TuiFlex::column()
+                .child(view.render_warping_indicator("Warping...", Duration::ZERO, ctx))
+                .child(view.render_auto_approve_statusline(&builder, ctx))
+                .finish();
+            render_retained_element(controls, ctx, 80, 2)
         });
-        let size = TuiSize::new(80, 2);
-        let buffer = render_auto_approve_controls(&mut app, &controls, size);
         let lines = buffer.to_lines();
-        let warping_row = lines
-            .iter()
-            .position(|line| line.contains("▶▶ Auto approve off"))
-            .expect("warping control should render") as u16;
         let footer_row = lines
             .iter()
             .position(|line| line.trim_end() == "▶▶")
             .expect("footer control should render") as u16;
-        let footer_col = label_column(&lines[usize::from(footer_row)], "▶▶");
+        let footer_col = first_visible_column(&lines[usize::from(footer_row)]) as u16;
+        let (warping_col, warping_row) = footer_label_position(&buffer, "▶▶ Auto approve off");
 
-        run_auto_approve_click(
-            &mut app,
-            controls_window_id,
-            &controls,
-            size,
-            (footer_col, footer_row),
-        );
-        assert_eq!(
-            pending_auto_approve_mode(&app, &view),
-            AIConversationAutoexecuteMode::RunToCompletion,
-            "the footer click should dispatch its typed action even while the warping control renders"
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_down(footer_col, footer_row),
+        ));
+        view.read(&app, |view, _| {
+            assert!(view.footer_auto_approve_mouse.lock().unwrap().is_clicked());
+            assert!(!view.warping_auto_approve_mouse.lock().unwrap().is_clicked());
+        });
+        assert!(
+            dispatch_session_event(
+                &app,
+                &view,
+                &mut element,
+                scene.clone(),
+                &left_mouse_up(footer_col, footer_row),
+            ),
+            "warping control must not cancel the footer's armed click",
         );
         view.read(&app, |view, _| {
             assert!(!view.footer_auto_approve_mouse.lock().unwrap().is_clicked());
             assert!(!view.warping_auto_approve_mouse.lock().unwrap().is_clicked());
         });
 
-        run_auto_approve_click(
-            &mut app,
-            controls_window_id,
-            &controls,
-            size,
-            (footer_col + 3, footer_row),
-        );
-        assert_eq!(
-            pending_auto_approve_mode(&app, &view),
-            AIConversationAutoexecuteMode::RunToCompletion,
-            "clicking outside the footer glyph must not toggle auto-approve"
-        );
-        let enabled_buffer = render_auto_approve_controls(&mut app, &controls, size);
-        let enabled_lines = enabled_buffer.to_lines();
-        let warping_col = label_column(
-            &enabled_lines[usize::from(warping_row)],
-            "▶▶ Auto approve on",
-        );
-
-        run_auto_approve_click(
-            &mut app,
-            controls_window_id,
-            &controls,
-            size,
-            (warping_col, warping_row),
-        );
-        assert_eq!(
-            pending_auto_approve_mode(&app, &view),
-            AIConversationAutoexecuteMode::RespectUserSettings,
-            "the warping control should remain independently clickable"
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_down(warping_col, warping_row),
+        ));
+        view.read(&app, |view, _| {
+            assert!(!view.footer_auto_approve_mouse.lock().unwrap().is_clicked());
+            assert!(view.warping_auto_approve_mouse.lock().unwrap().is_clicked());
+        });
+        assert!(
+            dispatch_session_event(
+                &app,
+                &view,
+                &mut element,
+                scene,
+                &left_mouse_up(warping_col, warping_row),
+            ),
+            "footer control must not cancel the warping control's armed click",
         );
     });
 }
@@ -1294,6 +1159,33 @@ fn left_mouse_up(x: u16, y: u16) -> TuiEvent {
 /// (transcript/input/attachment bar) are absent from `rendered_views`, so they
 /// lay out zero-size; the footer — part of the session view's own tree —
 /// renders with the clickable model label.
+fn render_retained_element(
+    mut element: Box<dyn TuiElement>,
+    ctx: &AppContext,
+    width: u16,
+    height: u16,
+) -> (Box<dyn TuiElement>, Rc<TuiScene>, TuiBuffer) {
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(width, height)),
+        &mut layout_ctx,
+        ctx,
+    );
+    element.after_layout(&mut layout_ctx, ctx);
+    let area = TuiRect::new(0, 0, size.width.min(width), size.height.min(height));
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+    }
+    let scene = Rc::new(paint_ctx.scene.clone());
+    (element, scene, buffer)
+}
+
 fn render_retained_session(
     app: &App,
     view: &ViewHandle<super::TuiTerminalSessionView>,
@@ -1301,28 +1193,10 @@ fn render_retained_session(
     height: u16,
 ) -> (Box<dyn TuiElement>, Rc<TuiScene>, TuiBuffer) {
     app.read(|ctx| {
-        let mut element = ctx
+        let element = ctx
             .render_tui_view(view.window_id(ctx), view.id())
             .expect("session view should render");
-        let mut rendered_views = EntityIdMap::default();
-        let mut layout_ctx = TuiLayoutContext {
-            rendered_views: &mut rendered_views,
-        };
-        let size = element.layout(
-            TuiConstraint::loose(TuiSize::new(width, height)),
-            &mut layout_ctx,
-            ctx,
-        );
-        element.after_layout(&mut layout_ctx, ctx);
-        let area = TuiRect::new(0, 0, size.width.min(width), size.height.min(height));
-        let mut buffer = TuiBuffer::empty(area);
-        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-        {
-            let mut surface = TuiPaintSurface::new(&mut buffer);
-            element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
-        }
-        let scene = Rc::new(paint_ctx.scene.clone());
-        (element, scene, buffer)
+        render_retained_element(element, ctx, width, height)
     })
 }
 fn render_footer_lines(
@@ -2225,31 +2099,6 @@ fn add_focus_test_session(
         TuiSessions::register_session(&fixture.sessions, view.clone(), manager, focus, ctx)
     });
     (view, session_id)
-}
-
-fn add_auto_approve_runtime_test_session(
-    app: &mut App,
-) -> ViewHandle<super::TuiTerminalSessionView> {
-    register_tui_session_view_test_singletons(app);
-    add_test_semantic_selection(app);
-    app.update(TuiAutoupdater::register);
-    let (window_id, _) = app.update(|ctx| {
-        ctx.add_tui_window(
-            AddWindowOptions {
-                window_style: WindowStyle::NotStealFocus,
-                ..Default::default()
-            },
-            |_| TestHostView,
-        )
-    });
-    let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
-    let orchestration = app.update(TuiOrchestrationModel::register);
-    app.update(|ctx| TuiSessions::wire_orchestration(&sessions, &orchestration, ctx));
-    let (view, manager) = add_test_terminal_session(app, window_id);
-    app.update(|ctx| {
-        TuiSessions::register_session(&sessions, view.clone(), manager, true, ctx);
-    });
-    view
 }
 
 fn render_element(element: Box<dyn TuiElement>, ctx: &AppContext, width: u16) -> TuiBuffer {

@@ -16026,7 +16026,6 @@ dependencies = [
  "pathfinder_color",
  "pathfinder_geometry",
  "rangemap",
- "ratatui",
  "serde_json",
  "shell-words",
  "similar",

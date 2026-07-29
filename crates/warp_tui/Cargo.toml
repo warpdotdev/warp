@@ -101,8 +101,6 @@ arboard = { workspace = true, features = ["wayland-data-control"] }
 
 [dev-dependencies]
 tempfile.workspace = true
-# Runtime-path mouse tests feed the same crossterm events used by `TuiRuntime`.
-ratatui = "0.30"
 # `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
 # singleton that the editor-backed TUI input view depends on in tests.
 warp_core = { workspace = true, features = ["test-util"] }
