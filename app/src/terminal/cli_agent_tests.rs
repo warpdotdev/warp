@@ -265,6 +265,7 @@ fn test_detect_known_agents() {
                 ("goose", CLIAgent::Goose),
                 ("vibe", CLIAgent::Vibe),
                 ("agy", CLIAgent::Antigravity),
+                ("devin", CLIAgent::Devin),
                 ("omp", CLIAgent::OhMyPi),
                 ("warp", CLIAgent::WarpTui),
                 ("warp-dev", CLIAgent::WarpTui),

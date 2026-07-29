@@ -466,6 +466,7 @@ pub enum CLIAgentType {
     Hermes,
     Vibe,
     Antigravity,
+    Devin,
     /// Warp's own headless TUI, targeted by the code review panel as a CLI-agent-equivalent destination.
     WarpTui,
     Unknown,

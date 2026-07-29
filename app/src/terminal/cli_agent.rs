@@ -95,6 +95,14 @@ const ANTIGRAVITY_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// Devin brand color (#6B5BFF — blue-purple)
+const DEVIN_COLOR: ColorU = ColorU {
+    r: 107,
+    g: 91,
+    b: 255,
+    a: 255,
+};
+
 /// Auggie brand color (white, monochrome logo)
 const AUGGIE_COLOR: ColorU = ColorU {
     r: 255,
@@ -135,7 +143,7 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
+/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, Antigravity, Devin)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -153,6 +161,7 @@ pub enum CLIAgent {
     Hermes,
     Vibe,
     Antigravity,
+    Devin,
     /// Warp's own headless TUI.
     WarpTui,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
@@ -178,6 +187,7 @@ impl CLIAgent {
             CLIAgent::Hermes => &["hermes"],
             CLIAgent::Vibe => &["vibe", "vibe-acp"],
             CLIAgent::Antigravity => &["agy"],
+            CLIAgent::Devin => &["devin"],
             CLIAgent::WarpTui => &[
                 "warp",
                 "warp-preview",
@@ -241,6 +251,7 @@ impl CLIAgent {
             CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
             CLIAgent::Antigravity => "Antigravity",
+            CLIAgent::Devin => "Devin",
             CLIAgent::WarpTui => "Warp TUI",
             CLIAgent::Unknown => "CLI Agent",
         }
@@ -267,6 +278,7 @@ impl CLIAgent {
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
+            CLIAgent::Devin => Some(Icon::DevinLogo),
             CLIAgent::WarpTui => None,
             CLIAgent::Unknown => None,
         }
@@ -300,6 +312,7 @@ impl CLIAgent {
             CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
             CLIAgent::Antigravity => &[],
+            CLIAgent::Devin => &[SkillProvider::Agents],
             CLIAgent::WarpTui => &[],
             CLIAgent::Unknown => &[],
         }
@@ -350,6 +363,7 @@ impl CLIAgent {
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
             CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
+            CLIAgent::Devin => Some(DEVIN_COLOR),
             CLIAgent::WarpTui => None,
             CLIAgent::Unknown => None,
         }
@@ -364,6 +378,8 @@ impl CLIAgent {
             | CLIAgent::Auggie
             | CLIAgent::Droid
             | CLIAgent::Antigravity => ColorU::new(0, 0, 0, 255),
+            // Devin has a dark blue-purple brand color — white icon for contrast.
+            | CLIAgent::Devin => ColorU::white(),
             _ => ColorU::white(),
         }
     }
@@ -626,6 +642,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
             CLIAgent::Antigravity => CLIAgentType::Antigravity,
+            CLIAgent::Devin => CLIAgentType::Devin,
             CLIAgent::WarpTui => CLIAgentType::WarpTui,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }
