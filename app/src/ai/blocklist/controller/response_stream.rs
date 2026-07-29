@@ -29,10 +29,16 @@ const MAX_RETRIES: usize = 3;
 #[cfg(not(target_family = "wasm"))]
 const GROK_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Maximum time to wait for a request-time GEAP credential mint before
-/// surfacing the existing manual-refresh recovery UI.
+/// How long a request will hold for a request-time GEAP credential mint before
+/// giving up and sending anyway.
+///
+/// This is not a failure deadline: on expiry the request is sent with the
+/// credential snapshot it already had, exactly as it would have been without
+/// the refresh attempt. It is sized for the mint's three sequential legs (Warp
+/// OIDC token, Google STS exchange, optional service-account impersonation)
+/// rather than copied from the single-call Grok refresh above.
 #[cfg(not(target_family = "wasm"))]
-const GEAP_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const GEAP_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// What to do about a failed or truncated MAA response attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,13 +261,21 @@ impl ResponseStream {
     }
 
     /// Sends the request for `request_id`. When the request's model is served by
-    /// the connected Grok subscription or Gemini Enterprise and that credential
-    /// is already past hard expiry, this first blocks on a single shared refresh
-    /// (owned by `ApiKeyManager`, so only one runs at a time) before sending.
-    /// The wait is bounded by the provider-specific five-second timeout. If the
-    /// refresh fails or times out, the request is NOT sent with the dead token; a
-    /// terminal, user-visible error is surfaced instead. Requests with valid
-    /// credentials (and requests for other providers) are sent directly.
+    /// the connected Grok subscription or may route to Gemini Enterprise, and
+    /// that credential is already past hard expiry, this first blocks on a
+    /// single shared refresh (owned by `ApiKeyManager`, so only one runs at a
+    /// time) before sending. Requests with valid credentials, and requests for
+    /// other providers, are sent directly.
+    ///
+    /// The two providers diverge on failure. The Grok subscription is the only
+    /// client-side source of xAI auth with no alternate host, so a dead token
+    /// means the request cannot succeed and a terminal error is surfaced
+    /// instead of sending. Gemini Enterprise is a *host*, not a provider: the
+    /// server picks between Bedrock, GEAP, and Direct API per request, and the
+    /// client cannot know which one a given request will land on. So a failed
+    /// GEAP mint sends the snapshot unchanged and lets the server decide — a
+    /// GEAP-routed request gets the usual credentials error from Google, and
+    /// one routed elsewhere is unaffected.
     fn spawn_request(
         request_id: Uuid,
         params: api::RequestParams,
@@ -334,8 +348,13 @@ impl ResponseStream {
 
             // Gemini Enterprise credentials are minted by the app layer but
             // coordinated on ApiKeyManager so concurrent prompts share one
-            // in-flight mint. Only a hard-expired, binding-matching token
-            // blocks; near-expiry tokens continue through the existing
+            // in-flight mint. This asks whether the model *may* route to GEAP,
+            // which is the most the client can know — the server resolves the
+            // actual host per request, and for auto models it does so only
+            // after a classifier picks a concrete model. Over-triggering is
+            // therefore expected and costs nothing but a bounded wait, since a
+            // failed mint still sends. Only a hard-expired, binding-matching
+            // credential blocks; near-expiry ones ride the existing
             // asynchronous safety net.
             let uses_geap = LLMPreferences::as_ref(ctx)
                 .get_llm_info(&params.model)
@@ -350,44 +369,43 @@ impl ResponseStream {
             {
                 let refresh_binding = binding.clone();
                 let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.begin_expired_geap_refresh(&binding, ctx, |manager, ctx| {
-                        crate::ai::geap_credentials::refresh_geap_credentials(manager, ctx);
+                    manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, ctx| {
+                        crate::ai::geap_credentials::start_geap_refresh_for_waiter(
+                            manager, waiter, ctx,
+                        );
                     })
                 });
                 if let Some(refresh_rx) = refresh_rx {
                     let _ = ctx.spawn(
                         async move { refresh_rx.with_timeout(GEAP_REFRESH_REQUEST_TIMEOUT).await },
                         move |me, result, ctx| {
+                            // Cancelled or superseded while waiting — drop this attempt.
                             if me.current_request_id != Some(request_id) {
                                 return;
                             }
-                            let refresh_outcome =
-                                if matches!(result, Ok(Ok(GeapRefreshOutcome::Refreshed))) {
-                                    GeapRefreshDispatch::Refreshed
-                                } else {
-                                    GeapRefreshDispatch::Failed
-                                };
-                            // RequestParams snapshots credentials before the
-                            // wait. Re-read only GEAP credentials so unrelated
-                            // API keys remain unchanged, then route the common
-                            // success/failure dispatch through one method.
+                            // `RequestParams` snapshotted the credentials before
+                            // the wait, so re-read just the GEAP credential and
+                            // leave every other key alone. A mint failure, a
+                            // timeout, or a dropped sender all leave the snapshot
+                            // untouched.
                             let fresh_credentials =
-                                if matches!(refresh_outcome, GeapRefreshDispatch::Refreshed) {
-                                    ApiKeyManager::as_ref(ctx)
-                                        .api_keys_for_request(
-                                            UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx),
-                                            UserWorkspaces::as_ref(ctx)
-                                                .is_aws_bedrock_credentials_enabled(ctx),
-                                            Some(refresh_binding.clone()),
-                                        )
-                                        .and_then(|keys| keys.google_cloud_credentials)
-                                } else {
-                                    None
-                                };
-                            me.dispatch_geap_refresh_result(
+                                matches!(result, Ok(Ok(GeapRefreshOutcome::Refreshed)))
+                                    .then(|| {
+                                        ApiKeyManager::as_ref(ctx)
+                                            .api_keys_for_request(
+                                                UserWorkspaces::as_ref(ctx)
+                                                    .is_byo_api_key_enabled(ctx),
+                                                UserWorkspaces::as_ref(ctx)
+                                                    .is_aws_bedrock_credentials_enabled(ctx),
+                                                Some(refresh_binding.clone()),
+                                            )
+                                            .and_then(|keys| keys.google_cloud_credentials)
+                                    })
+                                    .flatten();
+                            apply_geap_refresh_to_params(&mut me.params, fresh_credentials);
+                            Self::spawn_generate(
                                 request_id,
-                                refresh_outcome,
-                                fresh_credentials,
+                                me.params.clone(),
                                 cancellation_rx,
                                 ctx,
                             );
@@ -407,41 +425,6 @@ impl ResponseStream {
     #[cfg(not(target_family = "wasm"))]
     fn surface_grok_refresh_failure(&mut self, request_id: Uuid, ctx: &mut ModelContext<Self>) {
         let error = Arc::new(AIApiError::GrokSubscriptionTokenRefreshFailed);
-        self.error_event_emitted = true;
-        self.report_request_failure(&error, NetworkStatus::as_ref(ctx).is_online());
-        ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
-            error,
-        ))));
-        self.on_response_stream_complete(request_id, ctx);
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    fn dispatch_geap_refresh_result(
-        &mut self,
-        request_id: Uuid,
-        outcome: GeapRefreshDispatch,
-        fresh_credentials: Option<maa_api::request::settings::api_keys::GoogleCloudCredentials>,
-        cancellation_rx: oneshot::Receiver<()>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.current_request_id != Some(request_id) {
-            return;
-        }
-        if geap_refresh_dispatch_sends(outcome, fresh_credentials.is_some()) {
-            replace_geap_credentials(&mut self.params, fresh_credentials);
-            Self::spawn_generate(request_id, self.params.clone(), cancellation_rx, ctx);
-        } else {
-            // Refresh failure, timeout, cancellation, or an empty successful
-            // result is terminal: never send the dead credential snapshot.
-            self.surface_geap_refresh_failure(request_id, ctx);
-        }
-    }
-
-    /// Emits the existing Gemini Enterprise credentials recovery error when a
-    /// request-time mint fails or times out, without sending the expired token.
-    #[cfg(not(target_family = "wasm"))]
-    fn surface_geap_refresh_failure(&mut self, request_id: Uuid, ctx: &mut ModelContext<Self>) {
-        let error = Arc::new(AIApiError::GeminiEnterpriseCredentialsRefreshFailed);
         self.error_event_emitted = true;
         self.report_request_failure(&error, NetworkStatus::as_ref(ctx).is_online());
         ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
@@ -785,25 +768,21 @@ impl ResponseStream {
     }
 }
 
+/// Applies the result of a request-time GEAP mint to the request snapshot.
+///
+/// A successful mint swaps in the fresh credential. Anything else — mint
+/// failure, timeout, or a dropped sender — leaves the snapshot untouched, so
+/// the request goes out exactly as it would have without the refresh attempt
+/// and the server decides whether that credential still works.
 #[cfg(not(target_family = "wasm"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GeapRefreshDispatch {
-    Refreshed,
-    Failed,
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn geap_refresh_dispatch_sends(outcome: GeapRefreshDispatch, has_fresh_credentials: bool) -> bool {
-    matches!(outcome, GeapRefreshDispatch::Refreshed) && has_fresh_credentials
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn replace_geap_credentials(
+fn apply_geap_refresh_to_params(
     params: &mut api::RequestParams,
-    credentials: Option<maa_api::request::settings::api_keys::GoogleCloudCredentials>,
+    fresh_credentials: Option<maa_api::request::settings::api_keys::GoogleCloudCredentials>,
 ) {
-    if let Some(keys) = params.api_keys.as_mut() {
-        keys.google_cloud_credentials = credentials;
+    if let Some(credentials) = fresh_credentials
+        && let Some(keys) = params.api_keys.as_mut()
+    {
+        keys.google_cloud_credentials = Some(credentials);
     }
 }
 

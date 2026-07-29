@@ -4,6 +4,7 @@ use ai::api_keys::{
     ApiKeyManager, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation,
     GeapMintBinding, GeapRefreshOutcome, LoadGeapCredentialsError,
 };
+use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
@@ -133,14 +134,28 @@ pub(crate) fn refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, false, ctx);
+    refresh_geap_credentials_with_options(manager, false, None, ctx);
 }
 
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, true, ctx);
+    refresh_geap_credentials_with_options(manager, true, None, ctx);
+}
+
+/// Mint kickoff for a request blocked on an expired credential.
+///
+/// `waiter` is handed to the mint rather than installed by the caller, so it is
+/// only registered once this function commits to minting. If any guard below
+/// declines, the sender drops and the blocked request proceeds with the
+/// credential it already had.
+pub(crate) fn start_geap_refresh_for_waiter(
+    manager: &mut ApiKeyManager,
+    waiter: oneshot::Sender<GeapRefreshOutcome>,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    refresh_geap_credentials_with_options(manager, false, Some(waiter), ctx);
 }
 
 /// Request-time safety net. The triggering request is never delayed —
@@ -172,9 +187,16 @@ pub(crate) fn refresh_geap_credentials_if_needed(
 }
 
 /// The refresh guard + mint kickoff that all triggers funnel through.
+///
+/// `waiter`, when present, is a request blocked on this mint. It is installed
+/// only after every guard below has passed, immediately before the state moves
+/// to `Refreshing`, so the single-flight window on `ApiKeyManager` is open
+/// exactly while a mint is actually running. Returning early drops the sender,
+/// which the blocked request reads as "not refreshed" and sends unchanged.
 fn refresh_geap_credentials_with_options(
     manager: &mut ApiKeyManager,
     force: bool,
+    waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
     let minted_for = match current_geap_policy(ctx) {
@@ -217,6 +239,9 @@ fn refresh_geap_credentials_with_options(
         "GEAP: minting credentials (audience={}, force={force})",
         minted_for.audience
     );
+    // Commit point: from here a mint is guaranteed to run and to funnel through
+    // `apply_geap_mint_result`, which is the only place the window closes.
+    manager.install_geap_refresh_waiter(waiter);
     manager.set_geap_credentials_state(GeapCredentialsState::Refreshing { previous }, ctx);
 
     // Leg 1: every mint — initial or re-mint, timer/trigger/forced — starts
@@ -244,6 +269,11 @@ fn refresh_geap_credentials_with_options(
     );
 }
 
+/// Applies a finished mint and wakes everything blocked on it.
+///
+/// Closing the single-flight window and delivering the outcome happen here and
+/// only here: the waiters are taken up front and the outcome is sent once, so
+/// no arm of the inner logic can forget to release a blocked request.
 fn apply_geap_mint_result(
     manager: &mut ApiKeyManager,
     result: Result<GeapCredentials, LoadGeapCredentialsError>,
@@ -251,18 +281,30 @@ fn apply_geap_mint_result(
     force: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
+    let waiters = manager.take_geap_refresh_waiters();
+    let outcome = apply_geap_mint_result_inner(manager, result, minted_for, force, ctx);
+    for waiter in waiters {
+        let _ = waiter.send(outcome);
+    }
+}
+
+fn apply_geap_mint_result_inner(
+    manager: &mut ApiKeyManager,
+    result: Result<GeapCredentials, LoadGeapCredentialsError>,
+    minted_for: GeapMintBinding,
+    force: bool,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) -> GeapRefreshOutcome {
     let current_binding = match current_geap_policy(ctx) {
         GeapPolicy::Disabled => {
             log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
             manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
-            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
-            return;
+            return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
             manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
-            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
-            return;
+            return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Mintable(binding) => binding,
     };
@@ -293,12 +335,11 @@ fn apply_geap_mint_result(
                 manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
             }
         }
-        // Requests waiting on the old binding must not send the previous
-        // credential. They terminate while the safety-net mint continues under
-        // the current binding.
-        manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
+        // Not a mint failure, so no cooldown: the config moved, and the re-mint
+        // below runs under the current binding. Requests blocked on the old
+        // binding send with the credential they already had.
         refresh_geap_credentials(manager, ctx);
-        return;
+        return GeapRefreshOutcome::Failed;
     }
 
     match result {
@@ -319,7 +360,8 @@ fn apply_geap_mint_result(
             // Arm the next one-shot proactive refresh — this is what makes
             // the ~hourly loop self-sustaining.
             schedule_geap_token_refresh(manager, ctx);
-            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Refreshed);
+            manager.clear_geap_mint_failure();
+            GeapRefreshOutcome::Refreshed
         }
         Err(err) => {
             report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
@@ -349,7 +391,11 @@ fn apply_geap_mint_result(
                     );
                 }
             }
-            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
+            // Start the cooldown. The restore above leaves the expired
+            // credential looking eligible again, so without this every
+            // subsequent request would block on a mint that is failing.
+            manager.record_geap_mint_failure();
+            GeapRefreshOutcome::Failed
         }
     }
 }

@@ -119,6 +119,8 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         grok_refresh_waiters: None,
         #[cfg(not(target_family = "wasm"))]
         geap_refresh_waiters: None,
+        #[cfg(not(target_family = "wasm"))]
+        geap_last_mint_failure: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         geap_credentials_state: GeapCredentialsState::Missing,
@@ -844,32 +846,63 @@ fn begin_expired_geap_refresh_is_single_flight() {
         manager.update(&mut app, |manager, ctx| {
             let binding = geap_gate();
             let mut kickoff_count = 0;
-            let first = manager.begin_expired_geap_refresh(&binding, ctx, |_, _| {
+            // The kickoff stands in for the app-layer mint: committing to mint
+            // is what installs the waiter and opens the single-flight window.
+            let first = manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, _| {
                 kickoff_count += 1;
+                manager.install_geap_refresh_waiter(Some(waiter));
             });
-            let second = manager.begin_expired_geap_refresh(&binding, ctx, |_, _| {
+            let second = manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, _| {
                 kickoff_count += 1;
+                manager.install_geap_refresh_waiter(Some(waiter));
             });
 
             assert!(first.is_some());
             assert!(second.is_some());
+            // The second request attached to the in-flight mint instead of
+            // starting its own.
             assert_eq!(kickoff_count, 1);
-            assert_eq!(
-                manager
-                    .geap_refresh_waiters
-                    .as_ref()
-                    .expect("refresh should be in flight")
-                    .len(),
-                2
-            );
-
-            manager.notify_geap_refresh_outcome(GeapRefreshOutcome::Failed);
+            assert_eq!(manager.take_geap_refresh_waiters().len(), 2);
+            // Taking the waiters closes the window.
             assert!(manager.geap_refresh_waiters.is_none());
-            // A failed outcome is terminal for the current request pair; no
-            // second mint is started by the waiters themselves.
-            assert_eq!(kickoff_count, 1);
         });
     });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn declined_geap_kickoff_leaves_no_in_flight_window() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| make_manager_with_geap(geap_loaded("expired", Some(0))));
+        manager.update(&mut app, |manager, ctx| {
+            let binding = geap_gate();
+            // A kickoff that hits one of its own guards returns without
+            // minting, dropping the sender rather than installing it.
+            let receiver = manager.begin_expired_geap_refresh(&binding, ctx, |_, _waiter, _| {});
+            assert!(receiver.is_some());
+            // No window was opened, so a later request starts a fresh kickoff
+            // instead of attaching to a mint that is not running. This is what
+            // makes "waiters present" mean "mint in flight".
+            assert!(manager.geap_refresh_waiters.is_none());
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_mint_failure_cooldown_suppresses_the_blocking_wait() {
+    let binding = geap_gate();
+    let mut manager = make_manager_with_geap(geap_loaded("expired", Some(0)));
+    assert!(manager.geap_expired_refresh_eligibility(&binding));
+
+    // A failed mint restores the expired credential, so without the cooldown
+    // every following request would block on a mint that is failing.
+    manager.record_geap_mint_failure();
+    assert!(!manager.geap_expired_refresh_eligibility(&binding));
+
+    // A later success reopens the blocking path.
+    manager.clear_geap_mint_failure();
+    assert!(manager.geap_expired_refresh_eligibility(&binding));
 }
 
 // ── grok expiry + blocking-refresh eligibility ──────────────────

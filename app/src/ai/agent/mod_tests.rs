@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_errors::ErrorExt;
 use warp_multi_agent_api::{FileContent, FileContentLineRange};
 
 use crate::ai::agent::{
@@ -122,19 +121,6 @@ fn transient_network_error_reports_pending_resume() {
     );
 
     assert!(error.will_attempt_resume());
-}
-
-#[test]
-fn geap_refresh_failure_is_terminal_and_uses_credentials_recovery_renderable() {
-    let error = Arc::new(AIApiError::GeminiEnterpriseCredentialsRefreshFailed);
-    assert!(!error.is_recoverable());
-    assert!(!error.is_actionable());
-
-    let renderable: RenderableAIError = (&error).into();
-    assert!(matches!(
-        renderable,
-        RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
-    ));
 }
 
 #[test]
