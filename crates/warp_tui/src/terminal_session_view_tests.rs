@@ -1956,7 +1956,10 @@ fn auto_queue_is_not_exposed_in_statusline_or_shortcuts() {
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         view.update(&mut app, |view, ctx| {
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                    ctx,
+                );
             });
         });
 
@@ -2220,7 +2223,10 @@ fn input_adjacent_surfaces_follow_figma_outer_edge_alignment() {
 
         view.update(&mut app, |view, ctx| {
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                    ctx,
+                );
             });
         });
         let buffer = render_session_buffer(&mut app, &view, 80, 24);
@@ -2239,7 +2245,7 @@ fn input_adjacent_surfaces_follow_figma_outer_edge_alignment() {
         );
         assert_eq!(
             buffer[(input_border_column as u16, shortcuts_row as u16)].bg,
-            app.read(|ctx| TuiUiBuilder::from_app(ctx).shortcuts_background()),
+            app.read(|ctx| TuiUiBuilder::from_app(ctx).read_only_menu_background()),
             "shortcuts background must begin at the input border's outer edge"
         );
     });
@@ -4113,8 +4119,8 @@ fn footer_conversations_callout_no_longer_renders() {
             "no conversations-callout glyph remains: {row}"
         );
         assert!(
-            row.starts_with("auto (cost-efficient) "),
-            "the model-led status row renders in place of the callout: {row}"
+            row.contains("auto (cost-efficient)"),
+            "the configured status row renders in place of the callout: {row}"
         );
     });
 }
