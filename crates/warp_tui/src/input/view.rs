@@ -52,7 +52,9 @@ use crate::editor_interaction::{
     TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
     apply_editor_action, apply_editor_clipboard_action, follow_editor_cursor,
 };
-use crate::inline_menu::{TuiInlineMenu, TuiInlineMenuAccepted, active_inline_menu};
+use crate::inline_menu::{
+    TuiInlineMenu, TuiInlineMenuAccepted, TuiInlineMenuInputOwnership, active_inline_menu,
+};
 use crate::input_mode_policy::{self, AI_LOCKED_CONFIG, SHELL_LOCKED_CONFIG};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::keybindings::{
@@ -513,6 +515,7 @@ impl TuiInputView {
     /// construct it directly to exercise mouse dispatch.
     fn render_element(&self, ctx: &AppContext) -> TuiEditorElement {
         let builder = TuiUiBuilder::from_app(ctx);
+        let input_ownership = self.active_inline_menu_input_ownership(ctx);
         let mut styles = TuiEditorStyles::default();
         if let Some(range) = self
             .inline_menus
@@ -538,6 +541,9 @@ impl TuiInputView {
                 .vim_visual_selection_ranges(motion_type, ctx);
             element = element.with_selection_ranges(ranges);
         }
+        if input_ownership.is_masked() {
+            element = element.masked();
+        }
         if let Some(hint_text) = self
             .inline_menus
             .iter()
@@ -551,15 +557,19 @@ impl TuiInputView {
         // provider on every layout pass instead of being snapshotted here.
         // Shell mode teaches how to exit; agent mode adapts to the transcript
         // state.
-        let session_state = self.session_state.clone();
-        element.with_placeholder_ghost_text(move |app| {
-            session_state
-                .as_ref(app)
-                .resolve(app)
-                .ok()
-                .and_then(|state| state.hint_text())
-                .map(|hint| (hint, TuiUiBuilder::from_app(app).muted_text_style()))
-        })
+        if !input_ownership.inline_menu_owns_input() {
+            let session_state = self.session_state.clone();
+            element.with_placeholder_ghost_text(move |app| {
+                session_state
+                    .as_ref(app)
+                    .resolve(app)
+                    .ok()
+                    .and_then(|state| state.hint_text())
+                    .map(|hint| (hint, TuiUiBuilder::from_app(app).muted_text_style()))
+            })
+        } else {
+            element
+        }
     }
     /// Collapses the current text selection to its head without changing text.
     pub(crate) fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
@@ -626,10 +636,13 @@ impl TuiView for TuiInputView {
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(ctx);
-        if self.voice_is_active(ctx) {
+        let inline_menu_owns_input = self
+            .active_inline_menu_input_ownership(ctx)
+            .inline_menu_owns_input();
+        if self.voice_is_active(ctx) && !inline_menu_owns_input {
             return self.render_input(ctx);
         }
-        let (prefix, prefix_style) = if self.is_shell_mode(ctx) {
+        let (prefix, prefix_style) = if self.is_shell_mode(ctx) && !inline_menu_owns_input {
             ("!", builder.shell_command_accent_style())
         } else {
             (">", builder.accent_text_style())
@@ -653,6 +666,9 @@ impl TuiView for TuiInputView {
 
     fn keymap_context(&self, ctx: &AppContext) -> keymap::Context {
         let suggestions_mode = self.suggestions_mode.as_ref(ctx).mode();
+        let inline_menu_owns_input = self
+            .active_inline_menu_input_ownership(ctx)
+            .inline_menu_owns_input();
         // In vim mode, escape is handled only when vim actually needs it:
         // - Non-Normal modes (Insert→Normal, Visual→Normal, Replace→Normal)
         // - Normal mode with pending input (clear the partial command)
@@ -672,7 +688,7 @@ impl TuiView for TuiInputView {
             mcp_menu_active: suggestions_mode == TuiInputSuggestionsMode::Mcp,
             plan_toggle_available: self.plan_toggle_available(ctx),
             keyboard_enhancement_supported: self.keyboard_enhancement_supported,
-            shell_completion_available: self.is_shell_mode(ctx),
+            shell_completion_available: self.is_shell_mode(ctx) && !inline_menu_owns_input,
         })
     }
 
@@ -728,6 +744,11 @@ impl TypedActionView for TuiInputView {
 
     fn handle_action(&mut self, action: &TuiInputAction, ctx: &mut ViewContext<Self>) {
         if self.handle_inline_menu_action(action, ctx) {
+            return;
+        }
+        let input_ownership = self.active_inline_menu_input_ownership(ctx);
+        if input_ownership.inline_menu_owns_input() {
+            self.handle_inline_menu_owned_input_action(action, input_ownership, ctx);
             return;
         }
         let outcome = match action {
@@ -945,6 +966,54 @@ impl TypedActionView for TuiInputView {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl TuiInputView {
+    fn handle_inline_menu_owned_input_action(
+        &mut self,
+        action: &TuiInputAction,
+        input_ownership: TuiInlineMenuInputOwnership,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let outcome = match action {
+            TuiInputAction::Editor(action) => {
+                apply_editor_action(&self.model, action, self.editor_behavior, ctx)
+            }
+            TuiInputAction::EditorCommand(command) => {
+                self.editor_state
+                    .apply_command(&self.model, *command, self.editor_behavior, ctx)
+            }
+            TuiInputAction::SetCursor { offset } => {
+                self.model.update(ctx, |model, ctx| {
+                    model.select_at(*offset, false, ctx);
+                    model.end_selection(ctx);
+                });
+                TuiEditorInteractionOutcome::FollowCursor
+            }
+            TuiInputAction::Submit
+            | TuiInputAction::HandleEscape
+            | TuiInputAction::LogOutSelectedMcp
+            | TuiInputAction::Complete => TuiEditorInteractionOutcome::PreserveViewport,
+        };
+        let outcome = match outcome {
+            TuiEditorInteractionOutcome::Clipboard(_) if input_ownership.is_masked() => {
+                TuiEditorInteractionOutcome::FollowCursor
+            }
+            TuiEditorInteractionOutcome::Clipboard(action) => {
+                match apply_editor_clipboard_action(&self.model, action, ctx) {
+                    Ok(true) => ctx.emit(TuiInputViewEvent::ClipboardCopySucceeded),
+                    Ok(false) => {}
+                    Err(error) => {
+                        log::error!("Failed to copy TUI input selection: {error}");
+                        ctx.emit(TuiInputViewEvent::ClipboardCopyFailed);
+                    }
+                }
+                TuiEditorInteractionOutcome::FollowCursor
+            }
+            outcome => outcome,
+        };
+        if outcome == TuiEditorInteractionOutcome::FollowCursor {
+            self.follow_cursor(ctx);
+        }
+        ctx.notify();
+    }
     // ── Read helpers ──────────────────────────────────────────────────────────
     fn open_inline_menu(&self, mode: TuiInputSuggestionsMode, ctx: &mut ViewContext<Self>) {
         if let Some(menu) = self.inline_menus.iter().find(|menu| menu.mode() == mode) {
@@ -1357,6 +1426,14 @@ impl TuiInputView {
             self.suggestions_mode.as_ref(ctx).mode(),
             ctx,
         )
+    }
+
+    /// Resolves the shared editor owner from the one active inline menu.
+    fn active_inline_menu_input_ownership(&self, ctx: &AppContext) -> TuiInlineMenuInputOwnership {
+        self.active_inline_menu(ctx)
+            .map_or(TuiInlineMenuInputOwnership::Composer, |menu| {
+                menu.input_ownership(ctx)
+            })
     }
 }
 

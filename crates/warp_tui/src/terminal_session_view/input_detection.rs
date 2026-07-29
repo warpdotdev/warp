@@ -99,6 +99,16 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.abort_input_detection(ctx);
+        let inline_menu_owns_input = active_inline_menu(
+            &self.inline_menus,
+            self.suggestions_mode.as_ref(ctx).mode(),
+            ctx,
+        )
+        .is_some_and(|menu| menu.input_ownership(ctx).inline_menu_owns_input());
+        if inline_menu_owns_input {
+            self.abort_shell_completion(ctx);
+            return;
+        }
         self.handle_completion_editor_changed(ctx);
         if is_user_edit {
             self.schedule_input_detection(ctx);

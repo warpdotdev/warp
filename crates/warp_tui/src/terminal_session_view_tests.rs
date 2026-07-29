@@ -61,7 +61,7 @@ use super::{
     LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT, RUNNING_COMMAND_DETACH_HINT,
     SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
     SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
-    SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
+    SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG,
     SHELL_MODE_HINT, STATUSLINE_RESET_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
@@ -4470,7 +4470,7 @@ fn blocked_terminal_use_action_acceptance_uses_ctrl_enter_without_rebinding_subm
     });
 }
 #[test]
-fn voice_input_keeps_ctrl_s_as_the_default_keybinding() {
+fn voice_input_uses_ctrl_s_only_when_composer_shortcuts_are_active() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
         app.read(|ctx| {
@@ -4489,7 +4489,9 @@ fn voice_input_keeps_ctrl_s_as_the_default_keybinding() {
                 .insert(TuiTerminalSessionView::ui_name());
             assert!(!binding.in_context(&session_context));
 
-            session_context.set.insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
+            session_context
+                .set
+                .insert(SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG);
             assert!(binding.in_context(&session_context));
         });
     });

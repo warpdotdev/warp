@@ -360,6 +360,30 @@ pub(crate) enum TuiInlineMenuAccepted {
     Completion(TuiCompletionAcceptance),
 }
 
+/// Who owns the shared TUI editor while an inline menu is active.
+///
+/// The variants are exhaustive so ownership and masking cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum TuiInlineMenuInputOwnership {
+    /// The composer owns editor behavior; the menu only observes input and handles menu actions.
+    Composer,
+    /// The inline menu owns ordinary plaintext editor behavior.
+    InlineMenuPlainText,
+    /// The inline menu owns editor behavior, with masked rendering and clipboard export disabled.
+    InlineMenuMasked,
+}
+
+impl TuiInlineMenuInputOwnership {
+    pub(crate) fn inline_menu_owns_input(self) -> bool {
+        matches!(self, Self::InlineMenuPlainText | Self::InlineMenuMasked)
+    }
+
+    pub(crate) fn is_masked(self) -> bool {
+        matches!(self, Self::InlineMenuMasked)
+    }
+}
+
 /// Type alias for mouse-interaction callbacks stored in the element tree.
 type InlineMenuAcceptFn = dyn Fn(usize, &mut TuiEventContext<'_>, &AppContext);
 type InlineMenuScrollFn = dyn Fn(isize, &mut TuiEventContext<'_>, &AppContext);
@@ -375,6 +399,10 @@ pub(crate) trait TuiInlineMenuHandle {
     fn mode(&self) -> TuiInputSuggestionsMode;
     /// Returns whether this menu is open.
     fn is_open(&self, ctx: &AppContext) -> bool;
+    /// Returns who owns the shared editor while this menu is active.
+    fn input_ownership(&self, _ctx: &AppContext) -> TuiInlineMenuInputOwnership {
+        TuiInlineMenuInputOwnership::Composer
+    }
     /// Opens the menu when it supports explicit opening.
     fn open(&self, _ctx: &mut AppContext) {}
     /// Returns the input range highlighted by this menu.
@@ -436,6 +464,9 @@ impl TuiInlineMenu {
 
     pub(crate) fn mode(&self) -> TuiInputSuggestionsMode {
         self.handle.mode()
+    }
+    pub(crate) fn input_ownership(&self, ctx: &AppContext) -> TuiInlineMenuInputOwnership {
+        self.handle.input_ownership(ctx)
     }
 
     /// Renders the menu without mouse interactions (used in tests and other

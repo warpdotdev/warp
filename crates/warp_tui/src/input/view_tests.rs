@@ -46,7 +46,8 @@ use crate::editor_element::{TuiEditorAction, TuiEditorElement};
 use crate::editor_interaction::TuiEditorCommand;
 use crate::inline_menu::{
     TuiInlineMenu, TuiInlineMenuAccepted, TuiInlineMenuHandle, TuiInlineMenuHeader,
-    TuiInlineMenuScrollAnchor, TuiInlineMenuSnapshot, TuiInlineMenuStatus,
+    TuiInlineMenuInputOwnership, TuiInlineMenuScrollAnchor, TuiInlineMenuSnapshot,
+    TuiInlineMenuStatus,
 };
 use crate::input_mode_policy::AI_LOCKED_CONFIG;
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
@@ -93,6 +94,126 @@ impl InputModePolicy for TestInputModePolicy {
     ) -> Option<PolicyConfigUpdate> {
         None
     }
+}
+
+struct TestSecretMenu;
+
+impl Entity for TestSecretMenu {
+    type Event = ();
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TestSecretMenu> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::ModelSelector
+    }
+
+    fn is_open(&self, _ctx: &AppContext) -> bool {
+        true
+    }
+
+    fn input_ownership(&self, _ctx: &AppContext) -> TuiInlineMenuInputOwnership {
+        TuiInlineMenuInputOwnership::InlineMenuMasked
+    }
+
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, _ctx: &mut AppContext) {}
+    fn select_next(&self, _ctx: &mut AppContext) {}
+    fn accept(&self, _ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        None
+    }
+    fn dismiss(&self, _ctx: &mut AppContext) {}
+    fn snapshot(&self, _ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        Some(TuiInlineMenuSnapshot {
+            header: Some(TuiInlineMenuHeader {
+                title: Some("Secret".to_owned()),
+                tabs: Vec::new(),
+            }),
+            rows: Vec::new(),
+            selected_index: None,
+            scroll_offset: 0,
+            scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+            max_visible_rows: 1,
+            status: None,
+        })
+    }
+}
+
+#[test]
+fn masked_inline_menu_input_suppresses_copy_and_composer_modes() {
+    App::test((), |mut app| async move {
+        let (view, copied) = app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            add_test_semantic_selection(ctx);
+            let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
+            let input_mode = add_test_input_mode(ctx);
+            let suggestions_mode =
+                add_suggestions_mode(ctx, TuiInputSuggestionsMode::ModelSelector);
+            let menu = ctx.add_model(|_| TestSecretMenu);
+            let (_, view) = ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                move |ctx| {
+                    TuiInputView::new_for_test(
+                        input_model,
+                        input_mode,
+                        suggestions_mode,
+                        vec![TuiInlineMenu::new(menu)],
+                        |_| false,
+                        ctx,
+                    )
+                },
+            );
+            let copied = Rc::new(Cell::new(false));
+            let copied_for_subscription = copied.clone();
+            ctx.subscribe_to_view(&view, move |_, event, _| {
+                if matches!(event, TuiInputViewEvent::ClipboardCopySucceeded) {
+                    copied_for_subscription.set(true);
+                }
+            });
+            (view, copied)
+        });
+
+        app.update(|ctx| {
+            type_str(&view, ctx, "top-secret");
+            dispatch(
+                &view,
+                ctx,
+                &[
+                    TuiInputAction::EditorCommand(TuiEditorCommand::SelectAll),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::Copy),
+                ],
+            );
+        });
+        app.read(|ctx| {
+            let rendered = render_input_buffer(&view, ctx).to_lines().join("\n");
+            assert!(rendered.contains("••••••••••"), "{rendered}");
+            assert!(!rendered.contains("top-secret"), "{rendered}");
+            assert!(!view.as_ref(ctx).is_shell_mode(ctx));
+        });
+        assert!(!copied.get());
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("", ctx));
+            type_str(&view, ctx, "!?");
+        });
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "!?");
+            assert!(!view.as_ref(ctx).is_shell_mode(ctx));
+            assert_eq!(
+                view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ModelSelector
+            );
+        });
+    });
 }
 
 fn add_test_input_mode(ctx: &mut AppContext) -> ModelHandle<BlocklistAIInputModel> {
