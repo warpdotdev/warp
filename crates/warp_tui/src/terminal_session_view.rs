@@ -68,7 +68,9 @@ use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
     TuiAttachmentPasteDisposition,
 };
-use crate::cli_agent_osc_event_publisher::CliAgentOscEventPublisher;
+use crate::cli_agent_osc_event_publisher::{
+    CliAgentOscEventPublisher, host_supports_cli_agent_notifications,
+};
 use crate::clipboard::copy_to_clipboard;
 use crate::completion_menu::TuiCompletionMenuModel;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
@@ -2107,7 +2109,8 @@ impl TuiTerminalSessionView {
 
     /// Enables CLI-agent lifecycle notifications for the root TUI session.
     pub(crate) fn enable_cli_agent_osc_event_publishing(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.cli_agent_osc_event_publisher.is_some() {
+        if self.cli_agent_osc_event_publisher.is_some() || !host_supports_cli_agent_notifications()
+        {
             return;
         }
         let terminal_surface_id = self.terminal_surface_id;

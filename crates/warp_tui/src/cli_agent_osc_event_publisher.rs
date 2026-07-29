@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsStr;
 use std::io::{self, Write};
 
 use warp::tui_export::{
@@ -7,11 +8,32 @@ use warp::tui_export::{
     BlocklistAIHistoryModel, ConversationSelectionHandle, ConversationStatus,
     ConversationStatusUpdate,
 };
-use warp_core::cli_agent_protocol::{CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentNotification};
+use warp_core::cli_agent_protocol::{
+    CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentNotification, WARP_CLI_AGENT_PROTOCOL_VERSION_ENV,
+    WARP_CLIENT_VERSION_ENV,
+};
 use warp_terminal::model::escape_sequences::{C0, C1, tmux_passthrough};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
 const WARP_TUI_AGENT_NAME: &str = "warp-tui";
+
+/// Returns whether the host terminal advertises structured Warp notifications.
+///
+/// Requiring both values matches the Claude plugin's structured-notification
+/// capability check and prevents standalone TUI runs from emitting Warp OSC.
+pub(crate) fn host_supports_cli_agent_notifications() -> bool {
+    let protocol_version = env::var_os(WARP_CLI_AGENT_PROTOCOL_VERSION_ENV);
+    let client_version = env::var_os(WARP_CLIENT_VERSION_ENV);
+    has_warp_host_capability(protocol_version.as_deref(), client_version.as_deref())
+}
+
+fn has_warp_host_capability(
+    protocol_version: Option<&OsStr>,
+    client_version: Option<&OsStr>,
+) -> bool {
+    protocol_version.is_some_and(|value| !value.is_empty())
+        && client_version.is_some_and(|value| !value.is_empty())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StatusOscEvent {

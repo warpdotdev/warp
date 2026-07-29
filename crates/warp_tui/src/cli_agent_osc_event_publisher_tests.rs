@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn warp_host_capability_requires_protocol_and_client_versions() {
+    let protocol_version = OsStr::new("1");
+    let client_version = OsStr::new("local");
+    let empty = OsStr::new("");
+
+    assert!(has_warp_host_capability(
+        Some(protocol_version),
+        Some(client_version)
+    ));
+    assert!(!has_warp_host_capability(None, Some(client_version)));
+    assert!(!has_warp_host_capability(Some(protocol_version), None));
+    assert!(!has_warp_host_capability(Some(empty), Some(client_version)));
+    assert!(!has_warp_host_capability(
+        Some(protocol_version),
+        Some(empty)
+    ));
+}
+
+#[test]
 fn status_events_ignore_background_conversations_and_restorations() {
     let selected_conversation_id = AIConversationId::new();
 
