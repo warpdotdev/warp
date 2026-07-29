@@ -50,22 +50,23 @@ use super::{
     AUTO_APPROVE_DISABLED_HINT, AUTO_APPROVE_ENABLED_HINT, AUTO_APPROVE_FEEDBACK_DURATION,
     AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource, COST_CONVERSATION_IN_PROGRESS_HINT,
     COST_EMPTY_CONVERSATION_HINT, COST_NO_ACTIVE_CONVERSATION_HINT, CTRL_C_EXIT_HINT,
-    CTRL_C_KILL_CHILD_HINT, ContextWindowUsage, ConversationRestoreState,
-    DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, FooterSegment, FooterSegments,
-    INLINE_MENU_TOP_PADDING_ROWS, LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT,
-    RUNNING_COMMAND_DETACH_HINT,
+    CTRL_C_KILL_CHILD_HINT, ConversationRestoreState,
+    DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME, INLINE_MENU_TOP_PADDING_ROWS,
+    LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT, RUNNING_COMMAND_DETACH_HINT,
     SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
     SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
     SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_OWNS_INPUT_FLAG,
     SHELL_MODE_HINT, STATUSLINE_RESET_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
-    format_context_window_usage, format_statusline_date, format_statusline_time_12_hour,
-    format_statusline_time_24_hour, format_todo_progress, log_bundle_success_message,
-    mcp_primary_action_hint, raw_prompt_if_not_blank, render_git_branch_status,
-    render_mcp_menu_footer, render_status_footer_row,
-    render_statusline_datetime, should_render_plain_git_branch, voice_argument_is_empty,
-    voice_command_argument,
+    log_bundle_success_message, mcp_primary_action_hint, raw_prompt_if_not_blank,
+    render_mcp_menu_footer, voice_argument_is_empty, voice_command_argument,
+};
+use super::statusline::{
+    ContextWindowUsage, FooterSegment, FooterSegments, format_context_window_usage,
+    format_statusline_date, format_statusline_time_12_hour, format_statusline_time_24_hour,
+    format_todo_progress, render_git_branch_status, render_status_footer_row,
+    render_statusline_datetime, should_render_plain_git_branch,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
