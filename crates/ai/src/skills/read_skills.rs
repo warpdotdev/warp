@@ -1,10 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use warp_util::local_or_remote_path::LocalOrRemotePath;
-
-use super::parse_skill::{ParsedSkill, parse_skill, parse_skill_content_at_location};
-use super::skill_provider::{SkillProvider, SkillScope, get_provider_for_path};
+use super::parse_skill::{ParsedSkill, parse_skill};
+use super::skill_provider::SkillScope;
 
 /// The environment variable that specifies extra skill directories to index at
 /// personal (home) precedence. Value is a comma-separated list of paths; each
@@ -32,56 +30,29 @@ pub fn parse_skills_dirs_env() -> Vec<PathBuf> {
 ///
 /// Each directory in `dirs` is expected to contain individual skill folders as
 /// **direct children** (e.g. `<dir>/<skill-name>/SKILL.md`). This matches the
-/// layout used by `SKILLS_DIRS`. Entries that are not directories or cannot be
-/// read are skipped with a warning.
+/// layout used by `SKILLS_DIRS`. Entries that are not directories are skipped
+/// with a warning.
 ///
 /// Skills loaded this way are assigned `SkillScope::Home` so they are always
 /// in scope — the same precedence as personal skills from `~/.agents/skills`.
 pub fn read_skills_for_skills_dirs(dirs: &[PathBuf]) -> Vec<ParsedSkill> {
-    let mut skills = Vec::new();
-    for dir in dirs {
-        if !dir.is_dir() {
+    dirs.iter()
+        .filter(|dir| {
+            if dir.is_dir() {
+                return true;
+            }
             log::warn!(
                 "SKILLS_DIRS: skipping '{}' — not a directory or does not exist",
                 dir.display()
             );
-            continue;
-        }
-        let Ok(entries) = fs::read_dir(dir) else {
-            log::warn!("SKILLS_DIRS: cannot read directory '{}'", dir.display());
-            continue;
-        };
-        for entry in entries {
-            let Ok(entry) = entry else { continue };
-            let entry_path = entry.path();
-            if !entry_path.is_dir() {
-                continue;
-            }
-            let skill_file_path = entry_path.join("SKILL.md");
-            if !skill_file_path.exists() {
-                continue;
-            }
-            let Ok(content) = fs::read_to_string(&skill_file_path) else {
-                log::warn!(
-                    "SKILLS_DIRS: cannot read skill file '{}'",
-                    skill_file_path.display()
-                );
-                continue;
-            };
-            let location = LocalOrRemotePath::Local(skill_file_path);
-            let provider = get_provider_for_path(&location).unwrap_or(SkillProvider::Agents);
-            match parse_skill_content_at_location(location, &content, provider, SkillScope::Home) {
-                Ok(skill) => skills.push(skill),
-                Err(err) => {
-                    log::warn!(
-                        "SKILLS_DIRS: failed to parse skill in '{}': {err}",
-                        entry_path.display()
-                    );
-                }
-            }
-        }
-    }
-    skills
+            false
+        })
+        .flat_map(|dir| read_skills(dir))
+        .map(|mut skill| {
+            skill.scope = SkillScope::Home;
+            skill
+        })
+        .collect()
 }
 
 /// Read all skills from a directory containing skill subdirectories
