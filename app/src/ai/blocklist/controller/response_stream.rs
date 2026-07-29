@@ -359,24 +359,19 @@ impl ResponseStream {
                             }
                             // `RequestParams` snapshotted the credentials before
                             // the wait, so re-read just the GEAP credential and
-                            // leave every other key alone. A mint failure, a
-                            // timeout, or a dropped sender all leave the snapshot
-                            // untouched.
-                            let fresh_credentials =
-                                matches!(result, Ok(Ok(GeapRefreshOutcome::Refreshed)))
-                                    .then(|| {
-                                        ApiKeyManager::as_ref(ctx)
-                                            .api_keys_for_request(
-                                                UserWorkspaces::as_ref(ctx)
-                                                    .is_byo_api_key_enabled(ctx),
-                                                UserWorkspaces::as_ref(ctx)
-                                                    .is_aws_bedrock_credentials_enabled(ctx),
-                                                Some(refresh_binding.clone()),
-                                            )
-                                            .and_then(|keys| keys.google_cloud_credentials)
-                                    })
-                                    .flatten();
-                            apply_geap_refresh_to_params(&mut me.params, fresh_credentials);
+                            // leave every other key alone.
+                            //
+                            // Unlike the Grok branch above, a mint failure, a
+                            // timeout, or a dropped sender is never surfaced as a
+                            // terminal error — the request goes out with the
+                            // snapshot untouched, and it is the job of the server
+                            // to respond with an error if the GEAP credentials are bad.
+                            if matches!(result, Ok(Ok(GeapRefreshOutcome::Refreshed)))
+                                && let Some(credentials) = ApiKeyManager::as_ref(ctx)
+                                    .geap_credentials_for_request(&refresh_binding)
+                            {
+                                apply_geap_refresh_to_params(&mut me.params, Some(credentials));
+                            }
                             Self::spawn_generate(
                                 request_id,
                                 me.params.clone(),
