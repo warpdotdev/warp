@@ -1981,6 +1981,106 @@ fn test_parse_empty_underline() {
     )
 }
 
+/// `<kbd>` keyboard-shortcut tags are recognized in the parser and rendered using the existing
+/// inline-code visual treatment (no new style), per maintainer guidance on
+/// https://github.com/warpdotdev/warp/issues/13733.
+#[test]
+fn test_basic_parse_kbd() {
+    let source = "Press <kbd>Cmd</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::inline_code("Cmd"),
+        ])]
+    );
+}
+
+/// The motivating test case from issue #13733: two adjacent keycaps joined by a literal `+`.
+#[test]
+fn test_parse_kbd_issue_test_case() {
+    let source = "Press <kbd>Cmd</kbd>+<kbd>K</kbd> to open the command palette.";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Press "),
+            FormattedTextFragment::inline_code("Cmd"),
+            FormattedTextFragment::plain_text("+"),
+            FormattedTextFragment::inline_code("K"),
+            FormattedTextFragment::plain_text(" to open the command palette."),
+        ])]
+    );
+}
+
+#[test]
+fn test_mixed_parse_kbd() {
+    let source = "This is ~~test~~ **with** <kbd>text</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("This is "),
+            FormattedTextFragment::strikethrough("test"),
+            FormattedTextFragment::plain_text(" "),
+            FormattedTextFragment::bold("with"),
+            FormattedTextFragment::plain_text(" "),
+            FormattedTextFragment::inline_code("text"),
+        ])]
+    );
+}
+
+#[test]
+fn test_multi_parse_kbd() {
+    let source = "<kbd>test1</kbd>\n<kbd>test2</kbd>";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![
+            FormattedTextLine::Line(vec![FormattedTextFragment::inline_code("test1")]),
+            FormattedTextLine::Line(vec![FormattedTextFragment::inline_code("test2")]),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_empty_kbd() {
+    assert_eq!(
+        parse_all("some <kbd></kbd> text", parse_inline),
+        vec![
+            FormattedTextFragment::plain_text("some "),
+            FormattedTextFragment::inline_code(""),
+            FormattedTextFragment::plain_text(" text"),
+        ]
+    );
+}
+
+/// An unmatched `</kbd>` (no opener) degrades to literal text, never a panic.
+#[test]
+fn test_parse_unmatched_kbd_end_is_literal() {
+    assert_eq!(
+        parse_all("no opener </kbd> here", parse_inline),
+        vec![FormattedTextFragment::plain_text("no opener </kbd> here")]
+    );
+}
+
+/// An unterminated `<kbd>` (missing closer) leaves the opening tag as literal text.
+#[test]
+fn test_parse_unterminated_kbd_is_literal() {
+    assert_eq!(
+        parse_all("dangling <kbd>Cmd here", parse_inline),
+        vec![FormattedTextFragment::plain_text("dangling <kbd>Cmd here")]
+    );
+}
+
+/// `<kbd>` does not nest with bold/italic — it is matched as a single atomic token, the same
+/// way backtick code spans are. This mirrors the narrower scope requested by the maintainer:
+/// unlike a delimiter-stack style, this cannot interact with the buffer's style model.
+#[test]
+fn test_parse_kbd_does_not_interpret_nested_markdown() {
+    assert_eq!(
+        parse_all("<kbd>**Cmd**</kbd>", parse_inline),
+        vec![FormattedTextFragment::inline_code("**Cmd**")]
+    );
+}
+
 #[test]
 fn test_unordered_list_indentation_level_relative() {
     // Test that both 2-space and 4-space relative indentation produce the same structure
