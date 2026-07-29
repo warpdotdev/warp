@@ -221,14 +221,14 @@ fn status_snapshot(status: TuiInlineMenuStatus) -> TuiInlineMenuSnapshot {
 }
 
 #[test]
-fn renders_loading_and_empty_statuses() {
+fn renders_loading_and_empty_statuses_left_aligned() {
     let loading = render(status_snapshot(TuiInlineMenuStatus::Loading(
         "Loading conversations…".to_owned(),
     )));
     assert!(
         loading
             .iter()
-            .any(|line| line.contains("Loading conversations…"))
+            .any(|line| line.starts_with("Loading conversations…"))
     );
 
     let empty = render(status_snapshot(TuiInlineMenuStatus::Empty(
@@ -237,7 +237,7 @@ fn renders_loading_and_empty_statuses() {
     assert!(
         empty
             .iter()
-            .any(|line| line.contains("No conversations found"))
+            .any(|line| line.starts_with("No conversations found"))
     );
 }
 
