@@ -1,9 +1,10 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use warpui::{App, SingletonEntity};
 
-use super::{AuthManager, AuthManagerEvent};
+use super::{AuthManager, AuthManagerEvent, request_device_code_with_timeout};
 use crate::ServerApiProvider;
 use crate::auth::auth_view_modal::AuthRedirectPayload;
 use crate::auth::credentials::{Credentials, RefreshToken};
@@ -88,6 +89,35 @@ fn test_duplicate_redirect_for_logged_in_user_is_silently_ignored() {
         AuthManager::handle(&app).update(&mut app, |auth_manager, ctx| {
             auth_manager.initialize_user_from_auth_payload(auth_payload, true, ctx);
         });
+    });
+}
+
+#[test]
+fn test_device_code_request_retries_then_times_out() {
+    App::test((), |_app| async move {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_request = attempts.clone();
+
+        let result = request_device_code_with_timeout(
+            move || {
+                attempts_for_request.fetch_add(1, Ordering::Relaxed);
+                futures::future::pending()
+            },
+            Duration::from_millis(1),
+            2,
+        )
+        .await;
+
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        let error = result.unwrap_err();
+        assert!(matches!(
+            &error,
+            UserAuthenticationError::DeviceCodeRequestTimedOut { attempts: 2 }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "Timed out requesting a sign-in link after 2 attempts"
+        );
     });
 }
 

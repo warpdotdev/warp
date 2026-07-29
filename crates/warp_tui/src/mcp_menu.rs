@@ -2,12 +2,11 @@ use warp::tui_export::{
     TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerStatus,
     TuiMcpTransport,
 };
-use warp_search_core::inline_menu::InlineMenuSelection;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
 use crate::inline_menu::{
-    MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuRow, TuiInlineMenuRowStyle,
-    TuiInlineMenuSnapshot, TuiInlineMenuStatus, keep_selected_visible, result_row_capacity,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
+    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 use crate::ui::abbreviate_home_prefix;
@@ -26,9 +25,7 @@ enum TuiMcpMenuState {
     #[default]
     Closed,
     Open {
-        rows: Vec<TuiMcpMenuRow>,
-        selection: InlineMenuSelection,
-        scroll_offset: usize,
+        list: TuiInlineMenuListState<TuiMcpMenuRow>,
     },
 }
 
@@ -81,9 +78,7 @@ impl TuiMcpMenuModel {
             return;
         }
         self.state = TuiMcpMenuState::Open {
-            rows: Vec::new(),
-            selection: InlineMenuSelection::default(),
-            scroll_offset: 0,
+            list: TuiInlineMenuListState::default(),
         };
         self.refresh_rows(ctx);
     }
@@ -99,35 +94,43 @@ impl TuiMcpMenuModel {
     }
 
     pub(crate) fn select_previous(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiMcpMenuState::Open {
-            rows,
-            selection,
-            scroll_offset,
-        } = &mut self.state
-        else {
+        let TuiMcpMenuState::Open { list } = &mut self.state else {
             return;
         };
-        if let Some(index) =
-            selection.select_previous(rows.len(), |index| rows[index].action.is_some())
-        {
-            keep_selected_visible(rows.len(), index, MAX_VISIBLE_ROWS, scroll_offset);
-        }
+        list.select_previous(MAX_VISIBLE_ROWS, |row| row.action.is_some());
         ctx.emit(TuiMcpMenuEvent::Updated);
     }
 
     pub(crate) fn select_next(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiMcpMenuState::Open {
-            rows,
-            selection,
-            scroll_offset,
-        } = &mut self.state
-        else {
+        let TuiMcpMenuState::Open { list } = &mut self.state else {
             return;
         };
-        if let Some(index) = selection.select_next(rows.len(), |index| rows[index].action.is_some())
-        {
-            keep_selected_visible(rows.len(), index, MAX_VISIBLE_ROWS, scroll_offset);
-        }
+        list.select_next(MAX_VISIBLE_ROWS, |row| row.action.is_some());
+        ctx.emit(TuiMcpMenuEvent::Updated);
+    }
+
+    /// Selects the row at absolute snapshot index `index` (for mouse click).
+    /// Returns `true` when the row was actually selected, `false` when the
+    /// index is out of bounds, the menu is not open, or the row has no action.
+    pub(crate) fn select_at_snapshot_index(
+        &mut self,
+        index: usize,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let TuiMcpMenuState::Open { list } = &mut self.state else {
+            return false;
+        };
+        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, |row| row.action.is_some());
+        ctx.emit(TuiMcpMenuEvent::Updated);
+        selected
+    }
+
+    /// Scrolls the viewport by `delta` rows without changing the selection.
+    pub(crate) fn scroll_by_delta(&mut self, delta: isize, ctx: &mut ModelContext<Self>) {
+        let TuiMcpMenuState::Open { list } = &mut self.state else {
+            return;
+        };
+        list.scroll_by(delta, MAX_VISIBLE_ROWS);
         ctx.emit(TuiMcpMenuEvent::Updated);
     }
 
@@ -135,33 +138,22 @@ impl TuiMcpMenuModel {
         &mut self,
         _ctx: &mut ModelContext<Self>,
     ) -> Option<TuiMcpAction> {
-        let TuiMcpMenuState::Open {
-            rows, selection, ..
-        } = &self.state
-        else {
+        let TuiMcpMenuState::Open { list } = &self.state else {
             return None;
         };
-        selection
-            .selected_index()
-            .and_then(|index| rows.get(index))
-            .and_then(|row| row.action)
+        list.selected_row().and_then(|row| row.action)
     }
 
     pub(crate) fn snapshot(&self, app: &AppContext) -> Option<TuiInlineMenuSnapshot> {
         if !self.is_open(app) {
             return None;
         }
-        let TuiMcpMenuState::Open {
-            rows,
-            selection,
-            scroll_offset,
-        } = &self.state
-        else {
+        let TuiMcpMenuState::Open { list } = &self.state else {
             return None;
         };
         let mcp = TuiMcpManager::as_ref(app);
         let snapshot = mcp.snapshot();
-        let status = rows.is_empty().then(|| {
+        let status = list.rows().is_empty().then(|| {
             let label = match &snapshot.config_state {
                 TuiMcpConfigState::Missing => format!(
                     "No MCP config found at {}",
@@ -180,18 +172,21 @@ impl TuiMcpMenuModel {
                 )),
                 tabs: Vec::new(),
             }),
-            rows: rows
+            rows: list
+                .rows()
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
+                    prefix: None,
                     description: row.description.clone(),
                     state_suffix: None,
                     is_selectable: row.action.is_some(),
                     style: TuiInlineMenuRowStyle::Default,
                 })
                 .collect(),
-            selected_index: selection.selected_index(),
-            scroll_offset: *scroll_offset,
+            selected_index: list.selected_index(),
+            scroll_offset: list.scroll_offset(),
+            scroll_anchor: list.scroll_anchor(),
             max_visible_rows: MAX_VISIBLE_ROWS,
             status,
         })
@@ -251,17 +246,12 @@ impl TuiMcpMenuModel {
             }
         }
 
-        let mut selection = InlineMenuSelection::default();
-        if let Some(index) = rows.iter().position(|row| row.action.is_some()) {
-            selection.select(index, rows.len(), |candidate| {
-                rows[candidate].action.is_some()
-            });
-        }
-        self.state = TuiMcpMenuState::Open {
-            rows,
-            selection,
-            scroll_offset: 0,
-        };
+        let preferred_index = rows.iter().position(|row| row.action.is_some());
+        let mut list = TuiInlineMenuListState::default();
+        list.replace_rows(rows, false, preferred_index, MAX_VISIBLE_ROWS, |row| {
+            row.action.is_some()
+        });
+        self.state = TuiMcpMenuState::Open { list };
         ctx.emit(TuiMcpMenuEvent::Updated);
     }
 }

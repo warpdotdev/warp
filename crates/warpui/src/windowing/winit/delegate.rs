@@ -55,18 +55,19 @@ impl GlobalHotKeyHandler {
 static MAIN_THREAD_ID: OnceLock<thread::ThreadId> = OnceLock::new();
 
 /// Open a URL using the platform's default handler.
-pub fn open_url_in_system(url: &str) {
+pub fn open_url_in_system(url: &str) -> bool {
     #[cfg(target_family = "wasm")]
-    if let Some(window) = web_sys::window() {
-        if let Some(safe_url) = crate::browser::safe_browser_open_url(url) {
-            let _ = window.open_with_url_and_target_and_features(
-                &safe_url,
-                "_blank",
-                "noopener,noreferrer",
-            );
-        } else {
+    {
+        let Some(window) = web_sys::window() else {
+            return false;
+        };
+        let Some(safe_url) = crate::browser::safe_browser_open_url(url) else {
             log::warn!("Skipping browser URL open for invalid or unsafe URL");
-        }
+            return false;
+        };
+        window
+            .open_with_url_and_target_and_features(&safe_url, "_blank", "noopener,noreferrer")
+            .is_ok_and(|window| window.is_some())
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -84,7 +85,7 @@ pub fn open_url_in_system(url: &str) {
         // 3. Fall back to default linux url opening behavior.
         if platform::linux::is_wsl() {
             match open::with_detached(url, "wslview") {
-                Ok(_) => return,
+                Ok(_) => return true,
                 Err(e) => log::info!(
                     "Failed to open url with wslview {e:?}, falling back to another method"
                 ),
@@ -112,7 +113,11 @@ pub fn open_url_in_system(url: &str) {
                         .stderr(std::process::Stdio::null())
                         .status()
                     {
-                        Ok(_) => return,
+                        Ok(status) if status.success() => return true,
+                        Ok(status) => log::info!(
+                            "Failed to open url with rundll32.exe: process exited with {status}, \
+                             falling back to another method"
+                        ),
                         Err(e) => log::info!(
                             "Failed to open url with rundll32.exe {e:?}, falling back to another method"
                         ),
@@ -122,17 +127,33 @@ pub fn open_url_in_system(url: &str) {
                 }
             }
         }
-        if let Err(e) = open::that_detached(url) {
-            log::warn!("Unable to open url {e:?}");
+        match open::that_detached(url) {
+            Ok(_) => true,
+            Err(e) => {
+                log::warn!("Unable to open url {e:?}");
+                false
+            }
         }
     }
 
     #[cfg(windows)]
     {
-        if let Err(e) = open::that_detached(url) {
-            log::warn!("Unable to open url {e:?}");
+        match open::that_detached(url) {
+            Ok(_) => true,
+            Err(e) => {
+                log::warn!("Unable to open url {e:?}");
+                false
+            }
         }
     }
+
+    #[cfg(not(any(
+        target_family = "wasm",
+        target_os = "linux",
+        target_os = "freebsd",
+        windows
+    )))]
+    false
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -299,8 +320,8 @@ impl platform::Delegate for AppDelegate {
         platform::SystemTheme::Light
     }
 
-    fn open_url(&self, url: &str) {
-        open_url_in_system(url);
+    fn open_url(&self, url: &str) -> bool {
+        open_url_in_system(url)
     }
 
     fn open_file_path(&self, path: &Path) {
@@ -604,8 +625,8 @@ impl platform::Delegate for IntegrationTestDelegate {
         self.app_delegate.system_theme()
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn open_file_path(&self, _: &Path) {

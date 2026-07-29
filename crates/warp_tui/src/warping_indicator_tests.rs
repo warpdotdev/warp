@@ -47,7 +47,7 @@ fn renders_the_indicator_row_and_requests_a_repaint() {
         });
         app.read(|app_ctx| {
             let element = render_warping_indicator_row(
-                "Warping...",
+                "Warping",
                 Duration::ZERO,
                 TuiText::new("▶▶ Auto approve off")
                     .with_style(TuiUiBuilder::from_app(app_ctx).muted_text_style())
@@ -81,7 +81,7 @@ fn renders_the_indicator_row_and_requests_a_repaint() {
 }
 
 #[test]
-fn shimmer_only_applies_to_the_warping_label() {
+fn shimmer_only_applies_to_the_warping_label_and_groups_its_ellipsis() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
@@ -89,7 +89,7 @@ fn shimmer_only_applies_to_the_warping_label() {
         app.read(|app_ctx| {
             let config = ShimmerConfig::default();
             let element = render_warping_indicator_row(
-                "Warping...",
+                "Warping",
                 config.period / 2,
                 TuiText::new("▶▶ Auto approve off").finish(),
                 app_ctx,
@@ -101,6 +101,9 @@ fn shimmer_only_applies_to_the_warping_label() {
             let base = Color::Rgb(base.r, base.g, base.b);
             assert_eq!(frame.buffer[(0, 0)].fg, base);
             assert_ne!(frame.buffer[(5, 0)].fg, base);
+            let first_dot_color = frame.buffer[(9, 0)].fg;
+            assert_eq!(frame.buffer[(10, 0)].fg, first_dot_color);
+            assert_eq!(frame.buffer[(11, 0)].fg, first_dot_color);
         });
     });
 }
@@ -114,7 +117,7 @@ fn renders_a_custom_progress_label() {
         app.read(|app_ctx| {
             let builder = TuiUiBuilder::from_app(app_ctx);
             let element = render_warping_indicator_row(
-                "Summarizing conversation...",
+                "Summarizing conversation",
                 Duration::ZERO,
                 TuiText::new("▶▶ Auto approve on")
                     .with_style(builder.success_glyph_style())

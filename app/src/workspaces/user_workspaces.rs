@@ -1788,13 +1788,7 @@ impl UserWorkspaces {
     {
         self.update_current_workspace(
             |workspace| {
-                if let Some(team) = workspace.teams.first_mut() {
-                    f(&mut team.organization_settings.sandboxed_agent_settings);
-                } else {
-                    panic!(
-                        "No team found in current workspace. Did you call setup_test_workspace()?"
-                    );
-                }
+                f(&mut workspace.settings.sandboxed_agent_settings);
             },
             ctx,
         );
@@ -1806,13 +1800,7 @@ impl UserWorkspaces {
     {
         self.update_current_workspace(
             |workspace| {
-                if let Some(team) = workspace.teams.first_mut() {
-                    f(&mut team.organization_settings.ai_autonomy_settings);
-                } else {
-                    panic!(
-                        "No team found in current workspace. Did you call setup_test_workspace()?"
-                    );
-                }
+                f(&mut workspace.settings.ai_autonomy_settings);
             },
             ctx,
         );

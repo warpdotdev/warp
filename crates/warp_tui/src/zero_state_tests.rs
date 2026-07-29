@@ -3,10 +3,17 @@ use std::path::PathBuf;
 use uuid::Uuid;
 use warp::tui_export::{
     TuiMcpConfigState, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot,
-    TuiMcpTransport,
+    TuiMcpTransport, register_tui_session_view_test_singletons,
 };
+use warpui::{EntityIdMap, SingletonEntity};
+use warpui_core::elements::tui::{
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, text_width,
+};
+use warpui_core::{App, AppContext};
 
-use super::mcp_status_label;
+use super::{LEFT_COLUMN_COLS, build_zero_state_overlay, mcp_status_label};
+use crate::tui_builder::TuiUiBuilder;
 
 fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     TuiMcpServerSnapshot {
@@ -80,4 +87,212 @@ fn mcp_summary_marks_config_errors() {
         mcp_status_label(&snapshot),
         ("Config error · run /mcp".to_string(), true)
     );
+}
+
+// ---------------------------------------------------------------------------
+// Render tests for the path-header fix (APP-5009)
+//
+// Both tests call `build_zero_state_overlay` — the same function that
+// `TuiZeroStateView::render` uses to compose the overlay column.  Any change
+// to how `render` places the path header (e.g. moving it back inside the
+// LEFT_COLUMN_COLS constrained box) goes through `build_zero_state_overlay`
+// and is therefore caught here.
+//
+// Verified empirically: wrapping `path_header` back in a TuiConstrainedBox
+// with min=max=LEFT_COLUMN_COLS inside `build_zero_state_overlay` causes the
+// wide-terminal test to fail because the buffer is only 48 cols wide and the
+// 60-char path is clipped — no row matches `header_text`.
+// ---------------------------------------------------------------------------
+
+/// Lay out `element` at `(w, h)`, render it into a fresh buffer, and return
+/// the buffer.  Mirrors `render_element_with_size` in terminal_session_view_tests.rs.
+fn render_to_buffer(
+    mut element: Box<dyn TuiElement>,
+    app_ctx: &warpui_core::AppContext,
+    w: u16,
+    h: u16,
+) -> TuiBuffer {
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(w, h)),
+        &mut layout_ctx,
+        app_ctx,
+    );
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    {
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(
+            TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+            &mut surface,
+            &mut paint_ctx,
+        );
+    }
+    buffer
+}
+
+fn render_element_lines(
+    element: Box<dyn TuiElement>,
+    ctx: &AppContext,
+    width: u16,
+    height: u16,
+) -> Vec<String> {
+    render_to_buffer(element, ctx, width, height).to_lines()
+}
+/// When the terminal is wide enough, the path header must stay on one row and
+/// must not be capped at LEFT_COLUMN_COLS.
+///
+/// Calls the real `build_zero_state_overlay` (the same function used by
+/// `TuiZeroStateView::render`) and asserts the path appears verbatim in the
+/// rendered `TuiBuffer`.  Any regression that moves the path back inside the
+/// 48-col constrained box causes this test to fail: the buffer would be only
+/// 48 cols wide and the 60-char path would be clipped — no row would equal
+/// `header_text`.
+#[test]
+fn zero_state_path_header_not_truncated_at_wide_terminal() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.update(crate::autoupdate::TuiAutoupdater::register);
+
+        app.read(|app_ctx| {
+            // A path definitely longer than LEFT_COLUMN_COLS (48).
+            let long_cwd = "/home/user/work/projects/my-organisation/very-long-repo-name";
+            assert!(
+                long_cwd.len() as u16 > LEFT_COLUMN_COLS,
+                "test cwd must exceed LEFT_COLUMN_COLS"
+            );
+
+            let builder = crate::tui_builder::TuiUiBuilder::from_app(app_ctx);
+
+            // project_section_header_text returns abbreviate_home_prefix(long_cwd)
+            // when no rules are indexed; with the sandbox HOME=/root the path is
+            // returned unchanged.
+            let header_text = {
+                use ai::project_context::model::ProjectContextModel;
+                use warp_util::local_or_remote_path::LocalOrRemotePath;
+                let cwd_path = LocalOrRemotePath::Local(PathBuf::from(long_cwd));
+                let rules =
+                    ProjectContextModel::as_ref(app_ctx).find_applicable_project_rules(&cwd_path);
+                super::project_section_header_text(long_cwd, rules.as_ref())
+            };
+            assert!(
+                header_text.len() as u16 > LEFT_COLUMN_COLS,
+                "resolved header ({header_text:?}) must still exceed LEFT_COLUMN_COLS"
+            );
+
+            // Give the overlay exactly enough width for the displayed path.
+            // Call build_zero_state_overlay -- the same function render() calls.
+            let overlay = build_zero_state_overlay(Some(long_cwd), &builder, app_ctx);
+            let buffer = render_to_buffer(overlay, app_ctx, text_width(&header_text), 12);
+            let lines = buffer.to_lines();
+
+            // The path header should appear as an exact-match row somewhere in the
+            // rendered buffer.  Its row index varies by title/version content so we
+            // search.  If the path were inside the 48-col box the buffer would be 48
+            // cols wide and the 60-char path would be clipped -- the assertion fails.
+            let _ = lines
+                .iter()
+                .position(|line| line.trim_end() == header_text)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "path header {header_text:?} must appear verbatim in the rendered output;\n\
+                         got lines:\n{}",
+                        lines.join("\n")
+                    )
+                });
+            assert!(
+                header_text.len() as u16 > LEFT_COLUMN_COLS,
+                "path header length {} should exceed LEFT_COLUMN_COLS ({})",
+                header_text.len(),
+                LEFT_COLUMN_COLS
+            );
+        });
+    });
+}
+
+#[test]
+fn login_line_shows_signed_in_account_email() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+
+        let lines = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            render_element_lines(super::render_login_line(&builder, ctx), ctx, 48, 1)
+        });
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Signed in as test_user@warp.dev")),
+            "zero-state login line should show the signed-in email:\n{}",
+            lines.join("\n")
+        );
+    });
+}
+
+/// At a narrow terminal the complete displayed path must wrap across rows
+/// without losing content.
+#[test]
+fn zero_state_path_header_wraps_without_losing_content_at_narrow_terminal() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.update(crate::autoupdate::TuiAutoupdater::register);
+
+        app.read(|app_ctx| {
+            let long_cwd = "/home/user/work/projects/my-organisation/very-long-repo-name";
+            let narrow_width: u16 = 30;
+            assert!(
+                long_cwd.len() as u16 > narrow_width,
+                "test cwd must exceed the narrow terminal width"
+            );
+
+            let builder = crate::tui_builder::TuiUiBuilder::from_app(app_ctx);
+
+            // Derive expected wrapped rows from header_text (the abbreviated path),
+            // not from long_cwd -- so the assertion is correct even if $HOME changes.
+            let header_text = {
+                use ai::project_context::model::ProjectContextModel;
+                use warp_util::local_or_remote_path::LocalOrRemotePath;
+                let cwd_path = LocalOrRemotePath::Local(PathBuf::from(long_cwd));
+                let rules =
+                    ProjectContextModel::as_ref(app_ctx).find_applicable_project_rules(&cwd_path);
+                super::project_section_header_text(long_cwd, rules.as_ref())
+            };
+            let header_chars = header_text.chars().collect::<Vec<_>>();
+            let expected_wrapped = header_chars
+                .chunks(usize::from(narrow_width))
+                .map(|chunk| chunk.iter().collect::<String>())
+                .collect::<Vec<_>>();
+            assert!(
+                expected_wrapped.len() > 1,
+                "test path must wrap at the narrow terminal width"
+            );
+
+            let overlay = build_zero_state_overlay(Some(long_cwd), &builder, app_ctx);
+            let buffer = render_to_buffer(overlay, app_ctx, narrow_width, 12);
+            let lines = buffer.to_lines();
+
+            // Buffer width must clamp to narrow_width.
+            assert_eq!(
+                buffer.area.width, narrow_width,
+                "buffer width should be clamped to narrow_width"
+            );
+            // The wrapped path rows must appear consecutively so joining them
+            // reconstructs the complete displayed path.
+            let has_wrapped_rows = lines.windows(expected_wrapped.len()).any(|rows| {
+                rows.iter()
+                    .map(|row| row.trim_end())
+                    .eq(expected_wrapped.iter().map(String::as_str))
+            });
+            assert!(
+                has_wrapped_rows,
+                "wrapped path rows {expected_wrapped:?} must appear consecutively \
+                 in narrow output;\ngot lines:\n{}",
+                lines.join("\n")
+            );
+        });
+    });
 }

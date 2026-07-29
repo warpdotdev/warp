@@ -97,6 +97,67 @@ fn view_logs_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
+fn add_api_key_command_is_tui_only_and_requires_a_provider() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::AddApiKey)
+        .expect("expected /add-api-key to be registered in TUI mode");
+    assert_eq!(command, ADD_API_KEY);
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(command.availability, Availability::AI_ENABLED);
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /add-api-key to require a provider");
+    assert!(!argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(
+        argument.hint_text,
+        Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME)
+    );
+    assert!(
+        argument
+            .hint_text
+            .is_some_and(|hint| hint.split('|').any(|provider| provider == "grok"))
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::AddApiKey)
+    );
+}
+
+#[test]
+fn clear_api_key_command_is_tui_only_and_requires_a_provider() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::ClearApiKey)
+        .expect("expected /clear-provider-api-key to be registered in TUI mode");
+    assert_eq!(command, CLEAR_API_KEY);
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(command.availability, Availability::AI_ENABLED);
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /clear-provider-api-key to require a provider");
+    assert!(!argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(
+        argument.hint_text,
+        Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME)
+    );
+    assert!(
+        argument
+            .hint_text
+            .is_some_and(|hint| hint.split('|').any(|provider| provider == "grok"))
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::ClearApiKey)
+    );
+}
+#[test]
 fn auto_approve_command_is_local_agent_action_without_arguments() {
     let tui_commands = all_commands(settings::SettingsMode::Tui);
     let command = tui_commands
@@ -135,6 +196,23 @@ fn auto_approve_command_is_local_agent_action_without_arguments() {
 }
 
 #[test]
+fn statusline_command_is_always_available_only_in_tui_mode() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::Statusline)
+        .expect("expected /statusline to be registered in TUI mode");
+    assert_eq!(command, STATUSLINE);
+    assert_eq!(command.availability, Availability::ALWAYS);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Statusline)
+    );
+}
+#[test]
 fn logout_command_is_registered_only_for_tui_mode() {
     assert!(
         all_commands(settings::SettingsMode::Tui)
@@ -149,17 +227,14 @@ fn logout_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
-fn version_command_is_registered_only_for_tui_mode() {
-    assert!(
-        all_commands(settings::SettingsMode::Tui)
-            .iter()
-            .any(|command| command == &VERSION)
-    );
-    assert!(
-        !all_commands(settings::SettingsMode::Gui)
-            .iter()
-            .any(|command| command == &VERSION)
-    );
+fn version_command_is_not_registered() {
+    for settings_mode in [settings::SettingsMode::Gui, settings::SettingsMode::Tui] {
+        assert!(
+            all_commands(settings_mode)
+                .iter()
+                .all(|command| command.name != "/version")
+        );
+    }
 }
 
 #[test]
@@ -295,6 +370,59 @@ fn strip_command_prefix_substring_not_matched() {
     // "/planning" should not match "/plan"
     let result = strip_command_prefix("/planning something", "/plan");
     assert_eq!(result, None);
+}
+
+#[test]
+fn clear_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command.kind == SlashCommandKind::Clear),
+        "/clear should be registered in TUI mode"
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Clear),
+        "/clear should not be registered in GUI mode"
+    );
+}
+
+#[test]
+fn clear_command_has_correct_registry_metadata() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::Clear)
+        .expect("expected /clear to be registered in TUI mode");
+
+    assert_eq!(command.name, "/clear");
+    assert_eq!(command.kind, SlashCommandKind::Clear);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert_eq!(command.supported_surfaces.gui_icon_path(), None);
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(
+        command.availability,
+        Availability::NO_LRC_CONTROL | Availability::AI_ENABLED | Availability::NOT_CLOUD_AGENT
+    );
+
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /clear to declare an argument");
+    assert!(argument.is_optional);
+    assert!(argument.should_execute_on_selection);
+    assert_eq!(argument.hint_text, None);
+}
+
+#[test]
+fn clear_command_is_active_only_outside_cloud_mode() {
+    let local_context =
+        Availability::NO_LRC_CONTROL | Availability::AI_ENABLED | Availability::NOT_CLOUD_AGENT;
+    assert!(CLEAR.is_active(local_context));
+
+    // NOT_CLOUD_AGENT is absent → cloud context.
+    let cloud_context = Availability::NO_LRC_CONTROL | Availability::AI_ENABLED;
+    assert!(!CLEAR.is_active(cloud_context));
 }
 
 #[test]

@@ -29,8 +29,10 @@
 
 use std::mem;
 
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
@@ -103,6 +105,33 @@ impl TuiText {
             return 0;
         }
         u16::try_from(self.paragraph(width).line_count(width)).unwrap_or(u16::MAX)
+    }
+    /// The cell width occupied by the first rendered row at `width`, including
+    /// trailing whitespace that belongs to the row.
+    pub(super) fn first_rendered_line_width(&self, width: u16) -> u16 {
+        if width == 0 || self.is_empty() {
+            return 0;
+        }
+
+        let area = Rect::new(0, 0, width, 1);
+        // An explicitly empty symbol distinguishes untouched cells from
+        // rendered spaces, whose symbols are `" "`. This lets callers retain
+        // intentional trailing whitespace without duplicating the wrapping
+        // algorithm used by `Paragraph`.
+        let mut buffer = Buffer::filled(area, Cell::new(""));
+        self.paragraph(width).render(area, &mut buffer);
+        let mut occupied_width = 0;
+        let mut column = 0;
+        while column < width {
+            let symbol = buffer[(column, 0)].symbol();
+            if symbol.is_empty() {
+                break;
+            }
+            let symbol_width = text_width(symbol).max(1);
+            occupied_width = column.saturating_add(symbol_width).min(width);
+            column = column.saturating_add(symbol_width);
+        }
+        occupied_width
     }
 
     /// Whether this element holds no text at all (and so occupies no rows).

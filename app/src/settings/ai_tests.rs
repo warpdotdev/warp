@@ -36,6 +36,64 @@ fn add_ai_enablement_dependencies_for_test(app: &mut App) {
     app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
+#[test]
+fn tui_statusline_default_matches_figma() {
+    let config = TuiStatuslineConfig::default();
+    assert_eq!(config.order, TuiStatuslineItem::ALL);
+    assert_eq!(
+        config.enabled,
+        vec![
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::WorkingDirectory,
+            TuiStatuslineItem::GitBranch,
+            TuiStatuslineItem::GitDiffStatus,
+        ]
+    );
+}
+
+#[test]
+fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items() {
+    let config = TuiStatuslineConfig {
+        order: vec![
+            TuiStatuslineItem::GitBranch,
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::GitBranch,
+        ],
+        enabled: vec![
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::ContextWindowUsage,
+        ],
+    }
+    .normalized();
+
+    assert_eq!(
+        config.order,
+        vec![
+            TuiStatuslineItem::GitBranch,
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::AutoApprove,
+            TuiStatuslineItem::AutoQueue,
+            TuiStatuslineItem::WorkingDirectory,
+            TuiStatuslineItem::GitBranchStatus,
+            TuiStatuslineItem::GitDiffStatus,
+            TuiStatuslineItem::CreditUsage,
+            TuiStatuslineItem::ContextWindowUsage,
+            TuiStatuslineItem::Date,
+            TuiStatuslineItem::Time12Hour,
+            TuiStatuslineItem::Time24Hour,
+            TuiStatuslineItem::AgentTodoList,
+            TuiStatuslineItem::VoiceInput,
+        ]
+    );
+    assert_eq!(
+        config.enabled,
+        vec![
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::ContextWindowUsage,
+        ]
+    );
+}
 // FocusedTerminalInfo Tests
 
 #[test]

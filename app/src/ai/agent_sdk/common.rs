@@ -34,18 +34,37 @@ pub fn validate_agent_mode_base_model_id(
     ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
     let llm_prefs = LLMPreferences::as_ref(ctx);
-
-    let llm_id: LLMId = model_id.into();
     let valid_ids = llm_prefs
         .get_base_llm_choices_for_agent_mode(ctx)
         .map(|info| info.id.clone())
         .collect::<Vec<_>>();
 
+    classify_agent_mode_base_model_id(
+        model_id,
+        &valid_ids,
+        llm_prefs.agent_mode_models_unavailable(),
+    )
+}
+
+/// Classifies a user-supplied agent-mode model id against the available model
+/// list, distinguishing "the model list fetch failed (so the list is empty or
+/// stale)" from "the id is genuinely not in a valid list".
+fn classify_agent_mode_base_model_id(
+    model_id: &str,
+    valid_ids: &[LLMId],
+    list_unavailable: bool,
+) -> anyhow::Result<LLMId> {
+    let llm_id: LLMId = model_id.into();
     if valid_ids.contains(&llm_id) {
         Ok(llm_id)
+    } else if list_unavailable {
+        Err(anyhow::anyhow!(
+            "Could not retrieve the agent-mode model list from the server \
+             (the request failed or returned no models). Try again later."
+        ))
     } else {
         let suggestions = valid_ids
-            .into_iter()
+            .iter()
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(", ");

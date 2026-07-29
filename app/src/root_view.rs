@@ -3501,6 +3501,7 @@ impl RootView {
                 UserAuthenticationError::Unexpected(_) => {
                     report_error!(err);
                 }
+                UserAuthenticationError::DeviceCodeRequestTimedOut { .. } => {}
                 UserAuthenticationError::InvalidStateParameter => {}
                 UserAuthenticationError::MissingStateParameter => {}
             },

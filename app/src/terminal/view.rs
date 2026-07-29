@@ -18273,6 +18273,15 @@ impl TerminalView {
     }
 
     #[cfg(feature = "local_fs")]
+    fn open_code_in_warp(
+        &mut self,
+        source: CodeSource,
+        layout: EditorLayout,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.emit(Event::OpenCodeInWarp { source, layout });
+    }
+    #[cfg(feature = "local_fs")]
     fn open_file_path_with_target(
         &mut self,
         path: PathBuf,
@@ -18360,16 +18369,6 @@ impl TerminalView {
         {
             ctx.emit(Event::OpenFileInWarp { path, session })
         }
-    }
-
-    #[cfg(feature = "local_fs")]
-    fn open_code_in_warp(
-        &mut self,
-        source: CodeSource,
-        layout: EditorLayout,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        ctx.emit(Event::OpenCodeInWarp { source, layout })
     }
 
     fn open_code_diff(&self, view: ViewHandle<CodeDiffView>, ctx: &mut ViewContext<Self>) {

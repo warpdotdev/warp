@@ -1,5 +1,5 @@
-//! Per-tool, per-state one-line labels for tool-call rows in the TUI
-//! transcript, modeled on the GUI's inline action text.
+//! Per-tool, per-state labels for tool-call rows in the TUI transcript,
+//! modeled on the GUI's inline action text.
 
 use std::path::Path;
 
@@ -8,9 +8,10 @@ use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
     AskUserQuestionResult, FileGlobV2Result, GrepResult, RequestCommandOutputResult,
     RunAgentsAgentOutcomeKind, RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-    StopRecordingResult, SuggestNewConversationResult,
+    StopRecordingResult, SuggestNewConversationResult, mcp_server_name_for_id,
 };
 use warp_core::command::ExitCode;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::TuiStyle;
 
 use self::ToolCallDisplayState as State;
@@ -41,8 +42,9 @@ pub(crate) struct ResolvedCommandBlock {
     pub(crate) state: CommandBlockState,
 }
 
-/// Longest rendered length for interpolated values (commands, queries, paths)
-/// so tool-call rows stay scannable one-liners.
+/// Longest rendered length for compact interpolated values such as queries and
+/// paths. Shell commands are preserved in full and wrap in their collapsible
+/// header instead.
 const MAX_INLINE_LEN: usize = 80;
 
 /// Coarse presentation state for a tool call.
@@ -138,18 +140,35 @@ pub(crate) fn tool_call_display_state(
     }
 }
 
-/// Returns the one-line transcript label for a tool call in its current state.
+/// Returns the transcript label for a tool call in its current state.
+///
+/// Equivalent to [`tool_call_label_with_server`] with no MCP server name; use
+/// that variant when rendering an MCP tool call whose originating server is
+/// known so the label surfaces both the tool name and the server.
 pub(crate) fn tool_call_label(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,
     output_streaming: bool,
     block: Option<&ResolvedCommandBlock>,
 ) -> String {
+    tool_call_label_with_server(action, status, output_streaming, block, None)
+}
+
+/// Like [`tool_call_label`], but interpolates the MCP tool's originating server
+/// name (when known) into the per-state label so MCP tool calls surface both
+/// their tool name and server identity across the transcript lifecycle.
+pub(crate) fn tool_call_label_with_server(
+    action: &AIAgentAction,
+    status: Option<&AIActionStatus>,
+    output_streaming: bool,
+    block: Option<&ResolvedCommandBlock>,
+    server_name: Option<&str>,
+) -> String {
     let state = tool_call_display_state(status, output_streaming, block.map(|block| block.state));
     let result = status
         .and_then(AIActionStatus::finished_result)
         .map(|result| &result.result);
-    let label = label_for_action(&action.action, state, result, block);
+    let label = label_for_action(&action.action, state, result, block, server_name);
     match state {
         State::Blocked => format!("{label} (awaiting approval)"),
         State::Constructing
@@ -158,6 +177,21 @@ pub(crate) fn tool_call_label(
         | State::Succeeded
         | State::Failed
         | State::Cancelled => label,
+    }
+}
+
+/// Resolves the user-facing name of the originating MCP server for an MCP
+/// tool-call action, for use in transcript labels. Returns `None` for non-
+/// MCP-tool actions, legacy/flat calls with no server id, or unknown servers.
+pub(crate) fn mcp_server_name_for_action(
+    action: &AIAgentActionType,
+    app: &AppContext,
+) -> Option<String> {
+    match action {
+        AIAgentActionType::CallMCPTool { server_id, .. } => server_id
+            .as_ref()
+            .and_then(|id| mcp_server_name_for_id(id, app)),
+        _ => None,
     }
 }
 
@@ -173,6 +207,7 @@ fn label_for_action(
     state: State,
     result: Option<&AIAgentActionResultType>,
     block: Option<&ResolvedCommandBlock>,
+    server_name: Option<&str>,
 ) -> String {
     let block_state = block.map(|block| block.state);
     match action {
@@ -183,7 +218,9 @@ fn label_for_action(
             let executed = result
                 .and_then(AIAgentActionResultType::command_str)
                 .or_else(|| block.and_then(|block| block.command.as_deref()));
-            let cmd = single_line(executed.unwrap_or(command));
+            // Shell-command headers wrap in `TuiShellCommandView`, so retain
+            // the complete command instead of capping it at MAX_INLINE_LEN.
+            let cmd = executed.unwrap_or(command).trim_end();
             match state {
                 State::Constructing => "Generating command…".to_owned(),
                 State::Pending | State::Blocked => format!("Run `{cmd}`"),
@@ -351,16 +388,23 @@ fn label_for_action(
         }
         AIAgentActionType::CallMCPTool { name, .. } => {
             let name = single_line(name);
+            // Append the originating server when known so MCP tool calls
+            // surface both identities, with a deterministic no-server fallback.
+            let suffix = server_name
+                .map(|server| format!(" on {server}"))
+                .unwrap_or_default();
             match state {
                 // Like the GUI's "Calling \"{name}\" MCP tool..." loading
                 // text; the tool name is available before its args finish.
-                State::Constructing if name.is_empty() => "Calling MCP tool…".to_owned(),
-                State::Constructing => format!("Calling \"{name}\" MCP tool…"),
-                State::Pending | State::Blocked => format!("Call MCP tool {name}"),
-                State::Running => format!("Calling MCP tool {name}"),
-                State::Succeeded => format!("Called MCP tool {name}"),
-                State::Failed => format!("MCP tool {name} failed"),
-                State::Cancelled => format!("MCP tool {name} cancelled"),
+                State::Constructing if name.is_empty() => {
+                    format!("Calling MCP tool{suffix}…")
+                }
+                State::Constructing => format!("Calling \"{name}\" MCP tool{suffix}…"),
+                State::Pending | State::Blocked => format!("Call MCP tool {name}{suffix}"),
+                State::Running => format!("Calling MCP tool {name}{suffix}"),
+                State::Succeeded => format!("Called MCP tool {name}{suffix}"),
+                State::Failed => format!("MCP tool {name}{suffix} failed"),
+                State::Cancelled => format!("MCP tool {name}{suffix} cancelled"),
             }
         }
         AIAgentActionType::SuggestNewConversation { .. } => match state {

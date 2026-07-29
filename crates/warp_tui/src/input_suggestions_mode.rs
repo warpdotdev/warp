@@ -6,6 +6,8 @@
 
 use warpui_core::{Entity, ModelContext};
 
+use crate::read_only_menu::TuiReadOnlyMenuKind;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TuiInputSuggestionsMode {
     #[default]
@@ -15,14 +17,28 @@ pub(crate) enum TuiInputSuggestionsMode {
     ModelSelector,
     SkillMenu,
     Mcp,
-    PromptHistory,
+    PromptAndCommandHistory,
     CompletionSuggestions,
-    Shortcuts,
+    ReadOnlyMenu(TuiReadOnlyMenuKind),
 }
 
 impl TuiInputSuggestionsMode {
     pub(crate) fn is_visible(self) -> bool {
         self != Self::Closed
+    }
+
+    pub(crate) fn read_only_menu(self) -> Option<TuiReadOnlyMenuKind> {
+        match self {
+            Self::ReadOnlyMenu(kind) => Some(kind),
+            Self::Closed
+            | Self::SlashCommands
+            | Self::ConversationMenu
+            | Self::ModelSelector
+            | Self::SkillMenu
+            | Self::Mcp
+            | Self::PromptAndCommandHistory
+            | Self::CompletionSuggestions => None,
+        }
     }
 }
 
@@ -75,9 +91,9 @@ impl TuiInputSuggestionsModeModel {
             | TuiInputSuggestionsMode::ModelSelector
             | TuiInputSuggestionsMode::SkillMenu
             | TuiInputSuggestionsMode::Mcp
-            | TuiInputSuggestionsMode::PromptHistory
+            | TuiInputSuggestionsMode::PromptAndCommandHistory
             | TuiInputSuggestionsMode::CompletionSuggestions
-            | TuiInputSuggestionsMode::Shortcuts => false,
+            | TuiInputSuggestionsMode::ReadOnlyMenu(_) => false,
         }
     }
 

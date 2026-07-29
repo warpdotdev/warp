@@ -1255,13 +1255,17 @@ impl Input {
                 return false;
             }
             SlashCommandKind::AutoApprove
+            | SlashCommandKind::Statusline
+            | SlashCommandKind::AddApiKey
+            | SlashCommandKind::ClearApiKey
             | SlashCommandKind::ViewLogs
             | SlashCommandKind::Voice
             | SlashCommandKind::NaturalLanguageDetection
             | SlashCommandKind::Theme
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout
-            | SlashCommandKind::Version => {
+            | SlashCommandKind::Clear
+            | SlashCommandKind::Status => {
                 debug_assert!(
                     false,
                     "Attempted to execute TUI-only slash command in the GUI: {}",

@@ -388,7 +388,7 @@ impl ModelSearchItem {
         } else if is_custom_router {
             Icon::Dataflow
         } else {
-            llm.provider.icon().unwrap_or(Icon::Oz)
+            llm.provider.icon().unwrap_or(Icon::Agent)
         };
         let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
         let credential_icon =
@@ -396,7 +396,7 @@ impl ModelSearchItem {
         Self {
             id: llm.id.clone(),
             window_id,
-            provider: llm.provider.clone(),
+            provider: llm.provider,
             spec: llm.spec.clone(),
             leading_icon,
             credential_icon,

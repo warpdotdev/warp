@@ -702,6 +702,7 @@ default = [
     "terminal_lifecycle_recovery",
     "cloud_runners",
     "cloud_agent_runners",
+    "file_backed_execution_profiles",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.

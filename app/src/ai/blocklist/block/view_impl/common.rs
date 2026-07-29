@@ -83,6 +83,7 @@ use crate::ai::blocklist::view_util::{
 };
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
+use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::code::editor::view::CodeEditorView;
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
@@ -337,8 +338,16 @@ pub fn render_warping_indicator<V: View>(
                 LOAD_OUTPUT_MESSAGE_FOR_SEARCH_CODEBASE.to_owned()
             }
             Some(AIAgentActionType::Grep { .. }) => LOAD_OUTPUT_MESSAGE_FOR_GREP.to_owned(),
-            Some(AIAgentActionType::CallMCPTool { name, .. }) => {
-                format!("Calling \"{name}\" MCP tool...")
+            Some(AIAgentActionType::CallMCPTool {
+                server_id, name, ..
+            }) => {
+                match server_id
+                    .as_ref()
+                    .and_then(|id| TemplatableMCPServerManager::get_mcp_name(id, app))
+                {
+                    Some(server) => format!("Calling \"{name}\" MCP tool on {server}..."),
+                    None => format!("Calling \"{name}\" MCP tool..."),
+                }
             }
             Some(AIAgentActionType::ReadMCPResource { name, .. }) => {
                 format!("Reading \"{name}\" MCP resource...")

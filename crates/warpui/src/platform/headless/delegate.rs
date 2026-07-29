@@ -82,16 +82,16 @@ impl platform::Delegate for AppDelegate {
         platform::SystemTheme::Light
     }
 
-    fn open_url(&self, url: &str) {
+    fn open_url(&self, url: &str) -> bool {
         #[cfg(target_os = "macos")]
         {
             // Use macOS platform implementation
-            crate::platform::mac::Window::open_url(url);
+            crate::platform::mac::Window::open_url(url)
         }
         #[cfg(not(target_os = "macos"))]
         {
             // Reuse the winit implementation for non-mac platforms
-            crate::windowing::winit::delegate::open_url_in_system(url);
+            crate::windowing::winit::delegate::open_url_in_system(url)
         }
     }
 
