@@ -265,7 +265,6 @@ impl UserWorkspaces {
             .map(|ws| ws.teams.len() > 1)
             .unwrap_or(false)
     }
-
     pub fn team_for_window(&self, window_id: WindowId) -> Option<&Team> {
         self.team_uid_for_window(window_id)
             .and_then(|team_uid| self.team_from_uid(team_uid))
