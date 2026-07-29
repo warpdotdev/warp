@@ -847,6 +847,18 @@ pub const VIM_MODE: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const COPY_DEBUGGING_ID: StaticCommand = StaticCommand {
+    name: "/copy-debugging-id",
+    description: "Copy debugging information for this conversation",
+    kind: SlashCommandKind::CopyDebuggingId,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/copy.svg",
+    },
+    availability: Availability::ACTIVE_CONVERSATION,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static COMMAND_REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
 /// A unique identifier for a static slash command.
@@ -948,6 +960,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
+        COPY_DEBUGGING_ID,
         MODEL.clone(),
         STATUS,
         VIEW_LOGS,

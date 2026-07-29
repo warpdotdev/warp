@@ -76,7 +76,7 @@ impl CloudAgentCapacityModal {
 
     fn get_upgrade_url(ctx: &ViewContext<Self>) -> Option<String> {
         let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
-        if let Some(team) = UserWorkspaces::handle(ctx).as_ref(ctx).current_team() {
+        if let Some(team) = UserWorkspaces::handle(ctx).as_ref(ctx).team_for_view(ctx) {
             return Some(UserWorkspaces::upgrade_link_for_team(team.uid));
         }
 

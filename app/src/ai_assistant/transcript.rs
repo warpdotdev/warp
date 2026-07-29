@@ -858,8 +858,8 @@ impl View for Transcript {
                 );
             }
 
-            let is_custom_llm_enabled: bool = UserWorkspaces::as_ref(app)
-                .current_team()
+            let is_custom_llm_enabled = UserWorkspaces::as_ref(app)
+                .team_for_view_handle(&self.view_handle, app)
                 .is_some_and(|team| team.is_custom_llm_enabled());
 
             if !is_custom_llm_enabled {

@@ -353,7 +353,10 @@ impl TerminalDriver {
 
                 match request.subject {
                     ShareSubject::Team => {
-                        if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+                        if let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+                            .team_for_view(ctx)
+                            .map(|team| team.uid)
+                        {
                             terminal_view.update_session_team_permissions(
                                 Some(role),
                                 team_uid.to_string(),

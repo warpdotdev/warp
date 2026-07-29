@@ -1022,6 +1022,10 @@ impl AIConversation {
     pub fn server_conversation_token(&self) -> Option<&ServerConversationToken> {
         self.server_conversation_token.as_ref()
     }
+    pub fn debugging_server_conversation_token(&self) -> Option<&ServerConversationToken> {
+        self.server_conversation_token()
+            .or_else(|| self.forked_from_server_conversation_token())
+    }
 
     /// Returns the server-assigned run identifier as a string.
     pub fn run_id(&self) -> Option<String> {

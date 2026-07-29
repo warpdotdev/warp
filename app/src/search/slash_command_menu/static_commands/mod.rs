@@ -113,6 +113,7 @@ pub enum SlashCommandKind {
     ExportToFile,
     VimMode,
     Status,
+    CopyDebuggingId,
 }
 
 /// The application surfaces on which a static slash command is implemented.

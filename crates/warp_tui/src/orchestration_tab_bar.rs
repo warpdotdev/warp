@@ -179,6 +179,28 @@ pub(crate) fn render_orchestration_tab_footer(builder: &TuiUiBuilder) -> Box<dyn
     .finish()
 }
 
+/// Footer shown when a **child** tab is selected in the local orchestration
+/// tab bar. Extends the standard navigation hint with a kill shortcut so the
+/// user knows a single Ctrl+C will terminate the selected child agent.
+pub(crate) fn render_orchestration_child_selected_tab_footer(
+    builder: &TuiUiBuilder,
+) -> Box<dyn TuiElement> {
+    let primary = builder.primary_text_style();
+    let muted = builder.muted_text_style();
+    TuiText::from_spans([
+        ("Tab or ← →".to_string(), primary),
+        (" to navigate  ".to_string(), muted),
+        ("Shift + ← →".to_string(), primary),
+        (" to go to start/end  ".to_string(), muted),
+        ("↓".to_string(), primary),
+        (" to send a message  ".to_string(), muted),
+        ("Ctrl+C ".to_string(), primary),
+        ("to kill sub-agent".to_string(), muted),
+    ])
+    .truncate()
+    .finish()
+}
+
 pub(crate) fn render_cloud_orchestration_tab_footer(builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
     let primary = builder.primary_text_style();
     let muted = builder.muted_text_style();

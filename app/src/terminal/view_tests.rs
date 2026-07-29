@@ -60,7 +60,8 @@ use crate::terminal::alt_screen::should_intercept_mouse;
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::cli_agent_sessions::event::{
-    CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
+    CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource,
+    CLIAgentEventType,
 };
 use crate::terminal::cli_agent_sessions::listener::CLIAgentSessionListener;
 use crate::terminal::cli_agent_sessions::{
@@ -4528,6 +4529,67 @@ fn test_banner_for_incompatible_plugins() {
     })
 }
 
+/// Regression test for #9011: the slow-bootstrap banner used to persist
+/// indefinitely when shell integration never sent the bootstrap signal
+/// (e.g. the user's shell `exec`s into `expect` before Warp's integration
+/// runs). The auto-dismiss timer scheduled when the banner opens must
+/// eventually close it.
+#[test]
+fn test_slow_bootstrap_banner_auto_dismisses() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal =
+            MockTerminalManager::create_new_terminal_view_window_for_test(&mut app, None);
+
+        // Open the banner directly and schedule a short-duration auto-dismiss
+        // timer. We bypass `on_bootstrap_failed_timer_complete` (which itself
+        // waits the 7-second bootstrap timeout) to keep this test fast — the
+        // important behavior under test is the auto-dismiss path.
+        terminal.update(&mut app, |view, ctx| {
+            view.is_slow_bootstrap_banner_open = true;
+            view.slow_bootstrap_banner_auto_dismiss_handle = Some(
+                view.start_slow_bootstrap_banner_auto_dismiss_timer(Duration::from_millis(50), ctx),
+            );
+        });
+
+        assert!(terminal.read(&app, |view, _ctx| view.is_slow_bootstrap_banner_open));
+
+        assert_eventually!(
+            200 => terminal.read(&app, |view, _ctx| !view.is_slow_bootstrap_banner_open
+                && view.slow_bootstrap_banner_auto_dismiss_handle.is_none()),
+            "Slow bootstrap banner did not auto-dismiss"
+        );
+    })
+}
+
+/// Regression test for #9011: when the banner is dismissed by another path
+/// (manual user dismissal or a successful bootstrap event), any pending
+/// auto-dismiss timer should be aborted so it can't fire after the fact.
+#[test]
+fn test_hide_slow_bootstrap_banner_aborts_pending_auto_dismiss() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal =
+            MockTerminalManager::create_new_terminal_view_window_for_test(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.is_slow_bootstrap_banner_open = true;
+            view.slow_bootstrap_banner_auto_dismiss_handle =
+                Some(view.start_slow_bootstrap_banner_auto_dismiss_timer(
+                    // Long enough that the timer can't fire before we hide.
+                    Duration::from_secs(60),
+                    ctx,
+                ));
+            view.hide_slow_bootstrap_banner(ctx);
+        });
+
+        terminal.read(&app, |view, _ctx| {
+            assert!(!view.is_slow_bootstrap_banner_open);
+            assert!(view.slow_bootstrap_banner_auto_dismiss_handle.is_none());
+        });
+    })
+}
+
 // Regression test for GH#3548 / GH#6093: the "Seems like your completions are not
 // working" banner must offer a permanent "Don't show me again" dismissal that is
 // persisted, while the "x" close button keeps its existing per-session behavior.
@@ -8287,6 +8349,36 @@ fn set_warp_tui_session(view: &mut TerminalView, ctx: &mut ViewContext<TerminalV
             },
             ctx,
         );
+    });
+}
+
+#[test]
+fn warp_tui_listener_does_not_auto_open_rich_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .auto_open_rich_input_on_cli_agent_start
+                .set_value(true, ctx);
+        });
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_cli_agent_notification(
+                Some(CLI_AGENT_NOTIFICATION_SENTINEL),
+                r#"{"v":1,"agent":"warp-tui","event":"session_start"}"#,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let session = CLIAgentSessionsModel::as_ref(ctx)
+                .session(view.view_id)
+                .expect("Warp TUI session should be registered");
+            assert!(session.listener.is_some());
+            assert!(!session.should_auto_toggle_input);
+            assert!(!view.has_active_cli_agent_input_session(ctx));
+        });
     });
 }
 #[test]

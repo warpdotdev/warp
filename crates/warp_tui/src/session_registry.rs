@@ -266,7 +266,7 @@ impl TuiSessions {
                 }
                 TuiTerminalSessionEvent::CleanupFailedChildLaunch { conversation_id } => {
                     orchestration.update(ctx, |orchestration, ctx| {
-                        orchestration.cleanup_failed_child(conversation_id, ctx);
+                        orchestration.cleanup_child(conversation_id, ctx);
                     });
                 }
                 TuiTerminalSessionEvent::ExecuteCommand(_)
@@ -401,6 +401,28 @@ impl TuiSessions {
                         (**prepared).clone(),
                         ctx,
                     );
+                });
+            }
+            TuiOrchestrationEvent::KillLocalChildSession {
+                session_id,
+                conversation_id,
+            } => {
+                let child_view = sessions
+                    .as_ref(ctx)
+                    .session(*session_id)
+                    .map(|session| session.view().clone());
+                if let Some(child_view) = child_view {
+                    match child_view {
+                        TuiSessionView::Terminal(view) => {
+                            view.update(ctx, |view, ctx| {
+                                view.cancel_active_conversation(ctx);
+                            });
+                        }
+                        TuiSessionView::Cloud(_) => {}
+                    }
+                }
+                orchestration_for_events.update(ctx, |orchestration, ctx| {
+                    orchestration.cleanup_child(conversation_id, ctx);
                 });
             }
             TuiOrchestrationEvent::RemoveChildSession(session_id) => {

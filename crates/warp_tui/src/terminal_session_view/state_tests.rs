@@ -9,7 +9,9 @@ use super::{
 };
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::read_only_menu::TuiReadOnlyMenuKind;
-use crate::terminal_session_view::{BlockingInputSource, TuiTerminalSessionView};
+use crate::terminal_session_view::{
+    BlockingInputSource, SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, TuiTerminalSessionView,
+};
 use crate::terminal_use::TuiInputTarget;
 
 fn composer_state(mode: TuiComposerMode, orchestration_available: bool) -> TuiTerminalSessionState {
@@ -21,7 +23,48 @@ fn composer_state(mode: TuiComposerMode, orchestration_available: bool) -> TuiTe
         transcript_is_empty: false,
         orchestration_available,
         plan_available: false,
+        can_attach_agent_to_running_command: false,
+        agent_is_tagged_in: false,
     })
+}
+
+#[test]
+fn tagged_in_composer_exposes_detach_shortcut() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let mut state = composer_state(
+                TuiComposerMode::Agent {
+                    agent_controlled_terminal_use: false,
+                },
+                false,
+            );
+            let TuiTerminalSessionState::Block(block) = &mut state else {
+                unreachable!();
+            };
+            block.agent_is_tagged_in = true;
+            let mut context = Context::default();
+            context.set.insert(TuiTerminalSessionView::ui_name());
+            context
+                .set
+                .insert(SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG);
+
+            let sections = state.shortcut_sections(&context, ctx);
+
+            assert_eq!(
+                sections
+                    .iter()
+                    .map(|section| section.title)
+                    .collect::<Vec<_>>(),
+                vec!["Shortcuts", "Terminal use"]
+            );
+            assert_eq!(sections[1].shortcuts[0].key, "Escape");
+            assert_eq!(
+                sections[1].shortcuts[0].description,
+                "return control to command"
+            );
+        });
+    });
 }
 fn alt_screen_state(
     input_target: TuiInputTarget,
@@ -34,6 +77,8 @@ fn alt_screen_state(
             transcript_is_empty: false,
             orchestration_available: false,
             plan_available: false,
+            can_attach_agent_to_running_command: false,
+            agent_is_tagged_in: false,
         },
     }
 }
@@ -44,6 +89,8 @@ fn block_state(interaction: TuiInteractionState) -> TuiTerminalSessionState {
         transcript_is_empty: false,
         orchestration_available: false,
         plan_available: false,
+        can_attach_agent_to_running_command: false,
+        agent_is_tagged_in: false,
     })
 }
 

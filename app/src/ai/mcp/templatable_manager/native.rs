@@ -1581,16 +1581,21 @@ impl TemplatableMCPServerManager {
         }
     }
 
-    pub fn is_authorized_editor(&self, template_uuid: Uuid, ctx: &AppContext) -> bool {
+    pub fn is_authorized_editor(
+        &self,
+        template_uuid: Uuid,
+        team_uid: Option<ServerId>,
+        ctx: &AppContext,
+    ) -> bool {
         let cloud_templatable_mcp_server = self.get_cloud_templatable_mcp_server(template_uuid);
 
         if let Some(cloud_templatable_mcp_server) = cloud_templatable_mcp_server {
             let auth_state = AuthStateProvider::as_ref(ctx).get();
-            let current_team = UserWorkspaces::as_ref(ctx).current_team();
-
-            let has_admin_permissions = current_team.is_some_and(|team| {
-                team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
-            });
+            let has_admin_permissions = team_uid
+                .and_then(|team_uid| UserWorkspaces::as_ref(ctx).team_from_uid(team_uid))
+                .is_some_and(|team| {
+                    team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
+                });
             let is_author = cloud_templatable_mcp_server.metadata().creator_uid
                 == auth_state.user_id().map(|user_id| user_id.as_string());
 
@@ -1733,16 +1738,14 @@ impl TemplatableMCPServerManager {
     pub fn share_templatable_mcp_server(
         &mut self,
         template_uuid: Uuid,
+        team_uid: ServerId,
         ctx: &mut ModelContext<Self>,
     ) {
         let sync_id = self
             .get_cloud_templatable_mcp_server(template_uuid)
             .map(|server| server.sync_id());
-        let team_uid = TemplatableMCPServerManager::get_first_team_space_id(ctx);
 
-        if let Some(sync_id) = sync_id
-            && let Some(team_uid) = team_uid
-        {
+        if let Some(sync_id) = sync_id {
             let object_type_and_id = CloudObjectTypeAndId::GenericStringObject {
                 object_type: GenericStringObjectFormat::Json(JsonObjectType::TemplatableMCPServer),
                 id: sync_id,
@@ -1761,11 +1764,12 @@ impl TemplatableMCPServerManager {
     pub fn share_templatable_mcp_server_installation(
         &mut self,
         installation_uuid: Uuid,
+        team_uid: ServerId,
         ctx: &mut ModelContext<Self>,
     ) {
         let template_uuid = self.get_template_uuid(installation_uuid);
         if let Some(template_uuid) = template_uuid {
-            self.share_templatable_mcp_server(template_uuid, ctx);
+            self.share_templatable_mcp_server(template_uuid, team_uid, ctx);
         }
     }
 
@@ -1802,15 +1806,6 @@ impl TemplatableMCPServerManager {
         if let Some(template_uuid) = template_uuid {
             self.unshare_templatable_mcp_server(template_uuid, ctx);
         }
-    }
-
-    pub fn get_first_team_space_id(app: &AppContext) -> Option<ServerId> {
-        let user_workspaces = UserWorkspaces::as_ref(app);
-        let all_user_spaces = user_workspaces.all_user_spaces(app);
-        all_user_spaces.into_iter().find_map(|space| match space {
-            Space::Team { team_uid } => Some(team_uid),
-            _ => None,
-        })
     }
 
     pub fn has_oauth_credentials_for_server(&self, template_uuid: Uuid) -> bool {

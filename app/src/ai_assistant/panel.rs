@@ -22,7 +22,7 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::execution_context::WarpAiExecutionContext;
@@ -116,6 +116,7 @@ enum InputSuggestionsMode {
 /// TODO: we should eventually refactor this and other panels into a more
 /// general Panel view.
 pub struct AIAssistantPanelView {
+    view_handle: WeakViewHandle<Self>,
     editor: ViewHandle<EditorView>,
     transcript_view: ViewHandle<Transcript>,
     input_suggestions_view: ViewHandle<InputSuggestions>,
@@ -237,6 +238,7 @@ impl AIAssistantPanelView {
         };
 
         let mut panel = Self {
+            view_handle: ctx.handle(),
             editor,
             transcript_view,
             input_suggestions_view,
@@ -612,8 +614,11 @@ impl AIAssistantPanelView {
     }
 
     fn issue_request(&mut self, request: String, ctx: &mut ViewContext<Self>) {
+        let team_uid = UserWorkspaces::as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|team| team.uid);
         self.requests_model.update(ctx, |requests_model, ctx| {
-            requests_model.issue_request(request, ctx);
+            requests_model.issue_request(request, team_uid, ctx);
         });
         self.transcript_view.update(ctx, |transcript_view, ctx| {
             transcript_view.clear_selected_block(ctx);
@@ -985,7 +990,7 @@ impl AIAssistantPanelView {
         );
 
         let is_custom_llm_enabled: bool = UserWorkspaces::as_ref(app)
-            .current_team()
+            .team_for_view_handle(&self.view_handle, app)
             .is_some_and(|team| team.is_custom_llm_enabled());
 
         if !is_custom_llm_enabled {

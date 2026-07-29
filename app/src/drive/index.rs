@@ -650,7 +650,7 @@ impl DriveIndex {
         let cloud_model = CloudModel::handle(ctx);
 
         let spaces = user_workspaces.update(ctx, |user_workspaces, ctx| {
-            user_workspaces.all_user_spaces(ctx)
+            user_workspaces.spaces_for_window(self.window_id, ctx)
         });
         let num_cloud_objects_per_space = match self.index_variant {
             DriveIndexVariant::MainIndex => cloud_model
@@ -5247,7 +5247,7 @@ impl View for DriveIndex {
             }
         };
 
-        if let Some(team) = workspaces.current_team() {
+        if let Some(team) = workspaces.team_for_window(self.window_id) {
             if team.billing_metadata.is_delinquent_due_to_payment_issue() {
                 let current_user_email = self.auth_state.user_email().unwrap_or_default();
                 let has_admin_permissions = team.has_admin_permissions(&current_user_email);

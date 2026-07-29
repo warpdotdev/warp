@@ -23387,9 +23387,9 @@ impl Workspace {
     }
 
     fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
-        // TODO this is a stop gap for now - ideally a specific team uid should
-        // be passed into each event
-        UserWorkspaces::as_ref(app).current_team_uid()
+        UserWorkspaces::as_ref(app)
+            .team_for_window(self.window_id)
+            .map(|team| team.uid)
     }
 
     fn initiate_user_signup(
@@ -24162,10 +24162,8 @@ impl TypedActionView for Workspace {
                 send_telemetry_from_ctx!(TelemetryEvent::UserMenuUpgradeClicked, ctx);
 
                 let auth_state = AuthStateProvider::as_ref(ctx).get();
-                let user_workspaces = UserWorkspaces::as_ref(ctx);
-
-                let upgrade_url = if let Some(team) = user_workspaces.current_team() {
-                    UserWorkspaces::upgrade_link_for_team(team.uid)
+                let upgrade_url = if let Some(team_uid) = self.team_uid(ctx) {
+                    UserWorkspaces::upgrade_link_for_team(team_uid)
                 } else {
                     let user_id = auth_state.user_id().unwrap_or_default();
                     UserWorkspaces::upgrade_link(user_id)
