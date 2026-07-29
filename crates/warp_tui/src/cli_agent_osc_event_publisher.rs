@@ -2,11 +2,12 @@ use std::env;
 use std::ffi::OsStr;
 use std::io::{self, Write};
 
+use crate::tool_call_labels::tool_call_label;
 use warp::tui_export::{
-    AIAgentActionResultType, AIAgentActionType, AIConversationId, ActiveSession,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, ConversationSelectionHandle, ConversationStatus,
-    ConversationStatusUpdate,
+    AIActionStatus, AIAgentActionResultType, AIAgentActionType, AIAgentTextSection,
+    AIConversationId, ActiveSession, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationSelectionHandle,
+    ConversationStatus, ConversationStatusUpdate,
 };
 use warp_core::cli_agent_protocol::{
     CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentNotification, WARP_CLI_AGENT_PROTOCOL_VERSION_ENV,
@@ -16,6 +17,7 @@ use warp_terminal::model::escape_sequences::{C0, C1, tmux_passthrough};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
 const WARP_TUI_AGENT_NAME: &str = "warp-tui";
+const MAX_NOTIFICATION_DESCRIPTION_CHARS: usize = 320;
 
 /// Returns whether the host terminal advertises structured Warp notifications.
 ///
@@ -75,12 +77,15 @@ impl CliAgentOscEventPublisher {
     }
 
     pub(crate) fn publish_session_start(&self, ctx: &AppContext) {
-        self.publish(self.notification("session_start", ctx));
+        let mut notification = self.notification("session_start", ctx);
+        notification.summary = Some("Warp Agent session started.".to_owned());
+        self.publish(notification);
     }
 
     pub(crate) fn publish_prompt_submit(&self, prompt: String, ctx: &AppContext) {
         let mut notification = self.notification("prompt_submit", ctx);
-        notification.query = Some(prompt);
+        notification.query = notification_excerpt(&prompt);
+        notification.summary = Some("Warp Agent is working on your request.".to_owned());
         self.publish(notification);
     }
 
@@ -106,13 +111,26 @@ impl CliAgentOscEventPublisher {
                 else {
                     return;
                 };
-                if matches!(&action.action, AIAgentActionType::AskUserQuestion { .. }) {
+                if let AIAgentActionType::AskUserQuestion { questions } = &action.action {
                     let mut notification = self.notification("question_asked", ctx);
-                    notification.summary = Some("Waiting for your answer".to_owned());
+                    notification.summary = notification_excerpt(
+                        &questions
+                            .iter()
+                            .map(|item| item.question.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    );
+                    notification.tool_name = Some(action.action.user_friendly_name());
                     self.publish(notification);
                 } else {
                     let mut notification = self.notification("permission_request", ctx);
                     notification.tool_name = Some(action.action.user_friendly_name());
+                    notification.summary = Some(tool_call_label(
+                        action,
+                        Some(&AIActionStatus::Blocked),
+                        false,
+                        None,
+                    ));
                     self.publish(notification);
                 }
             }
@@ -173,22 +191,84 @@ impl CliAgentOscEventPublisher {
         };
         let mut notification = self.notification(status_event.event, ctx);
         notification.error_type = status_event.error_type.map(str::to_owned);
+        notification.summary = Some(
+            match new_status {
+                ConversationStatus::Success => "Warp Agent completed your request.",
+                ConversationStatus::Error => "Warp Agent encountered an error.",
+                ConversationStatus::Cancelled => "Warp Agent was cancelled.",
+                ConversationStatus::InProgress => "Warp Agent is working on your request.",
+                ConversationStatus::Blocked { .. } => "Warp Agent is waiting for your input.",
+                ConversationStatus::TransientError => "Warp Agent is reconnecting.",
+                ConversationStatus::WaitingForEvents => "Warp Agent is waiting for events.",
+            }
+            .to_owned(),
+        );
+        if let Some(conversation) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation(conversation_id)
+        {
+            notification.query = conversation
+                .latest_user_query()
+                .as_deref()
+                .and_then(notification_excerpt);
+            notification.response = match new_status {
+                ConversationStatus::Success => {
+                    conversation.exchanges_reversed().find_map(|exchange| {
+                        let output = exchange.output_status.output()?;
+                        let output = output.get();
+                        let response = output
+                            .text_from_agent_output()
+                            .flat_map(|text| &text.sections)
+                            .filter_map(|section| match section {
+                                AIAgentTextSection::PlainText { text } => Some(text.text()),
+                                AIAgentTextSection::Code { .. }
+                                | AIAgentTextSection::Table { .. }
+                                | AIAgentTextSection::Image { .. }
+                                | AIAgentTextSection::MermaidDiagram { .. } => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        notification_excerpt(&response)
+                    })
+                }
+                ConversationStatus::Error => conversation.latest_exchange().and_then(|exchange| {
+                    exchange
+                        .output_status
+                        .to_string()
+                        .strip_prefix("Error: ")
+                        .and_then(notification_excerpt)
+                }),
+                ConversationStatus::Cancelled => {
+                    Some("The task was cancelled before completion.".to_owned())
+                }
+                ConversationStatus::InProgress
+                | ConversationStatus::Blocked { .. }
+                | ConversationStatus::TransientError
+                | ConversationStatus::WaitingForEvents => None,
+            };
+        }
         self.publish(notification);
     }
 
     fn notification(&self, event: &str, ctx: &AppContext) -> CLIAgentNotification {
+        let cwd = self
+            .active_session
+            .as_ref(ctx)
+            .current_working_directory()
+            .cloned()
+            .or_else(|| {
+                env::current_dir()
+                    .ok()
+                    .map(|cwd| cwd.to_string_lossy().into_owned())
+            });
         CLIAgentNotification {
             session_id: Some(self.terminal_surface_id.to_string()),
-            cwd: self
-                .active_session
-                .as_ref(ctx)
-                .current_working_directory()
-                .cloned()
-                .or_else(|| {
-                    env::current_dir()
-                        .ok()
-                        .map(|cwd| cwd.to_string_lossy().into_owned())
-                }),
+            project: cwd.as_deref().and_then(|cwd| {
+                std::path::Path::new(cwd)
+                    .file_name()
+                    .filter(|name| !name.is_empty())
+                    .map(|name| name.to_string_lossy().into_owned())
+            }),
+            cwd,
             ..CLIAgentNotification::new(WARP_TUI_AGENT_NAME, event)
         }
     }
@@ -211,6 +291,22 @@ impl CliAgentOscEventPublisher {
         let _ = stdout.write_all(sequence.as_bytes());
         let _ = stdout.flush();
     }
+}
+
+fn notification_excerpt(text: &str) -> Option<String> {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let mut excerpt = normalized
+        .chars()
+        .take(MAX_NOTIFICATION_DESCRIPTION_CHARS)
+        .collect::<String>();
+    if normalized.chars().count() > MAX_NOTIFICATION_DESCRIPTION_CHARS {
+        excerpt.push('…');
+    }
+    Some(excerpt)
 }
 
 fn status_osc_event(

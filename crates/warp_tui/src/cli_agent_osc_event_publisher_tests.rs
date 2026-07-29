@@ -46,6 +46,22 @@ fn status_events_ignore_background_conversations_and_restorations() {
 }
 
 #[test]
+fn notification_excerpt_is_trimmed_and_bounded() {
+    assert_eq!(
+        notification_excerpt("  Finished\n\nupdating   the parser. "),
+        Some("Finished updating the parser.".to_owned())
+    );
+
+    let long = "x".repeat(MAX_NOTIFICATION_DESCRIPTION_CHARS + 1);
+    let excerpt = notification_excerpt(&long).expect("non-empty text should produce an excerpt");
+    assert_eq!(
+        excerpt.chars().count(),
+        MAX_NOTIFICATION_DESCRIPTION_CHARS + 1
+    );
+    assert!(excerpt.ends_with('…'));
+}
+
+#[test]
 fn terminal_statuses_map_to_stop_events() {
     let conversation_id = AIConversationId::new();
     let update = ConversationStatusUpdate::Changed {
