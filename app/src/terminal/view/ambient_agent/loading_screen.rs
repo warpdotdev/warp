@@ -24,7 +24,7 @@ use crate::ui_components::blended_colors;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Icon size for the error icon
-const ERROR_ICON_SIZE: f32 = 32.;
+const ERROR_ICON_SIZE: f32 = 24.;
 
 /// Renders the cloud mode loading screen with shimmering warp logo and tips.
 pub fn render_cloud_mode_loading_screen(
