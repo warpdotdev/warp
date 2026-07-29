@@ -744,8 +744,7 @@ impl ResponseStream {
 
 /// Applies the result of a request-time GEAP mint to the request snapshot.
 ///
-/// A successful mint swaps in the fresh credential. Anything else — mint
-/// failure, timeout, or a dropped sender — leaves the snapshot untouched.
+/// A successful mint swaps in the fresh credential.
 #[cfg(not(target_family = "wasm"))]
 fn apply_geap_refresh_to_params(
     params: &mut api::RequestParams,
