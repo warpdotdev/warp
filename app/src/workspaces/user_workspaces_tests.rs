@@ -969,7 +969,6 @@ fn test_codebase_context_enabled_by_team_and_user() {
     let mut team = team_for_test();
     team.organization_settings.codebase_context_settings.setting = AdminEnablementSetting::Enable;
 
-    // Enable codebase context on the user level (this doesn't matter since team overrides)
     let mut workspace = workspace_for_test(&team);
     workspace.settings.codebase_context_settings = CodebaseContextSettings {
         setting: AdminEnablementSetting::Enable,
@@ -997,15 +996,13 @@ fn test_codebase_context_enabled_by_team_and_user() {
 }
 
 #[test]
-fn test_codebase_context_disabled_by_team() {
-    // Disable codebase context on a team level
+fn test_codebase_context_disabled_by_workspace() {
     let mut team = team_for_test();
-    team.organization_settings.codebase_context_settings.setting = AdminEnablementSetting::Disable;
+    team.organization_settings.codebase_context_settings.setting = AdminEnablementSetting::Enable;
 
-    // Enable codebase context on the user level (this doesn't matter since team overrides)
     let mut workspace = workspace_for_test(&team);
     workspace.settings.codebase_context_settings = CodebaseContextSettings {
-        setting: AdminEnablementSetting::Enable,
+        setting: AdminEnablementSetting::Disable,
     };
 
     App::test((), |mut app| async move {
@@ -1019,11 +1016,11 @@ fn test_codebase_context_disabled_by_team() {
         );
 
         app.read(|ctx| {
-            let codebase_context_enabled = UserWorkspaces::as_ref(ctx)
-                .is_codebase_context_enabled(ctx);
+            let codebase_context_enabled =
+                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
             assert!(
                 !codebase_context_enabled,
-                "codebase context should be off when it's disabled by the team, regardless of the user's settings"
+                "codebase context should be off when it's disabled by the workspace"
             );
         });
     })
