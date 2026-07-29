@@ -771,7 +771,7 @@ pub(crate) struct TuiTerminalSessionView {
     read_only_menu_viewport: TuiViewportedListState,
     /// The selected conversation and active TODO-list generation currently
     /// displayed by an open TODO menu.
-    todo_menu_list_key: Option<(AIConversationId, usize)>,
+    open_todo_menu_list_key: Option<(AIConversationId, usize)>,
     /// Session-owned live state model shared by this surface and its input view.
     session_state: ModelHandle<TuiTerminalSessionStateModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
@@ -1865,7 +1865,7 @@ impl TuiTerminalSessionView {
         });
         ctx.subscribe_to_model(&suggestions_mode, |view, _, event, ctx| {
             view.read_only_menu_selection.clear();
-            view.todo_menu_list_key = match event.mode.read_only_menu() {
+            view.open_todo_menu_list_key = match event.mode.read_only_menu() {
                 Some(TuiReadOnlyMenuKind::Todos) => view.active_todo_menu_list_key(ctx),
                 Some(TuiReadOnlyMenuKind::Shortcuts | TuiReadOnlyMenuKind::Status) | None => None,
             };
@@ -2075,7 +2075,7 @@ impl TuiTerminalSessionView {
             suggestions_mode,
             read_only_menu_selection,
             read_only_menu_viewport,
-            todo_menu_list_key: None,
+            open_todo_menu_list_key: None,
             session_state,
             conversation_menu,
             model_menu,
@@ -2329,7 +2329,7 @@ impl TuiTerminalSessionView {
                 .conversation_selection
                 .as_ref(ctx)
                 .selected_conversation(ctx)
-                .and_then(|conversation| todo_menu::menu(conversation, builder)),
+                .and_then(|conversation| todo_menu::active_todo_menu(conversation, builder)),
         }) {
             let menu = menu.render_with_viewport(
                 self.read_only_menu_selection.clone(),
@@ -3486,17 +3486,17 @@ impl TuiTerminalSessionView {
 
     fn sync_open_todo_menu_list(&mut self, ctx: &mut ViewContext<Self>) {
         if !todo_menu_is_open(self.suggestions_mode.as_ref(ctx).mode()) {
-            self.todo_menu_list_key = None;
+            self.open_todo_menu_list_key = None;
             return;
         }
         let key = self.active_todo_menu_list_key(ctx);
         let Some(key) = key else {
-            self.todo_menu_list_key = None;
+            self.open_todo_menu_list_key = None;
             self.close_todo_menu_if_unavailable(ctx);
             return;
         };
-        if self.todo_menu_list_key.as_ref() != Some(&key) {
-            self.todo_menu_list_key = Some(key);
+        if self.open_todo_menu_list_key.as_ref() != Some(&key) {
+            self.open_todo_menu_list_key = Some(key);
             let scroll_top =
                 self.read_only_menu_initial_scroll_top(TuiReadOnlyMenuKind::Todos, ctx);
             self.read_only_menu_viewport

@@ -209,7 +209,7 @@ pub(crate) fn render_todo_list_section(
 
     let mut rows = TuiFlex::column();
     for (title, status) in todos {
-        let (glyph, glyph_style) = todo_glyph(status, &builder);
+        let (glyph, glyph_style) = todo_status_glyph(status, &builder);
         let title_style = match status {
             TodoStatus::Pending | TodoStatus::InProgress | TodoStatus::Completed => {
                 builder.primary_text_style()
@@ -255,7 +255,10 @@ pub(crate) fn render_todo_list_section(
 /// The status glyph and its style for one task row. Pending and in-progress
 /// glyphs follow the TUI Figma design; terminal states reuse the tool-call
 /// glyph vocabulary (see `tool_call_glyph`).
-fn todo_glyph(status: &TodoStatus, builder: &TuiUiBuilder) -> (&'static str, TuiStyle) {
+pub(crate) fn todo_status_glyph(
+    status: &TodoStatus,
+    builder: &TuiUiBuilder,
+) -> (&'static str, TuiStyle) {
     match status {
         TodoStatus::Pending => ("◌", builder.primary_text_style()),
         TodoStatus::InProgress => ("●", builder.attention_glyph_style()),

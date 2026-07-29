@@ -3,36 +3,21 @@
 use warp::tui_export::{AIConversation, TodoStatus};
 use warpui_core::elements::tui::Modifier;
 
+use crate::agent_block_sections::todo_status_glyph;
 use crate::read_only_menu::{
     TuiReadOnlyMenu, TuiReadOnlyMenuRow, TuiReadOnlyMenuSection, TuiReadOnlyMenuText,
 };
 use crate::tui_builder::TuiUiBuilder;
 
 fn todo_row(title: &str, status: TodoStatus, builder: &TuiUiBuilder) -> TuiReadOnlyMenuRow {
-    let (glyph, glyph_style, title_style) = match status {
-        TodoStatus::Pending => (
-            "◌",
-            builder.primary_text_style(),
-            builder.muted_text_style(),
-        ),
-        TodoStatus::InProgress => (
-            "●",
-            builder.attention_glyph_style(),
-            builder.primary_text_style(),
-        ),
-        TodoStatus::Completed => (
-            "✓",
-            builder.success_glyph_style(),
-            builder.muted_text_style(),
-        ),
-        TodoStatus::Cancelled => (
-            "■",
-            builder.muted_text_style(),
-            builder
-                .muted_text_style()
-                .add_modifier(Modifier::CROSSED_OUT),
-        ),
-        TodoStatus::Stopped => ("■", builder.muted_text_style(), builder.muted_text_style()),
+    let (glyph, glyph_style) = todo_status_glyph(&status, builder);
+    let title_style = match status {
+        TodoStatus::Pending | TodoStatus::Completed => builder.muted_text_style(),
+        TodoStatus::InProgress => builder.primary_text_style(),
+        TodoStatus::Cancelled => builder
+            .muted_text_style()
+            .add_modifier(Modifier::CROSSED_OUT),
+        TodoStatus::Stopped => builder.muted_text_style(),
     };
     TuiReadOnlyMenuRow::new([TuiReadOnlyMenuText::new([
         (format!("{glyph} "), glyph_style),
@@ -40,7 +25,7 @@ fn todo_row(title: &str, status: TodoStatus, builder: &TuiUiBuilder) -> TuiReadO
     ])])
 }
 
-pub(super) fn menu(
+pub(super) fn active_todo_menu(
     conversation: &AIConversation,
     builder: &TuiUiBuilder,
 ) -> Option<TuiReadOnlyMenu> {
