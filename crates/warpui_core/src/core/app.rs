@@ -4388,23 +4388,18 @@ impl AppContext {
                 );
             }
             TaskCallback::ViewFromFuture {
-                window_id: stored_window_id,
+                window_id,
                 view_id,
                 callback,
             } => {
-                let current_window_id = self
-                    .view_to_window
-                    .get(&view_id)
-                    .copied()
-                    .unwrap_or(stored_window_id);
                 if let Some(mut view) = self
                     .windows
-                    .get_mut(&current_window_id)
+                    .get_mut(&window_id)
                     .and_then(|w| w.views.remove(&view_id))
                 {
-                    callback(view.as_any_mut(), output, self, current_window_id, view_id);
+                    callback(view.as_any_mut(), output, self, window_id, view_id);
                     self.windows
-                        .get_mut(&current_window_id)
+                        .get_mut(&window_id)
                         .ok_or_else(|| anyhow!("Unable to retrieve window for view"))?
                         .views
                         .insert(view_id, view);
@@ -4417,6 +4412,9 @@ impl AppContext {
                 mut on_item,
                 on_done,
             } => {
+                // A stream can outlive a cross-window view transfer
+                // (ex. when dragging a tab to a new window), so the window captured
+                // when the stream started may no longer contain the view.
                 let current_window_id = self
                     .view_to_window
                     .get(&view_id)
@@ -4476,6 +4474,7 @@ impl AppContext {
                 on_done: callback,
                 ..
             } => {
+                // Completion must use the same current window as item delivery.
                 let current_window_id = self
                     .view_to_window
                     .get(&view_id)

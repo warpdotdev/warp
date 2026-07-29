@@ -7608,7 +7608,6 @@ impl PaneGroup {
         );
         self.clean_up_panes(ctx);
 
-        // Clean up any state associated with this pane group (global search views, etc.)
         let pane_group_id = ctx.view_id();
         working_directories_model.update(ctx, |model, ctx| {
             model.remove_pane_group(pane_group_id, ctx);

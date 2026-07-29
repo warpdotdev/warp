@@ -27441,15 +27441,6 @@ impl View for TerminalView {
         "Terminal"
     }
 
-    fn on_window_transferred(
-        &mut self,
-        _source_window_id: WindowId,
-        target_window_id: WindowId,
-        _ctx: &mut ViewContext<Self>,
-    ) {
-        self.window_id = target_window_id;
-    }
-
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         // Grab this here, before we take the terminal model lock.
         let menu_positioning = self.input.as_ref(app).menu_positioning(app);

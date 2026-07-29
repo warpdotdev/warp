@@ -87,14 +87,10 @@ fn test_transfer_view_to_window_updates_window_mapping() {
 }
 
 #[test]
-fn test_transfer_view_task_callbacks_continue_working() {
+fn test_transfer_view_stream_continues_in_target_window() {
     #[derive(Default)]
     struct TestView {
-        future_values: Vec<usize>,
-        stream_values: Vec<usize>,
-        future_window_ids: Vec<WindowId>,
-        stream_window_ids: Vec<WindowId>,
-        stream_completed: bool,
+        events: Vec<(Option<usize>, WindowId)>,
     }
 
     impl Entity for TestView {
@@ -121,54 +117,34 @@ fn test_transfer_view_task_callbacks_continue_working() {
         let (target_window_id, _) =
             app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
         let view = app.add_view(source_window_id, |_| TestView::default());
-        let view_id = view.id();
-
-        let (future_tx, future_rx) = futures::channel::oneshot::channel();
-        let future_handle = view.update(&mut app, |_, ctx| {
-            ctx.spawn(
-                async move { future_rx.await.unwrap() },
-                |view, output, ctx| {
-                    view.future_values.push(output);
-                    view.future_window_ids.push(ctx.window_id());
-                },
-            )
-        });
-        let (stream_tx, stream_rx) = futures::channel::mpsc::unbounded();
-        let stream_future = view.update(&mut app, |_, ctx| {
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        let stream = view.update(&mut app, |_, ctx| {
             ctx.spawn_stream_local(
-                stream_rx,
-                |view, output, ctx| {
-                    view.stream_values.push(output);
-                    view.stream_window_ids.push(ctx.window_id());
-                },
-                |view, ctx| {
-                    view.stream_completed = true;
-                    view.stream_window_ids.push(ctx.window_id());
-                },
+                rx,
+                |view, item, ctx| view.events.push((Some(item), ctx.window_id())),
+                |view, ctx| view.events.push((None, ctx.window_id())),
             )
             .into_future()
         });
 
-        assert!(app.update(|ctx| {
-            ctx.transfer_view_to_window(view_id, source_window_id, target_window_id)
-        }));
-        future_tx.send(1usize).unwrap();
-        stream_tx.unbounded_send(2usize).unwrap();
-        stream_tx.unbounded_send(3usize).unwrap();
-        drop(stream_tx);
-
-        let future = app.update(|ctx| ctx.await_spawned_future(future_handle.future_id()));
-        future.await;
-        stream_future.await;
+        assert!(app.update(|ctx| ctx.transfer_view_to_window(
+            view.id(),
+            source_window_id,
+            target_window_id
+        )));
+        tx.unbounded_send(1).unwrap();
+        tx.unbounded_send(2).unwrap();
+        drop(tx);
+        stream.await;
 
         view.read(&app, |view, _| {
-            assert_eq!(view.future_values, vec![1]);
-            assert_eq!(view.stream_values, vec![2, 3]);
-            assert!(view.stream_completed);
-            assert_eq!(view.future_window_ids, vec![target_window_id]);
             assert_eq!(
-                view.stream_window_ids,
-                vec![target_window_id, target_window_id, target_window_id]
+                view.events,
+                vec![
+                    (Some(1), target_window_id),
+                    (Some(2), target_window_id),
+                    (None, target_window_id),
+                ]
             );
         });
     });
