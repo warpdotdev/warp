@@ -684,6 +684,33 @@ fn workspace_for_test(team: &Team) -> Workspace {
 }
 
 #[test]
+fn test_current_workspace_billing_metadata_uses_selected_teamless_workspace() {
+    let first_team = team_for_test();
+    let first_workspace = workspace_for_test(&first_team);
+    let mut second_workspace = workspace_for_test(&first_team);
+    second_workspace.uid = "workspace_uid987654321".to_string().into();
+    second_workspace.teams.clear();
+    second_workspace.billing_metadata.customer_type = CustomerType::Enterprise;
+    let second_workspace_uid = second_workspace.uid;
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![first_workspace, second_workspace]);
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_current_workspace_uid(second_workspace_uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .current_workspace_billing_metadata()
+                    .map(|metadata| metadata.customer_type),
+                Some(CustomerType::Enterprise)
+            );
+        });
+    })
+}
+#[test]
 fn test_window_team_assignment_is_immutable() {
     let first_team = team_for_test();
     let mut second_team = team_for_test();
@@ -733,8 +760,11 @@ fn test_window_team_assignment_inherits_from_source_or_self_serve_team() {
         let fallback_window_id = WindowId::new();
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
             user_workspaces.set_team_for_window(source_window_id, second_team.uid, ctx);
-            user_workspaces.register_window(inherited_window_id, Some(source_window_id), ctx);
-            user_workspaces.register_window(fallback_window_id, None, ctx);
+            let inherited_team_uid =
+                user_workspaces.inherited_or_default_team_uid(Some(source_window_id));
+            let fallback_team_uid = user_workspaces.inherited_or_default_team_uid(None);
+            user_workspaces.register_window(inherited_window_id, inherited_team_uid, ctx);
+            user_workspaces.register_window(fallback_window_id, fallback_team_uid, ctx);
         });
 
         app.read(|ctx| {

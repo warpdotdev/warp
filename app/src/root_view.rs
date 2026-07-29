@@ -72,7 +72,7 @@ use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
@@ -1623,6 +1623,33 @@ impl NewWorkspaceSource {
             _ => false,
         }
     }
+
+    pub fn team_uid(&self, ctx: &AppContext) -> Option<ServerId> {
+        let source_window_id = match self {
+            Self::Empty {
+                previous_active_window,
+                ..
+            } => *previous_active_window,
+            Self::TransferredTab {
+                source_window_id, ..
+            } => Some(*source_window_id),
+            Self::FromTemplate { .. }
+            | Self::Session { .. }
+            | Self::SharedSessionAsViewer { .. }
+            | Self::FromCloudConversationId { .. }
+            | Self::NotebookFromFilePath { .. }
+            | Self::NotebookById { .. }
+            | Self::WorkflowById { .. }
+            | Self::AgentSession { .. }
+            | Self::AmbientAgent => None,
+            Self::Restored { .. } => {
+                // TODO: Store the team UID in WindowSnapshot and restore it here.
+                None
+            }
+        };
+
+        UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(source_window_id)
+    }
 }
 
 /// Args needed to construct a `Workspace`.
@@ -1773,6 +1800,11 @@ impl RootView {
         workspace_setting: NewWorkspaceSource,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        let window_id = ctx.window_id();
+        let team_uid = workspace_setting.team_uid(ctx);
+        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, team_uid, ctx);
+        });
         let server_api_provider = ServerApiProvider::as_ref(ctx);
         let server_api = server_api_provider.get();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();

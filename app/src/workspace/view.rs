@@ -2843,28 +2843,6 @@ impl Workspace {
         // reads the sizes from the window snapshot. A new window initializes with all default sizes.
         let resizable_data = ResizableData::handle(ctx);
         let window_id = ctx.window_id();
-        let source_window_id = match &workspace_setting {
-            NewWorkspaceSource::Empty {
-                previous_active_window,
-                ..
-            } => *previous_active_window,
-            NewWorkspaceSource::TransferredTab {
-                source_window_id, ..
-            } => Some(*source_window_id),
-            NewWorkspaceSource::FromTemplate { .. }
-            | NewWorkspaceSource::Restored { .. }
-            | NewWorkspaceSource::Session { .. }
-            | NewWorkspaceSource::SharedSessionAsViewer { .. }
-            | NewWorkspaceSource::FromCloudConversationId { .. }
-            | NewWorkspaceSource::NotebookFromFilePath { .. }
-            | NewWorkspaceSource::NotebookById { .. }
-            | NewWorkspaceSource::WorkflowById { .. }
-            | NewWorkspaceSource::AgentSession { .. }
-            | NewWorkspaceSource::AmbientAgent => None,
-        };
-        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, source_window_id, ctx);
-        });
         let has_horizontal_split = workspace_setting.has_horizontal_split();
 
         let (left_panel_size, right_panel_size) =

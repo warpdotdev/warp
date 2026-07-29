@@ -16,8 +16,8 @@ use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
-    AdminEnablementSetting, CustomerType, EnterpriseSecretRegex, HostEnablementSetting,
-    UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    AdminEnablementSetting, BillingMetadata, CustomerType, EnterpriseSecretRegex,
+    HostEnablementSetting, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
 };
 use crate::ai::llms::LLMModelHost;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -35,9 +35,7 @@ use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
 };
 #[cfg(test)]
-use crate::workspaces::workspace::{
-    AIAutonomyPolicy, BillingMetadata, WorkspaceMember, WorkspaceSettings,
-};
+use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
 use crate::workspaces::workspace::{
     AiAutonomySettings, AiOverages, SandboxedAgentSettings, UsageBasedPricingSettings,
 };
@@ -219,17 +217,23 @@ impl UserWorkspaces {
         self.current_workspace()
             .and_then(|w| w.teams.iter().find(|t| t.uid == team_uid))
     }
+
     pub fn register_window(
         &mut self,
         window_id: WindowId,
-        source_window_id: Option<WindowId>,
+        team_uid: Option<ServerId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let team_uid = source_window_id
-            .and_then(|source_window_id| self.team_uid_for_window(source_window_id))
-            .or_else(|| self.self_serve_team_uid());
         self.window_team_uids.entry(window_id).or_insert(team_uid);
         ctx.notify();
+    }
+    pub fn inherited_or_default_team_uid(
+        &self,
+        source_window_id: Option<WindowId>,
+    ) -> Option<ServerId> {
+        source_window_id
+            .and_then(|source_window_id| self.team_uid_for_window(source_window_id))
+            .or_else(|| self.self_serve_team_uid())
     }
 
     pub fn set_team_for_window(
@@ -431,6 +435,10 @@ impl UserWorkspaces {
     pub fn current_workspace(&self) -> Option<&Workspace> {
         self.current_workspace_uid
             .and_then(|workspace_uid| self.workspace_from_uid(workspace_uid))
+    }
+    pub fn current_workspace_billing_metadata(&self) -> Option<&BillingMetadata> {
+        self.current_workspace()
+            .map(|workspace| &workspace.billing_metadata)
     }
 
     pub fn current_workspace_mut(&mut self) -> Option<&mut Workspace> {
