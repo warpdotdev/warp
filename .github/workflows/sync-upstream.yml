@@ -1,0 +1,69 @@
+# Keeps this fork's master branch current with warpdotdev/warp.
+# - Runs daily (and on manual workflow_dispatch)
+# - Fast-forwards when possible; otherwise merges so fork-only commits (like this file) are kept
+# - Fails on merge conflicts so you can resolve locally
+name: Sync Upstream
+
+on:
+  schedule:
+    # Daily at 16:00 UTC
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Needed so the job can push back to master
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch and merge upstream/master
+        env:
+          UPSTREAM_URL: https://github.com/warpdotdev/warp.git
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null \
+            || git remote set-url upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream master
+          git checkout master
+
+          BEFORE=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/master)
+
+          if [ "$BEFORE" = "$UPSTREAM" ]; then
+            echo "Already up to date with upstream/master ($BEFORE)"
+            exit 0
+          fi
+
+          BEHIND=$(git rev-list --count HEAD..upstream/master)
+          AHEAD=$(git rev-list --count upstream/master..HEAD)
+          echo "Behind upstream by ${BEHIND} commit(s); ahead by ${AHEAD} commit(s)"
+
+          if git merge-base --is-ancestor HEAD upstream/master; then
+            echo "Fast-forwarding master to upstream/master"
+            git merge --ff-only upstream/master
+          else
+            echo "Merging upstream/master into master (preserving fork-only commits)"
+            git merge upstream/master -m "chore: sync upstream/master into fork"
+          fi
+
+          AFTER=$(git rev-parse HEAD)
+          echo "Synced: ${BEFORE} -> ${AFTER}"
+          git push origin master
