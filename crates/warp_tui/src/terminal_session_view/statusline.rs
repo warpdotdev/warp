@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use chrono::{Local, NaiveDateTime};
+use vim::vim::{MotionType, VimMode};
 use warp::settings::{AISettings, TuiStatuslineConfig, TuiStatuslineItem};
 use warp::tui_export::{ConversationUsageTotals, GitRepoModels, GitStatusMetadata, LLMPreferences};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -11,7 +12,6 @@ use warpui_core::elements::tui::{
     Modifier, TuiAnimated, TuiElement, TuiFlex, TuiHoverable, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, ViewContext};
-use vim::vim::{MotionType, VimMode};
 
 use super::{
     CTRL_C_EXIT_HINT, CTRL_C_KILL_CHILD_HINT, ConversationRestoreState, LOADING_CONVERSATION_HINT,
@@ -138,7 +138,7 @@ impl FooterSegment {
     fn separator_to(&self, next: &Self) -> &'static str {
         match (self, next) {
             (
-                Self::ShellMode | Self::Model(_) | Self::VimIndicator(_),
+                Self::ShellMode | Self::VimIndicator(_),
                 Self::WorkingDirectory(_),
             ) => " ",
             (Self::WorkingDirectory(_), Self::GitBranch(_) | Self::GitBranchStatus(_)) => " ",

@@ -52,8 +52,8 @@ use warpui::event::KeyState;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    Modifier, TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex,
-    TuiDispatchEventResult, TuiEventHandler, TuiHoverable, TuiSelectionHandle, TuiSize, TuiStyle,
+    Modifier, TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiDispatchEventResult,
+    TuiElement, TuiEventHandler, TuiFlex, TuiHoverable, TuiSelectionHandle, TuiSize, TuiStyle,
     TuiText, TuiViewportedListState,
 };
 use warpui_core::keymap::macros::*;
