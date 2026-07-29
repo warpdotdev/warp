@@ -303,6 +303,10 @@ pub enum WorkspaceAction {
     DecreaseZoom,
     ResetZoom,
     ActivateTabByNumber(usize),
+    ActivateTabOrGroupByNumber(usize),
+    ActivateLastTabOrGroup,
+    ActivateTabInActiveGroupByNumber(usize),
+    ActivateLastTabInActiveGroup,
     OpenPalette {
         mode: PaletteMode,
         source: PaletteSource,
@@ -920,6 +924,10 @@ impl WorkspaceAction {
             ContinueThirdPartyConversationLocally { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
+            | ActivateTabOrGroupByNumber(_)
+            | ActivateLastTabOrGroup
+            | ActivateTabInActiveGroupByNumber(_)
+            | ActivateLastTabInActiveGroup
             | ActivatePrevTab
             | ActivateNextTab
             | ActivateLastTab
