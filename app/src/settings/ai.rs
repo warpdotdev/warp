@@ -1981,6 +1981,18 @@ define_settings_group!(AISettings, settings: [
         description: "Whether agent-executed commands are included in command history.",
     }
 
+    // Whether fast forward / auto-approve can run commands that match the command denylist.
+    auto_approve_bypasses_command_denylist: AutoApproveBypassesCommandDenylist {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_approve_bypasses_command_denylist",
+        description: "Whether auto-approve bypasses the command denylist.",
+    }
+
     // Controls whether the conversation history view appears in the tools panel.
     show_conversation_history: ShowConversationHistory {
         type: bool,
