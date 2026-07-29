@@ -2,7 +2,6 @@ use std::env;
 use std::ffi::OsStr;
 use std::io::{self, Write};
 
-use crate::tool_call_labels::tool_call_label;
 use warp::tui_export::{
     AIActionStatus, AIAgentActionResultType, AIAgentActionType, AIAgentTextSection,
     AIConversationId, ActiveSession, BlocklistAIActionEvent, BlocklistAIActionModel,
@@ -15,6 +14,8 @@ use warp_core::cli_agent_protocol::{
 };
 use warp_terminal::model::escape_sequences::{C0, C1, tmux_passthrough};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
+
+use crate::tool_call_labels::tool_call_label;
 
 const WARP_TUI_AGENT_NAME: &str = "warp-tui";
 const MAX_NOTIFICATION_DESCRIPTION_CHARS: usize = 320;
