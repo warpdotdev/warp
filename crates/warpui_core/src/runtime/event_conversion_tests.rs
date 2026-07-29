@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use instant::Instant;
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
-    MouseButton, MouseEvent, MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+    ModifierKeyCode, MouseButton, MouseEvent, MouseEventKind,
 };
 
 use super::{ClickTracker, crossterm_event_to_tui_event};
@@ -14,6 +14,45 @@ use crate::platform::keyboard::KeyCode as PhysicalKeyCode;
 
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Option<TuiEvent> {
     crossterm_event_to_tui_event(CrosstermEvent::Key(KeyEvent::new(code, modifiers)))
+}
+fn key_with_state(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    state: KeyEventState,
+) -> Option<TuiEvent> {
+    crossterm_event_to_tui_event(CrosstermEvent::Key(KeyEvent::new_with_kind_and_state(
+        code,
+        modifiers,
+        KeyEventKind::Press,
+        state,
+    )))
+}
+#[test]
+fn caps_lock_and_shift_apply_xor_casing_to_ascii_text() {
+    let cases = [
+        (
+            KeyCode::Char('a'),
+            KeyModifiers::empty(),
+            KeyEventState::CAPS_LOCK,
+            "A",
+        ),
+        (
+            KeyCode::Char('A'),
+            KeyModifiers::SHIFT,
+            KeyEventState::CAPS_LOCK,
+            "a",
+        ),
+    ];
+    for (code, modifiers, state, expected_chars) in cases {
+        let Some(TuiEvent::KeyDown {
+            keystroke, chars, ..
+        }) = key_with_state(code, modifiers, state)
+        else {
+            panic!("expected KeyDown");
+        };
+        assert_eq!(chars, expected_chars);
+        assert_eq!(keystroke.shift, modifiers.contains(KeyModifiers::SHIFT));
+    }
 }
 
 fn mouse(kind: MouseEventKind, modifiers: KeyModifiers) -> Option<TuiEvent> {

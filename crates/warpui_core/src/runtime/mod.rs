@@ -31,8 +31,8 @@ use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event as CrosstermEvent, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    EnableFocusChange, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -171,8 +171,19 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     /// from modifier lifecycle events and synthesizing mouse multi-click counts.
     /// Returns `None` for events with no TUI equivalent.
     fn convert_event(&mut self, mut event: CrosstermEvent) -> Option<TuiEvent> {
-        self.shift_key_tracker.update(&mut event);
+        let shift_restored = self.shift_key_tracker.update(&mut event);
+        let shifted_key_without_base = shift_restored
+            && matches!(
+                &event,
+                CrosstermEvent::Key(KeyEvent {
+                    code: KeyCode::Char(character),
+                    ..
+                }) if !character.is_alphabetic()
+            );
         let mut tui_event = crossterm_event_to_tui_event(event)?;
+        if let TuiEvent::KeyDown { details, .. } = &mut tui_event {
+            details.shifted_key_without_base = shifted_key_without_base;
+        }
         self.click_tracker.annotate(&mut tui_event, Instant::now());
         Some(tui_event)
     }
@@ -261,7 +272,7 @@ where
     /// Enters the alternate screen + raw mode and prepares to drive `root_view`.
     /// The terminal is restored when the returned runtime is dropped.
     pub fn enter(app: &App, window_id: WindowId, root_view: ViewHandle<T>) -> io::Result<Self> {
-        let guard = TuiTerminalGuard::enter()?;
+        let guard = TuiTerminalGuard::enter(false)?;
         let mut runtime = Self::with_terminal(app, window_id, root_view, CrosstermTerminal::new());
         runtime._terminal_guard = Some(guard);
         Ok(runtime)
@@ -424,25 +435,34 @@ impl TuiTerminal for CrosstermTerminal {
 pub struct TuiTerminalGuard {
     _guard: RawModeGuard<CrosstermModeControl>,
     keyboard_enhancement_supported: bool,
+    modifier_key_lifecycle_enabled: bool,
 }
 
 impl TuiTerminalGuard {
     /// Enables raw mode and switches to the alternate screen, restoring both
     /// when the guard is dropped.
-    pub fn enter() -> io::Result<Self> {
+    pub fn enter(report_modifier_key_lifecycle: bool) -> io::Result<Self> {
         let keyboard_enhancement_supported =
             matches!(terminal::supports_keyboard_enhancement(), Ok(true));
         Ok(Self {
             _guard: RawModeGuard::enter(CrosstermModeControl {
                 keyboard_enhancement_supported,
+                report_modifier_key_lifecycle,
             })?,
             keyboard_enhancement_supported,
+            modifier_key_lifecycle_enabled: keyboard_enhancement_supported
+                && report_modifier_key_lifecycle,
         })
     }
 
     /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
     pub fn keyboard_enhancement_supported(&self) -> bool {
         self.keyboard_enhancement_supported
+    }
+
+    /// Whether standalone modifier press/release reporting is active.
+    pub fn modifier_key_lifecycle_enabled(&self) -> bool {
+        self.modifier_key_lifecycle_enabled
     }
 }
 
@@ -473,6 +493,11 @@ impl TuiDriverHandle {
     pub fn keyboard_enhancement_supported(&self) -> bool {
         self._guard.keyboard_enhancement_supported()
     }
+
+    /// Whether standalone modifier press/release reporting is active.
+    pub fn modifier_key_lifecycle_enabled(&self) -> bool {
+        self._guard.modifier_key_lifecycle_enabled()
+    }
 }
 
 /// Starts a headless TUI session that draws `root_view` and feeds terminal input
@@ -496,8 +521,9 @@ pub fn spawn_tui_driver<T: TuiView>(
     ctx: &mut AppContext,
     window_id: WindowId,
     root_view: ViewHandle<T>,
+    report_modifier_key_lifecycle: bool,
 ) -> io::Result<TuiDriverHandle> {
-    let guard = TuiTerminalGuard::enter()?;
+    let guard = TuiTerminalGuard::enter(report_modifier_key_lifecycle)?;
 
     // The presenter + renderer + terminal live behind an `Rc<RefCell<_>>` owned
     // by the invalidation callback. The input path never borrows it, so painting
@@ -645,11 +671,13 @@ trait TerminalModeControl {
 
 struct CrosstermModeControl {
     keyboard_enhancement_supported: bool,
+    report_modifier_key_lifecycle: bool,
 }
 
 fn enter_terminal_screen(
     out: &mut impl Write,
     keyboard_enhancement_supported: bool,
+    report_modifier_key_lifecycle: bool,
 ) -> io::Result<()> {
     execute!(
         out,
@@ -667,19 +695,13 @@ fn enter_terminal_screen(
     // reader starts because crossterm's query cannot run concurrently with
     // event polling.
     if keyboard_enhancement_supported {
-        // Reporting all keys is required for standalone modifier events. With
-        // that mode active, Crossterm 0.29 needs alternate keys to recover the
-        // text produced by shifted keys because it does not expose Kitty's
-        // associated-text field.
-        let _ = execute!(
-            out,
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-            )
-        );
+        let mut flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
+        if report_modifier_key_lifecycle {
+            flags |= KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+        }
+        let _ = execute!(out, PushKeyboardEnhancementFlags(flags));
     }
     Ok(())
 }
@@ -705,7 +727,11 @@ impl TerminalModeControl for CrosstermModeControl {
     fn enter(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
-        if let Err(error) = enter_terminal_screen(&mut out, self.keyboard_enhancement_supported) {
+        if let Err(error) = enter_terminal_screen(
+            &mut out,
+            self.keyboard_enhancement_supported,
+            self.report_modifier_key_lifecycle,
+        ) {
             let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
             let _ = terminal::disable_raw_mode();
             return Err(error);

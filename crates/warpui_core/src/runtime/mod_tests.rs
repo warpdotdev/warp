@@ -301,9 +301,12 @@ fn shift_lifecycle_restores_shift_to_alternate_key_events() {
             )))
             .expect("shift press");
 
-        for char in ['A', '!'] {
+        for (char, expected_shifted_key_without_base) in [('A', false), ('!', true)] {
             let Some(TuiEvent::KeyDown {
-                keystroke, chars, ..
+                keystroke,
+                chars,
+                details,
+                ..
             }) = screen.convert_event(CrosstermEvent::Key(KeyEvent::new(
                 KeyCode::Char(char),
                 KeyModifiers::CONTROL,
@@ -315,6 +318,10 @@ fn shift_lifecycle_restores_shift_to_alternate_key_events() {
             assert!(keystroke.shift);
             assert_eq!(keystroke.key, char.to_string());
             assert_eq!(chars, char.to_string());
+            assert_eq!(
+                details.shifted_key_without_base,
+                expected_shifted_key_without_base
+            );
         }
 
         screen
@@ -646,7 +653,7 @@ impl TerminalModeControl for RecordingControl {
 #[test]
 fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     let mut enter_output = Vec::new();
-    enter_terminal_screen(&mut enter_output, true).unwrap();
+    enter_terminal_screen(&mut enter_output, true, true).unwrap();
     assert!(
         enter_output
             .windows(b"\x1b[?2004h".len())
@@ -667,7 +674,7 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
 #[test]
 fn terminal_screen_lifecycle_toggles_focus_reporting() {
     let mut enter_output = Vec::new();
-    enter_terminal_screen(&mut enter_output, true).unwrap();
+    enter_terminal_screen(&mut enter_output, true, true).unwrap();
     assert!(
         enter_output
             .windows(b"\x1b[?1004h".len())
@@ -696,7 +703,7 @@ fn terminal_screen_lifecycle_toggles_focus_reporting() {
 #[test]
 fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
     let mut enter_output = Vec::new();
-    enter_terminal_screen(&mut enter_output, true).unwrap();
+    enter_terminal_screen(&mut enter_output, true, true).unwrap();
 
     let mut leave_output = Vec::new();
     leave_terminal_screen(&mut leave_output, true).unwrap();
@@ -719,9 +726,31 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
 }
 
 #[test]
+fn terminal_screen_lifecycle_can_skip_all_key_reporting() {
+    let mut enter_output = Vec::new();
+    enter_terminal_screen(&mut enter_output, true, false).unwrap();
+
+    #[cfg(not(windows))]
+    {
+        assert!(
+            enter_output
+                .windows(b"\x1b[>3u".len())
+                .any(|window| window == b"\x1b[>3u"),
+            "compatibility mode should retain safe keyboard enhancements"
+        );
+        assert!(
+            !enter_output
+                .windows(b"\x1b[>15u".len())
+                .any(|window| window == b"\x1b[>15u"),
+            "compatibility mode should not request all-key reporting"
+        );
+    }
+}
+
+#[test]
 fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
     let mut enter_output = Vec::new();
-    enter_terminal_screen(&mut enter_output, false).unwrap();
+    enter_terminal_screen(&mut enter_output, false, true).unwrap();
     assert!(
         !enter_output
             .windows(b"\x1b[>15u".len())

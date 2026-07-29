@@ -21,7 +21,7 @@ use warpui_core::{App, AppContext};
 
 use super::{
     ForwardedPtyInput, MouseReportPolicy, TuiTerminalContentElement, forwarded_pty_input_for_event,
-    mouse_event_to_pty_bytes, normalize_paste_text, paste_bytes_from_normalized,
+    mouse_event_to_pty_bytes, normalize_paste_text, paste_bytes_from_normalized, pty_keystroke,
 };
 
 /// Builds retained screen bounds anchored at `(x, y)`.
@@ -39,6 +39,22 @@ impl ModeProvider for MouseModeProvider {
     fn is_term_mode_set(&self, _mode: TermMode) -> bool {
         false
     }
+}
+#[test]
+fn shifted_symbol_without_base_uses_produced_character_semantics_for_pty() {
+    let keystroke = Keystroke::parse("ctrl-shift-!").unwrap();
+    let details = KeyEventDetails {
+        key_without_modifiers: Some("!".to_owned()),
+        shifted_key_without_base: true,
+        ..Default::default()
+    };
+
+    let (fallback, key_without_modifiers) = pty_keystroke(&keystroke, &details);
+
+    assert!(fallback.ctrl);
+    assert!(!fallback.shift);
+    assert_eq!(fallback.key, "!");
+    assert_eq!(key_without_modifiers, None);
 }
 
 fn forwarded_input<'a>(

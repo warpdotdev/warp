@@ -35,6 +35,8 @@ use warpui_core::elements::tui::{
     TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
     TuiScreenRect, TuiSize,
 };
+use warpui_core::event::KeyEventDetails;
+use warpui_core::keymap::Keystroke;
 
 use crate::terminal_session_view::TuiTerminalSessionAction;
 /// Which terminal mouse reports the active process and user settings allow.
@@ -196,6 +198,22 @@ struct ForwardedPtyInput<'a> {
     possible_typeahead: Option<Cow<'a, str>>,
 }
 
+fn pty_keystroke<'a>(
+    keystroke: &'a Keystroke,
+    details: &'a KeyEventDetails,
+) -> (Cow<'a, Keystroke>, Option<&'a str>) {
+    if details.shifted_key_without_base {
+        let mut fallback = keystroke.clone();
+        fallback.shift = false;
+        (Cow::Owned(fallback), None)
+    } else {
+        (
+            Cow::Borrowed(keystroke),
+            details.key_without_modifiers.as_deref(),
+        )
+    }
+}
+
 /// Converts one semantic input event into the PTY bytes and any text that the
 /// shell may echo as typeahead.
 fn forwarded_pty_input_for_event<'a>(
@@ -209,9 +227,10 @@ fn forwarded_pty_input_for_event<'a>(
             details,
             is_composing: false,
         } => {
+            let (keystroke, key_without_modifiers) = pty_keystroke(keystroke, details);
             let bytes = KeystrokeWithDetails {
-                keystroke,
-                key_without_modifiers: details.key_without_modifiers.as_deref(),
+                keystroke: keystroke.as_ref(),
+                key_without_modifiers,
                 chars: Some(chars.as_str()),
             }
             .to_pty_bytes(model)?;

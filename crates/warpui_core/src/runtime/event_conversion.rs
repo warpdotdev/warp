@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use instant::Instant;
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
-    MouseButton, MouseEvent, MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+    ModifierKeyCode, MouseButton, MouseEvent, MouseEventKind,
 };
 
 use crate::elements::tui::{TuiEvent, TuiPoint, TuiPointExt, TuiScrollDelta};
@@ -120,7 +120,7 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
             meta: event.modifiers.contains(KeyModifiers::META),
             key,
         },
-        chars: produced_chars(event.code, event.modifiers),
+        chars: produced_chars(event.code, event.modifiers, event.state),
         details: KeyEventDetails {
             key_without_modifiers: key_without_modifiers(event.code),
             ..Default::default()
@@ -136,27 +136,32 @@ pub(crate) struct ShiftKeyTracker {
 }
 
 impl ShiftKeyTracker {
-    pub(crate) fn update(&mut self, event: &mut CrosstermEvent) {
+    pub(crate) fn update(&mut self, event: &mut CrosstermEvent) -> bool {
         if matches!(event, CrosstermEvent::FocusLost) {
             self.left_pressed = false;
             self.right_pressed = false;
-            return;
+            return false;
         }
         let CrosstermEvent::Key(key_event) = event else {
-            return;
+            return false;
         };
         match key_event.code {
             KeyCode::Modifier(ModifierKeyCode::LeftShift) => {
                 update_pressed(&mut self.left_pressed, key_event.kind);
+                false
             }
             KeyCode::Modifier(ModifierKeyCode::RightShift) => {
                 update_pressed(&mut self.right_pressed, key_event.kind);
+                false
             }
-            KeyCode::Modifier(_) => {}
-            _ if self.left_pressed || self.right_pressed => {
+            KeyCode::Modifier(_) => false,
+            _ if (self.left_pressed || self.right_pressed)
+                && !key_event.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
                 key_event.modifiers.insert(KeyModifiers::SHIFT);
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 }
@@ -188,10 +193,18 @@ fn modifier_key(code: ModifierKeyCode) -> Option<PhysicalKeyCode> {
     }
 }
 
-fn produced_chars(code: KeyCode, modifiers: KeyModifiers) -> String {
+fn produced_chars(code: KeyCode, modifiers: KeyModifiers, state: KeyEventState) -> String {
     let KeyCode::Char(char) = code else {
         return String::new();
     };
+    if char.is_ascii_alphabetic() && state.contains(KeyEventState::CAPS_LOCK) {
+        return if modifiers.contains(KeyModifiers::SHIFT) {
+            char.to_ascii_lowercase()
+        } else {
+            char.to_ascii_uppercase()
+        }
+        .to_string();
+    }
     if modifiers.contains(KeyModifiers::SHIFT) {
         return char.to_uppercase().collect();
     }
