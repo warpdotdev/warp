@@ -2137,7 +2137,10 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
                     .contains(SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG)
             );
             view.suggestions_mode.update(ctx, |mode, ctx| {
-                mode.set_mode(TuiInputSuggestionsMode::Shortcuts, ctx);
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                    ctx,
+                );
             });
             assert!(
                 !view
