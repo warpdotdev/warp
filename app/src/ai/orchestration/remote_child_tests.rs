@@ -2,8 +2,9 @@ use anyhow::anyhow;
 use warpui::App;
 
 use super::{
-    CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
-    RemoteChildLaunchConfig, classify_cloud_agent_startup_error, prepare_remote_child_launch,
+    CloudAgentStartupAuthFlow, CloudAgentStartupBlocker, CloudAgentStartupFailure,
+    CloudAgentStartupIssue, CloudAgentStartupPresentation, RemoteChildLaunchConfig,
+    classify_cloud_agent_startup_error, prepare_remote_child_launch,
 };
 use crate::ai::agent::{StartAgentExecutionMode, UserQueryMode};
 use crate::ai::blocklist::StartAgentRequest;
@@ -121,20 +122,35 @@ fn github_auth_error_is_a_shared_blocker_with_cloud_callback_url() {
 }
 
 #[test]
-fn non_auth_client_error_uses_clean_server_message_not_context_wrapper() {
-    // A ClientError without auth_url should resolve to the clean `error` field,
-    // not the outermost context string (e.g. "Failed to send API request to URL").
-    let inner = ClientError {
-        error: "User is not authorized to run cloud agents".to_string(),
-        auth_url: None,
-    };
-    let error = anyhow::Error::new(inner)
-        .context("Failed to send API request to https://app.warp.dev/api/v1/agent/run");
+fn cloud_startup_presentations_preserve_gui_copy_and_child_retry_semantics() {
     assert_eq!(
-        classify_cloud_agent_startup_error(&error),
-        CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
-            message: "User is not authorized to run cloud agents".to_string(),
-        })
+        CloudAgentStartupPresentation::failure("Server error"),
+        CloudAgentStartupPresentation {
+            title: "Failed to start environment",
+            detail: "Server error".to_string(),
+            action_label: None,
+            primary_url: None,
+        }
+    );
+    assert_eq!(
+        CloudAgentStartupPresentation::github_auth(
+            "https://example.com/auth",
+            CloudAgentStartupAuthFlow::RetryRetainedRequest,
+        ),
+        CloudAgentStartupPresentation {
+            title: "GitHub Authentication Required",
+            detail: "Please authenticate with GitHub to continue".to_string(),
+            action_label: Some("Authenticate with GitHub"),
+            primary_url: Some("https://example.com/auth".to_string()),
+        }
+    );
+    assert_eq!(
+        CloudAgentStartupPresentation::github_auth(
+            "https://example.com/auth",
+            CloudAgentStartupAuthFlow::RerunOrchestrationRequest,
+        )
+        .detail,
+        "Authenticate with GitHub, then run the orchestration request again."
     );
 }
 

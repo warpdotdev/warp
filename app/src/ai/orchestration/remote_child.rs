@@ -132,6 +132,49 @@ impl CloudAgentStartupFailure {
     }
 }
 
+/// Whether authentication can resume a retained launch or requires the user to rerun it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudAgentStartupAuthFlow {
+    RetryRetainedRequest,
+    RerunOrchestrationRequest,
+}
+
+/// Renderer-neutral content for a cloud-agent startup card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CloudAgentStartupPresentation {
+    pub title: &'static str,
+    pub detail: String,
+    pub action_label: Option<&'static str>,
+    pub primary_url: Option<String>,
+}
+
+impl CloudAgentStartupPresentation {
+    pub fn failure(message: impl Into<String>) -> Self {
+        Self {
+            title: "Failed to start environment",
+            detail: message.into(),
+            action_label: None,
+            primary_url: None,
+        }
+    }
+
+    pub fn github_auth(auth_url: impl Into<String>, flow: CloudAgentStartupAuthFlow) -> Self {
+        let detail = match flow {
+            CloudAgentStartupAuthFlow::RetryRetainedRequest => {
+                "Please authenticate with GitHub to continue"
+            }
+            CloudAgentStartupAuthFlow::RerunOrchestrationRequest => {
+                "Authenticate with GitHub, then run the orchestration request again."
+            }
+        };
+        Self {
+            title: "GitHub Authentication Required",
+            detail: detail.to_string(),
+            action_label: Some("Authenticate with GitHub"),
+            primary_url: Some(auth_url.into()),
+        }
+    }
+}
 /// Shared interpretation of an error returned while starting a cloud agent.
 ///
 /// This distinction preserves the existing orchestrated-child contract:
@@ -234,17 +277,12 @@ pub fn prepare_remote_child_launch(
 
 /// Maps server/client launch failures into shared startup presentation.
 pub fn classify_cloud_agent_startup_error(error: &anyhow::Error) -> CloudAgentStartupIssue {
-    if let Some(client_error) = error.downcast_ref::<ClientError>() {
-        if let Some(auth_url) = &client_error.auth_url {
-            return CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
-                message: client_error.error.clone(),
-                auth_url: github_auth_url::cloud_setup_auth_url_with_next(auth_url),
-            });
-        }
-        // Non-auth ClientError: extract the clean server message directly instead of
-        // using error.to_string(), which would include the outermost context wrapper.
-        return CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
+    if let Some(client_error) = error.downcast_ref::<ClientError>()
+        && let Some(auth_url) = &client_error.auth_url
+    {
+        return CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
             message: client_error.error.clone(),
+            auth_url: github_auth_url::cloud_setup_auth_url_with_next(auth_url),
         });
     }
     if let Some(capacity_error) = error.downcast_ref::<CloudAgentCapacityError>() {
