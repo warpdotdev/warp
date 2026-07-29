@@ -124,8 +124,6 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
-        is_invite_link_enabled: false,
-        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     };
@@ -257,8 +255,6 @@ fn team_for_test() -> Team {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
-        is_invite_link_enabled: false,
-        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     }
@@ -1079,8 +1075,6 @@ fn test_joining_team_moves_objects() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
-        is_invite_link_enabled: false,
-        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     };
@@ -1267,8 +1261,6 @@ fn test_leaving_team_moves_objects() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
-        is_invite_link_enabled: false,
-        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     };

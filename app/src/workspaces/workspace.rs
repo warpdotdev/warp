@@ -1066,13 +1066,39 @@ pub struct TeamSettings {
     pub team_byo: Option<TeamByoSettings>,
 }
 
+impl TeamSettings {
+    /// Decodes a cached team-settings JSON row, handling both the current shape
+    /// and the legacy shape.
+    ///
+    /// Rows written by releases before teams had their own effective settings
+    /// serialized the team's `WorkspaceSettings` directly at the top level, which
+    /// carries an `is_invite_link_enabled` key that the current `TeamSettings`
+    /// shape never has. Deserializing such a row straight into `TeamSettings`
+    /// would "succeed" (every field is defaulted) but silently drop all cached
+    /// LLM/policy values. This detects the legacy shape by that marker key and
+    /// migrates it via [`From<WorkspaceSettings>`] so cached values survive until
+    /// the next metadata refresh.
+    pub fn from_cached_json(json: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(json).ok()?;
+        if value.get("is_invite_link_enabled").is_some() {
+            let legacy: WorkspaceSettings = serde_json::from_value(value).ok()?;
+            Some(legacy.into())
+        } else {
+            serde_json::from_value(value).ok()
+        }
+    }
+}
+
 impl From<WorkspaceSettings> for TeamSettings {
     /// Migrates a legacy cached `WorkspaceSettings` (the shape the team settings
     /// cache stored before teams had their own effective settings) into a
     /// `TeamSettings`. The workspace layer had no enforcement/split metadata, so
     /// enforcement bits default to `false` and the split entry lists are empty;
     /// the merged values are carried over so cached LLM/policy values survive
-    /// until the next metadata refresh.
+    /// until the next metadata refresh. The workspace-scoped
+    /// `is_invite_link_enabled` / `is_discoverable` flags are intentionally
+    /// dropped — they are not part of `TeamSettings` and are read from the
+    /// workspace settings at their call sites.
     fn from(ws: WorkspaceSettings) -> Self {
         let path_strings = |paths: Option<Vec<PathBuf>>| SplitListSetting {
             values: paths

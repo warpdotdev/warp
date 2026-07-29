@@ -255,8 +255,6 @@ fn team_for_test() -> Team {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
-        is_invite_link_enabled: false,
-        is_discoverable: false,
         is_eligible_for_discovery: false,
         has_billing_history: false,
     }

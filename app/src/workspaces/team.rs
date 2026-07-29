@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use super::workspace::{
     BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings, WorkspaceInviteCode,
-    WorkspaceSettings,
 };
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
@@ -88,67 +87,19 @@ pub struct Team {
     pub stripe_customer_id: Option<String>,
     /// The team's effective settings, sourced from the server's `Team.settings`.
     pub settings: TeamSettings,
-    /// Whether invite links are enabled for the team. This is a workspace-level
-    /// setting (`WorkspaceSettings::is_invite_link_enabled`) surfaced on the team.
-    pub is_invite_link_enabled: bool,
-    /// Whether the team is discoverable. This is a workspace-level setting
-    /// (`WorkspaceSettings::is_discoverable`) surfaced on the team.
-    pub is_discoverable: bool,
     /// If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
     pub is_eligible_for_discovery: bool,
     pub has_billing_history: bool,
-}
-
-/// Serialized shape of the team settings stored in the local sqlite cache.
-///
-/// Wraps the effective [`TeamSettings`] together with the two workspace-level
-/// flags surfaced on [`Team`] so a cache round-trip preserves them.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct TeamSettingsCache {
-    #[serde(default)]
-    pub settings: TeamSettings,
-    #[serde(default)]
-    pub is_invite_link_enabled: bool,
-    #[serde(default)]
-    pub is_discoverable: bool,
-}
-
-impl TeamSettingsCache {
-    /// Decodes a cached team-settings JSON row, handling both the current shape
-    /// and the legacy shape.
-    ///
-    /// Rows written by releases before teams had their own effective settings
-    /// serialized the team's `WorkspaceSettings` directly at the top level, which
-    /// has no `settings` key. Deserializing those directly into
-    /// `TeamSettingsCache` would "succeed" (every field is `#[serde(default)]`)
-    /// but silently drop all cached LLM/policy values. This detects the legacy
-    /// shape by the absence of the `settings` key and migrates it — including the
-    /// `is_invite_link_enabled` / `is_discoverable` flags — so cached values
-    /// survive until the next metadata refresh.
-    pub fn from_cached_json(json: &str) -> Option<Self> {
-        let value: serde_json::Value = serde_json::from_str(json).ok()?;
-        if value.get("settings").is_some() {
-            serde_json::from_value(value).ok()
-        } else {
-            let legacy: WorkspaceSettings = serde_json::from_value(value).ok()?;
-            Some(Self {
-                is_invite_link_enabled: legacy.is_invite_link_enabled,
-                is_discoverable: legacy.is_discoverable,
-                settings: legacy.into(),
-            })
-        }
-    }
 }
 
 impl Team {
     pub fn from_local_cache(
         uid: ServerId,
         name: String,
-        settings_cache: Option<TeamSettingsCache>,
+        settings: Option<TeamSettings>,
         billing_metadata: Option<BillingMetadata>,
         members: Option<Vec<TeamMember>>,
     ) -> Self {
-        let settings_cache = settings_cache.unwrap_or_default();
         Self {
             uid,
             name,
@@ -158,9 +109,7 @@ impl Team {
             invite_link_domain_restrictions: Default::default(),
             billing_metadata: billing_metadata.unwrap_or_default(),
             stripe_customer_id: Default::default(),
-            settings: settings_cache.settings,
-            is_invite_link_enabled: settings_cache.is_invite_link_enabled,
-            is_discoverable: settings_cache.is_discoverable,
+            settings: settings.unwrap_or_default(),
             is_eligible_for_discovery: false,
             has_billing_history: false,
         }

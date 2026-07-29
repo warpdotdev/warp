@@ -88,7 +88,6 @@ mod team_settings_conversion {
         ActionPermission, ComputerUsePermission, WriteToPtyPermission,
     };
     use crate::workspaces::gql_convert::team_settings_from_gql;
-    use crate::workspaces::team::TeamSettingsCache;
     use crate::workspaces::workspace::{
         AdminEnablementSetting, TeamSettings, UgcCollectionEnablementSetting, WorkspaceSettings,
     };
@@ -210,71 +209,6 @@ mod team_settings_conversion {
         }
     }
 
-    /// Builds a minimal `GqlWorkspaceSettings` with the given distinctive values.
-    fn workspace_settings_with(
-        llm_enabled: bool,
-        codebase_context: gqlws::AdminEnablementSetting,
-        is_invite_link_enabled: bool,
-        is_discoverable: bool,
-    ) -> gqlws::WorkspaceSettings {
-        gqlws::WorkspaceSettings {
-            is_discoverable,
-            is_invite_link_enabled,
-            llm_settings: gqlws::LlmSettings {
-                enabled: llm_enabled,
-                host_configs: vec![],
-            },
-            team_byo: None,
-            telemetry_settings: gqlws::TelemetrySettings {
-                force_enabled: false,
-            },
-            ugc_collection_settings: gqlws::UgcCollectionSettings {
-                setting: gqlws::UgcCollectionEnablementSetting::RespectUserSetting,
-            },
-            cloud_conversation_storage_settings: gqlws::CloudConversationStorageSettings {
-                setting: gqlws::AdminEnablementSetting::RespectUserSetting,
-            },
-            ai_permissions_settings: gqlws::AiPermissionsSettings {
-                allow_ai_in_remote_sessions: false,
-                remote_session_regex_list: vec![],
-            },
-            link_sharing_settings: gqlws::LinkSharingSettings {
-                anyone_with_link_sharing_enabled: false,
-                direct_link_sharing_enabled: false,
-            },
-            secret_redaction_settings: gqlws::SecretRedactionSettings {
-                enabled: false,
-                regexes: vec![],
-            },
-            ai_autonomy_settings: gqlws::AiAutonomySettings {
-                apply_code_diffs_setting: None,
-                read_files_setting: None,
-                read_files_allowlist: None,
-                create_plans_setting: None,
-                execute_commands_setting: None,
-                execute_commands_allowlist: None,
-                execute_commands_denylist: None,
-                write_to_pty_setting: None,
-                computer_use_setting: None,
-            },
-            usage_based_pricing_settings: gqlws::UsageBasedPricingSettings {
-                enabled: false,
-                max_monthly_spend_cents: None,
-            },
-            addon_credits_settings: gqlws::AddonCreditsSettings {
-                auto_reload_enabled: false,
-                max_monthly_spend_cents: None,
-                selected_auto_reload_credit_denomination: None,
-            },
-            codebase_context_settings: gqlws::CodebaseContextSettings {
-                enabled: false,
-                setting: codebase_context,
-            },
-            sandboxed_agent_settings: None,
-            ambient_agent_settings: None,
-        }
-    }
-
     #[test]
     fn reads_effective_values_and_preserves_metadata() {
         let settings = TeamSettings::from(sample_gql_team_settings());
@@ -392,36 +326,35 @@ mod team_settings_conversion {
     }
 
     #[test]
-    fn from_gql_sources_settings_from_team_and_flags_from_workspace() {
-        // Team payload: codebase_context = Enable, llm enabled = true.
-        let team_settings = sample_gql_team_settings();
-        // Workspace payload deliberately DIFFERENT: codebase_context = Disable and
-        // llm disabled, but invite-link + discoverability enabled.
-        let workspace_settings =
-            workspace_settings_with(false, gqlws::AdminEnablementSetting::Disable, true, true);
+    fn team_settings_from_gql_uses_team_payload() {
+        // The team payload carries distinctive values (llm enabled, codebase
+        // context Enable, ugc enforced). `team_settings_from_gql` derives
+        // `Team.settings` from this payload only — it takes just the team settings,
+        // so it structurally cannot clone workspace settings. This is the parse
+        // boundary replacing the old `Team::organization_settings` clone.
+        let settings = team_settings_from_gql(sample_gql_team_settings());
 
-        let (settings, is_invite_link_enabled, is_discoverable) =
-            team_settings_from_gql(&workspace_settings, team_settings);
-
-        // Effective settings come from the TEAM payload, not the workspace.
         assert!(
             settings.llm_settings.enabled,
-            "Team.settings must be sourced from the team payload, not cloned from workspace settings"
+            "Team.settings must be sourced from the team payload"
         );
         assert_eq!(
             settings.codebase_context.value,
             AdminEnablementSetting::Enable,
-            "team codebase_context value must win over the workspace value"
+            "team codebase_context value must flow through from the team payload"
         );
-        // The two flags come from the WORKSPACE settings (not on TeamSettings).
-        assert!(is_invite_link_enabled);
-        assert!(is_discoverable);
+        assert!(
+            settings.ugc_collection.is_enforced_by_workspace,
+            "enforcement metadata from the team payload must be preserved"
+        );
     }
 
     #[test]
     fn migrates_legacy_workspace_settings_cache_row() {
         // A row written by the previous release: a serialized `WorkspaceSettings`
-        // with the old fields at the top level (no `settings` key).
+        // with the old fields at the top level, including the workspace-level
+        // `is_invite_link_enabled` marker key that the current `TeamSettings`
+        // shape never has.
         let mut legacy = WorkspaceSettings {
             is_invite_link_enabled: true,
             is_discoverable: true,
@@ -432,33 +365,30 @@ mod team_settings_conversion {
         legacy.enable_warp_attribution = AdminEnablementSetting::Disable;
         let legacy_json = serde_json::to_string(&legacy).expect("serialize legacy row");
 
-        let cache = TeamSettingsCache::from_cached_json(&legacy_json)
+        let settings = TeamSettings::from_cached_json(&legacy_json)
             .expect("legacy WorkspaceSettings cache row should decode, not fall back to default");
 
-        // Cached LLM / policy values and the two flags survive the migration.
+        // Cached LLM / policy values survive the migration (they must not be
+        // silently dropped). The workspace-level invite-link/discoverability flags
+        // are intentionally not part of TeamSettings and are dropped here.
         assert!(
-            cache.settings.llm_settings.enabled,
+            settings.llm_settings.enabled,
             "cached custom-LLM value must not be silently lost"
         );
-        assert!(cache.is_invite_link_enabled);
-        assert!(cache.is_discoverable);
         assert_eq!(
-            cache.settings.codebase_context.value,
+            settings.codebase_context.value,
             AdminEnablementSetting::Enable
         );
         assert_eq!(
-            cache.settings.enable_warp_attribution,
+            settings.enable_warp_attribution,
             AdminEnablementSetting::Disable
         );
 
-        // The current cache shape (which has a nested `settings` key) still decodes.
-        let current = TeamSettingsCache {
-            is_invite_link_enabled: true,
-            ..Default::default()
-        };
-        let current_json = serde_json::to_string(&current).expect("serialize current row");
-        let decoded = TeamSettingsCache::from_cached_json(&current_json)
+        // The current cache shape (a serialized TeamSettings) still decodes.
+        let current_json =
+            serde_json::to_string(&settings).expect("serialize current TeamSettings row");
+        let decoded = TeamSettings::from_cached_json(&current_json)
             .expect("current cache shape should decode");
-        assert!(decoded.is_invite_link_enabled);
+        assert!(decoded.llm_settings.enabled);
     }
 }

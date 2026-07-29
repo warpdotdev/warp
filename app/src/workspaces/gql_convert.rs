@@ -1221,28 +1221,20 @@ impl From<GqlTeamSettings> for TeamSettings {
     }
 }
 
-/// Derives a team's effective settings plus the two workspace-scoped flags
-/// surfaced on [`Team`] from the GraphQL payloads. `settings` always comes from
-/// the **team** payload; `is_invite_link_enabled` / `is_discoverable` always come
-/// from the **workspace** settings (they are not part of `TeamSettings`).
+/// Derives a team's effective settings from the GraphQL payload. The settings
+/// always come from the **team** payload (`gql_team.settings`), never from a
+/// clone of the workspace settings. Workspace-scoped flags such as
+/// invite-link/discoverability are intentionally not part of `TeamSettings` and
+/// are read from the workspace settings at their call sites.
 ///
-/// Extracted from [`Team::from_gql`] so the settings-vs-flags sourcing is
+/// Extracted from [`Team::from_gql`] so the team-payload sourcing is
 /// unit-testable without constructing a full `GqlWorkspace`.
-pub(crate) fn team_settings_from_gql(
-    workspace_settings: &GqlWorkspaceSettings,
-    team_settings: GqlTeamSettings,
-) -> (TeamSettings, bool, bool) {
-    (
-        team_settings.into(),
-        workspace_settings.is_invite_link_enabled,
-        workspace_settings.is_discoverable,
-    )
+pub(crate) fn team_settings_from_gql(team_settings: GqlTeamSettings) -> TeamSettings {
+    team_settings.into()
 }
 
 impl Team {
     pub fn from_gql(gql_workspace: GqlWorkspace, gql_team: GqlTeam) -> Team {
-        let (settings, is_invite_link_enabled, is_discoverable) =
-            team_settings_from_gql(&gql_workspace.settings, gql_team.settings);
         Self {
             // TEAM FIELDS
             // These fields will persist in the Team rust type even after we finish
@@ -1281,12 +1273,11 @@ impl Team {
                 .stripe_customer_id
                 .as_ref()
                 .map(|id| id.clone().into_inner()),
-            // Team-effective settings come from the team payload; invite-link /
-            // discoverability are workspace-level and come from the workspace
-            // settings (see `team_settings_from_gql`).
-            settings,
-            is_invite_link_enabled,
-            is_discoverable,
+            // Team-effective settings come from the team payload, not from a
+            // clone of the workspace settings. Invite-link / discoverability are
+            // workspace-level and are read from the workspace settings at their
+            // call sites, so they are not surfaced on `Team`.
+            settings: team_settings_from_gql(gql_team.settings),
             is_eligible_for_discovery: gql_workspace.is_eligible_for_discovery,
             has_billing_history: gql_workspace.has_billing_history,
         }
