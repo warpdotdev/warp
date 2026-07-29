@@ -120,6 +120,88 @@ impl LogoGlyph {
         }
     }
 }
+
+fn starfield_emitter_x(size: TuiSize, leading_reserved_cols: u16, logo_panel_cols: u16) -> f64 {
+    let available_cols = size.width.saturating_sub(leading_reserved_cols);
+    if available_cols < MIN_ANIMATION_COLS {
+        return (f64::from(size.width) - 1.0) / 2.0;
+    }
+    let panel_cols = available_cols.min(logo_panel_cols);
+    let leading_spacer_cols = available_cols.saturating_sub(panel_cols).div_ceil(2);
+    f64::from(leading_reserved_cols + leading_spacer_cols) + (f64::from(panel_cols) - 1.0) / 2.0
+}
+
+pub(crate) struct ZeroStateStarfieldElement {
+    clock: AnimationClock,
+    style: TuiStyle,
+    leading_reserved_cols: u16,
+    logo_panel_cols: u16,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
+}
+
+impl ZeroStateStarfieldElement {
+    pub(crate) fn new(
+        clock: AnimationClock,
+        style: TuiStyle,
+        leading_reserved_cols: u16,
+        logo_panel_cols: u16,
+    ) -> Self {
+        Self {
+            clock,
+            style,
+            leading_reserved_cols,
+            logo_panel_cols,
+            size: None,
+            origin: None,
+        }
+    }
+}
+
+impl TuiElement for ZeroStateStarfieldElement {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let size = constraint.max;
+        self.size = Some(size);
+        size
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else { return };
+        let mut frame = LogoFrame::new(size);
+        draw_background_stars_from(
+            &mut frame,
+            self.clock.elapsed(),
+            starfield_emitter_x(size, self.leading_reserved_cols, self.logo_panel_cols),
+        );
+        for (x, y, cell) in frame.iter_cells() {
+            if let Some(destination) = surface.cell_mut(origin.offset(x as i32, y as i32)) {
+                destination
+                    .set_symbol(cell.glyph.as_str())
+                    .set_style(self.style);
+            }
+        }
+        ctx.repaint_after(REPAINT_INTERVAL);
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LogoCell {
     surface: LogoSurface,
@@ -176,6 +258,7 @@ pub struct ZeroStateAnimationElement {
     clock: AnimationClock,
     config: Arc<ZeroStateAnimationConfig>,
     styles: WarpLogoStyles,
+    draw_background_stars: bool,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
@@ -190,9 +273,15 @@ impl ZeroStateAnimationElement {
             clock,
             config,
             styles,
+            draw_background_stars: true,
             size: None,
             origin: None,
         }
+    }
+
+    pub(crate) fn without_background_stars(mut self) -> Self {
+        self.draw_background_stars = false;
+        self
     }
 }
 
@@ -222,7 +311,12 @@ impl TuiElement for ZeroStateAnimationElement {
     ) {
         self.origin = Some(ctx.scene_point(origin));
         let Some(size) = self.size else { return };
-        let Some(frame) = object_frame_at(self.clock.elapsed(), size, &self.config) else {
+        let Some(frame) = object_frame_at_with_background(
+            self.clock.elapsed(),
+            size,
+            &self.config,
+            self.draw_background_stars,
+        ) else {
             return;
         };
 
@@ -255,10 +349,20 @@ pub(crate) fn logo_frame_at(elapsed: Duration, size: TuiSize) -> Option<LogoFram
     object_frame_at(elapsed, size, &ZeroStateAnimationConfig::default())
 }
 
+#[cfg(test)]
 fn object_frame_at(
     elapsed: Duration,
     size: TuiSize,
     config: &ZeroStateAnimationConfig,
+) -> Option<LogoFrame> {
+    object_frame_at_with_background(elapsed, size, config, true)
+}
+
+fn object_frame_at_with_background(
+    elapsed: Duration,
+    size: TuiSize,
+    config: &ZeroStateAnimationConfig,
+    draw_stars: bool,
 ) -> Option<LogoFrame> {
     let cell_aspect_ratio = config.shape.cell_aspect_ratio();
     let (logo_cols, logo_rows) = fitted_logo_size(size, cell_aspect_ratio)?;
@@ -266,7 +370,9 @@ fn object_frame_at(
     let angle = (elapsed.as_secs_f64() % revolution_secs) / revolution_secs * std::f64::consts::TAU;
     let (sin, cos) = angle.sin_cos();
     let mut frame = LogoFrame::new(size);
-    draw_background_stars(&mut frame, elapsed);
+    if draw_stars {
+        draw_background_stars(&mut frame, elapsed);
+    }
     let mut z_buffer = vec![None; usize::from(size.width) * usize::from(size.height)];
 
     let source_cols = usize::from(logo_cols) * SURFACE_SAMPLES;
@@ -362,10 +468,14 @@ fn object_frame_at(
 }
 
 fn draw_background_stars(frame: &mut LogoFrame, elapsed: Duration) {
+    let center_x = (f64::from(frame.size.width) - 1.0) / 2.0;
+    draw_background_stars_from(frame, elapsed, center_x);
+}
+
+fn draw_background_stars_from(frame: &mut LogoFrame, elapsed: Duration, center_x: f64) {
     let width = usize::from(frame.size.width);
     let height = usize::from(frame.size.height);
     let star_count = star_count_for_size(frame.size);
-    let center_x = (f64::from(frame.size.width) - 1.0) / 2.0;
     let center_y = (f64::from(frame.size.height) - 1.0) / 2.0;
     let elapsed = elapsed.as_secs_f64();
 

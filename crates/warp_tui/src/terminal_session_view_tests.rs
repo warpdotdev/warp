@@ -2902,21 +2902,25 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
             "zero-state title should render in the transcript area:\n{}",
             lines.join("\n")
         );
+        // The 32-column animation panel is centered in the 152 columns left
+        // after the 48-column copy region: 48 + (152 - 32) / 2 = 108.
+        let animation_start = 108;
+        let animation_end = 140;
         assert!(
-            lines
-                .iter()
-                .take(28)
-                .any(|line| line.chars().skip(148).any(|character| character != ' ')),
-            "animation content should use columns beyond the former 48 + 100 column cap:\n{}",
+            lines.iter().take(28).any(|line| line
+                .chars()
+                .skip(animation_start)
+                .take(animation_end - animation_start)
+                .any(|character| character != ' ')),
+            "animation content should render in the centered remaining-space panel:\n{}",
             lines.join("\n")
         );
         assert!(
-            lines
-                .iter()
-                .take(28)
-                .skip(20)
-                .any(|line| line.chars().take(48).any(|character| character != ' ')),
-            "animation content should paint beneath the status column:\n{}",
+            lines.iter().take(28).any(|line| line
+                .chars()
+                .skip(animation_end)
+                .any(|character| character != ' ')),
+            "starfield content should extend beyond the centered logo panel:\n{}",
             lines.join("\n")
         );
     });

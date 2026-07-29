@@ -24,7 +24,7 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
-    Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiStack, TuiText,
+    Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiStack, TuiText,
 };
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
@@ -33,7 +33,7 @@ use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 use crate::zero_state_animation::{
     WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent,
-    ZeroStateAnimationElement,
+    ZeroStateAnimationElement, ZeroStateStarfieldElement,
 };
 
 /// Cap on "What's new" bullets, mirroring the compact zero-state mock.
@@ -47,6 +47,9 @@ const MAX_CHANGELOG_BULLETS: usize = 3;
 /// to the full available terminal width without being capped by this constant.
 const LEFT_COLUMN_COLS: u16 = 48;
 
+/// Width of the right-aligned animation region. This keeps the logo secondary
+/// to the copy and input while leaving enough cells for its wireframe detail.
+const ANIMATION_PANEL_COLS: u16 = 32;
 // ---------------------------------------------------------------------------
 // TuiZeroStateView
 // ---------------------------------------------------------------------------
@@ -154,12 +157,67 @@ impl TuiView for TuiZeroStateView {
                 background: builder.muted_text_style(),
             },
         )
+        .without_background_stars()
+        .finish();
+        let starfield = ZeroStateStarfieldElement::new(
+            self.clock,
+            builder.muted_text_style(),
+            LEFT_COLUMN_COLS,
+            ANIMATION_PANEL_COLS,
+        )
         .finish();
         let overlay = build_zero_state_overlay(cwd.as_deref(), &builder, ctx);
-        TuiStack::new().child(animation).child(overlay).finish()
+        build_zero_state_layout(
+            starfield,
+            animation,
+            overlay,
+            builder.transcript_background(),
+        )
     }
 }
 
+/// Centers the animation within the space beside the copy and centers the
+/// opaque copy block vertically. Reserving the copy column before measuring
+/// the animation also hides the artwork when a narrow terminal cannot display
+/// both regions.
+fn build_zero_state_layout(
+    starfield: Box<dyn TuiElement>,
+    animation: Box<dyn TuiElement>,
+    overlay: Box<dyn TuiElement>,
+    background: Color,
+) -> Box<dyn TuiElement> {
+    let copy_column_reservation = TuiConstrainedBox::new(TuiText::new("").finish())
+        .with_min_cols(LEFT_COLUMN_COLS)
+        .with_max_cols(LEFT_COLUMN_COLS)
+        .finish();
+    let animation = TuiConstrainedBox::new(animation)
+        .with_max_cols(ANIMATION_PANEL_COLS)
+        .finish();
+    let animation_region = TuiFlex::row()
+        .flex_child(TuiText::new("").finish())
+        .child(animation)
+        .flex_child(TuiText::new("").finish())
+        .finish();
+    let animation_layer = TuiFlex::row()
+        .child(copy_column_reservation)
+        .flex_child(animation_region)
+        .finish();
+
+    let overlay = TuiContainer::new(overlay)
+        .with_background(background)
+        .finish();
+    let overlay_layer = TuiFlex::column()
+        .flex_child(TuiText::new("").finish())
+        .child(overlay)
+        .flex_child(TuiText::new("").finish())
+        .finish();
+
+    TuiStack::new()
+        .child(starfield)
+        .child(animation_layer)
+        .child(overlay_layer)
+        .finish()
+}
 /// Assembles the text-overlay column placed on top of the animation layer.
 ///
 /// Both [`TuiZeroStateView::render`] and the regression tests call this function so
