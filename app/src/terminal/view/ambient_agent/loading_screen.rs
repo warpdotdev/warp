@@ -19,9 +19,7 @@ use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, WeakViewHandle};
 
 use crate::ai::agent_tips::{AITip, AITipModel};
 use crate::ai::loading::shimmering_warp_loading_text;
-use crate::ai::orchestration::{
-    CloudAgentStartupAuthFlow, CloudAgentStartupPresentation,
-};
+use crate::ai::orchestration::{CloudAgentStartupAuthFlow, CloudAgentStartupPresentation};
 use crate::terminal::view::ambient_agent::CloudModeTip;
 use crate::ui_components::blended_colors;
 use crate::workspaces::user_workspaces::UserWorkspaces;

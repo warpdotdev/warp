@@ -240,8 +240,7 @@ impl TuiCloudRunView {
                 }
             }
             TuiCloudRunStartup::Failed(failure) => {
-                let presentation =
-                    CloudAgentStartupPresentation::failure(failure.message());
+                let presentation = CloudAgentStartupPresentation::failure(failure.message());
                 CloudRunDisplayState {
                     status: ConversationStatus::Error,
                     status_label: presentation.title.to_string(),

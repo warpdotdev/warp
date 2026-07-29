@@ -136,6 +136,7 @@ impl CloudAgentStartupFailure {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloudAgentStartupAuthFlow {
     RetryRetainedRequest,
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     RerunOrchestrationRequest,
 }
 
