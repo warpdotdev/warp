@@ -1041,8 +1041,7 @@ pub struct TeamSandboxedAgentSettings {
 /// [`EnforceableSetting`] / [`SplitListSetting`]) so future admin UI can recover
 /// those details. Unlike `WorkspaceSettings`, it does not carry the
 /// workspace-scoped `is_invite_link_enabled` / `is_discoverable` flags (those
-/// live on [`WorkspaceSettings`] and are surfaced directly on
-/// [`super::team::Team`]).
+/// remain on [`WorkspaceSettings`] and are read from the current workspace).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamSettings {
     pub ugc_collection: EnforceableSetting<UgcCollectionEnablementSetting>,
