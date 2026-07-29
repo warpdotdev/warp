@@ -747,10 +747,14 @@ fn test_vim_linewise_operations_at_eof() {
         let one_line_delete = add_code_editor("one", &mut app);
         vim_user_insert(&one_line_delete, "dd", &mut app);
         assert_eq!(buffer_text(&one_line_delete, &app), "");
+        let default_line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
 
         let one_line_yank = add_code_editor("one", &mut app);
         vim_user_insert(&one_line_yank, "yyP", &mut app);
-        assert_eq!(buffer_text(&one_line_yank, &app), "one\none");
+        assert_eq!(
+            buffer_text(&one_line_yank, &app),
+            format!("one{default_line_ending}one")
+        );
 
         let empty_line_yank = add_code_editor("", &mut app);
         assert_eq!(buffer_text(&empty_line_yank, &app), "");
@@ -764,7 +768,7 @@ fn test_vim_linewise_operations_at_eof() {
         assert_eq!(empty_line_register.text, "\n");
         assert_eq!(empty_line_register.motion_type, MotionType::Linewise);
         vim_user_insert(&empty_line_yank, "P", &mut app);
-        assert_eq!(buffer_text(&empty_line_yank, &app), "\n");
+        assert_eq!(buffer_text(&empty_line_yank, &app), default_line_ending);
     });
 }
 #[test]
