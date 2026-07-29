@@ -5,7 +5,7 @@
 *Summary:* Restoring an orchestration conversation in Warp Agent CLI currently restores only the selected parent conversation. Its child-agent conversations remain absent from the retained TUI session registry, so the existing orchestration tab bar cannot display or navigate to them. Restore every locally known, TUI-displayable descendant when the parent is restored through either `--resume` or the conversations menu, while preserving the current GUI and TUI presentation.
 
 *Key design choices:*
-- Reuse a small frontend-neutral child-restoration descriptor/loader in `app`, while keeping GUI pane creation and TUI session creation in their respective UI layers. Do not introduce a callback-driven cross-frontend coordinator.
+- Reuse the existing frontend-neutral history loaders, `AIConversation` metadata methods, topology walker, and block-restoration plan directly. Add only the missing TUI session materializer; do not introduce a new cross-frontend child descriptor/resolver or coordinator.
 - Eagerly materialize all supported descendant sessions in the TUI, in topology order, and eagerly restore local Oz transcripts. Remote children use the existing lightweight cloud-run session and persisted run metadata rather than gaining a new transcript UI.
 - Match the GUI's locally known restoration scope. Do not synthesize UI children from `AmbientAgentTask.children` when no local child conversation/topology record exists; that list is currently sufficient for event watching, but not for reconstructing conversation identity, transcript, or all presentation metadata.
 
@@ -19,8 +19,8 @@
 7. Restoring the same tree more than once never creates duplicate sessions or duplicate orchestration tabs. Replacing a parent conversation removes retained child-session projections belonging to the replaced tree without cancelling or deleting the underlying cloud tasks.
 8. A parent with no children restores exactly as it does today: one focused parent session, no tab bar, and no additional network or session work.
 9. A missing/corrupt child record, a remote child without stable task/run identity, a shared-session-viewer child, or a local non-Oz harness that the TUI cannot display does not fail the parent restore. That child is skipped with diagnostic logging; other supported descendants still restore.
-10. The GUI's restoration timing, hidden-pane ownership checks, shared-session behavior, hydration decisions, focus, and rendered behavior do not change.
-11. Child discovery has parity with existing GUI restoration: locally indexed child records and the restored-conversation store are eligible. A server-only `--resume` whose client has no child topology records restores only the parent; deriving UI children solely from server `children` run IDs is out of scope.
+10. The GUI's restoration code, timing, hidden-pane ownership checks, shared-session behavior, hydration decisions, focus, and rendered behavior do not change.
+11. Child discovery uses the existing history index and loaders. A server-only `--resume` whose client has no child topology records restores only the parent; deriving UI children solely from server `children` run IDs is out of scope.
 
 == TECH ==
 
@@ -47,20 +47,26 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 
 *Design alternatives*:
 
-- *Alternative A — shared descriptor/loading core with frontend-specific materializers (selected).*
-  - Extract the frontend-neutral portion of GUI restoration: enumerate already-indexed child IDs, resolve a full child conversation from the history model or `RestoredAgentConversations`, and classify the persisted child as local, task-backed remote, or shared-session viewer.
-  - The GUI keeps its current direct-child loop, ownership/pane checks, hidden-pane creation, shared-session placeholder, and remote hydration code. It replaces only its duplicated conversation lookup/classification with the shared resolver.
-  - The TUI uses the existing recursive topology walker, the shared resolver, and its own retained-session materializer.
-  - Pros: shares the actual persistence/topology semantics, keeps frontend lifecycle types out of the core, allows the GUI behavior to remain byte-for-byte equivalent after extraction, and gives the TUI freedom to use heterogeneous session views.
-  - Cons: each frontend still owns iteration/idempotency and some branching, so the shared code is intentionally modest rather than a universal restoration engine.
+- *Alternative A — reuse the existing shared primitives directly; add only a TUI materializer (selected).*
+  - The TUI reads recursive descendant IDs with `descendant_conversation_ids_in_spawn_order`, obtains each `AIConversation` from the already-hydrated history model or the existing `load_conversation_data` API, and classifies it with existing methods such as `is_remote_child`, `is_viewing_shared_session`, `task_id`, and orchestration-harness accessors.
+  - The GUI remains unchanged. Its direct-child loop continues to resolve from history / `RestoredAgentConversations`, enforce pane ownership, and invoke the existing hidden-pane materializers.
+  - Pros: uses the same kind of data-oriented shared seam as base conversation restoration, introduces no abstraction that has only two callers, minimizes GUI risk, and keeps the implementation focused on the missing TUI lifecycle.
+  - Cons: the GUI's history/store fallback and the TUI's history/loader lookup remain expressed at their call sites. The small amount of repeated control flow is deliberate because their availability and ownership semantics differ.
 
-- *Alternative B — shared restoration coordinator with GUI/TUI adapter callbacks (rejected).*
+- *Alternative B — add a frontend-neutral child descriptor/resolver (rejected as unnecessary for this change).*
+  - Introduce a type owning a resolved `AIConversation`, parent ID, and semantic local/remote/shared-viewer kind, plus a resolver that combines history and `RestoredAgentConversations`.
+  - GUI and TUI would both consume that type before entering their own materializers.
+  - Pros: gives child lookup/classification a named contract and centralizes the history/store precedence.
+  - Cons: it mostly wraps fields and methods already present on `AIConversation`; `RestoredAgentConversations` has GUI take-once semantics that the TUI does not need; and it would require changing/exporting `app` APIs plus touching the GUI to remove only a few lines of lookup. It over-formalizes data that the existing shared loader seam already exposes.
+  - Decision: do not add this type or resolver unless implementation uncovers a concrete invariant that cannot be expressed with the existing APIs.
+
+- *Alternative C — shared restoration coordinator with GUI/TUI adapter callbacks (rejected).*
   - Add a coordinator in `app` that owns traversal, deduplication, async child hydration, error aggregation, and lifecycle ordering. Define an adapter trait/callback set such as `has_materialized_child`, `materialize_local`, `materialize_remote`, `materialize_shared_viewer`, and `on_failure`; call it from both `PaneGroup` and `TuiOrchestrationModel`.
   - The GUI adapter would wrap `child_agent_panes`, pane ownership checks, off-tree attachment, fullscreen entry, task-fetch subscriptions, and transcript/live-attach fallback.
   - The TUI adapter would wrap `TuiSessions`, terminal managers, cloud-run state, focus, event consumers, and tab refreshes.
   - Pros: one place could own traversal and deduplication, and future restoration policy changes would have a single coordinator.
   - Cons: the apparent commonality ends after discovery. GUI restore is lazy per fullscreen pane and includes hidden/off-tree/shared-session semantics; TUI restore is eager, recursive, and creates heterogeneous retained sessions. A coordinator would either expose UI lifecycle details in a large trait or hide important behavior in callbacks, making ordering and failure handling harder to reason about. It would also force a GUI control-flow rewrite despite the explicit no-GUI-behavior-change constraint.
-  - Decision: reject this alternative for APP-5038. The shared contract should describe data, not orchestrate UI objects.
+  - Decision: reject this alternative for APP-5038. Existing shared primitives should continue to describe/load data, not orchestrate UI objects.
 
 - *Eager sessions versus lazy sessions.*
   - Eager session materialization is selected because the existing TUI tab snapshot intentionally requires a session before showing a child. Lazy sessions would require changing tab/navigability semantics, adding loading/error tabs, and splitting identity from session availability—a TUI UI behavior change.
@@ -75,51 +81,38 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 
 *Proposed changes:*
 
-1. *Add a frontend-neutral child restore descriptor and resolver in `app`.*
-   - Add `app/src/ai/blocklist/child_agent_restoration.rs` (exact module name may follow nearby conventions) and export its TUI-facing types/functions through `app/src/tui_export.rs`.
-   - Define a descriptor that owns the resolved `AIConversation`, its resolved parent `AIConversationId`, and a semantic kind:
-     - local child (including legacy local children with no explicit harness, which are treated as Oz);
-     - task-backed remote child with stable task/run identity;
-     - shared-session viewer child;
-     - unsupported local harness when explicitly known.
-   - Provide a resolver for one child ID. It must first clone the conversation already in `BlocklistAIHistoryModel`; if absent, take it from `RestoredAgentConversations`, preserving today's take-once semantics. It must not create panes, sessions, fetch task data, change focus, or mutate topology.
-   - Keep recursive ordering in the existing `descendant_conversation_ids_in_spawn_order` helper rather than introducing a second walker.
+1. *Reuse the existing child data seams without changing the GUI.*
+   - Keep `PaneGroup::restore_missing_child_agent_panes_for_parent` and `create_hidden_child_agent_pane` unchanged.
+   - In the TUI restore path, get descendant IDs from `descendant_conversation_ids_in_spawn_order`.
+   - Resolve an ID by cloning `BlocklistAIHistoryModel::conversation` when already hydrated. If an indexed child is not in memory, use `BlocklistAIHistoryModel::load_conversation_data`; do not add a second persistence resolver.
+   - Classify the returned `AIConversation` with its existing metadata methods. Treat a local child with no explicit harness as legacy Oz; skip explicit local non-Oz and shared-session-viewer records because the TUI has no matching retained view.
+   - Do not add a new `app` module, public export, descriptor type, or GUI call-site refactor.
 
-2. *Refactor GUI lookup only, with no lifecycle change.*
-   - Update `PaneGroup::restore_missing_child_agent_panes_for_parent` to preserve its current direct-child enumeration and its existing “pane exists” and “owned outside pane” guards.
-   - Replace the inline history/store lookup and kind inspection with the shared resolver/descriptor.
-   - Route each descriptor to the same existing shared-session, remote-task hydration, or local hidden-pane path. Do not change lazy fullscreen triggering, attachment order, pending hydration, focus, error text, or pane ownership.
-
-3. *Add a restore-only TUI orchestration materialization API.*
+2. *Add a restore-only TUI orchestration materialization API.*
    - After `replace_conversation_surface` restores and selects the parent, call a new `TuiOrchestrationModel` restore entry point with the parent conversation ID and root `TuiSessionId`. Both `TuiConversationRestoreOrigin::Startup` and `ConversationList` must use this same call.
-   - Walk descendants in recursive spawn order and resolve every descriptor before/while materializing. Use the root session's window for all new child sessions; preserve each conversation's actual parent ID in history.
+   - Walk descendants in recursive spawn order and resolve every child conversation before/while materializing. Use the root session's window for all new child sessions; preserve each conversation's actual parent ID in history.
    - Before creating a child, consult both `TuiSessions::session_ids_by_conversation` and `child_session_by_conversation`. Existing live materializations are reused, not duplicated.
    - Register every restored supported child in `child_session_by_conversation`. Register event consumers using the same ownership rules as live children: local child sessions may consume their own stream; remote placeholders remain passive, while the root parent remains responsible for descendant status watching.
    - A child failure is isolated: log the child ID and reason, continue the traversal, and finish the parent restore in `Idle`.
 
-4. *Materialize restored local Oz children without launching them.*
+3. *Materialize restored local Oz children without launching them.*
    - Add a `TuiSessions` path that creates an unfocused local terminal session and passes its view/manager back to the orchestration restore API.
    - Add a restore-only `TuiTerminalSessionView` method for a fresh child surface. It must reuse `prepare_conversation_block_restoration`, action-result restoration, `BlocklistAIHistoryModel::restore_conversations`, transcript restoration, active-conversation selection, and exit-summary refresh.
    - It must not call `prepare_local_oz_child_launch`, `start_new_child_conversation`, `record_new_conversation_request_complete`, `initialize_orchestrated_child_conversation`, or `start_orchestrated_child`.
    - Restore the persisted working-directory metadata as the terminal session's startup directory where available. Do not attempt to restart a terminated local process.
 
-5. *Materialize restored remote/cloud children in the current cloud view.*
+4. *Materialize restored remote/cloud children in the current cloud view.*
    - Add `TuiCloudRunState::new_restored` (or an equivalent explicit constructor) requiring conversation ID, task ID, run ID, and run URL. It starts in `Spawned`; it must never render “Starting cloud run…” for a restored child.
    - Add a restore-only `TuiSessions` cloud-session constructor that accepts the restored state, creates an unfocused `TuiCloudRunView`, restores the child conversation onto that surface, marks it active there, and registers the conversation/session mapping.
    - Derive the current Oz run URL with the existing `oz_run_url` helper. Continue to derive displayed lifecycle status from the restored `AIConversation`, as `TuiCloudRunView` does today.
    - If stable task/run identity is missing or invalid, skip the remote child. Do not invent a new task or leave a permanently dispatching placeholder.
 
-6. *Clean up replaced tree projections and async races.*
+5. *Clean up replaced tree projections and async races.*
    - Before replacing an already selected parent, collect that parent's materialized descendant session IDs. Remove those retained session projections and unregister their event consumers without calling `kill_child_agent` or the cloud cancellation API.
    - Guard any async/background enrichment with the existing restore request ID or with a root/child mapping check, so a stale completion cannot attach a child to a later restored parent.
    - If the parent restore is repeated, the session lookup guards make the operation idempotent. If a different parent replaces it, stale child sessions from the prior tree do not remain visible.
 
 *Affected files (expected):*
-- `app/src/ai/blocklist/child_agent_restoration.rs` (new shared descriptor/resolver)
-- `app/src/ai/blocklist/mod.rs`
-- `app/src/tui_export.rs`
-- `app/src/pane_group/child_agent/restoration.rs`
-- `app/src/pane_group/mod_tests.rs` and/or a new shared resolver test file
 - `crates/warp_tui/src/terminal_session_view.rs`
 - `crates/warp_tui/src/terminal_session_view_tests.rs`
 - `crates/warp_tui/src/orchestration_model.rs`
@@ -134,14 +127,14 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 - *When are tabs/sessions created?* Eagerly during parent restore. Lazy session creation would require a new tab loading contract and is outside the no-UI-change scope.
 - *When is heavy state hydrated?* Local Oz transcripts are eager. Remote children eagerly create only the lightweight cloud session from persisted identity/status; the current TUI does not display their transcript.
 - *Which child kinds?* Local Oz (including legacy unspecified-harness local rows) and task-backed cloud children are supported. Explicit local non-Oz and shared-session-viewer children are skipped because the TUI has no corresponding retained view.
-- *What is shared?* Descriptor construction, persisted-conversation resolution, and semantic child classification. UI lifecycle orchestration stays per frontend.
+- *What is shared?* The existing history loaders/index, `AIConversation` metadata, topology walker, and block-restoration plan. No new child-specific shared abstraction is required; UI lifecycle orchestration stays per frontend.
 - *Do server-only run IDs create tabs?* No. The existing GUI does not reconstruct UI children solely from `AmbientAgentTask.children`, and those IDs are not a complete conversation restoration record.
 - *Does restoration restart children?* No. It restores navigable history/status projections only and never relaunches prompts, local processes, or cloud tasks.
 - *Does switching parents kill children?* No. It removes stale TUI projections and event-consumer registrations but does not invoke child cancellation/deletion.
 - *What remains out of scope?* New TUI visuals, new remote transcript UI, local third-party harness support, shared-session viewer support, server-side child reconstruction, changes to GUI behavior, and changing how live child agents are launched.
 
 *Risks / blast radius:*
-- The shared resolver touches GUI prior art. Mitigate with GUI integration tests that assert the same lazy timing, off-tree pane, identity, remote hydration decision, and focus.
+- The selected design intentionally leaves GUI code untouched, reducing GUI blast radius. Existing GUI restore tests remain a no-regression gate.
 - Session cleanup can accidentally cancel work if it uses live kill paths. The restore path must remove projections only and explicitly test that no cancel/delete method is invoked.
 - Restoring full local transcripts in several background terminal sessions can increase startup memory/latency for large trees. The eager decision is required by current tab semantics; record timings in manual verification and keep remote children lightweight.
 - Legacy or malformed records may lack harness/task/run metadata. Fail per child, retain the parent, and verify supported siblings still restore.
@@ -170,9 +163,9 @@ It passed (`1 passed, 757 skipped`) and proves the failing precondition: a known
 
 8. *Unsupported and malformed children degrade independently* — Seed supported siblings around a missing child record, explicit local non-Oz child, shared-session-viewer child, remote child without task/run identity, and a malformed topology cycle. Assert the parent and supported siblings restore, unsupported records create no session, no infinite traversal occurs, and diagnostics identify each skipped child. Run with `cargo nextest run -p warp_tui restore_skips_unsupported_or_malformed_children`. Verifies behavior 9.
 
-9. *Shared resolver contract* — Add `app` tests proving history-first resolution, restored-store fallback, take-once behavior, semantic classification, preserved parent identity, spawn-order independence, and no UI/session side effects. Run with `cargo nextest run -p warp child_agent_restoration`. Supports behavior 4-11.
+9. *Existing shared-seam coverage* — Add/extend TUI tests proving an already-hydrated child and an indexed-but-not-loaded child both flow through the existing history APIs into the same materializer, while classification preserves parent identity and does not create a session for unsupported kinds. Run with `cargo nextest run -p warp_tui restored_child_history_loading`. Supports behavior 4-11.
 
-10. *GUI no-regression* — Retain and run the existing GUI tests for lazy topology/pane restoration and remote child hydration, including `test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_child_pane`, the restored remote-child tests in `pane_group::mod_tests`, and `hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_identity`. Add an assertion that the shared resolver refactor still restores a nested child only through the existing fullscreen-entry chain and keeps focus on the parent. Run with `cargo nextest run -p warp pane_group_restore child_agent_hydration hydrate_remote_child_placeholder`. Verifies behavior 10.
+10. *GUI no-regression* — Run the existing GUI tests for lazy topology/pane restoration and remote child hydration, including `test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_child_pane`, the restored remote-child tests in `pane_group::mod_tests`, and `hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_identity`. No GUI production or test changes are expected. Run with `cargo nextest run -p warp pane_group_restore child_agent_hydration hydrate_remote_child_placeholder`. Verifies behavior 10.
 
 11. *Server-only scope guard* — Test a parent loaded by server token with no local child topology while task metadata exposes `children` run IDs. Assert event-watching state may record those run IDs through existing streamer behavior, but the TUI creates no synthetic child conversation/session. Run with `cargo nextest run -p warp_tui server_only_resume_does_not_synthesize_child_sessions` and the relevant `orchestration_event_streamer` restore tests. Verifies behavior 11.
 
