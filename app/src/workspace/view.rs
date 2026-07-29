@@ -21983,7 +21983,7 @@ impl Workspace {
                         error_description: error.to_string(),
                     },
                     variant: BannerButtonVariant::Naked,
-                    icon: Some(Icon::Oz),
+                    icon: Some(Icon::Agent),
                     more_info_button_action: None,
                 });
         Some(WorkspaceBannerFields {

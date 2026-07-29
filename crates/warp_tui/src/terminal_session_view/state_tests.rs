@@ -8,6 +8,7 @@ use super::{
     upgrade_terminal_model,
 };
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::terminal_session_view::{BlockingInputSource, TuiTerminalSessionView};
 use crate::terminal_use::TuiInputTarget;
 
@@ -110,13 +111,28 @@ fn only_composer_interactions_produce_input_hints() {
         false,
     );
     assert!(state.hint_text().is_some());
-    let TuiTerminalSessionState::Block(block) = &mut state else {
-        unreachable!();
-    };
-    let TuiInteractionState::Composer(composer) = &mut block.interaction else {
-        unreachable!();
-    };
-    composer.suggestions_mode = TuiInputSuggestionsMode::Shortcuts;
+    {
+        let TuiTerminalSessionState::Block(block) = &mut state else {
+            unreachable!();
+        };
+        let TuiInteractionState::Composer(composer) = &mut block.interaction else {
+            unreachable!();
+        };
+        composer.suggestions_mode =
+            TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts);
+    }
+    assert_eq!(state.hint_text(), None);
+    // The dedicated status overlay also suppresses the footer hint.
+    {
+        let TuiTerminalSessionState::Block(block) = &mut state else {
+            unreachable!();
+        };
+        let TuiInteractionState::Composer(composer) = &mut block.interaction else {
+            unreachable!();
+        };
+        composer.suggestions_mode =
+            TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status);
+    }
     assert_eq!(state.hint_text(), None);
 }
 

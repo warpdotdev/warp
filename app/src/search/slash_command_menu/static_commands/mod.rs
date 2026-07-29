@@ -54,7 +54,10 @@ pub enum SlashCommandKind {
     Agent,
     CloudAgent,
     AddMcp,
+    AddApiKey,
+    ClearApiKey,
     AutoApprove,
+    Statusline,
     Mcp,
     ViewLogs,
     Voice,
@@ -62,7 +65,6 @@ pub enum SlashCommandKind {
     Theme,
     Exit,
     Logout,
-    Version,
     CreateEnvironment,
     CreateDockerSandbox,
     CreateNewProject,
@@ -87,6 +89,7 @@ pub enum SlashCommandKind {
     OpenRepo,
     OpenRules,
     New,
+    Clear,
     Model,
     Host,
     Harness,
@@ -108,6 +111,7 @@ pub enum SlashCommandKind {
     Rewind,
     ExportToClipboard,
     ExportToFile,
+    Status,
 }
 
 /// The application surfaces on which a static slash command is implemented.

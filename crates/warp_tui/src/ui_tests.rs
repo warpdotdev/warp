@@ -69,7 +69,7 @@ fn login_placeholder_is_centered_for_all_states() {
                 (
                     None,
                     None,
-                    vec!["Sign in to continue", "Opening your browser…"],
+                    vec!["Sign in to continue", "Requesting a sign-in link…"],
                 ),
                 (
                     Some("https://warp.dev/device"),

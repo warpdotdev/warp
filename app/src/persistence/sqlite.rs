@@ -2828,11 +2828,11 @@ fn read_sqlite_data(
         .optional()?
         .map(|uid| uid.into());
 
-    // Command history, user profiles, and pending object actions are only
-    // consumed by the GUI; headless launch modes skip loading them.
-    let commands = if data_scope.gui_history() {
+    // The GUI and TUI both consume command history. Other headless launch
+    // modes skip it.
+    let commands = if data_scope.command_history() {
         schema::commands::dsl::commands
-            // Ensure the commands come into memory sorted chronologically.
+            // The newest row for a duplicate command supplies its summary metadata.
             .order(schema::commands::columns::id.desc())
             .load_iter::<model::Command, DefaultLoadingMode>(conn)?
             .filter_map(|command| command.ok())
@@ -2842,7 +2842,7 @@ fn read_sqlite_data(
         Vec::new()
     };
 
-    let user_profiles = if data_scope.gui_history() {
+    let user_profiles = if data_scope.gui_only_data() {
         schema::user_profiles::dsl::user_profiles
             .load_iter::<model::UserProfile, DefaultLoadingMode>(conn)?
             .filter_map(|user_profile| user_profile.ok())
@@ -2852,7 +2852,7 @@ fn read_sqlite_data(
         Vec::new()
     };
 
-    let object_actions: Vec<ObjectAction> = if data_scope.gui_history() {
+    let object_actions: Vec<ObjectAction> = if data_scope.gui_only_data() {
         schema::object_actions::dsl::object_actions
             .load_iter::<model::PersistedObjectAction, DefaultLoadingMode>(conn)?
             .filter_map(|object_action| object_action.ok()) // parse into PersistedObjectAction

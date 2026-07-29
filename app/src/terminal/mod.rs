@@ -9,9 +9,8 @@ use ordered_float::Float;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
 mod package_installers;
-pub(crate) use history::UpArrowHistoryConfig;
 pub use history::{
-    History, HistoryEntry, HistoryEvent, ShellHost, prompt_history_for_terminal_view,
+    History, HistoryEntry, HistoryEvent, LinkedWorkflowData, ShellHost, UpArrowHistoryConfig,
 };
 pub use view::{Event, TerminalView};
 pub use warp_terminal::shell::{self, ShellLaunchData};

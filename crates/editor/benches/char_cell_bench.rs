@@ -128,7 +128,7 @@ fn bench_dataset(
     let char_count = text.chars().count();
     group.throughput(Throughput::Elements(char_count as u64));
 
-    let state = CharCellState::new_for_test(80);
+    let state = CharCellState::new(80, None);
     let (_, vector_allocations) = measure_allocations(|| state.update_text(&text));
     let retained_bytes = state.text_index_retained_bytes();
     let dataset = format!(

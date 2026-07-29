@@ -59,14 +59,25 @@ fn mcp_permission_details_are_structured_and_human_readable() {
         app.read(|ctx| {
             let view = view.as_ref(ctx);
             assert!(view.permission_prompt.is_none());
+            // No server id on this action, so the question falls back to naming
+            // just the tool (not the old "this MCP tool" phrasing).
             assert_eq!(
-                view.permission_question(),
-                "Is it OK if I call this MCP tool?"
+                view.permission_question(None),
+                "Is it OK if I call MCP tool create_issue?"
             );
-            let details = view.details();
+            // With a known server, both identities surface in the question.
+            assert_eq!(
+                view.permission_question(Some("github")),
+                "Is it OK if I call MCP tool create_issue on github?"
+            );
+            let details = view.details(None);
             assert!(details.starts_with("create_issue\n{"));
             assert!(details.contains("\"priority\": 1"));
             assert!(details.contains("\"title\": \"Fix permission UI\""));
+            // The details body labels the tool with its server when known.
+            let details_with_server = view.details(Some("github"));
+            assert!(details_with_server.starts_with("create_issue on github\n{"));
+            assert!(details_with_server.contains("\"priority\": 1"));
         });
 
         action_model.update(&mut app, |action_model, ctx| {
@@ -122,7 +133,7 @@ fn mcp_permission_details_are_structured_and_human_readable() {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("■ Is it OK if I call this MCP tool?"))
+                .any(|line| line.contains("■ Is it OK if I call MCP tool create_issue?"))
         );
         assert!(lines.iter().any(|line| line.contains("create_issue")));
         assert!(lines.iter().any(|line| line.contains("(1) yes")));

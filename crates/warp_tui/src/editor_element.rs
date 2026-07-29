@@ -4,8 +4,8 @@
 //! The element *paints and interacts*; it does not compute row structure.
 //! Rows come from the render state's single display-row implementation
 //! (`CharCellState::display_lattice`), which interleaves ghost rows and
-//! elides hidden line ranges; the element slices its text snapshot by each
-//! row's char range, applies consumer-supplied styles, prefixes gutter cells,
+//! elides hidden line ranges; the element obtains each row's paint-ready text
+//! from the lattice, applies consumer-supplied styles, prefixes gutter cells,
 //! and windows by scroll. Interaction geometry (cursor placement, mouse
 //! hit-testing) queries the same lattice, so what is painted and what a click
 //! resolves to can never disagree.
@@ -25,9 +25,7 @@ use std::rc::Rc;
 use string_offset::CharOffset;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
-use warp_editor::render::model::{
-    CharCellTemporaryBlock, DisplayLattice, DisplayRow, DisplayRowKind,
-};
+use warp_editor::render::model::{DisplayLattice, DisplayRow, DisplayRowKind};
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex, TuiGridPoint, TuiLayoutContext,
     TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiScreenPoint,
@@ -184,9 +182,8 @@ impl TuiEditorElement {
             let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
             start..end
         });
-        let hidden_line_ranges = inner
-            .render_state()
-            .as_ref(app)
+        let render_state = inner.render_state().as_ref(app);
+        let hidden_line_ranges = render_state
             .char_cell()
             .map(|char_cell| char_cell.hidden_line_ranges(app))
             .unwrap_or_default();
@@ -429,7 +426,7 @@ impl TuiEditorElement {
             let mut styled_spans = Vec::new();
             let mut column = TuiFlex::column();
             for (vis_idx, row) in visible_slice.iter().enumerate() {
-                column.add_child(self.render_row(row, &chars, lattice.ghosts()));
+                column.add_child(self.render_row(row, &chars, &lattice));
                 if let Some((start_col, end_col)) = self.selection_span_in_row(row, &lattice) {
                     selected_spans.push((
                         vis_idx as u16,
@@ -499,11 +496,13 @@ impl TuiEditorElement {
         &self,
         row: &DisplayRow,
         chars: &[char],
-        ghosts: &[CharCellTemporaryBlock],
+        lattice: &DisplayLattice<'_>,
     ) -> Box<dyn TuiElement> {
         let (content, style) = match &row.kind {
             DisplayRowKind::Buffer { line_index } => {
-                let content = slice_chars(chars, &row.char_range);
+                let content = lattice
+                    .row_text(row, chars)
+                    .expect("buffer display rows have source text");
                 let style = self
                     .styles
                     .line_overrides
@@ -513,12 +512,11 @@ impl TuiEditorElement {
                     .unwrap_or(self.styles.text);
                 (content, style)
             }
-            DisplayRowKind::Ghost { ghost_index } => {
-                let ghost_chars: Vec<char> = ghosts[*ghost_index].content.chars().collect();
-                (
-                    slice_chars(&ghost_chars, &row.char_range),
-                    self.styles.ghost,
-                )
+            DisplayRowKind::Ghost { .. } => {
+                let content = lattice
+                    .row_text(row, chars)
+                    .expect("ghost display rows have source text");
+                (content, self.styles.ghost)
             }
             DisplayRowKind::Gap { line_range } => {
                 (format!("… {} lines", line_range.len()), self.styles.gap)
@@ -873,13 +871,6 @@ impl TuiElement for TuiEditorElement {
 
         false
     }
-}
-
-/// The chars in `range`, collected into the row's paint text.
-fn slice_chars(chars: &[char], range: &Range<CharOffset>) -> String {
-    let start = range.start.as_usize().min(chars.len());
-    let end = range.end.as_usize().min(chars.len());
-    chars[start..end].iter().collect()
 }
 
 /// The number of decimal digits in `n` (minimum 1), sizing the gutter's

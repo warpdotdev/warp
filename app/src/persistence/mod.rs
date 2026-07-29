@@ -108,9 +108,9 @@ pub enum PersistedDataScope {
     /// The GUI app: everything, including window/tab/block session
     /// restoration and command history.
     Full,
-    /// The `warp-tui` front-end: cloud objects and agent/conversation state,
-    /// but no GUI session restoration, command history, user profiles, or
-    /// pending object actions.
+    /// The `warp-tui` front-end: command history, cloud objects, and
+    /// agent/conversation state, but no GUI session restoration, user profiles,
+    /// or pending object actions.
     TuiFrontend,
     /// The remote server daemon: only codebase index metadata.
     CodebaseIndicesOnly,
@@ -122,9 +122,16 @@ impl PersistedDataScope {
         matches!(self, PersistedDataScope::Full)
     }
 
-    /// Command history, user profiles, and pending object actions, which
-    /// only the GUI consumes.
-    fn gui_history(self) -> bool {
+    /// Shell-command history consumed by both interactive front-ends.
+    fn command_history(self) -> bool {
+        matches!(
+            self,
+            PersistedDataScope::Full | PersistedDataScope::TuiFrontend
+        )
+    }
+
+    /// User profiles and pending object actions, which only the GUI consumes.
+    fn gui_only_data(self) -> bool {
         matches!(self, PersistedDataScope::Full)
     }
 }

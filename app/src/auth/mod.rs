@@ -21,6 +21,7 @@ pub use auth_state::AuthStateProvider;
 use itertools::Itertools;
 pub use login_failure_notification::LoginFailureReason;
 pub use user_uid::UserUid;
+use warp_core::channel::ChannelState;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_errors::{report_error, report_if_error};
 use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
@@ -30,6 +31,8 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai_assistant::requests::REQUEST_LIMIT_INFO_CACHE_KEY;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
@@ -62,6 +65,17 @@ pub fn init(app: &mut AppContext) {
     paste_auth_token_modal::init(app);
 }
 
+/// Returns the configured Warp web logout URL.
+///
+/// Keep this derived from the channel's server root so local and non-production
+/// builds log out of the same web session they use for authentication.
+pub fn web_logout_url() -> String {
+    format!(
+        "{}/logout",
+        ChannelState::server_root_url().trim_end_matches('/')
+    )
+}
+
 /// If the app has running processes or dirty objects, we'll show a confirmation modal before logging out.
 /// If the user aborts, the user will not be logged out.
 pub fn maybe_log_out(app: &mut AppContext) {
@@ -91,7 +105,7 @@ pub fn maybe_log_out(app: &mut AppContext) {
     {
         send_telemetry_sync_from_app_ctx!(TelemetryEvent::LogOutModalShown, app);
         let mut button_data = vec![ModalButton::for_app("Yes, log out", |ctx| {
-            log_out(ctx);
+            log_out_and_open_web(ctx);
         })];
 
         let mut info_text_vec: Vec<String> = vec![];
@@ -202,8 +216,19 @@ pub fn maybe_log_out(app: &mut AppContext) {
             focus_running_window_and_show_native_modal(sessions_summary, alert_data, app);
         }
     } else {
-        log_out(app);
+        log_out_and_open_web(app);
     }
+}
+
+/// Logs out locally and sends the user to Warp web's logout endpoint.
+///
+/// This is intentionally separate from [`log_out`], which is also used for
+/// non-user-initiated auth recovery paths where opening a browser would be
+/// surprising.
+pub fn log_out_and_open_web(app: &mut AppContext) {
+    log_out(app);
+    let logout_url = web_logout_url();
+    app.open_url(&logout_url);
 }
 
 // Log out the user, clears workspace state, stops running processes, and deletes database.
@@ -222,6 +247,12 @@ pub fn log_out(app: &mut AppContext) {
 
     AuthManager::handle(app).update(app, |auth_manager, ctx| {
         auth_manager.log_out(ctx);
+    });
+    // Detach built-in Warp-hosted MCP servers; they authenticate with the
+    // credentials that were just cleared.
+    #[cfg(not(target_family = "wasm"))]
+    TemplatableMCPServerManager::handle(app).update(app, |manager, ctx| {
+        manager.sync_builtin_servers(false, ctx);
     });
     BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
         history_model.reset();
@@ -338,3 +369,7 @@ fn remove_cloud_persisted_settings(app: &mut AppContext) {
         privacy_settings.refresh_to_default();
     });
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

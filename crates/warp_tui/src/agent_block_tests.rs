@@ -1842,7 +1842,7 @@ fn task_list_renders_header_and_status_glyph_rows() {
                 vec![
                     "≡ Tasks 4 ▾",
                     "  ✓ Compile list",
-                    "  • Determine duplications",
+                    "  ● Determine duplications",
                     "  ◌ Create suggestions",
                     "  ■ Old task",
                 ],
@@ -1853,7 +1853,7 @@ fn task_list_renders_header_and_status_glyph_rows() {
             // Completed: green check, primary title.
             assert_eq!(frame.buffer[(2, 1)].fg, green);
             assert_eq!(frame.buffer[(4, 1)].fg, primary);
-            // In progress: yellow bullet, primary title.
+            // In progress: yellow filled circle, primary title.
             assert_eq!(frame.buffer[(2, 2)].fg, yellow);
             assert_eq!(frame.buffer[(4, 2)].fg, primary);
             // Pending: primary glyph and title.

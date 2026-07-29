@@ -42,7 +42,7 @@ pub fn update_command_history(
                 event.workflow_command.to_owned(),
                 is_agent_executed,
             )],
-        )
+        );
     });
 
     if let Some(sender) = model_event_sender {
