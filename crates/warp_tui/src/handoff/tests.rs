@@ -67,15 +67,19 @@ fn dispatch(
 }
 
 fn submit_handoff(app: &mut App, fixture: &Fixture, text: &str) -> ViewHandle<TuiHandoffBlock> {
-    // These tests exercise handoff-card UI behavior rather than slash-command-menu
-    // availability, so execute the command directly without the active-conversation gate.
-    let argument = text
-        .strip_prefix(slash_commands::MOVE_TO_CLOUD.name)
-        .and_then(|s| s.strip_prefix(' '))
-        .map(str::to_owned);
     fixture.view.update(app, |view, ctx| {
-        view.execute_tui_slash_command(&slash_commands::MOVE_TO_CLOUD, argument.as_ref(), ctx);
+        view.input_view.update(ctx, |input, ctx| {
+            input.set_text(text, ctx);
+        });
+        ctx.focus(&view.input_view);
     });
+    let input_id = fixture.view.read(app, |view, _| view.input_view.id());
+    assert!(dispatch(
+        app,
+        fixture.window_id,
+        &[fixture.view.id(), input_id],
+        "enter",
+    ));
     fixture.view.read(app, |view, ctx| {
         view.active_handoff(ctx).expect("handoff card is installed")
     })

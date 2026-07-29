@@ -294,7 +294,8 @@ const SHELL_MODE_HINT: &str = "Shell mode";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
 const COPY_DEBUGGING_LINK_HINT: &str = "Debugging link copied to clipboard";
-const COPY_DEBUGGING_LINK_NO_TOKEN_HINT: &str = "No debugging link available for this conversation";
+const COPY_DEBUGGING_LINK_NO_TOKEN_HINT: &str =
+    "No debugging link available for this conversation yet.";
 const LOG_BUNDLE_FAILED_HINT: &str = "Failed to create log bundle (check logs)";
 const NLD_ENABLED_HINT: &str = "Natural language detection enabled.";
 const NLD_DISABLED_HINT: &str = "Natural language detection disabled.";

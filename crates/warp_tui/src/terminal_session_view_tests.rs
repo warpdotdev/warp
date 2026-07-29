@@ -22,6 +22,7 @@ use warp::tui_export::{
     register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::channel::Channel;
+use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -4033,18 +4034,14 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
     });
 }
 
-/// Verifies that `/copy-debugging-link` is absent from the TUI slash-command
-/// data source's active command set when the current conversation is empty
-/// (zero state). `TuiConversationSelection::new` eagerly creates a blank
-/// conversation, so active-conversation commands require at least one exchange.
+/// Verifies that `/copy-debugging-link` is available for the TUI's eagerly-created blank
+/// conversation, matching the GUI's active-conversation semantics.
 #[test]
-fn copy_debugging_link_absent_from_active_commands_at_zero_state() {
+fn copy_debugging_link_available_in_active_commands_at_zero_state() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
-        // At zero state the eagerly-created conversation is empty — the command
-        // must NOT be in the active set.
         view.read(&app, |view, ctx| {
             let has_copy_debugging_link = view
                 .slash_commands_source
@@ -4052,24 +4049,21 @@ fn copy_debugging_link_absent_from_active_commands_at_zero_state() {
                 .active_commands()
                 .any(|(_, cmd)| cmd.kind == SlashCommandKind::CopyDebuggingLink);
             assert!(
-                !has_copy_debugging_link,
-                "/copy-debugging-link must be absent from active commands while the \
-                 conversation is empty (ACTIVE_CONVERSATION gate)",
+                has_copy_debugging_link,
+                "/copy-debugging-link must be available for the blank active conversation",
             );
         });
     });
 }
 
-/// Verifies that `ACTIVE_CONVERSATION`-gated commands are absent at the zero state.
+/// Verifies that `/handoff` remains available for the TUI's blank active conversation.
 #[test]
-fn active_conversation_gated_commands_absent_at_zero_state() {
+fn handoff_is_available_at_zero_state() {
     App::test((), |mut app| async move {
+        let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
+        let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(true);
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-
-        // `/auto-approve` requires ACTIVE_CONVERSATION | AGENT_VIEW | AI_ENABLED |
-        // NOT_CLOUD_AGENT. ACTIVE_CONVERSATION is false at zero state, so the
-        // command is absent regardless of the other bits.
         view.read(&app, |view, ctx| {
             let active_names: Vec<&str> = view
                 .slash_commands_source
@@ -4079,12 +4073,8 @@ fn active_conversation_gated_commands_absent_at_zero_state() {
                 .collect();
 
             assert!(
-                !active_names.contains(&slash_commands::COPY_DEBUGGING_LINK.name),
-                "/copy-debugging-link must not be active at zero state",
-            );
-            assert!(
-                !active_names.contains(&slash_commands::AUTO_APPROVE.name),
-                "/auto-approve must not be active at zero state",
+                active_names.contains(&slash_commands::MOVE_TO_CLOUD.name),
+                "/handoff must be active at zero state",
             );
         });
     });
@@ -4099,7 +4089,10 @@ fn copy_debugging_link_footer_hint_renders_in_session() {
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
         view.update(&mut app, |view, ctx| {
-            view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_LINK, None, ctx);
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text(slash_commands::COPY_DEBUGGING_LINK.name, ctx);
+            });
+            view.handle_submitted_input(slash_commands::COPY_DEBUGGING_LINK.name, ctx);
         });
 
         // Render the full session and verify the error hint appears in the
@@ -4123,8 +4116,6 @@ fn copy_debugging_link_shows_error_hint_when_no_server_token() {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
-        // Execute the command directly (bypassing availability gating so we can
-        // test the execution path in isolation without a real exchange).
         view.update(&mut app, |view, ctx| {
             view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_LINK, None, ctx);
         });

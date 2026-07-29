@@ -9,7 +9,6 @@ use super::core::subscribe_to_shared_dependencies;
 use super::{
     InlineItem, SlashCommandDataSource, SlashCommandDataSourceState, UpdatedActiveCommands,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 #[cfg(feature = "voice_input")]
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
@@ -130,19 +129,10 @@ impl TuiSlashCommandDataSource {
     }
 
     fn availability(&self, ctx: &AppContext) -> Availability {
-        let mut availability =
-            self.base_availability(ctx) | Availability::AGENT_VIEW | Availability::NOT_CLOUD_AGENT;
-        // Unlike the GUI where agent-view always implies an active conversation,
-        // `TuiConversationSelection::new` eagerly creates a blank conversation at
-        // startup. Require at least one exchange so commands gated on
-        // `ACTIVE_CONVERSATION` remain hidden until the user sends a message.
-        if BlocklistAIHistoryModel::as_ref(ctx)
-            .active_conversation(self.terminal_view_id())
-            .is_some_and(|c| !c.is_empty())
-        {
-            availability |= Availability::ACTIVE_CONVERSATION;
-        }
-        availability
+        self.base_availability(ctx)
+            | Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::NOT_CLOUD_AGENT
     }
 }
 
