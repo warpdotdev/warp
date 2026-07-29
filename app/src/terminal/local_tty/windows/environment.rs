@@ -222,14 +222,14 @@ fn wsl_env_allowlist(include_initial_working_dir: bool) -> OsString {
         format!("{TERM_PROGRAM_NAME}/u"),
         format!("{IS_LOCAL_SESSION_NAME}/u"),
         format!("{SSH_SOCKET_DIR}/u"),
-        format!("{CLIENT_VERSION_NAME}/u"),
+        format!("{WARP_CLIENT_VERSION_ENV}/u"),
         format!("{TERMINAL_SESSION_UUID_ENV}/u"),
         format!("{FOCUS_URL_ENV}/u"),
         format!("{PROMPT_NODE_VERSION_ENABLED_NAME}/u"),
     ];
 
     if FeatureFlag::HOANotifications.is_enabled() {
-        entries.push(format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"));
+        entries.push(format!("{WARP_CLI_AGENT_PROTOCOL_VERSION_ENV}/u"));
     }
 
     if include_initial_working_dir {
