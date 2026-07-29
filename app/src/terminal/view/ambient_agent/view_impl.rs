@@ -259,7 +259,7 @@ impl TerminalView {
                 self.pending_cloud_followup_task_id = None;
                 self.update_active_ambient_agent_conversation_status(
                     ConversationStatus::Error,
-                    Some(RenderableAIError::other(error_message.clone(), false)),
+                    Some(RenderableAIError::CloudStartupFailed(error_message.clone())),
                     ctx,
                 );
 
