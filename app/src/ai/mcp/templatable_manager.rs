@@ -243,6 +243,14 @@ impl TemplatableMCPServerManager {
         self.get_template_uuid(installation_uuid)
             .is_some_and(|uuid| self.server_credentials.contains_key(&uuid))
     }
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+    pub fn can_log_out(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
+        self.has_credentials(installation_uuid, app)
+            || self
+                .active_servers
+                .get(&installation_uuid)
+                .is_some_and(TemplatableMCPServerInfo::is_authenticated_transport)
+    }
 
     /// Returns the JSON Schema `input_schema` for a named tool across active MCP servers.
     ///

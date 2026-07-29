@@ -462,7 +462,7 @@ impl TuiOrchestrationModel {
                         child_surface_id,
                         conversation_id,
                         ConversationStatus::Error,
-                        Some(RenderableAIError::other(message, false)),
+                        Some(RenderableAIError::CloudStartupFailed(message)),
                         ctx,
                     );
                 });

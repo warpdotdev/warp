@@ -231,9 +231,11 @@ pub use crate::terminal::{
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
 pub use crate::tui::{
-    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
-    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiUserInfoSnapshot, log_out_tui,
+    TuiMcpAction, TuiMcpConfigDiagnostic, TuiMcpFileScope, TuiMcpFileSource, TuiMcpInstallRequest,
+    TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
+    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTemplateVariable, TuiMcpTransport,
+    TuiMcpVariableValue, TuiUserInfoManager, TuiUserInfoManagerEvent, TuiUserInfoSnapshot,
+    log_out_tui,
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
