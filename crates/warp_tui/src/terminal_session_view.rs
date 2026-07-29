@@ -3516,6 +3516,7 @@ impl TuiTerminalSessionView {
                 mode.set_mode(todo_mode, ctx);
             }
         });
+        self.sync_open_todo_menu_list(ctx);
     }
     fn render_response_summary_for_exchange(
         &self,
