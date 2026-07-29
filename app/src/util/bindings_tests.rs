@@ -79,6 +79,8 @@ fn test_keybinding_name_to_display_string() {
 #[test]
 fn test_ctrl_slash_is_reserved_for_pty_input() {
     assert!(CONTROL_CHARACTER_KEY_REGEX.is_match("ctrl-/"));
+    assert!(CONTROL_CHARACTER_KEY_REGEX.is_match("ctrl-shift-/"));
+    assert!(!CONTROL_CHARACTER_KEY_REGEX.is_match("ctrl-shift-?"));
 }
 
 #[test]
@@ -89,6 +91,12 @@ fn test_toggle_keybindings_page_default_is_mac_only() {
     } else {
         assert_eq!(keystroke, None);
     }
+}
+
+#[test]
+fn test_toggle_resource_center_default_does_not_intercept_ctrl_slash() {
+    let keystroke = custom_tag_to_keystroke(CustomAction::ToggleResourceCenter.into());
+    assert_eq!(keystroke, None);
 }
 
 #[test]

@@ -144,6 +144,10 @@ pub fn test_keyboard_protocol_disabled_shift_enter() -> Builder {
 /// output of the platform event conversion for both dedicated and shifted slash keys; native
 /// NSEvent conversion itself is covered by platform-level probes rather than this hermetic runner.
 pub fn test_ctrl_slash_emits_unit_separator_in_legacy_mode() -> Builder {
+    // Exercise the configuration that registers the legacy Resource Center action. Its old
+    // Ctrl+Shift+/ default intercepted Ctrl+/ on layouts where slash requires Shift.
+    FeatureFlag::AvatarInTabBar.set_user_preference(false);
+
     new_builder()
         .with_setup(setup_python_script!(
             "read_keys.py",
