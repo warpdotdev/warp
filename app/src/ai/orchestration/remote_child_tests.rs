@@ -121,6 +121,24 @@ fn github_auth_error_is_a_shared_blocker_with_cloud_callback_url() {
 }
 
 #[test]
+fn non_auth_client_error_uses_clean_server_message_not_context_wrapper() {
+    // A ClientError without auth_url should resolve to the clean `error` field,
+    // not the outermost context string (e.g. "Failed to send API request to URL").
+    let inner = ClientError {
+        error: "User is not authorized to run cloud agents".to_string(),
+        auth_url: None,
+    };
+    let error = anyhow::Error::new(inner)
+        .context("Failed to send API request to https://app.warp.dev/api/v1/agent/run");
+    assert_eq!(
+        classify_cloud_agent_startup_error(&error),
+        CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
+            message: "User is not authorized to run cloud agents".to_string(),
+        })
+    );
+}
+
+#[test]
 fn capacity_quota_and_fallback_errors_keep_their_semantics() {
     let capacity = anyhow::Error::new(CloudAgentCapacityError {
         error: "Too many agents".to_string(),

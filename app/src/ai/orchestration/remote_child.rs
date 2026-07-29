@@ -234,12 +234,17 @@ pub fn prepare_remote_child_launch(
 
 /// Maps server/client launch failures into shared startup presentation.
 pub fn classify_cloud_agent_startup_error(error: &anyhow::Error) -> CloudAgentStartupIssue {
-    if let Some(client_error) = error.downcast_ref::<ClientError>()
-        && let Some(auth_url) = &client_error.auth_url
-    {
-        return CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
+    if let Some(client_error) = error.downcast_ref::<ClientError>() {
+        if let Some(auth_url) = &client_error.auth_url {
+            return CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
+                message: client_error.error.clone(),
+                auth_url: github_auth_url::cloud_setup_auth_url_with_next(auth_url),
+            });
+        }
+        // Non-auth ClientError: extract the clean server message directly instead of
+        // using error.to_string(), which would include the outermost context wrapper.
+        return CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {
             message: client_error.error.clone(),
-            auth_url: github_auth_url::cloud_setup_auth_url_with_next(auth_url),
         });
     }
     if let Some(capacity_error) = error.downcast_ref::<CloudAgentCapacityError>() {

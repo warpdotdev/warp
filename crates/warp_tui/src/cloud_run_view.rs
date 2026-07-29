@@ -226,10 +226,10 @@ impl TuiCloudRunView {
                     blocked_action: blocker.message().to_owned(),
                 },
                 status_label: "GitHub authentication required".to_string(),
-                detail: Some(format!(
-                    "{} Authenticate, then run the orchestration request again.",
-                    blocker.message()
-                )),
+                detail: Some(
+                    "Authenticate with GitHub, then run the orchestration request again."
+                        .to_string(),
+                ),
                 link_instruction: Some("to authenticate or click the link below"),
                 link_url: Some(blocker.primary_url().to_string()),
             },

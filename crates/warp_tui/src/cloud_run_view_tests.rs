@@ -70,6 +70,7 @@ fn lightweight_cloud_view_renders_startup_and_blocker_without_terminal_state() {
                 ctx,
             );
             let lines = frame.buffer.to_lines();
+            // Status label still shows "GitHub authentication required".
             assert!(
                 lines
                     .iter()
@@ -79,6 +80,21 @@ fn lightweight_cloud_view_renders_startup_and_blocker_without_terminal_state() {
                 lines
                     .iter()
                     .any(|line| line.contains("https://example.com/auth"))
+            );
+            // Detail uses a short fixed string that does not echo the server message.
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Authenticate with GitHub"))
+            );
+            // The verbose server OAuth message must NOT appear in the detail line
+            // (it used to be prepended before the instruction text).
+            // The status label still says "GitHub authentication required", so we check
+            // that no rendered line duplicates the server message as a standalone prefix.
+            assert!(
+                !lines
+                    .iter()
+                    .any(|line| line.contains("GitHub authentication required Authenticate"))
             );
         });
     });
