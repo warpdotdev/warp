@@ -31,7 +31,7 @@ use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
 use crate::cloud_run::TuiCloudRunState;
-use crate::session_registry::{RemoteChildSession, TuiSessionId, TuiSessionView, TuiSessions};
+use crate::session_registry::{RemoteChildSession, TuiSessionId, TuiSessions};
 use crate::tab_bar::TuiTabBarPagingState;
 use crate::terminal_session_view::TuiTerminalSessionView;
 
@@ -81,6 +81,10 @@ pub(crate) enum TuiOrchestrationEvent {
         parent_session_id: TuiSessionId,
         request: Box<StartAgentRequest>,
         prepared: Box<PreparedRemoteChildLaunch>,
+    },
+    KillLocalChildSession {
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
     },
     RemoveChildSession(TuiSessionId),
 }
@@ -599,9 +603,8 @@ impl TuiOrchestrationModel {
         ctx.notify();
     }
 
-    /// Tears down the background session of a child that failed at the
-    /// launch stage (the executor's `CleanupFailedChildLaunch`).
-    pub(crate) fn cleanup_failed_child(
+    /// Deletes a child conversation and removes its retained TUI session.
+    pub(crate) fn cleanup_child(
         &mut self,
         conversation_id: &AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -665,21 +668,19 @@ impl TuiOrchestrationModel {
                     );
                 }
             } else if let Some(session_id) = child_session_id {
-                // Local child: cancel the in-flight conversation through the
-                // child session's view so the controller and PTY see the stop.
-                let child_view = TuiSessions::as_ref(ctx)
-                    .session(session_id)
-                    .map(|s| s.view().clone());
-                if let Some(TuiSessionView::Terminal(terminal_view)) = child_view {
-                    terminal_view.update(ctx, |view, ctx| {
-                        view.cancel_active_conversation(ctx);
-                    });
-                }
+                // Cancelling through the session is deferred until the current
+                // view update completes, then cleanup resumes from the event
+                // handler while the conversation is still available.
+                ctx.emit(TuiOrchestrationEvent::KillLocalChildSession {
+                    session_id,
+                    conversation_id,
+                });
+                return;
             }
         }
 
         // 3. Delete conversation and remove session.
-        self.cleanup_failed_child(&conversation_id, ctx);
+        self.cleanup_child(&conversation_id, ctx);
     }
 
     /// Kills every descendant spawned by `conversation_id`, including nested

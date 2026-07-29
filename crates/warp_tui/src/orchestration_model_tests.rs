@@ -184,7 +184,7 @@ fn add_relayed_executor(
                     );
                 }
                 StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
-                    orchestration.cleanup_failed_child(conversation_id, ctx);
+                    orchestration.cleanup_child(conversation_id, ctx);
                 }
             });
         });
