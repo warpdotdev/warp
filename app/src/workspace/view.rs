@@ -24162,10 +24162,8 @@ impl TypedActionView for Workspace {
                 send_telemetry_from_ctx!(TelemetryEvent::UserMenuUpgradeClicked, ctx);
 
                 let auth_state = AuthStateProvider::as_ref(ctx).get();
-                let user_workspaces = UserWorkspaces::as_ref(ctx);
-
-                let upgrade_url = if let Some(team) = user_workspaces.self_serve_team() {
-                    UserWorkspaces::upgrade_link_for_team(team.uid)
+                let upgrade_url = if let Some(team_uid) = self.team_uid(ctx) {
+                    UserWorkspaces::upgrade_link_for_team(team_uid)
                 } else {
                     let user_id = auth_state.user_id().unwrap_or_default();
                     UserWorkspaces::upgrade_link(user_id)

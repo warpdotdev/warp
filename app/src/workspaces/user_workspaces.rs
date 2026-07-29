@@ -233,7 +233,11 @@ impl UserWorkspaces {
     ) -> Option<ServerId> {
         source_window_id
             .and_then(|source_window_id| self.team_uid_for_window(source_window_id))
-            .or_else(|| self.self_serve_team_uid())
+            .or_else(|| {
+                self.current_workspace()
+                    .and_then(|workspace| workspace.teams.first())
+                    .map(|team| team.uid)
+            })
     }
 
     pub fn set_team_for_window(
@@ -406,14 +410,6 @@ impl UserWorkspaces {
             // If the team is not found, then allow it to go through by default (should still be enforced server-side)
             true
         }
-    }
-
-    pub fn self_serve_team(&self) -> Option<&Team> {
-        self.current_workspace().and_then(|w| w.teams.first())
-    }
-
-    pub fn self_serve_team_uid(&self) -> Option<ServerId> {
-        self.self_serve_team().map(|team| team.uid)
     }
 
     pub fn sole_team(&self) -> Option<&Team> {

@@ -745,7 +745,7 @@ fn test_window_team_assignment_is_immutable() {
 }
 
 #[test]
-fn test_window_team_assignment_inherits_from_source_or_self_serve_team() {
+fn test_window_team_assignment_inherits_from_source_or_default_team() {
     let first_team = team_for_test();
     let mut second_team = team_for_test();
     second_team.uid = 456.into();
