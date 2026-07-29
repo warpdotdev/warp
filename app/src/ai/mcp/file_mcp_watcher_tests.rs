@@ -3,13 +3,9 @@ use std::env;
 use std::path::PathBuf;
 
 use futures::stream::AbortHandle;
-use repo_metadata::repositories::RepoDetectionSource;
-use repo_metadata::{RepositoryUpdate, TargetFile};
-use settings::SettingsMode;
 
 use super::{
-    FileMCPConfigDiagnosticKind, FileMCPConfigParseOutcome, FileMCPWatcher, config_change_flags,
-    home_subdir_to_watch, parse_mcp_config_file, providers_in_scope, should_watch_repository,
+    FileMCPConfigDiagnosticKind, FileMCPConfigParseOutcome, FileMCPWatcher, parse_mcp_config_file,
     substitute_env_vars,
 };
 use crate::ai::mcp::MCPProvider;
@@ -40,109 +36,6 @@ fn abort_config_parse_cancels_and_removes_inflight_task() {
 
     assert!(observed_handle.is_aborted());
     assert!(!watcher.parse_abort_handles.contains_key(&key));
-}
-
-#[test]
-fn repository_discovery_is_surface_aware() {
-    assert!(should_watch_repository(
-        RepoDetectionSource::TerminalNavigation,
-        SettingsMode::Gui
-    ));
-    assert!(should_watch_repository(
-        RepoDetectionSource::CloudEnvironmentPrep,
-        SettingsMode::Gui
-    ));
-    assert!(!should_watch_repository(
-        RepoDetectionSource::ProjectRulesIndexing,
-        SettingsMode::Gui
-    ));
-    assert!(!should_watch_repository(
-        RepoDetectionSource::CodeReviewInitialization,
-        SettingsMode::Gui
-    ));
-
-    assert!(should_watch_repository(
-        RepoDetectionSource::TerminalNavigation,
-        SettingsMode::Tui
-    ));
-    assert!(!should_watch_repository(
-        RepoDetectionSource::ProjectRulesIndexing,
-        SettingsMode::Tui
-    ));
-    assert!(!should_watch_repository(
-        RepoDetectionSource::CodeReviewInitialization,
-        SettingsMode::Tui
-    ));
-    assert!(!should_watch_repository(
-        RepoDetectionSource::CloudEnvironmentPrep,
-        SettingsMode::Tui
-    ));
-}
-
-#[test]
-fn global_provider_initial_scans_cover_claude_codex_and_agents() {
-    let home = PathBuf::from("/home/test");
-
-    assert_eq!(home_subdir_to_watch(MCPProvider::Claude), None);
-    assert_eq!(
-        home.join(MCPProvider::Claude.home_config_path()),
-        home.join(".claude.json")
-    );
-
-    for (provider, subdir, config) in [
-        (MCPProvider::Codex, ".codex", ".codex/config.toml"),
-        (MCPProvider::Agents, ".agents", ".agents/.mcp.json"),
-    ] {
-        assert_eq!(home_subdir_to_watch(provider), Some(PathBuf::from(subdir)));
-        let discovered =
-            providers_in_scope(home.clone(), home.join(subdir)).collect::<HashSet<_>>();
-        assert!(
-            discovered.contains(&(provider, home.join(config))),
-            "{provider:?} config should be included in its home subdirectory scan"
-        );
-    }
-}
-
-#[test]
-fn project_initial_scan_covers_each_supported_provider_config() {
-    let repo = PathBuf::from("/work/repository");
-    let discovered = providers_in_scope(repo.clone(), repo.clone()).collect::<HashSet<_>>();
-
-    for provider in [
-        MCPProvider::Warp,
-        MCPProvider::Claude,
-        MCPProvider::Codex,
-        MCPProvider::Agents,
-    ] {
-        assert!(
-            discovered.contains(&(provider, repo.join(provider.project_config_path()))),
-            "{provider:?} project config should be included in a repository scan"
-        );
-    }
-}
-
-#[test]
-fn incremental_updates_detect_each_supported_provider_config() {
-    let repo = PathBuf::from("/work/repository");
-    for provider in [
-        MCPProvider::Warp,
-        MCPProvider::Claude,
-        MCPProvider::Codex,
-        MCPProvider::Agents,
-    ] {
-        let config_path = repo.join(provider.project_config_path());
-        let mut added = RepositoryUpdate::default();
-        added
-            .added
-            .insert(TargetFile::new(config_path.clone(), false));
-        assert_eq!(config_change_flags(&added, &config_path), (false, true));
-
-        let mut deleted = RepositoryUpdate::default();
-        deleted
-            .deleted
-            .insert(TargetFile::new(config_path.clone(), false));
-        assert_eq!(config_change_flags(&deleted, &config_path), (true, false));
-    }
 }
 #[test]
 fn test_substitute_env_vars_success() {

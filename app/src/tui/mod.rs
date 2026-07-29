@@ -9,10 +9,8 @@ mod mcp;
 mod user_info;
 
 pub use mcp::{
-    TuiMcpAction, TuiMcpConfigDiagnostic, TuiMcpFileScope, TuiMcpFileSource, TuiMcpInstallRequest,
-    TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
-    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTemplateVariable, TuiMcpTransport,
-    TuiMcpVariableValue,
+    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
+    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
 use url::Url;
 pub use user_info::{TuiUserInfoManager, TuiUserInfoManagerEvent, TuiUserInfoSnapshot};

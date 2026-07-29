@@ -10,10 +10,7 @@ use warp_core::features::FeatureFlag;
 use warpui::{App, Entity, ModelHandle, SingletonEntity as _};
 use watcher::HomeDirectoryWatcher;
 
-use super::{
-    CloudEnvMcpScanServer, FileBasedMCPManager, FileBasedMCPManagerEvent, FileBasedMCPServerScope,
-    MCPProvider,
-};
+use super::{CloudEnvMcpScanServer, FileBasedMCPManager, FileBasedMCPManagerEvent, MCPProvider};
 use crate::ai::mcp::file_mcp_watcher::{FileMCPConfigDiagnostic, FileMCPConfigDiagnosticKind};
 use crate::ai::mcp::{FileMCPWatcher, FileMCPWatcherEvent, ParsedTemplatableMCPServerResult};
 use crate::auth::AuthStateProvider;
@@ -193,67 +190,16 @@ fn test_config_error_preserves_last_known_good_servers() {
             );
 
             assert_eq!(manager.file_based_servers.len(), 1);
-            let diagnostics = manager.config_diagnostics();
-            assert_eq!(diagnostics.len(), 1);
-            assert_eq!(diagnostics[0].config_path, config_path);
-            assert_eq!(diagnostics[0].message, "invalid JSON");
-        });
-    });
-}
-
-#[test]
-fn all_config_diagnostics_are_owned_sorted_and_cleared_independently() {
-    let first_root = PathBuf::from("/tmp/a-repo");
-    let second_root = PathBuf::from("/tmp/b-repo");
-    let first_path = first_root.join(".mcp.json");
-    let second_path = second_root.join(".agents/.mcp.json");
-
-    App::test((), |mut app| async move {
-        let manager_handle = setup_app(&mut app);
-        manager_handle.update(&mut app, |manager, ctx| {
-            for (config_path, provider, message) in [
-                (
-                    second_path.clone(),
-                    MCPProvider::Agents,
-                    "second diagnostic",
-                ),
-                (first_path.clone(), MCPProvider::Claude, "first diagnostic"),
-            ] {
-                manager.handle_watcher_event(
-                    &FileMCPWatcherEvent::ConfigError {
-                        diagnostic: FileMCPConfigDiagnostic {
-                            config_path,
-                            provider,
-                            kind: FileMCPConfigDiagnosticKind::Parse,
-                            message: message.to_string(),
-                        },
-                    },
-                    ctx,
-                );
-            }
-
-            let diagnostics = manager.config_diagnostics();
-            assert_eq!(diagnostics.len(), 2);
-            assert_eq!(diagnostics[0].config_path, first_path);
-            assert_eq!(diagnostics[1].config_path, second_path);
-
-            manager.handle_watcher_event(
-                &FileMCPWatcherEvent::ConfigParsed {
-                    config_path: first_path.clone(),
-                    root_path: first_root,
-                    provider: MCPProvider::Claude,
-                    servers: Vec::new(),
-                },
-                ctx,
+            assert_eq!(
+                manager
+                    .config_diagnostic(&config_path)
+                    .map(|diagnostic| diagnostic.message.as_str()),
+                Some("invalid JSON")
             );
-
-            let remaining = manager.config_diagnostics();
-            assert_eq!(remaining.len(), 1);
-            assert_eq!(remaining[0].config_path, second_path);
-            assert_eq!(diagnostics.len(), 2, "prior snapshot should remain owned");
         });
     });
 }
+
 #[test]
 fn test_update_file_based_servers_spawns_new_servers() {
     let repo_path = PathBuf::from("/tmp/test-repo");
@@ -531,79 +477,6 @@ fn test_global_non_warp_server_respects_toggle() {
     });
 }
 
-#[test]
-fn tui_global_third_party_servers_never_auto_start() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-    let Some(home_dir) = dirs::home_dir() else {
-        return;
-    };
-    let parsed =
-        parse_mcp_json(r#"{"global-codex": {"command": "npx", "args": ["global-codex"]}}"#);
-
-    App::test((), |mut app| async move {
-        let manager = setup_app(&mut app);
-        let events = subscribe_events(&mut app, &manager);
-        set_file_based_mcp_enabled(&mut app, true);
-
-        manager.update(&mut app, |manager, ctx| {
-            manager.defer_global_warp_autostart = true;
-            manager.global_warp_servers_activated = false;
-            manager.apply_parsed_servers(home_dir, MCPProvider::Codex, parsed, ctx);
-        });
-        set_file_based_mcp_enabled(&mut app, false);
-        set_file_based_mcp_enabled(&mut app, true);
-
-        events.read(&app, |events, _| {
-            assert!(
-                events.spawned_uuids.is_empty(),
-                "TUI third-party global configs require an explicit start"
-            );
-            assert!(
-                events.despawned_uuids.is_empty(),
-                "GUI toggle changes must not control TUI third-party configs"
-            );
-        });
-    });
-}
-
-#[test]
-fn tui_global_warp_servers_start_only_after_activation() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-    let Some(warp_mcp_config_path) = warp_managed_mcp_config_path() else {
-        return;
-    };
-    let parsed = parse_mcp_json(r#"{"global-warp": {"command": "npx", "args": ["global-warp"]}}"#);
-
-    App::test((), |mut app| async move {
-        let manager = setup_app(&mut app);
-        let events = subscribe_events(&mut app, &manager);
-
-        manager.update(&mut app, |manager, ctx| {
-            manager.defer_global_warp_autostart = true;
-            manager.global_warp_servers_activated = false;
-            manager.apply_parsed_servers(
-                warp_mcp_config_path.root_path,
-                MCPProvider::Warp,
-                parsed,
-                ctx,
-            );
-        });
-        events.read(&app, |events, _| {
-            assert!(events.spawned_uuids.is_empty());
-        });
-
-        manager.update(&mut app, |manager, ctx| {
-            manager.activate_global_warp_servers(ctx);
-        });
-        events.read(&app, |events, _| {
-            assert_eq!(
-                events.spawned_uuids.len(),
-                1,
-                "post-login activation should start TUI Warp-global servers"
-            );
-        });
-    });
-}
 /// Project-scoped installations (both Warp and third-party) never auto-spawn on
 /// detection, and the toggle must not spawn or despawn them either.
 #[test]
@@ -779,76 +652,6 @@ fn test_server_referenced_from_both_global_and_project_is_global() {
                 e.spawned_uuids,
                 vec![installation_uuid],
                 "Global reference should make the server eligible for toggle-driven spawn"
-            );
-        });
-    });
-}
-
-#[test]
-fn source_snapshots_preserve_provenance_scope_spawn_root_and_hash_lookup() {
-    let Some(home_dir) = dirs::home_dir() else {
-        return;
-    };
-    let repo_path = PathBuf::from("/tmp/warp-test-provenance-repo");
-    let json = r#"{"shared-server": {"command": "npx", "args": ["shared"]}}"#;
-
-    App::test((), |mut app| async move {
-        let manager = setup_app(&mut app);
-        manager.update(&mut app, |manager, ctx| {
-            manager.apply_parsed_servers(
-                home_dir.clone(),
-                MCPProvider::Claude,
-                parse_mcp_json(json),
-                ctx,
-            );
-            manager.apply_parsed_servers(
-                repo_path.clone(),
-                MCPProvider::Agents,
-                parse_mcp_json(json),
-                ctx,
-            );
-
-            let snapshots = manager.file_based_servers_with_sources();
-            assert_eq!(snapshots.len(), 1);
-            let snapshot = &snapshots[0];
-            assert_eq!(snapshot.sources.len(), 2);
-            assert!(snapshot.sources.iter().any(|source| {
-                source.provider == MCPProvider::Claude
-                    && source.root_path == home_dir
-                    && source.scope == FileBasedMCPServerScope::Global
-            }));
-            assert!(snapshot.sources.iter().any(|source| {
-                source.provider == MCPProvider::Agents
-                    && source.root_path == repo_path
-                    && source.scope == FileBasedMCPServerScope::Project
-            }));
-
-            let hash = snapshot
-                .installation
-                .hash()
-                .expect("file installation should have a stable hash");
-            assert_eq!(
-                manager
-                    .installation_by_hash(hash)
-                    .map(|installation| installation.uuid()),
-                Some(snapshot.installation.uuid())
-            );
-            assert_eq!(
-                manager.spawn_root_for_installation(snapshot.installation.uuid()),
-                Some(home_dir.clone()),
-                "global provenance remains the deterministic spawn cwd"
-            );
-
-            manager.remove_servers_for_root_provider(&home_dir, MCPProvider::Claude, ctx);
-            assert_eq!(
-                snapshots[0].sources.len(),
-                2,
-                "returned provenance remains an owned snapshot"
-            );
-            assert_eq!(
-                manager.spawn_root_for_installation(snapshot.installation.uuid()),
-                Some(repo_path),
-                "project provenance becomes the spawn cwd after global removal"
             );
         });
     });

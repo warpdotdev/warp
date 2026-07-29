@@ -100,9 +100,7 @@ impl TuiTerminalSessionView {
     ) {
         self.abort_input_detection(ctx);
         self.handle_completion_editor_changed(ctx);
-        if is_user_edit
-            && self.suggestions_mode.as_ref(ctx).mode() != TuiInputSuggestionsMode::McpInstall
-        {
+        if is_user_edit {
             self.schedule_input_detection(ctx);
         }
     }

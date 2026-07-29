@@ -139,7 +139,7 @@ pub struct FileMCPWatcher {
 impl FileMCPWatcher {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let (file_mcp_tx, file_mcp_rx) = async_channel::unbounded::<FileMCPDetectionMessage>();
-        let settings_mode = settings::settings_mode();
+        let is_tui = settings::settings_mode() == settings::SettingsMode::Tui;
 
         ctx.spawn_stream_local(
             file_mcp_rx,
@@ -149,24 +149,32 @@ impl FileMCPWatcher {
             |_, _| {},
         );
 
-        ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
-            let file_mcp_tx = file_mcp_tx.clone();
-            move |me, _, event, ctx| {
-                let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
-                if should_watch_repository(*source, settings_mode) {
-                    let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
-                    if matches!(source, RepoDetectionSource::CloudEnvironmentPrep) {
-                        let count =
-                            providers_in_scope(repo_path.clone(), repo_path.clone()).count();
-                        me.cloud_env_pending.insert(repo_path.clone(), count);
+        if !is_tui {
+            // TODO: Extend TUI discovery to project and third-party provider
+            // configs in a later phase.
+            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
+                let file_mcp_tx = file_mcp_tx.clone();
+                move |me, _, event, ctx| {
+                    let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
+                    if matches!(
+                        source,
+                        RepoDetectionSource::TerminalNavigation
+                            | RepoDetectionSource::CloudEnvironmentPrep
+                    ) {
+                        let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
+                        if matches!(source, RepoDetectionSource::CloudEnvironmentPrep) {
+                            let count =
+                                providers_in_scope(repo_path.clone(), repo_path.clone()).count();
+                            me.cloud_env_pending.insert(repo_path.clone(), count);
+                        }
+                        me.register_repo_for_file_mcp_watching(repo_path, ctx, file_mcp_tx.clone());
                     }
-                    me.register_repo_for_file_mcp_watching(repo_path, ctx, file_mcp_tx.clone());
                 }
-            }
-        });
-        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
-            me.handle_home_directory_watcher_event(event, ctx);
-        });
+            });
+            ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
+                me.handle_home_directory_watcher_event(event, ctx);
+            });
+        }
         ctx.subscribe_to_model(
             &WarpManagedPathsWatcher::handle(ctx),
             |me, _, event, ctx| {
@@ -184,7 +192,7 @@ impl FileMCPWatcher {
             ));
         }
 
-        if let Some(home_dir) = dirs::home_dir() {
+        if !is_tui && let Some(home_dir) = dirs::home_dir() {
             for provider in MCPProvider::iter() {
                 if provider == MCPProvider::Warp {
                     continue;
@@ -510,7 +518,10 @@ impl FileMCPWatcher {
         let mut configs_to_update = Vec::new();
 
         for (provider, config_path) in providers_in_scope(root_path.clone(), watched_dir.clone()) {
-            let (was_deleted, was_added) = config_change_flags(&update, &config_path);
+            let was_deleted = update.deleted.iter().any(|f| f.path == config_path)
+                || update.moved.values().any(|f| f.path == config_path);
+            let was_added = update.added_or_modified().any(|f| f.path == config_path)
+                || update.moved.keys().any(|f| f.path == config_path);
             configs_to_update.push((provider, config_path, was_deleted, was_added));
         }
 
@@ -595,36 +606,6 @@ impl FileMCPWatcher {
     }
 }
 
-fn should_watch_repository(
-    source: RepoDetectionSource,
-    settings_mode: settings::SettingsMode,
-) -> bool {
-    match settings_mode {
-        settings::SettingsMode::Gui => match source {
-            RepoDetectionSource::TerminalNavigation | RepoDetectionSource::CloudEnvironmentPrep => {
-                true
-            }
-            RepoDetectionSource::ProjectRulesIndexing
-            | RepoDetectionSource::CodeReviewInitialization => false,
-        },
-        settings::SettingsMode::Tui => match source {
-            RepoDetectionSource::TerminalNavigation => true,
-            RepoDetectionSource::ProjectRulesIndexing
-            | RepoDetectionSource::CodeReviewInitialization
-            | RepoDetectionSource::CloudEnvironmentPrep => false,
-        },
-    }
-}
-
-fn config_change_flags(update: &RepositoryUpdate, config_path: &Path) -> (bool, bool) {
-    let was_deleted = update.deleted.iter().any(|file| file.path == config_path)
-        || update.moved.values().any(|file| file.path == config_path);
-    let was_added = update
-        .added_or_modified()
-        .any(|file| file.path == config_path)
-        || update.moved.keys().any(|file| file.path == config_path);
-    (was_deleted, was_added)
-}
 /// Returns an iterator of `(provider, config_path)` pairs for MCP providers whose configuration file
 /// paths fall within the watched directory.
 fn providers_in_scope(

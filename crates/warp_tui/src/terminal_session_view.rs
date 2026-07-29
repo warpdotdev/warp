@@ -93,9 +93,6 @@ use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
     TUI_BINDING_GROUP, binding_hint,
 };
-use crate::mcp_install_flow::{
-    TuiMcpInstallFlowAction, TuiMcpInstallFlowEvent, TuiMcpInstallFlowModel,
-};
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::orchestration_block::TuiOrchestrationBlock;
@@ -245,24 +242,6 @@ impl BlockingInputSource {
             Self::GrokOAuth(view) => Some(TuiChildView::new(&view).finish()),
         }
     }
-}
-
-fn render_mcp_install_footer(
-    builder: &TuiUiBuilder,
-    primary_action_hint: Option<&'static str>,
-) -> TuiFlex {
-    let mut spans = Vec::new();
-    if let Some(hint) = primary_action_hint {
-        spans.extend([
-            ("Enter".to_owned(), builder.primary_text_style()),
-            (format!(" {hint}  "), builder.muted_text_style()),
-        ]);
-    }
-    spans.extend([
-        ("Esc".to_owned(), builder.primary_text_style()),
-        (" to cancel".to_owned(), builder.muted_text_style()),
-    ]);
-    TuiFlex::row().child(TuiText::from_spans(spans).truncate().finish())
 }
 /// Events emitted by the TUI terminal session surface.
 pub(crate) enum TuiTerminalSessionEvent {
@@ -680,7 +659,6 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
 
 fn mcp_primary_action_hint(action: TuiMcpAction) -> Option<&'static str> {
     match action {
-        TuiMcpAction::Enable(_) => Some("to enable"),
         TuiMcpAction::Start(_) => Some("to start"),
         TuiMcpAction::Stop(_) => Some("to stop"),
         TuiMcpAction::Retry(_) => Some("to retry"),
@@ -877,7 +855,6 @@ pub(crate) struct TuiTerminalSessionView {
     model_menu: ModelHandle<TuiModelMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
     mcp_menu: ModelHandle<TuiMcpMenuModel>,
-    mcp_install_flow: ModelHandle<TuiMcpInstallFlowModel>,
     completion_menu: ModelHandle<TuiCompletionMenuModel>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
@@ -1161,42 +1138,6 @@ impl TuiTerminalSessionView {
 
     fn refresh_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
         self.focus_current_owner_if_active(ctx);
-        ctx.notify();
-    }
-
-    fn handle_accepted_mcp_install_action(
-        &mut self,
-        action: TuiMcpInstallFlowAction,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match action {
-            TuiMcpInstallFlowAction::ProvideValue { key, value } => {
-                let result = self
-                    .mcp_install_flow
-                    .update(ctx, |flow, ctx| flow.apply_value(key, value, ctx));
-                if let Err(message) = result {
-                    self.show_error_hint(message, ctx);
-                }
-            }
-            TuiMcpInstallFlowAction::Confirm => {
-                let Some((id, name, values)) = self.mcp_install_flow.as_ref(ctx).confirmation()
-                else {
-                    self.show_error_hint(
-                        "The MCP installation flow is no longer ready".to_owned(),
-                        ctx,
-                    );
-                    return;
-                };
-                let result = TuiMcpManager::handle(ctx)
-                    .update(ctx, |manager, ctx| manager.confirm_install(id, values, ctx));
-                self.mcp_install_flow
-                    .update(ctx, |flow, ctx| flow.dismiss(ctx));
-                match result {
-                    Ok(_) => self.show_success_hint(format!("{name} enabled and starting"), ctx),
-                    Err(message) => self.show_error_hint(message, ctx),
-                }
-            }
-        }
         ctx.notify();
     }
 
@@ -1800,16 +1741,6 @@ impl TuiTerminalSessionView {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
         });
-        let mcp_install_flow = ctx.add_model(|_| {
-            TuiMcpInstallFlowModel::new(input_editor_model.clone(), suggestions_mode.clone())
-        });
-        ctx.subscribe_to_model(&mcp_install_flow, |view, _, event, ctx| match event {
-            TuiMcpInstallFlowEvent::Updated => ctx.notify(),
-            TuiMcpInstallFlowEvent::Dismissed => {
-                view.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
-                ctx.notify();
-            }
-        });
         let prompt_and_command_history_menu = ctx.add_model(|ctx| {
             TuiPromptAndCommandHistoryMenuModel::new(
                 input_editor_model.clone(),
@@ -1878,7 +1809,6 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
-            TuiInlineMenu::new(mcp_install_flow.clone()),
             TuiInlineMenu::new(prompt_and_command_history_menu.clone()),
             TuiInlineMenu::new(completion_menu.clone()),
         ];
@@ -1982,9 +1912,6 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
-            }
-            TuiInputViewEvent::AcceptedMcpInstall(action) => {
-                view.handle_accepted_mcp_install_action(action.clone(), ctx);
             }
             TuiInputViewEvent::AcceptedPromptAndCommandHistory { text, kind } => {
                 view.handle_accepted_prompt_and_command_history(text.clone(), kind.clone(), ctx);
@@ -2249,7 +2176,6 @@ impl TuiTerminalSessionView {
             model_menu,
             skills_menu,
             mcp_menu,
-            mcp_install_flow,
             completion_menu,
             slash_commands_source,
             conversation_selection,
@@ -3455,12 +3381,6 @@ impl TuiTerminalSessionView {
         if let Some(hint) = self.footer_hint(voice_statusline_visible, ctx) {
             return hint.render(&builder);
         }
-        if self.mcp_install_flow.as_ref(ctx).is_open(ctx) {
-            return render_mcp_install_footer(
-                &builder,
-                self.mcp_install_flow.as_ref(ctx).primary_action_hint(),
-            );
-        }
         if self.mcp_menu.as_ref(ctx).is_open(ctx) {
             let menu = self.mcp_menu.as_ref(ctx);
             return render_mcp_menu_footer(
@@ -4407,37 +4327,9 @@ impl TuiTerminalSessionView {
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
     fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {
-        match action {
-            TuiMcpAction::Enable(id) => {
-                let request = TuiMcpManager::handle(ctx)
-                    .update(ctx, |model, ctx| model.prepare_install(id, ctx));
-                match request {
-                    Ok(request) => {
-                        self.mcp_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
-                        if !self
-                            .mcp_install_flow
-                            .update(ctx, |flow, ctx| flow.start(request, ctx))
-                        {
-                            self.show_error_hint(
-                                "Unable to open the MCP installation flow".to_owned(),
-                                ctx,
-                            );
-                        }
-                    }
-                    Err(message) => self.show_error_hint(message, ctx),
-                }
-            }
-            TuiMcpAction::Start(_)
-            | TuiMcpAction::Stop(_)
-            | TuiMcpAction::Retry(_)
-            | TuiMcpAction::LogOut(_)
-            | TuiMcpAction::ReopenAuthorization(_)
-            | TuiMcpAction::ReloadConfig => {
-                TuiMcpManager::handle(ctx).update(ctx, |model, ctx| {
-                    model.apply_action(action, ctx);
-                });
-            }
-        }
+        TuiMcpManager::handle(ctx).update(ctx, |model, ctx| {
+            model.apply_action(action, ctx);
+        });
         ctx.notify();
     }
 
