@@ -6152,25 +6152,18 @@ impl Workspace {
     }
 
     /// Renders the team-switcher pill shown in the title-bar top-right, to the
-    /// left of the + / inbox / avatar controls. Returns `None` when the user
-    /// has ≤1 team (pill is hidden entirely).
+    /// left of the right-side toolbar actions
     fn render_team_switcher_pill(
         &self,
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
-        // Only show when the user has access to more than one team.
+        // Only show when the user has access to more than one team available to them.
         if !user_workspaces.can_switch_teams() {
             return None;
         }
-        let workspace = user_workspaces.current_workspace()?;
-        // If no team is explicitly assigned to this window yet (e.g., the window was
-        // just opened and `initialize_unassigned_windows` hasn't run), fall back to
-        // the first available team as a placeholder so the pill renders.
-        let current_team = user_workspaces
-            .team_for_window(self.window_id)
-            .or_else(|| workspace.teams.first())?;
+        let current_team = user_workspaces.team_for_window(self.window_id)?;
         let team_name = current_team.name.clone();
         let team_color_hex = current_team.color.clone();
         let theme = appearance.theme();
@@ -21181,7 +21174,6 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) {
-        // Team-switcher pill — only visible when the user belongs to > 1 team.
         if let Some(pill) = self.render_team_switcher_pill(appearance, ctx) {
             target.add_child(pill);
         }
@@ -21341,33 +21333,28 @@ impl Workspace {
                 .finish(),
         )
         .with_border(tab_bar_border);
-        // Determine the tab bar background, combining NewTabStyling with the
-        // per-team tint.  Only tint when the user has >1 team (AC4: single-team
-        // users must see unchanged behavior), and blend rather than replace so
-        // the fg_overlay_1 base is preserved when NewTabStyling is active.
         let is_multi_team = UserWorkspaces::as_ref(ctx).can_switch_teams();
-        if FeatureFlag::NewTabStyling.is_enabled() {
-            let mut fill = internal_colors::fg_overlay_1(appearance.theme());
-            if is_multi_team
-                && let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id)
-                && let Some(hex) = team.color.as_deref()
-                && let Ok(mut team_color) =
-                    warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
-            {
-                // Blend a semi-transparent tint over the fg_overlay_1 base.
-                team_color.a = TEAM_HEADER_TINT_ALPHA;
-                fill = fill.blend(&Fill::Solid(team_color));
-            }
-            tab_bar_container = tab_bar_container.with_background(fill);
-        } else if is_multi_team
-            && let Some(team) = UserWorkspaces::as_ref(ctx).team_for_window(self.window_id)
-            && let Some(hex) = team.color.as_deref()
-            && let Ok(mut team_color) = warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
-        {
-            // NewTabStyling is off: still apply the team tint, but as its own
-            // background pass (no fg_overlay_1 to preserve in this branch).
-            team_color.a = TEAM_HEADER_TINT_ALPHA;
-            tab_bar_container = tab_bar_container.with_background(Fill::Solid(team_color));
+        let team_color = is_multi_team
+            .then(|| UserWorkspaces::as_ref(ctx).team_for_window(self.window_id))
+            .flatten()
+            .and_then(|team| team.color.as_deref())
+            .and_then(|hex| warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok())
+            .map(|mut color| {
+                color.a = TEAM_HEADER_TINT_ALPHA;
+                color
+            });
+        let background = if FeatureFlag::NewTabStyling.is_enabled() {
+            let base = internal_colors::fg_overlay_1(appearance.theme());
+            Some(
+                team_color
+                    .map(|color| base.blend(&Fill::Solid(color)))
+                    .unwrap_or(base),
+            )
+        } else {
+            team_color.map(Fill::Solid)
+        };
+        if let Some(background) = background {
+            tab_bar_container = tab_bar_container.with_background(background);
         }
         let tab_bar_element = tab_bar_container.finish();
 
