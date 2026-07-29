@@ -28485,6 +28485,24 @@ impl Workspace {
                 let group_pinned = transferred_group.group.pinned;
                 let member_ids = transferred_group.member_pane_group_ids.clone();
 
+                // Resolve the target BEFORE unsubscribing or transferring
+                // anything. This window is its own preview, so once the
+                // members are unsubscribed and their view trees moved there is
+                // no preview to fall back to - bailing after that point would
+                // leave the dragged sessions without a workspace.
+                let Some(target_workspace) =
+                    WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx)
+                else {
+                    log::warn!(
+                        "tab_drag: whole_window_group->other no target workspace for target_wid={} (reset_to_floating)",
+                        target.window_id
+                    );
+                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                        drag.reset_to_floating();
+                    });
+                    return;
+                };
+
                 for id in &member_ids {
                     if let Some(index) = self.tab_index_for_pane_group_id(*id) {
                         let pane_group = self.tabs[index].pane_group.clone();
@@ -28496,14 +28514,6 @@ impl Workspace {
                     ctx.transfer_view_tree_to_window(*id, caller_window_id, target.window_id);
                 }
 
-                let Some(target_workspace) =
-                    WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx)
-                else {
-                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
-                        drag.reset_to_floating();
-                    });
-                    return;
-                };
                 let raw_index = target.insertion_index;
                 target_workspace.update(ctx, move |workspace, ctx| {
                     let resolved = workspace.resolve_group_drop_index(raw_index, group_pinned);
