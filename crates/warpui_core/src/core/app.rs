@@ -4388,18 +4388,23 @@ impl AppContext {
                 );
             }
             TaskCallback::ViewFromFuture {
-                window_id,
+                window_id: stored_window_id,
                 view_id,
                 callback,
             } => {
+                let current_window_id = self
+                    .view_to_window
+                    .get(&view_id)
+                    .copied()
+                    .unwrap_or(stored_window_id);
                 if let Some(mut view) = self
                     .windows
-                    .get_mut(&window_id)
+                    .get_mut(&current_window_id)
                     .and_then(|w| w.views.remove(&view_id))
                 {
-                    callback(view.as_any_mut(), output, self, window_id, view_id);
+                    callback(view.as_any_mut(), output, self, current_window_id, view_id);
                     self.windows
-                        .get_mut(&window_id)
+                        .get_mut(&current_window_id)
                         .ok_or_else(|| anyhow!("Unable to retrieve window for view"))?
                         .views
                         .insert(view_id, view);
@@ -4407,19 +4412,24 @@ impl AppContext {
                 self.task_done(task_id);
             }
             TaskCallback::ViewFromStream {
-                window_id,
+                window_id: stored_window_id,
                 view_id,
                 mut on_item,
                 on_done,
             } => {
+                let current_window_id = self
+                    .view_to_window
+                    .get(&view_id)
+                    .copied()
+                    .unwrap_or(stored_window_id);
                 if let Some(mut view) = self
                     .windows
-                    .get_mut(&window_id)
+                    .get_mut(&current_window_id)
                     .and_then(|w| w.views.remove(&view_id))
                 {
-                    on_item(view.as_any_mut(), output, self, window_id, view_id);
+                    on_item(view.as_any_mut(), output, self, current_window_id, view_id);
                     self.windows
-                        .get_mut(&window_id)
+                        .get_mut(&current_window_id)
                         .ok_or_else(|| anyhow!("Unable to retrieve window for view"))?
                         .views
                         .insert(view_id, view);
@@ -4434,7 +4444,7 @@ impl AppContext {
                 self.task_callbacks.insert(
                     task_id,
                     TaskCallback::ViewFromStream {
-                        window_id,
+                        window_id: current_window_id,
                         view_id,
                         on_item,
                         on_done,
@@ -4461,19 +4471,24 @@ impl AppContext {
                 }
             }
             TaskCallback::ViewFromStream {
-                window_id,
+                window_id: stored_window_id,
                 view_id,
                 on_done: callback,
                 ..
             } => {
+                let current_window_id = self
+                    .view_to_window
+                    .get(&view_id)
+                    .copied()
+                    .unwrap_or(stored_window_id);
                 if let Some(mut view) = self
                     .windows
-                    .get_mut(&window_id)
+                    .get_mut(&current_window_id)
                     .and_then(|w| w.views.remove(&view_id))
                 {
-                    callback(view.as_any_mut(), self, window_id, view_id);
+                    callback(view.as_any_mut(), self, current_window_id, view_id);
                     self.windows
-                        .get_mut(&window_id)
+                        .get_mut(&current_window_id)
                         .expect("Window should exist.")
                         .views
                         .insert(view_id, view);

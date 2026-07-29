@@ -87,6 +87,94 @@ fn test_transfer_view_to_window_updates_window_mapping() {
 }
 
 #[test]
+fn test_transfer_view_task_callbacks_continue_working() {
+    #[derive(Default)]
+    struct TestView {
+        future_values: Vec<usize>,
+        stream_values: Vec<usize>,
+        future_window_ids: Vec<WindowId>,
+        stream_window_ids: Vec<WindowId>,
+        stream_completed: bool,
+    }
+
+    impl Entity for TestView {
+        type Event = ();
+    }
+
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "TestView"
+        }
+    }
+
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (source_window_id, _) =
+            app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
+        let (target_window_id, _) =
+            app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
+        let view = app.add_view(source_window_id, |_| TestView::default());
+        let view_id = view.id();
+
+        let (future_tx, future_rx) = futures::channel::oneshot::channel();
+        let future_handle = view.update(&mut app, |_, ctx| {
+            ctx.spawn(
+                async move { future_rx.await.unwrap() },
+                |view, output, ctx| {
+                    view.future_values.push(output);
+                    view.future_window_ids.push(ctx.window_id());
+                },
+            )
+        });
+        let (stream_tx, stream_rx) = futures::channel::mpsc::unbounded();
+        let stream_future = view.update(&mut app, |_, ctx| {
+            ctx.spawn_stream_local(
+                stream_rx,
+                |view, output, ctx| {
+                    view.stream_values.push(output);
+                    view.stream_window_ids.push(ctx.window_id());
+                },
+                |view, ctx| {
+                    view.stream_completed = true;
+                    view.stream_window_ids.push(ctx.window_id());
+                },
+            )
+            .into_future()
+        });
+
+        assert!(app.update(|ctx| {
+            ctx.transfer_view_to_window(view_id, source_window_id, target_window_id)
+        }));
+        future_tx.send(1usize).unwrap();
+        stream_tx.unbounded_send(2usize).unwrap();
+        stream_tx.unbounded_send(3usize).unwrap();
+        drop(stream_tx);
+
+        let future = app.update(|ctx| ctx.await_spawned_future(future_handle.future_id()));
+        future.await;
+        stream_future.await;
+
+        view.read(&app, |view, _| {
+            assert_eq!(view.future_values, vec![1]);
+            assert_eq!(view.stream_values, vec![2, 3]);
+            assert!(view.stream_completed);
+            assert_eq!(view.future_window_ids, vec![target_window_id]);
+            assert_eq!(
+                view.stream_window_ids,
+                vec![target_window_id, target_window_id, target_window_id]
+            );
+        });
+    });
+}
+
+#[test]
 fn test_transfer_view_subscriptions_continue_working() {
     #[derive(Default)]
     struct EmitterView;
