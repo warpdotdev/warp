@@ -531,7 +531,7 @@ pub enum AgentDriverError {
     /// `command` is the command that was in flight (or most recently
     /// submitted) when the shell died.
     #[error(
-        "The shell exited during setup command {command}, so the run could not continue. \
+        "The shell exited during setup command `{command}`, so the run could not continue. \
          Check the setup commands for this environment."
     )]
     SetupCommandExitedShell { command: String },

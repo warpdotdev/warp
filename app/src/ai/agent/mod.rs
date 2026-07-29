@@ -916,7 +916,7 @@ impl Display for RenderableAIError {
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
             Self::AgentExitedShell { command } => write!(
                 f,
-                "The shell exited while the agent was running the command {command}, so the run \
+                "The shell exited while the agent was running the command `{command}`, so the run \
                  could not continue. Ensure the agent is not asked to run commands or source \
                  scripts that can exit the shell."
             ),
