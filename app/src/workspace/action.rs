@@ -875,8 +875,7 @@ pub enum WorkspaceAction {
     /// Opens (or focuses) the in-app network log pane as a right-split of the
     /// active pane group. Gated on `ContextFlag::NetworkLogConsole`.
     OpenNetworkLogPane,
-    /// Opens a new window pre-scoped to the specified team, triggered from
-    /// the title-bar team-switcher dropdown.
+    /// Opens or focuses a window scoped to the specified team.
     OpenNewWindowForTeam {
         team_uid: ServerId,
     },

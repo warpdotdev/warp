@@ -584,6 +584,8 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 /// Save position for the tab bar.
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
 const TEAM_SWITCHER_PILL_POSITION_ID: &str = "workspace_view:team_switcher_pill";
+const TEAM_HEADER_TINT_ALPHA: u8 = 96;
+const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 
 /// Save position for the vertical tabs panel.
 /// HOA onboarding callouts anchor relative to this position, so whichever code
@@ -6178,10 +6180,11 @@ impl Workspace {
 
         // Parse the team color for the dot; fall back to a neutral theme grey
         // (matching the server contract / admin UI default) if invalid/missing.
-        let dot_color = team_color_hex
+        let mut dot_color = team_color_hex
             .as_deref()
             .and_then(|hex| warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok())
             .unwrap_or_else(|| internal_colors::neutral_5(theme));
+        dot_color.a = TEAM_SWITCHER_DOT_ALPHA;
 
         let pill = Hoverable::new(self.mouse_states.team_switcher_pill.clone(), move |state| {
             let dot = ConstrainedBox::new(
@@ -21351,9 +21354,8 @@ impl Workspace {
                 && let Ok(mut team_color) =
                     warp_core::ui::color::hex_color::coloru_from_hex_string(hex)
             {
-                // Blend a subtle semi-transparent tint (~25% alpha) over the
-                // fg_overlay_1 base so the tint doesn't discard it.
-                team_color.a = 64;
+                // Blend a semi-transparent tint over the fg_overlay_1 base.
+                team_color.a = TEAM_HEADER_TINT_ALPHA;
                 fill = fill.blend(&Fill::Solid(team_color));
             }
             tab_bar_container = tab_bar_container.with_background(fill);
@@ -21364,7 +21366,7 @@ impl Workspace {
         {
             // NewTabStyling is off: still apply the team tint, but as its own
             // background pass (no fg_overlay_1 to preserve in this branch).
-            team_color.a = 64;
+            team_color.a = TEAM_HEADER_TINT_ALPHA;
             tab_bar_container = tab_bar_container.with_background(Fill::Solid(team_color));
         }
         let tab_bar_element = tab_bar_container.finish();
@@ -26227,10 +26229,23 @@ impl TypedActionView for Workspace {
             }
             OpenNewWindowForTeam { team_uid } => {
                 let team_uid = *team_uid;
-                crate::root_view::open_new_with_workspace_source(
-                    NewWorkspaceSource::TeamSwitched { team_uid },
-                    ctx,
-                );
+                let existing_window_id = ctx
+                    .windows()
+                    .ordered_window_ids()
+                    .into_iter()
+                    .chain(ctx.window_ids())
+                    .find(|window_id| {
+                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                            == Some(team_uid)
+                    });
+                if let Some(window_id) = existing_window_id {
+                    ctx.windows().show_window_and_focus_app(window_id);
+                } else {
+                    crate::root_view::open_new_with_workspace_source(
+                        NewWorkspaceSource::TeamSwitched { team_uid },
+                        ctx,
+                    );
+                }
             }
             ShowTeamSwitcherMenu => {
                 self.show_team_switcher_dropdown(ctx);
