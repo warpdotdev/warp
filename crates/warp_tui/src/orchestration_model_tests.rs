@@ -667,6 +667,66 @@ fn kill_child_agent_removes_session_and_conversation_from_map() {
 }
 
 #[test]
+fn kill_descendant_agents_removes_nested_sessions_and_conversations() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = app.read(|ctx| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(parent_session_id.surface_id())
+                .unwrap()
+                .id()
+        });
+        let child_request = remote_request(parent_conversation_id);
+        let (child_conversation_id, child_surface_id, _) = add_remote_child_session(
+            &mut app,
+            &fixture,
+            parent_session_id,
+            &child_request,
+            "researcher".to_string(),
+            Harness::Oz,
+        );
+        let child_session_id = app.read(|ctx| {
+            TuiSessions::as_ref(ctx)
+                .session_id_for_surface(child_surface_id)
+                .expect("child session should be retained")
+        });
+        let grandchild_request = remote_request(child_conversation_id);
+        let (grandchild_conversation_id, grandchild_surface_id, _) = add_remote_child_session(
+            &mut app,
+            &fixture,
+            child_session_id,
+            &grandchild_request,
+            "nested-researcher".to_string(),
+            Harness::Oz,
+        );
+
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.kill_descendant_agents(parent_conversation_id, ctx);
+            });
+        });
+
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert!(history.conversation(&child_conversation_id).is_none());
+            assert!(history.conversation(&grandchild_conversation_id).is_none());
+            let sessions = TuiSessions::as_ref(ctx);
+            assert!(sessions.session_id_for_surface(child_surface_id).is_none());
+            assert!(
+                sessions
+                    .session_id_for_surface(grandchild_surface_id)
+                    .is_none()
+            );
+            assert_eq!(sessions.focused_session_id(), Some(parent_session_id));
+        });
+        assert_eq!(
+            app.read_model(&fixture.sessions, |sessions, _| sessions.len()),
+            1
+        );
+    });
+}
+#[test]
 fn failed_launch_cleanup_preserves_other_sessions() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture(&mut app);

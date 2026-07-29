@@ -22,9 +22,10 @@ use warp::tui_export::{
     OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,
     RenderableAIError, ServerApiProvider, StartAgentExecutionMode, StartAgentRequest,
     apply_child_agent_model_override, classify_cloud_agent_startup_error,
-    descendant_conversations_in_pill_order, inherit_child_agent_settings,
-    orchestration_root_conversation_id, oz_run_url, prepare_local_oz_child_launch,
-    prepare_remote_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
+    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
+    inherit_child_agent_settings, orchestration_root_conversation_id, oz_run_url,
+    prepare_local_oz_child_launch, prepare_remote_child_launch, register_agent_event_consumer,
+    unregister_agent_event_consumer,
 };
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
@@ -679,6 +680,23 @@ impl TuiOrchestrationModel {
 
         // 3. Delete conversation and remove session.
         self.cleanup_failed_child(&conversation_id, ctx);
+    }
+
+    /// Kills every descendant spawned by `conversation_id`, including nested
+    /// descendants. Children are removed deepest-first so each retained
+    /// session can tear down while its ancestry is still available.
+    pub(crate) fn kill_descendant_agents(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let descendant_ids = descendant_conversation_ids_in_spawn_order(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            conversation_id,
+        );
+        for descendant_id in descendant_ids.into_iter().rev() {
+            self.kill_child_agent(descendant_id, ctx);
+        }
     }
 
     /// Resolves a child request as failed without creating a TUI session.

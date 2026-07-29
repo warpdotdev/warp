@@ -3869,6 +3869,49 @@ fn add_orchestration_child(
 }
 
 #[test]
+fn new_slash_command_kills_descendant_agents() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (parent_view, _parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (_child_view, _child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+        let (_grandchild_view, _grandchild_session_id, grandchild_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, child_conversation_id, "grandchild");
+
+        parent_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    parent_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.execute_tui_slash_command(&slash_commands::NEW, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert!(
+                history.conversation(&child_conversation_id).is_none(),
+                "/new should delete direct child conversations"
+            );
+            assert!(
+                history.conversation(&grandchild_conversation_id).is_none(),
+                "/new should delete nested child conversations"
+            );
+            let new_conversation_id = parent_view
+                .as_ref(ctx)
+                .conversation_selection
+                .as_ref(ctx)
+                .selected_conversation_id(ctx)
+                .expect("/new should select a replacement conversation");
+            assert_ne!(new_conversation_id, parent_conversation_id);
+            assert!(history.conversation(&new_conversation_id).is_some());
+        });
+    });
+}
+#[test]
 fn escape_from_child_tab_switches_to_root_and_clears_tab_focus() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);

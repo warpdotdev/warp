@@ -4057,6 +4057,15 @@ impl TuiTerminalSessionView {
             self.show_transient_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
             return false;
         }
+        if let Some(conversation_id) = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.kill_descendant_agents(conversation_id, ctx);
+            });
+        }
         self.cancel_active_conversation(ctx);
         let terminal_surface_id = ctx.view_id();
         self.transcript.update(ctx, |transcript, ctx| {
