@@ -5,7 +5,9 @@ use warpui_core::AppContext;
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
-    Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiStyle, TuiText,
+    Modifier, TuiConstrainedBox, TuiConstraint, TuiElement, TuiFlex, TuiLayoutContext,
+    TuiPaintContext, TuiPaintSurface, TuiScreenPosition, TuiSize, TuiStyle, TuiText, text_width,
+    truncate_with_ellipsis,
 };
 
 use crate::tui_builder::TuiUiBuilder;
@@ -24,33 +26,145 @@ pub(crate) fn abbreviate_home_prefix(path: &str) -> String {
     path.to_owned()
 }
 
-/// Compacts a path for the one-line session footer while preserving its root
-/// (or first relative component) and basename.
-pub(crate) fn compact_footer_path(path: &str) -> String {
+/// Shortens a path for the one-line session footer so it fits within `budget`
+/// display columns, eliding as little as possible.
+///
+/// The home prefix is always abbreviated to `~`. When the abbreviated path fits
+/// the budget it is returned in full — the footer only elides when the row
+/// genuinely runs out of room. When it does not fit, interior components are
+/// dropped progressively (widest fitting form wins), preserving the root/home
+/// prefix and basename where possible (`~/projects/research` →
+/// `~/…/research`). If even `…/basename` cannot fit, the basename itself is
+/// grapheme-truncated with an ellipsis as a last resort. All measurements are
+/// display-cell widths, so multi-byte and wide characters never panic or
+/// overflow the row.
+pub(crate) fn elide_footer_path(path: &str, budget: u16) -> String {
     let path = abbreviate_home_prefix(path);
+    if text_width(&path) <= budget {
+        return path;
+    }
+
     let separator = if path.contains('\\') && !path.contains('/') {
         '\\'
     } else {
         '/'
     };
-    let components: Vec<_> = path
+    let separator_str = separator.to_string();
+    let leading = path.starts_with(separator);
+    let components: Vec<&str> = path
         .split(separator)
         .filter(|component| !component.is_empty())
         .collect();
+    let last = components.last().copied().unwrap_or_default();
+
+    // With two or fewer components there is no interior to elide, so fall back
+    // to grapheme truncation of the whole abbreviated path.
     if components.len() <= 2 {
-        return path;
+        return truncate_with_ellipsis(&path, usize::from(budget));
     }
 
-    let last = components
-        .last()
-        .expect("path has more than two components");
-    if path.starts_with(separator) {
-        format!("{separator}…{separator}{last}")
-    } else {
-        format!(
-            "{}{separator}…{separator}{last}",
-            components.first().expect("path has components")
-        )
+    let count = components.len();
+    let first = components[0];
+    // Prefix-preserving candidates: keep the root/first component and a growing
+    // suffix of trailing components, eliding the interior with `…`.
+    let mut prefix_candidates: Vec<String> = Vec::new();
+    for kept in (1..=count - 2).rev() {
+        let suffix = components[count - kept..].join(&separator_str);
+        prefix_candidates.push(if leading {
+            format!("{separator}{first}{separator}…{separator}{suffix}")
+        } else {
+            format!("{first}{separator}…{separator}{suffix}")
+        });
+    }
+    // Fallback candidates: drop the leading component too, keeping only `…` plus
+    // a trailing suffix. These sacrifice the root/home prefix, so they are only
+    // considered when no prefix-preserving form fits.
+    let mut fallback_candidates: Vec<String> = Vec::new();
+    for kept in (1..=count - 1).rev() {
+        let suffix = components[count - kept..].join(&separator_str);
+        fallback_candidates.push(if leading {
+            format!("{separator}…{separator}{suffix}")
+        } else {
+            format!("…{separator}{suffix}")
+        });
+    }
+
+    // Prefer the widest prefix-preserving candidate that fits, so a useful
+    // root/home prefix is retained whenever possible. Only when no
+    // prefix-preserving form fits do we fall back to the leading-component-free
+    // forms; and only when nothing fits at all do we grapheme-truncate the
+    // basename as a last resort.
+    let widest_fitting = |candidates: Vec<String>| -> Option<String> {
+        candidates
+            .into_iter()
+            .filter(|candidate| text_width(candidate) <= budget)
+            .max_by_key(|candidate| text_width(candidate))
+    };
+
+    widest_fitting(prefix_candidates)
+        .or_else(|| widest_fitting(fallback_candidates))
+        .unwrap_or_else(|| truncate_with_ellipsis(last, usize::from(budget)))
+}
+
+/// The footer's working-directory segment: a width-aware label that defers path
+/// elision to layout. Unlike a plain [`TuiText`], it consults the width it is
+/// actually granted (minus `reserved` columns held for the segments rendered
+/// after it) so the cwd only shortens when the row genuinely runs out of room.
+pub(crate) struct WorkingDirectoryLabel {
+    /// The raw working directory; home abbreviation and elision happen at
+    /// layout time against the granted width.
+    path: String,
+    style: TuiStyle,
+    /// Columns to leave for the segments rendered after this one, so eliding
+    /// the cwd never crowds out the git branch, usage, etc.
+    reserved: u16,
+    /// The elided text resolved during the most recent layout.
+    text: Option<TuiText>,
+    size: Option<TuiSize>,
+}
+
+impl WorkingDirectoryLabel {
+    pub(crate) fn new(path: String, style: TuiStyle, reserved: u16) -> Self {
+        Self {
+            path,
+            style,
+            reserved,
+            text: None,
+            size: None,
+        }
+    }
+}
+
+impl TuiElement for WorkingDirectoryLabel {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
+        let budget = constraint.max.width.saturating_sub(self.reserved);
+        let mut text = TuiText::new(elide_footer_path(&self.path, budget))
+            .with_style(self.style)
+            .truncate();
+        let size = text.layout(constraint, ctx, app);
+        self.text = Some(text);
+        self.size = Some(size);
+        size
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        if let Some(text) = &mut self.text {
+            text.render(origin, surface, ctx);
+        }
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
     }
 }
 

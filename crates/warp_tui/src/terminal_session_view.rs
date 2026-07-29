@@ -54,7 +54,7 @@ use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
-    TuiSelectionHandle, TuiSize, TuiStyle, TuiText,
+    TuiSelectionHandle, TuiSize, TuiStyle, TuiText, text_width,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
@@ -123,7 +123,7 @@ use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::tui_permission_prompt::TuiPermissionPrompt;
 use crate::ui::{
-    abbreviate_home_prefix, compact_footer_path, conversation_restore_failed,
+    WorkingDirectoryLabel, abbreviate_home_prefix, conversation_restore_failed,
     conversation_restoring,
 };
 use crate::usage::UsageToggle;
@@ -475,60 +475,128 @@ fn bordered_input(
         .finish()
 }
 
-/// One resolved item in the footer's configured presentation order.
+/// One resolved item in the footer's configured presentation order. Segments
+/// built from an already-rendered element carry the element's display width so
+/// the width-aware working-directory segment can reserve room for the segments
+/// that follow it (see [`FooterSegment::content_width`]).
 enum FooterSegment {
     ShellMode,
     ActiveIndicator(&'static str),
-    Model(Box<dyn TuiElement>),
-    WorkingDirectory(String),
+    Model(Box<dyn TuiElement>, u16),
+    WorkingDirectory { path: String, reserved: u16 },
     GitBranch(String),
-    CreditUsage(Box<dyn TuiElement>),
+    CreditUsage(Box<dyn TuiElement>, u16),
     ContextWindowUsage(String),
     GitDiff { additions: usize, deletions: usize },
     GitBranchStatus(String),
-    DateTime(Box<dyn TuiElement>),
+    DateTime(Box<dyn TuiElement>, u16),
     AgentTodoList(String),
-    VoiceInput(Box<dyn TuiElement>),
+    VoiceInput(Box<dyn TuiElement>, u16),
 }
 
 impl FooterSegment {
     fn separator_to(&self, next: &Self) -> &'static str {
         match (self, next) {
-            (Self::ShellMode | Self::Model(_), Self::WorkingDirectory(_)) => " ",
-            (Self::WorkingDirectory(_), Self::GitBranch(_)) => " ⊢ ",
+            (Self::ShellMode | Self::Model(_, _), Self::WorkingDirectory { .. }) => " ",
+            (Self::WorkingDirectory { .. }, Self::GitBranch(_)) => " ⊢ ",
             (Self::ActiveIndicator(_), Self::ActiveIndicator(_)) => " • ",
             (
-                Self::WorkingDirectory(_) | Self::GitBranch(_),
-                Self::WorkingDirectory(_) | Self::GitBranch(_),
+                Self::WorkingDirectory { .. } | Self::GitBranch(_),
+                Self::WorkingDirectory { .. } | Self::GitBranch(_),
             )
-            | (Self::DateTime(_), Self::DateTime(_))
+            | (Self::DateTime(_, _), Self::DateTime(_, _))
             | (Self::ShellMode, _)
             | (_, Self::ShellMode) => " • ",
             (
                 Self::ActiveIndicator(_)
-                | Self::Model(_)
-                | Self::WorkingDirectory(_)
+                | Self::Model(_, _)
+                | Self::WorkingDirectory { .. }
                 | Self::GitBranch(_)
-                | Self::CreditUsage(_)
+                | Self::CreditUsage(_, _)
                 | Self::ContextWindowUsage(_)
                 | Self::GitDiff { .. }
                 | Self::GitBranchStatus(_)
-                | Self::DateTime(_)
+                | Self::DateTime(_, _)
                 | Self::AgentTodoList(_)
-                | Self::VoiceInput(_),
+                | Self::VoiceInput(_, _),
                 Self::ActiveIndicator(_)
-                | Self::Model(_)
-                | Self::WorkingDirectory(_)
+                | Self::Model(_, _)
+                | Self::WorkingDirectory { .. }
                 | Self::GitBranch(_)
-                | Self::CreditUsage(_)
+                | Self::CreditUsage(_, _)
                 | Self::ContextWindowUsage(_)
                 | Self::GitDiff { .. }
                 | Self::GitBranchStatus(_)
-                | Self::DateTime(_)
+                | Self::DateTime(_, _)
                 | Self::AgentTodoList(_)
-                | Self::VoiceInput(_),
+                | Self::VoiceInput(_, _),
             ) => " | ",
         }
+    }
+
+    /// The display-cell width this segment occupies when rendered. Used to
+    /// reserve room for the segments after the working directory so eliding
+    /// the cwd never crowds them out. The working directory itself is
+    /// width-aware and reports its natural (unelided) width here, which the
+    /// reservation logic ignores.
+    fn content_width(&self) -> u16 {
+        match self {
+            Self::ShellMode => text_width(SHELL_MODE_HINT),
+            Self::ActiveIndicator(label) => text_width(label),
+            Self::Model(_, width)
+            | Self::CreditUsage(_, width)
+            | Self::DateTime(_, width)
+            | Self::VoiceInput(_, width) => *width,
+            Self::WorkingDirectory { path, .. } => text_width(path),
+            Self::GitBranch(value)
+            | Self::ContextWindowUsage(value)
+            | Self::GitBranchStatus(value)
+            | Self::AgentTodoList(value) => text_width(value),
+            Self::GitDiff {
+                additions,
+                deletions,
+            } => {
+                let mut width: u16 = 0;
+                if *additions > 0 {
+                    width = width.saturating_add(text_width(&format!("+{additions}")));
+                }
+                if *deletions > 0 {
+                    if *additions > 0 {
+                        // The space child rendered between `+n` and `-n`.
+                        width = width.saturating_add(1);
+                    }
+                    width = width.saturating_add(text_width(&format!("-{deletions}")));
+                }
+                width
+            }
+        }
+    }
+}
+
+/// Records how many columns the working-directory segment must leave for the
+/// segments rendered after it, so it only elides the cwd when the row runs out
+/// of room. The reservation is the total width of every trailing segment plus
+/// the separators from the cwd onward.
+fn set_working_directory_reserved_width(segments: &mut [FooterSegment]) {
+    let Some(cwd_index) = segments
+        .iter()
+        .position(|segment| matches!(segment, FooterSegment::WorkingDirectory { .. }))
+    else {
+        return;
+    };
+    let mut reserved: u16 = 0;
+    for index in cwd_index..segments.len() {
+        if let Some(next) = segments.get(index + 1) {
+            reserved = reserved.saturating_add(text_width(segments[index].separator_to(next)));
+        }
+        if index > cwd_index {
+            reserved = reserved.saturating_add(segments[index].content_width());
+        }
+    }
+    if let Some(FooterSegment::WorkingDirectory { reserved: slot, .. }) =
+        segments.get_mut(cwd_index)
+    {
+        *slot = reserved;
     }
 }
 
@@ -564,13 +632,16 @@ fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) ->
                         .finish(),
                 );
             }
-            FooterSegment::Model(element)
-            | FooterSegment::CreditUsage(element)
-            | FooterSegment::DateTime(element)
-            | FooterSegment::VoiceInput(element) => {
+            FooterSegment::Model(element, _)
+            | FooterSegment::CreditUsage(element, _)
+            | FooterSegment::DateTime(element, _)
+            | FooterSegment::VoiceInput(element, _) => {
                 row = row.child(element);
             }
-            FooterSegment::WorkingDirectory(cwd) | FooterSegment::GitBranch(cwd) => {
+            FooterSegment::WorkingDirectory { path, reserved } => {
+                row = row.child(WorkingDirectoryLabel::new(path, muted, reserved).finish());
+            }
+            FooterSegment::GitBranch(cwd) => {
                 row = row.child(TuiText::new(cwd).with_style(muted).truncate().finish());
             }
             FooterSegment::ContextWindowUsage(usage) => {
@@ -3280,6 +3351,7 @@ impl TuiTerminalSessionView {
                     } else {
                         builder.muted_text_style()
                     };
+                    let model_width = text_width(&model_name);
                     FooterSegment::Model(
                         TuiHoverable::new(
                             self.model_label_hover.clone(),
@@ -3293,11 +3365,16 @@ impl TuiTerminalSessionView {
                                 .dispatch_typed_action(TuiTerminalSessionAction::ToggleModelMenu);
                         })
                         .finish(),
+                        model_width,
                     )
                 }),
-                TuiStatuslineItem::WorkingDirectory => self
-                    .current_working_directory(ctx)
-                    .map(|cwd| FooterSegment::WorkingDirectory(compact_footer_path(&cwd))),
+                TuiStatuslineItem::WorkingDirectory => {
+                    self.current_working_directory(ctx)
+                        .map(|cwd| FooterSegment::WorkingDirectory {
+                            path: cwd,
+                            reserved: 0,
+                        })
+                }
                 TuiStatuslineItem::GitBranch => git_metadata
                     .map(|metadata| FooterSegment::GitBranch(metadata.current_branch_name.clone())),
                 TuiStatuslineItem::GitBranchStatus => git_metadata.and_then(|metadata| {
@@ -3320,16 +3397,16 @@ impl TuiTerminalSessionView {
                     .flatten()
                     .map(|totals| {
                         let mode = AISettings::as_ref(ctx).usage_display_mode;
-                        FooterSegment::CreditUsage(self.usage_toggle.render_entry(
-                            mode,
-                            totals,
-                            ctx,
-                            |event_ctx, _| {
-                                event_ctx.dispatch_typed_action(
-                                    TuiTerminalSessionAction::ToggleUsageDisplay,
-                                );
-                            },
-                        ))
+                        let usage_width = text_width(&crate::usage::entry_text(mode, totals));
+                        FooterSegment::CreditUsage(
+                            self.usage_toggle
+                                .render_entry(mode, totals, ctx, |event_ctx, _| {
+                                    event_ctx.dispatch_typed_action(
+                                        TuiTerminalSessionAction::ToggleUsageDisplay,
+                                    );
+                                }),
+                            usage_width,
+                        )
                     }),
                 TuiStatuslineItem::ContextWindowUsage => (!shell_mode)
                     .then(|| {
@@ -3345,19 +3422,22 @@ impl TuiTerminalSessionView {
                     }),
                 TuiStatuslineItem::Date => Some(FooterSegment::DateTime(
                     render_statusline_datetime(format_statusline_date, builder.muted_text_style()),
+                    text_width(&format_statusline_date(Local::now().naive_local())),
                 )),
-                TuiStatuslineItem::Time12Hour => {
-                    Some(FooterSegment::DateTime(render_statusline_datetime(
+                TuiStatuslineItem::Time12Hour => Some(FooterSegment::DateTime(
+                    render_statusline_datetime(
                         format_statusline_time_12_hour,
                         builder.muted_text_style(),
-                    )))
-                }
-                TuiStatuslineItem::Time24Hour => {
-                    Some(FooterSegment::DateTime(render_statusline_datetime(
+                    ),
+                    text_width(&format_statusline_time_12_hour(Local::now().naive_local())),
+                )),
+                TuiStatuslineItem::Time24Hour => Some(FooterSegment::DateTime(
+                    render_statusline_datetime(
                         format_statusline_time_24_hour,
                         builder.muted_text_style(),
-                    )))
-                }
+                    ),
+                    text_width(&format_statusline_time_24_hour(Local::now().naive_local())),
+                )),
                 TuiStatuslineItem::AgentTodoList => (!shell_mode)
                     .then(|| {
                         self.conversation_selection
@@ -3375,13 +3455,15 @@ impl TuiTerminalSessionView {
                         ))
                     }),
                 TuiStatuslineItem::VoiceInput => voice_statusline_visible.then(|| {
-                    FooterSegment::VoiceInput(self.render_voice_statusline(&builder, ctx))
+                    let (element, width) = self.render_voice_statusline(&builder, ctx);
+                    FooterSegment::VoiceInput(element, width)
                 }),
             };
             if let Some(segment) = segment {
                 ordered.push(segment);
             }
         }
+        set_working_directory_reserved_width(&mut ordered);
         render_status_footer_row(FooterSegments { ordered }, &builder)
     }
 
@@ -3389,11 +3471,13 @@ impl TuiTerminalSessionView {
         !shell_mode && AISettings::as_ref(ctx).is_voice_input_enabled(ctx)
     }
 
+    /// Builds the voice-input footer segment and reports its display width so
+    /// the width-aware working-directory segment can reserve room for it.
     fn render_voice_statusline(
         &self,
         builder: &TuiUiBuilder,
         ctx: &AppContext,
-    ) -> Box<dyn TuiElement> {
+    ) -> (Box<dyn TuiElement>, u16) {
         let state = self.input_view.as_ref(ctx).voice_state(ctx);
         let hovered = self
             .voice_input_mouse
@@ -3410,20 +3494,27 @@ impl TuiTerminalSessionView {
             ),
             TuiVoiceInputState::Listening => ("■ Listening", builder.error_text_style()),
             TuiVoiceInputState::Transcribing => {
-                return TuiText::new("… Transcribing")
-                    .with_style(builder.voice_input_status_style())
-                    .truncate()
-                    .finish();
+                let label = "… Transcribing";
+                return (
+                    TuiText::new(label)
+                        .with_style(builder.voice_input_status_style())
+                        .truncate()
+                        .finish(),
+                    text_width(label),
+                );
             }
         };
-        TuiHoverable::new(
-            self.voice_input_mouse.clone(),
-            TuiText::new(label).with_style(style).truncate().finish(),
+        (
+            TuiHoverable::new(
+                self.voice_input_mouse.clone(),
+                TuiText::new(label).with_style(style).truncate().finish(),
+            )
+            .on_click(|event_ctx, _| {
+                event_ctx.dispatch_typed_action(TuiTerminalSessionAction::ToggleVoiceInput);
+            })
+            .finish(),
+            text_width(label),
         )
-        .on_click(|event_ctx, _| {
-            event_ctx.dispatch_typed_action(TuiTerminalSessionAction::ToggleVoiceInput);
-        })
-        .finish()
     }
 
     fn is_auto_queue_enabled(&self, ctx: &AppContext) -> bool {

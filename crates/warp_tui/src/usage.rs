@@ -62,8 +62,10 @@ impl UsageToggle {
 }
 
 /// The entry's text for `mode`: the GUI-consistent credits total (formatted
-/// with the GUI's own `format_credits`) or the provider dollar cost.
-fn entry_text(mode: TuiUsageDisplayMode, totals: ConversationUsageTotals) -> String {
+/// with the GUI's own `format_credits`) or the provider dollar cost. Exposed to
+/// the footer so it can measure the entry's display width without rebuilding
+/// the element.
+pub(crate) fn entry_text(mode: TuiUsageDisplayMode, totals: ConversationUsageTotals) -> String {
     match mode {
         TuiUsageDisplayMode::Credits => format_credits(totals.credits_spent),
         TuiUsageDisplayMode::Cost => format_cost(totals.cost_in_cents),

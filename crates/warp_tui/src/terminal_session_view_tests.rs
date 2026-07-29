@@ -32,7 +32,7 @@ use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{
     Color, TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement,
     TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint,
-    TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
+    TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText, text_width,
 };
 use warpui_core::event::ModifiersState;
 use warpui_core::keymap::{Context, Keystroke, Trigger};
@@ -57,7 +57,7 @@ use super::{
     format_context_window_usage, format_statusline_date, format_statusline_time_12_hour,
     format_statusline_time_24_hour, format_todo_progress, log_bundle_success_message,
     raw_prompt_if_not_blank, render_status_footer_row, render_statusline_datetime,
-    voice_argument_is_empty, voice_command_argument,
+    set_working_directory_reserved_width, voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
@@ -133,8 +133,14 @@ fn footer_supports_arbitrary_order_and_figma_group_dividers() {
                         FooterSegment::ContextWindowUsage(format_context_window_usage(0.426)),
                         FooterSegment::GitBranch("feature/statusline".to_owned()),
                         FooterSegment::ActiveIndicator("Auto-queue"),
-                        FooterSegment::WorkingDirectory("/tmp/warp".to_owned()),
-                        FooterSegment::DateTime(TuiText::new("July 20, 2026").finish()),
+                        FooterSegment::WorkingDirectory {
+                            path: "/tmp/warp".to_owned(),
+                            reserved: 0,
+                        },
+                        FooterSegment::DateTime(
+                            TuiText::new("July 20, 2026").finish(),
+                            text_width("July 20, 2026"),
+                        ),
                     ],
                 },
                 &builder,
@@ -164,6 +170,52 @@ fn footer_supports_arbitrary_order_and_figma_group_dividers() {
 }
 
 #[test]
+fn footer_working_directory_uses_available_width() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let long_cwd = "/one/two/three/four/five";
+            let footer = |width: u16| {
+                let mut ordered = vec![
+                    FooterSegment::WorkingDirectory {
+                        path: long_cwd.to_owned(),
+                        reserved: 0,
+                    },
+                    FooterSegment::GitBranch("main".to_owned()),
+                ];
+                set_working_directory_reserved_width(&mut ordered);
+                let row = render_status_footer_row(FooterSegments { ordered }, &builder).finish();
+                render_element(row, ctx, width).to_lines()
+            };
+
+            // Wide row: the full multi-component cwd is shown, not eagerly
+            // collapsed, and the branch still renders after it.
+            assert_eq!(
+                footer(120),
+                vec![format!("{long_cwd} ⊢ main")],
+                "cwd must use available width instead of eager truncation"
+            );
+
+            // Narrow row: the cwd elides only as much as needed, stays on one
+            // line, and never crowds out the trailing branch segment.
+            let narrow = footer(20);
+            assert_eq!(narrow.len(), 1, "footer must stay on one line: {narrow:?}");
+            let line = &narrow[0];
+            assert!(line.contains('…'), "cwd should elide when narrow: {line:?}");
+            assert!(
+                line.contains("main"),
+                "trailing branch must survive cwd elision: {line:?}"
+            );
+            assert!(
+                line.ends_with("five ⊢ main") || line.contains("five ⊢ main"),
+                "basename and branch are preserved: {line:?}"
+            );
+        });
+    });
+}
+
+#[test]
 fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
@@ -174,20 +226,32 @@ fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators(
                     ordered: vec![
                         FooterSegment::ActiveIndicator("Auto-approve"),
                         FooterSegment::ActiveIndicator("Auto-queue"),
-                        FooterSegment::Model(TuiText::new("model").finish()),
-                        FooterSegment::WorkingDirectory("/tmp/warp".to_owned()),
+                        FooterSegment::Model(TuiText::new("model").finish(), text_width("model")),
+                        FooterSegment::WorkingDirectory {
+                            path: "/tmp/warp".to_owned(),
+                            reserved: 0,
+                        },
                         FooterSegment::GitBranch("main".to_owned()),
                         FooterSegment::GitBranchStatus("↑1 ↓2".to_owned()),
                         FooterSegment::GitDiff {
                             additions: 31,
                             deletions: 12,
                         },
-                        FooterSegment::CreditUsage(TuiText::new("40 credits").finish()),
+                        FooterSegment::CreditUsage(
+                            TuiText::new("40 credits").finish(),
+                            text_width("40 credits"),
+                        ),
                         FooterSegment::ContextWindowUsage("43% context used".to_owned()),
-                        FooterSegment::DateTime(TuiText::new("July 20, 2026").finish()),
-                        FooterSegment::DateTime(TuiText::new("1:08pm").finish()),
+                        FooterSegment::DateTime(
+                            TuiText::new("July 20, 2026").finish(),
+                            text_width("July 20, 2026"),
+                        ),
+                        FooterSegment::DateTime(
+                            TuiText::new("1:08pm").finish(),
+                            text_width("1:08pm"),
+                        ),
                         FooterSegment::AgentTodoList("❒ 1/10".to_owned()),
-                        FooterSegment::VoiceInput(TuiText::new("Voice").finish()),
+                        FooterSegment::VoiceInput(TuiText::new("Voice").finish(), text_width("Voice")),
                     ],
                 },
                 &builder,
@@ -1124,8 +1188,12 @@ fn render_usage_footer_row(app: &mut App, totals: ConversationUsageTotals) -> Ve
                             .with_style(builder.primary_text_style())
                             .truncate()
                             .finish(),
+                        text_width("TestModel"),
                     ),
-                    FooterSegment::CreditUsage(usage),
+                    FooterSegment::CreditUsage(
+                        usage,
+                        text_width(&crate::usage::entry_text(mode, totals)),
+                    ),
                 ],
             },
             &builder,
@@ -3107,10 +3175,14 @@ fn footer_renders_agent_sections_left_aligned() {
                                 .with_style(builder.primary_text_style())
                                 .truncate()
                                 .finish(),
+                            text_width("TestModel"),
                         ),
-                        FooterSegment::WorkingDirectory("/home/user/warp".to_owned()),
+                        FooterSegment::WorkingDirectory {
+                            path: "/home/user/warp".to_owned(),
+                            reserved: 0,
+                        },
                         FooterSegment::GitBranch("main".to_owned()),
-                        FooterSegment::CreditUsage(usage),
+                        FooterSegment::CreditUsage(usage, 0),
                         FooterSegment::GitDiff {
                             additions: 3,
                             deletions: 1,
@@ -3166,7 +3238,10 @@ fn footer_renders_shell_mode_sections_without_model_or_usage() {
                 FooterSegments {
                     ordered: vec![
                         FooterSegment::ShellMode,
-                        FooterSegment::WorkingDirectory("/home/user/warp".to_owned()),
+                        FooterSegment::WorkingDirectory {
+                            path: "/home/user/warp".to_owned(),
+                            reserved: 0,
+                        },
                         FooterSegment::GitBranch("main".to_owned()),
                         FooterSegment::GitDiff {
                             additions: 3,
