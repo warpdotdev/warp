@@ -572,6 +572,10 @@ pub enum VimEventType {
         character: Option<char>,
         advance: bool,
     },
+    ReplaceText {
+        text: String,
+        already_applied: bool,
+    },
     ToggleCase,
     Search(Direction),
     CycleSearch(Direction),
@@ -637,12 +641,16 @@ impl VimEventType {
     /// text all at once.
     fn for_dot_repeat(&self) -> Option<Self> {
         match self {
-            VimEventType::ReplaceChar { .. }
+            VimEventType::ReplaceChar { advance: false, .. }
             | VimEventType::ToggleCase
             | VimEventType::Paste { .. }
             | VimEventType::InsertText { .. }
             | VimEventType::JoinLine
             | VimEventType::DeleteForward => Some(self.clone()),
+            VimEventType::ReplaceText { text, .. } => Some(VimEventType::ReplaceText {
+                text: text.clone(),
+                already_applied: false,
+            }),
             VimEventType::Operation { operator, .. }
                 if *operator == VimOperator::Change
                     || *operator == VimOperator::Delete
@@ -662,19 +670,9 @@ impl VimEventType {
                 text: String::new(),
                 position: *position,
             }),
-            VimEventType::ChangeMode {
-                new:
-                    ModeTransition {
-                        mode: VimMode::Replace,
-                        ..
-                    },
-                ..
-            } => Some(VimEventType::ReplaceChar {
-                character: None,
-                advance: false,
-            }),
             VimEventType::Operation { .. }
             | VimEventType::ChangeMode { .. }
+            | VimEventType::ReplaceChar { advance: true, .. }
             | VimEventType::Navigate(_)
             | VimEventType::Search(_)
             | VimEventType::CycleSearch(_)
@@ -805,6 +803,9 @@ impl VimFSA {
             VimMode::Visual(motion_type) => self.handle_visual_command(c, motion_type)?,
             VimMode::Replace => {
                 let advance = self.continuous_replace;
+                if advance && let Some(text) = self.dot_repeat_text_mut() {
+                    text.push(c);
+                }
                 if !advance {
                     self.mode = VimMode::Normal;
                 }
@@ -815,6 +816,31 @@ impl VimFSA {
             }
         };
         let count = self.compute_event_count(c, &event_type);
+        if matches!(
+            event_type,
+            VimEventType::ChangeMode {
+                new: ModeTransition {
+                    mode: VimMode::Replace,
+                    ..
+                },
+                ..
+            }
+        ) {
+            self.dot_repeat_event = Some(VimEvent {
+                event_type: if self.continuous_replace {
+                    VimEventType::ReplaceText {
+                        text: String::new(),
+                        already_applied: false,
+                    }
+                } else {
+                    VimEventType::ReplaceChar {
+                        character: None,
+                        advance: false,
+                    }
+                },
+                count,
+            });
+        }
 
         self.clear();
 
@@ -833,6 +859,7 @@ impl VimFSA {
                     self.clear();
                     VimEventType::Escape.into()
                 }
+                VimMode::Replace if self.continuous_replace => self.finish_replace_mode(),
                 VimMode::Replace | VimMode::Visual(_) => {
                     self.change_mode(VimMode::Normal.into()).into()
                 }
@@ -901,14 +928,14 @@ impl VimFSA {
             //
             // Replace mode is another special case where we remember the count
             // that was entered when switching into replace mode.
-            ('.', _) | (_, VimEventType::ReplaceChar { .. }) => {
-                this_action_count.unwrap_or_else(|| {
+            (_, VimEventType::ReplaceChar { advance: true, .. }) => 1,
+            ('.', _) | (_, VimEventType::ReplaceChar { advance: false, .. }) => this_action_count
+                .unwrap_or_else(|| {
                     self.dot_repeat_event
                         .as_ref()
                         .map(|event| event.count)
                         .unwrap_or(1)
-                })
-            }
+                }),
             _ => this_action_count.unwrap_or(1) * self.get_operand_count().unwrap_or(1),
         }
     }
@@ -942,6 +969,27 @@ impl VimFSA {
                 }
             }
             None => self.change_mode(VimMode::Normal.into()).into(),
+        }
+    }
+
+    fn finish_replace_mode(&mut self) -> VimEvent {
+        let (text, count) = self
+            .dot_repeat_event
+            .as_ref()
+            .and_then(|event| match &event.event_type {
+                VimEventType::ReplaceText { text, .. } => Some((text.clone(), event.count)),
+                _ => None,
+            })
+            .unwrap_or_else(|| (String::new(), 1));
+        self.mode = VimMode::Normal;
+        self.continuous_replace = false;
+        self.clear();
+        VimEvent {
+            event_type: VimEventType::ReplaceText {
+                text,
+                already_applied: true,
+            },
+            count,
         }
     }
 
@@ -1783,6 +1831,10 @@ impl VimFSA {
                         ..
                     },
                 ..
+            })
+            | Some(VimEvent {
+                event_type: VimEventType::ReplaceText { text, .. },
+                ..
             }) => Some(text),
             _ => None,
         }
@@ -1990,6 +2042,15 @@ where
             VimEventType::ReplaceChar {
                 character: None, ..
             } => {}
+            VimEventType::ReplaceText {
+                text,
+                already_applied,
+            } => {
+                self.replace_text(text, event.count, *already_applied, ctx);
+                if *already_applied {
+                    self.change_mode(&VimMode::Replace, &VimMode::Normal.into(), ctx);
+                }
+            }
             VimEventType::Paste {
                 direction,
                 register_name,
@@ -2089,6 +2150,15 @@ pub trait VimHandler {
         c: char,
         char_count: u32,
         advance: bool,
+        ctx: &mut ViewContext<Self>,
+    );
+    /// Replay text entered during continuous Replace mode. `already_applied`
+    /// indicates that the first copy was applied interactively before this event.
+    fn replace_text(
+        &mut self,
+        text: &str,
+        count: u32,
+        already_applied: bool,
         ctx: &mut ViewContext<Self>,
     );
     /// Switch between upper/lowercase for character on cursor.

@@ -76,6 +76,26 @@ impl VimHandler for TuiInputView {
         ctx.notify();
     }
 
+    fn replace_text(
+        &mut self,
+        text: &str,
+        count: u32,
+        already_applied: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let repeat_count = count.saturating_sub(u32::from(already_applied));
+        self.model.update(ctx, |model, ctx| {
+            if repeat_count > 0 {
+                model.vim_replace_text(&text.repeat(repeat_count as usize), ctx);
+            }
+            if !text.is_empty() {
+                model.vim_move_horizontal_by_offset(1, &Direction::Backward, false, true, ctx);
+            }
+        });
+        self.follow_cursor(ctx);
+        ctx.notify();
+    }
+
     fn navigate_word(&mut self, count: u32, word_motion: &WordMotion, ctx: &mut ViewContext<Self>) {
         let WordMotion {
             direction,
@@ -176,6 +196,7 @@ impl VimHandler for TuiInputView {
             ctx.notify();
             return;
         }
+        let motion_type = vim_operand_motion_type(operand);
         let yanked = self.model.update(ctx, |model, ctx| {
             let existing_selections = model.selections(ctx).clone();
             select_vim_operand(model, operator, operand_count, operand, ctx);
@@ -209,11 +230,15 @@ impl VimHandler for TuiInputView {
                 | VimOperator::Indent
                 | VimOperator::Dedent => {}
             }
-            selected_text
+            if selected_text.is_empty() && motion_type == MotionType::Linewise {
+                "\n".to_owned()
+            } else {
+                selected_text
+            }
         });
         if !yanked.is_empty() {
             self.yank_buffer = yanked;
-            self.yank_motion_type = vim_operand_motion_type(operand);
+            self.yank_motion_type = motion_type;
         }
         self.follow_cursor(ctx);
         ctx.notify();
@@ -227,9 +252,10 @@ impl VimHandler for TuiInputView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.model.update(ctx, |model, ctx| {
-            model.replace_char(c, char_count, ctx);
             if advance {
-                model.vim_move_horizontal_by_offset(1, &Direction::Forward, false, true, ctx);
+                model.vim_replace_text(&c.to_string(), ctx);
+            } else {
+                model.replace_char(c, char_count, ctx);
             }
         });
         self.follow_cursor(ctx);
@@ -333,8 +359,7 @@ impl VimHandler for TuiInputView {
 
     fn jump_to_last_line(&mut self, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
-            let last_line = model.content().as_ref(ctx).max_point().row as usize;
-            model.jump_to_line_column(last_line, Some(0), ctx);
+            model.vim_move_to_last_line(ctx);
         });
         self.follow_cursor(ctx);
         ctx.notify();
@@ -484,7 +509,11 @@ impl VimHandler for TuiInputView {
                     model.vim_set_visual_tail_to_selection_heads(ctx);
                 });
             }
-            _ => {}
+            VimMode::Replace => {
+                self.model.update(ctx, |model, ctx| {
+                    model.vim_enforce_cursor_line_cap(ctx);
+                });
+            }
         }
         self.follow_cursor(ctx);
         ctx.notify();

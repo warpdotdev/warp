@@ -2449,11 +2449,12 @@ impl CodeEditorModel {
 
         for selection in selections.iter() {
             let start = selection.head;
-            let line_end = buffer.containing_line_end(start);
+            let line_end = buffer
+                .containing_line_end(start)
+                .saturating_sub(&CharOffset::from(1));
 
             // Don't make edits if we don't have space for the entire replacement on the line.
-            // We subtract 1 from the line end to exclude the newline.
-            let remaining = (line_end - 1) - start;
+            let remaining = line_end - start;
             if remaining.as_usize() < char_count as usize {
                 // No replacement; keep cursor as-is
                 new_selections_vec.push(SelectionOffsets {
@@ -2491,6 +2492,53 @@ impl CodeEditorModel {
             if let Ok(new_selections) = vec1::Vec1::try_from_vec(new_selections_vec) {
                 self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
             }
+        }
+    }
+
+    /// Replace text from each cursor through the current line, inserting any
+    /// remainder once the cursor reaches EOL. The resulting cursors sit after
+    /// the replacement text, matching the live cursor position in Vim's `R` mode.
+    pub fn vim_replace_text(&mut self, text: &str, ctx: &mut ModelContext<Self>) {
+        let text_len = CharOffset::from(text.chars().count());
+        if text_len == CharOffset::zero() {
+            return;
+        }
+
+        let buffer = self.content().as_ref(ctx);
+        let selections = self.selection_model.as_ref(ctx).selection_offsets();
+        let mut edits = Vec::with_capacity(selections.len());
+        let mut new_selections = Vec::with_capacity(selections.len());
+        for selection in selections.iter() {
+            let start = selection.head;
+            let line_content_end = buffer
+                .containing_line_end(start)
+                .saturating_sub(&CharOffset::from(1));
+            let replace_len = (line_content_end - start).min(text_len);
+            edits.push((text.to_owned(), start..start + replace_len));
+            let new_pos = start + text_len;
+            new_selections.push(SelectionOffsets {
+                head: new_pos,
+                tail: new_pos,
+            });
+        }
+
+        let Ok(edits) = Vec1::try_from_vec(edits) else {
+            return;
+        };
+        let selection_model = self.selection_model.clone();
+        self.update_content(
+            |mut content, ctx| {
+                content.apply_edit(
+                    BufferEditAction::InsertAtCharOffsetRanges { edits: &edits },
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        if let Ok(new_selections) = Vec1::try_from_vec(new_selections) {
+            self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
         }
     }
 
@@ -3187,6 +3235,26 @@ impl CodeEditorModel {
         self.vim_select_to_buffer_bound(TextDirection::Forwards, ctx);
     }
 
+    pub fn vim_move_to_last_line(&mut self, ctx: &mut ModelContext<Self>) {
+        let has_trailing_empty_line = self.content_string(ctx).into_string().ends_with('\n');
+        let (max_offset, max_row) = {
+            let buffer = self.content().as_ref(ctx);
+            (buffer.max_charoffset(), buffer.max_point().row)
+        };
+        if has_trailing_empty_line {
+            self.vim_set_selections(
+                vec1![SelectionOffsets {
+                    head: max_offset,
+                    tail: max_offset,
+                }],
+                AutoScrollBehavior::Selection,
+                ctx,
+            );
+        } else {
+            self.jump_to_line_column(max_row as usize, None, ctx);
+        }
+    }
+
     pub fn vim_extend_selection_linewise(
         &mut self,
         include_newline: bool,
@@ -3196,10 +3264,22 @@ impl CodeEditorModel {
         let buffer = self.content().as_ref(ctx);
         let selection_model = self.selection_model.as_ref(ctx);
         let current_selections = selection_model.selection_offsets();
+        let max_offset = buffer.max_charoffset();
+        let has_trailing_empty_line = self.content_string(ctx).into_string().ends_with('\n');
 
         let new_selections = current_selections.mapped(|selection| {
             let start_pos = selection.tail.min(selection.head);
             let end_pos = selection.tail.max(selection.head);
+            if include_newline
+                && has_trailing_empty_line
+                && start_pos == max_offset
+                && end_pos == max_offset
+            {
+                return SelectionOffsets {
+                    head: max_offset,
+                    tail: max_offset.saturating_sub(&CharOffset::from(1)),
+                };
+            }
 
             let start_point = start_pos.to_buffer_point(buffer);
             let end_point = end_pos.to_buffer_point(buffer);
@@ -3214,10 +3294,10 @@ impl CodeEditorModel {
                 // Don't include newline (for change operations)
                 buffer.containing_line_end(start_of_end_line) - 1
             };
-            let line_start = if consume_preceding_newline_at_eof
-                && line_end == buffer.max_charoffset()
+            let should_consume_preceding_newline = line_end == buffer.max_charoffset()
                 && start_point.row > 1
-            {
+                && consume_preceding_newline_at_eof;
+            let line_start = if should_consume_preceding_newline {
                 line_start.saturating_sub(&CharOffset::from(1))
             } else {
                 line_start

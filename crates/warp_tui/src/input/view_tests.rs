@@ -152,7 +152,7 @@ fn vim_handler_r_replaces_one_character_and_returns_to_normal() {
             dispatch(
                 &view,
                 ctx,
-                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('0'))],
+                &[TuiInputAction::Editor(TuiEditorAction::InsertChar('$'))],
             );
         });
         app.update(|ctx| {
@@ -173,9 +173,9 @@ fn vim_handler_r_replaces_one_character_and_returns_to_normal() {
             );
         });
         app.read(|ctx| {
-            assert_eq!(text(&view, ctx), "xbc");
+            assert_eq!(text(&view, ctx), "abx");
             assert_eq!(view.as_ref(ctx).vim_mode(ctx), Some(VimMode::Normal));
-            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((2, 0)));
         });
     });
 }
@@ -232,10 +232,55 @@ fn vim_handler_uppercase_r_replaces_continuously_until_escape() {
         app.read(|ctx| {
             assert_eq!(view.as_ref(ctx).vim_mode(ctx), Some(VimMode::Normal));
             assert_eq!(text(&view, ctx), "xycdef");
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((1, 0)));
         });
     });
 }
 
+#[test]
+fn vim_handler_uppercase_r_extends_at_eol_and_dot_replays_the_session() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| view.set_text("abc\nabcdef", ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "gg$Rxy"));
+        app.update(|ctx| dispatch(&view, ctx, &[TuiInputAction::HandleEscape]));
+        app.update(|ctx| type_str(&view, ctx, "j0."));
+
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "abxy\nxycdef");
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((1, 1)));
+            assert_eq!(view.as_ref(ctx).vim_mode(ctx), Some(VimMode::Normal));
+        });
+    });
+}
+
+#[test]
+fn vim_handler_counted_uppercase_r_repeats_the_session() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            view.update(ctx, |view, ctx| view.set_text("abcdefgh", ctx));
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| type_str(&view, ctx, "02Rxy"));
+        app.update(|ctx| dispatch(&view, ctx, &[TuiInputAction::HandleEscape]));
+
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "xyxyefgh");
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((3, 0)));
+            assert_eq!(view.as_ref(ctx).vim_mode(ctx), Some(VimMode::Normal));
+        });
+    });
+}
 #[test]
 fn vim_handler_x_and_uppercase_x_delete_around_the_cursor() {
     App::test((), |mut app| async move {
@@ -489,6 +534,83 @@ fn vim_counted_line_yank_pastes_complete_lines() {
     });
 }
 
+#[test]
+fn vim_linewise_deletes_handle_eof_blank_and_single_line_buffers() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("one\ntwo", ctx));
+            type_str(&view, ctx, "Gdd");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), "one"));
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("one\ntwo\nthree", ctx));
+            type_str(&view, ctx, "2GdG");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), "one"));
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("one\n", ctx));
+            type_str(&view, ctx, "Gdd");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), "one"));
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("one", ctx));
+            type_str(&view, ctx, "dd");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), ""));
+    });
+}
+
+#[test]
+fn vim_linewise_yanks_handle_eof_blank_and_single_line_buffers() {
+    App::test((), |mut app| async move {
+        enable_vim_mode(&mut app);
+        let view = app.update(|ctx| {
+            let view = build_view(ctx);
+            dispatch(&view, ctx, &[TuiInputAction::HandleEscape]);
+            view
+        });
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("one\ntwo", ctx));
+            type_str(&view, ctx, "GyyP");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), "one\ntwo\ntwo"));
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("one\ntwo\nthree", ctx));
+            type_str(&view, ctx, "2GyGggP");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), "two\nthree\none\ntwo\nthree"));
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("one\n", ctx));
+            type_str(&view, ctx, "GyyP");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), "one\n\n"));
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("one", ctx));
+            type_str(&view, ctx, "yyP");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), "one\none"));
+
+        app.update(|ctx| {
+            view.update(ctx, |view, ctx| view.set_text("", ctx));
+            type_str(&view, ctx, "yyP");
+        });
+        app.read(|ctx| assert_eq!(text(&view, ctx), "\n"));
+    });
+}
 #[test]
 fn vim_o_and_uppercase_o_insert_logical_lines() {
     App::test((), |mut app| async move {
