@@ -561,19 +561,31 @@ fn select_vim_operand(
             VimMotion::Paragraph(direction) => {
                 model.vim_move_by_paragraph(operand_count, direction, true, ctx);
                 if *motion_type == MotionType::Linewise {
-                    model.vim_extend_selection_linewise(operator.includes_trailing_newline(), ctx);
+                    model.vim_extend_selection_linewise(
+                        operator.includes_trailing_newline(),
+                        *operator == VimOperator::Delete,
+                        ctx,
+                    );
                 }
             }
             VimMotion::JumpToLastLine => {
                 model.vim_select_to_buffer_end(ctx);
                 if *motion_type == MotionType::Linewise {
-                    model.vim_extend_selection_linewise(operator.includes_trailing_newline(), ctx);
+                    model.vim_extend_selection_linewise(
+                        operator.includes_trailing_newline(),
+                        *operator == VimOperator::Delete,
+                        ctx,
+                    );
                 }
             }
             VimMotion::JumpToFirstLine => {
                 model.vim_select_to_buffer_start(ctx);
                 if *motion_type == MotionType::Linewise {
-                    model.vim_extend_selection_linewise(operator.includes_trailing_newline(), ctx);
+                    model.vim_extend_selection_linewise(
+                        operator.includes_trailing_newline(),
+                        *operator == VimOperator::Delete,
+                        ctx,
+                    );
                 }
             }
             VimMotion::FindChar(_)
@@ -592,7 +604,11 @@ fn select_vim_operand(
                     ctx,
                 );
             }
-            model.vim_extend_selection_linewise(operator.includes_trailing_newline(), ctx);
+            model.vim_extend_selection_linewise(
+                operator.includes_trailing_newline(),
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
         VimOperand::TextObject(text_object) => {
             model.vim_select_text_object(text_object, Some(operator), ctx);

@@ -2948,7 +2948,11 @@ impl CodeEditorModel {
 
         let include_newline = operator.includes_trailing_newline();
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(include_newline, ctx);
+            self.vim_extend_selection_linewise(
+                include_newline,
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -2969,7 +2973,11 @@ impl CodeEditorModel {
         self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
 
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(operator.includes_trailing_newline(), ctx);
+            self.vim_extend_selection_linewise(
+                operator.includes_trailing_newline(),
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -3052,7 +3060,11 @@ impl CodeEditorModel {
 
         let include_newline = operator.includes_trailing_newline();
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(include_newline, ctx);
+            self.vim_extend_selection_linewise(
+                include_newline,
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -3087,7 +3099,11 @@ impl CodeEditorModel {
 
         let include_newline = operator.includes_trailing_newline();
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(include_newline, ctx);
+            self.vim_extend_selection_linewise(
+                include_newline,
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -3127,7 +3143,11 @@ impl CodeEditorModel {
 
         let include_newline = operator.includes_trailing_newline();
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(include_newline, ctx);
+            self.vim_extend_selection_linewise(
+                include_newline,
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -3170,6 +3190,7 @@ impl CodeEditorModel {
     pub fn vim_extend_selection_linewise(
         &mut self,
         include_newline: bool,
+        consume_preceding_newline_at_eof: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let buffer = self.content().as_ref(ctx);
@@ -3193,12 +3214,14 @@ impl CodeEditorModel {
                 // Don't include newline (for change operations)
                 buffer.containing_line_end(start_of_end_line) - 1
             };
-            let line_start =
-                if include_newline && line_end == buffer.max_charoffset() && start_point.row > 1 {
-                    line_start.saturating_sub(&CharOffset::from(1))
-                } else {
-                    line_start
-                };
+            let line_start = if consume_preceding_newline_at_eof
+                && line_end == buffer.max_charoffset()
+                && start_point.row > 1
+            {
+                line_start.saturating_sub(&CharOffset::from(1))
+            } else {
+                line_start
+            };
 
             SelectionOffsets {
                 head: line_end,
@@ -3327,7 +3350,11 @@ impl CodeEditorModel {
                 self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
                 if let TextObjectType::Paragraph = text_object.object_type {
                     let include_newline = op.includes_trailing_newline();
-                    self.vim_extend_selection_linewise(include_newline, ctx);
+                    self.vim_extend_selection_linewise(
+                        include_newline,
+                        *op == VimOperator::Delete,
+                        ctx,
+                    );
                 }
             }
         }

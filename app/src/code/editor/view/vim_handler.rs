@@ -198,6 +198,7 @@ impl VimHandler for CodeEditorView {
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
                                         operator.includes_trailing_newline(),
+                                        *operator == VimOperator::Delete,
                                         ctx,
                                     );
                                 }
@@ -207,6 +208,7 @@ impl VimHandler for CodeEditorView {
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
                                         operator.includes_trailing_newline(),
+                                        *operator == VimOperator::Delete,
                                         ctx,
                                     );
                                 }
@@ -216,6 +218,7 @@ impl VimHandler for CodeEditorView {
                                 if *motion_type == MotionType::Linewise {
                                     model.vim_extend_selection_linewise(
                                         operator.includes_trailing_newline(),
+                                        *operator == VimOperator::Delete,
                                         ctx,
                                     );
                                 }
@@ -253,7 +256,11 @@ impl VimHandler for CodeEditorView {
 
                         let include_newline = operator.includes_trailing_newline()
                             && *operator != VimOperator::ToggleComment;
-                        model.vim_extend_selection_linewise(include_newline, ctx);
+                        model.vim_extend_selection_linewise(
+                            include_newline,
+                            *operator == VimOperator::Delete,
+                            ctx,
+                        );
                     }
                     VimOperand::TextObject(text_object) => {
                         model.vim_select_text_object(text_object, Some(operator), ctx);
