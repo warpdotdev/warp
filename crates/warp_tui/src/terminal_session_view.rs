@@ -68,6 +68,9 @@ use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
     TuiAttachmentPasteDisposition,
 };
+use crate::cli_agent_osc_event_publisher::{
+    CliAgentOscEventPublisher, host_supports_cli_agent_notifications,
+};
 use crate::clipboard::copy_to_clipboard;
 use crate::completion_menu::TuiCompletionMenuModel;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
@@ -94,7 +97,7 @@ use crate::orchestration_model::{TuiOrchestrationModel, TuiOrchestrationSnapshot
 use crate::orchestration_tab_bar::{
     ORCHESTRATION_TAB_BAR_FOCUSED_FLAG, TuiOrchestrationTabNavigationAction,
     orchestration_tab_bar_config, register_orchestration_surface_bindings,
-    render_orchestration_tab_footer,
+    render_orchestration_child_selected_tab_footer, render_orchestration_tab_footer,
 };
 use crate::platform::reveal_path_in_file_manager;
 use crate::prompt_and_command_history_menu::{
@@ -159,6 +162,9 @@ const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
 const RUNNING_COMMAND_DETACH_HINT: &str = "ctrl-c to return to command";
+/// The footer hint shown when the ctrl-c kill-child window is armed.
+/// Replaces the exit hint when viewing a child agent conversation.
+pub(crate) const CTRL_C_KILL_CHILD_HINT: &str = "ctrl-c again to kill child agent";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
 
 /// Fallback strings for the /status status menu.
@@ -782,6 +788,7 @@ pub(crate) struct TuiTerminalSessionView {
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
+    cli_agent_osc_event_publisher: Option<ModelHandle<CliAgentOscEventPublisher>>,
     ai_controller: ModelHandle<BlocklistAIController>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     cli_subagent_views: HashMap<BlockId, ViewHandle<TuiCLISubagentView>>,
@@ -841,6 +848,10 @@ pub(crate) struct TuiTerminalSessionView {
     statusline_config_view: Option<ViewHandle<TuiStatuslineConfigView>>,
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
     orchestration_tabs_focused: bool,
+    /// When set, the `exit_confirmation` window was armed to kill this child
+    /// rather than exit the TUI. The footer shows [`CTRL_C_KILL_CHILD_HINT`]
+    /// while armed, and a second ctrl-c within the window kills the child.
+    child_kill_armed_conversation: Option<AIConversationId>,
     zero_state_view: ViewHandle<TuiZeroStateView>,
 }
 
@@ -1499,6 +1510,7 @@ impl TuiTerminalSessionView {
             )
         });
         let start_agent_executor = action_model.as_ref(ctx).start_agent_executor(ctx);
+
         ctx.subscribe_to_model(&start_agent_executor, |view, _, event, ctx| match event {
             StartAgentExecutorEvent::CreateAgent(request) => {
                 ctx.emit(TuiTerminalSessionEvent::StartAgentConversation {
@@ -1549,15 +1561,29 @@ impl TuiTerminalSessionView {
         });
         // Only action lifecycle transitions can change the blocking input
         // owner. Presentation updates stay within the focused blocker.
-        ctx.subscribe_to_model(&action_model, |view, _, event, ctx| match event {
-            BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
-            | BlocklistAIActionEvent::ExecutingAction(_)
-            | BlocklistAIActionEvent::FinishedAction { .. } => view.refresh_input_focus(ctx),
-            BlocklistAIActionEvent::QueuedAction(_)
-            | BlocklistAIActionEvent::InitProject(_)
-            | BlocklistAIActionEvent::ToggleCodeReview(_)
-            | BlocklistAIActionEvent::InsertCodeReviewComments { .. } => {}
-        });
+        ctx.subscribe_to_model(
+            &action_model,
+            |view, action_model, event, ctx| match event {
+                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+                | BlocklistAIActionEvent::ExecutingAction(_) => view.refresh_input_focus(ctx),
+                BlocklistAIActionEvent::FinishedAction { action_id, .. } => {
+                    view.refresh_input_focus(ctx);
+                    let finished_asking_question = action_model
+                        .as_ref(ctx)
+                        .get_action_result(action_id)
+                        .is_some_and(|result| {
+                            matches!(&result.result, AIAgentActionResultType::AskUserQuestion(_))
+                        });
+                    if finished_asking_question {
+                        ctx.focus(&view.input_view);
+                    }
+                }
+                BlocklistAIActionEvent::QueuedAction(_)
+                | BlocklistAIActionEvent::InitProject(_)
+                | BlocklistAIActionEvent::ToggleCodeReview(_)
+                | BlocklistAIActionEvent::InsertCodeReviewComments { .. } => {}
+            },
+        );
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
@@ -1661,8 +1687,8 @@ impl TuiTerminalSessionView {
         // The footer's conversations callout depends on whether the input is
         // empty, so content changes must invalidate this parent view as well as
         // the input child. Typing after ctrl-c also disarms the pending exit
-        // confirmation; the ctrl-c buffer clear leaves the buffer empty, so the
-        // window it arms survives its own clear.
+        // confirmation (and any child-kill window); the ctrl-c buffer clear
+        // leaves the buffer empty, so the window it arms survives its own clear.
         let editor_for_footer = input_editor_model.clone();
         ctx.subscribe_to_model(&input_editor_model, move |view, _, event, ctx| {
             let CodeEditorModelEvent::ContentChanged { origin } = event else {
@@ -1675,6 +1701,7 @@ impl TuiTerminalSessionView {
                 .is_empty();
             if !is_empty {
                 view.exit_confirmation.disarm();
+                view.child_kill_armed_conversation = None;
             }
             view.handle_input_content_changed(origin.from_user(), ctx);
             ctx.notify();
@@ -1824,20 +1851,6 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::MoveFocusUp => {
                 view.focus_orchestration_tabs(ctx);
-            }
-        });
-        ctx.subscribe_to_model(&action_model, |view, action_model, event, ctx| {
-            let BlocklistAIActionEvent::FinishedAction { action_id, .. } = event else {
-                return;
-            };
-            let finished_asking_question = action_model
-                .as_ref(ctx)
-                .get_action_result(action_id)
-                .is_some_and(|result| {
-                    matches!(&result.result, AIAgentActionResultType::AskUserQuestion(_))
-                });
-            if finished_asking_question {
-                ctx.focus(&view.input_view);
             }
         });
         ctx.subscribe_to_view(&orchestration_tab_bar, |view, _, event, ctx| match event {
@@ -2085,6 +2098,7 @@ impl TuiTerminalSessionView {
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
+            cli_agent_osc_event_publisher: None,
             ai_controller,
             cli_subagent_controller,
             cli_subagent_views: HashMap::new(),
@@ -2119,12 +2133,36 @@ impl TuiTerminalSessionView {
             statusline_config_view: None,
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
+            child_kill_armed_conversation: None,
             zero_state_view,
         };
         if let Some(failure) = initial_zero_state_load_failure {
             view.show_zero_state_ascii_load_failure(failure, ctx);
         }
         view
+    }
+
+    /// Enables CLI-agent lifecycle notifications for the root TUI session.
+    pub(crate) fn enable_cli_agent_osc_event_publishing(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.cli_agent_osc_event_publisher.is_some() || !host_supports_cli_agent_notifications()
+        {
+            return;
+        }
+        let terminal_surface_id = self.terminal_surface_id;
+        let active_session = self.active_session.clone();
+        let conversation_selection = self.conversation_selection.clone();
+        let action_model = self.ai_action_model.clone();
+        let publisher = ctx.add_model(|ctx| {
+            CliAgentOscEventPublisher::new(
+                terminal_surface_id,
+                active_session,
+                conversation_selection,
+                &action_model,
+                ctx,
+            )
+        });
+        publisher.as_ref(ctx).publish_session_start(ctx);
+        self.cli_agent_osc_event_publisher = Some(publisher);
     }
 
     /// Starts the first request for a child conversation hosted by this
@@ -2186,6 +2224,12 @@ impl TuiTerminalSessionView {
             self.orchestration_tabs_focused = false;
             focus_changed = true;
             self.focus_current_owner(ctx);
+        }
+        // Disarm the child-kill window when the child is no longer reachable.
+        if !tabs_are_available && self.child_kill_armed_conversation.is_some() {
+            self.exit_confirmation.disarm();
+            self.child_kill_armed_conversation = None;
+            focus_changed = true;
         }
         if availability_changed || focus_changed {
             ctx.notify();
@@ -2287,9 +2331,65 @@ impl TuiTerminalSessionView {
         }
     }
 
+    /// If the orchestration snapshot shows a child tab selected (not the root),
+    /// returns that child's conversation id. Used to decide between the kill
+    /// path and the normal exit path on a ctrl-c press.
+    fn is_child_conversation_selected(&self, ctx: &AppContext) -> Option<AIConversationId> {
+        let snapshot = self.compute_orchestration_tab_snapshot(ctx)?;
+        (snapshot.selected_conversation_id != snapshot.root_conversation_id)
+            .then_some(snapshot.selected_conversation_id)
+    }
+
+    /// Kills a child agent: tombstones late events, deletes the conversation
+    /// from history, removes its retained TUI session, and returns focus to the
+    /// root/main orchestration agent. Equivalent to the GUI's Kill agent path.
+    fn kill_child_agent(&mut self, conversation_id: AIConversationId, ctx: &mut ViewContext<Self>) {
+        // Clear any armed kill or exit window.
+        self.exit_confirmation.disarm();
+        self.child_kill_armed_conversation = None;
+        // Return tab bar to unfocused state before the session is removed so
+        // the focus fall-back lands on the right surface.
+        self.orchestration_tabs_focused = false;
+        // Resolve the root session id BEFORE the kill clears the snapshot.
+        // We bypass `focus_conversation_session` because after the child is
+        // deleted the parent is no longer an orchestration root (no children),
+        // and that helper gates on the root check.
+        let root_session_id = self
+            .compute_orchestration_tab_snapshot(ctx)
+            .and_then(|snap| {
+                let history = BlocklistAIHistoryModel::as_ref(ctx);
+                TuiSessions::as_ref(ctx)
+                    .session_ids_by_conversation(history)
+                    .get(&snap.root_conversation_id)
+                    .copied()
+            });
+        // Tombstone + delete + remove session via the orchestration model.
+        TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.kill_child_agent(conversation_id, ctx);
+        });
+        // Focus the root session directly using the pre-kill resolved id.
+        if let Some(session_id) = root_session_id {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(session_id, ctx);
+            });
+        } else {
+            self.set_orchestration_tab_focus(false, ctx);
+        }
+    }
+
     /// Footer shown while orchestration tabs own keyboard focus.
-    fn render_orchestration_tab_footer(&self, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
-        render_orchestration_tab_footer(builder)
+    fn render_orchestration_tab_footer(
+        &self,
+        builder: &TuiUiBuilder,
+        ctx: &AppContext,
+    ) -> Box<dyn TuiElement> {
+        // Show the kill hint when a child tab is selected so the user knows
+        // that a single ctrl-c will terminate that agent.
+        if self.is_child_conversation_selected(ctx).is_some() {
+            render_orchestration_child_selected_tab_footer(builder)
+        } else {
+            render_orchestration_tab_footer(builder)
+        }
     }
     fn running_command_hint(&self, ctx: &AppContext) -> Option<String> {
         let context = self.keymap_context(ctx);
@@ -2396,7 +2496,7 @@ impl TuiTerminalSessionView {
         let footer = if matches!(input_target, TuiInputTarget::Disabled) {
             self.render_footer(ctx).finish()
         } else if self.orchestration_tabs_focused {
-            self.render_orchestration_tab_footer(builder)
+            self.render_orchestration_tab_footer(builder, ctx)
         } else {
             self.render_footer(ctx).finish()
         };
@@ -2935,10 +3035,20 @@ impl TuiTerminalSessionView {
         self.show_success_hint(COPY_SELECTION_HINT.to_owned(), ctx);
     }
 
-    /// Handles a ctrl-c press: reject a blocked terminal-use action first, then
-    /// apply terminal-use takeover/interrupt behavior. Otherwise a second press
-    /// within [`CTRL_C_EXIT_WINDOW`] exits the TUI; the first cancels the running
-    /// conversation or clears input and arms the footer confirmation.
+    /// Handles a ctrl-c press.
+    ///
+    /// Priority order:
+    /// 1. Cancel in-flight conversation restore.
+    /// 2. Reject a pending terminal-use action / handle terminal-use takeover.
+    /// 3. **Kill-child path (tab-bar focused + child tab selected):** a single
+    ///    ctrl-c immediately kills the selected child agent and returns focus to
+    ///    the root/main orchestration agent.
+    /// 4. **Kill-child path (viewing a child conversation without tab focus):**
+    ///    the first ctrl-c arms a 1-second kill window and shows a child-kill
+    ///    footer hint; a second ctrl-c within the window kills the child agent.
+    /// 5. **Exit path (root/main agent or no orchestration):** the first press
+    ///    cancels the running conversation or clears input and arms the exit
+    ///    confirmation window; a second press within the window exits the TUI.
     fn handle_interrupt(&mut self, ctx: &mut ViewContext<Self>) {
         if self.cancel_conversation_restore(ctx) {
             return;
@@ -2952,6 +3062,7 @@ impl TuiTerminalSessionView {
         }
         if self.reject_active_cli_subagent_action(ctx) {
             self.exit_confirmation.disarm();
+            self.child_kill_armed_conversation = None;
             ctx.notify();
             return;
         }
@@ -2962,9 +3073,48 @@ impl TuiTerminalSessionView {
         });
         if self.handle_terminal_use_interrupt(ctx) {
             self.exit_confirmation.disarm();
+            self.child_kill_armed_conversation = None;
             ctx.notify();
             return;
         }
+
+        // Path 1: tab-bar focused + child tab selected → single ctrl-c kills.
+        if self.orchestration_tabs_focused
+            && let Some(child_id) = self.is_child_conversation_selected(ctx)
+        {
+            self.kill_child_agent(child_id, ctx);
+            return;
+        }
+
+        // Path 2: tab-bar not focused, viewing a child conversation.
+        // First ctrl-c arms the kill window; second within ~1s kills the child.
+        if !self.orchestration_tabs_focused
+            && let Some(child_id) = self.is_child_conversation_selected(ctx)
+        {
+            let now = Instant::now();
+            if self.child_kill_armed_conversation == Some(child_id)
+                && self.exit_confirmation.should_exit(now)
+            {
+                // Second ctrl-c: kill the child and return to main agent.
+                self.kill_child_agent(child_id, ctx);
+                return;
+            }
+            // First ctrl-c: arm the kill window with the child-specific hint.
+            self.child_kill_armed_conversation = Some(child_id);
+            let window_expires_at = self.exit_confirmation.arm(now);
+            ctx.spawn(Timer::after(CTRL_C_EXIT_WINDOW), move |view, _, ctx| {
+                if view.exit_confirmation.disarm_expired(window_expires_at) {
+                    view.child_kill_armed_conversation = None;
+                    ctx.notify();
+                }
+            });
+            ctx.notify();
+            return;
+        }
+
+        // Path 3 (original): root/main agent or no orchestration.
+        // Ensure any stale kill window is cleared before the normal exit path.
+        self.child_kill_armed_conversation = None;
         let now = Instant::now();
         if self.exit_confirmation.should_exit(now) {
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -3005,7 +3155,7 @@ impl TuiTerminalSessionView {
 
     /// Cancels the surface's running conversation (in-flight stream or pending
     /// tool actions), returning whether there was one to cancel.
-    fn cancel_active_conversation(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+    pub(crate) fn cancel_active_conversation(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let terminal_surface_id = ctx.view_id();
         self.ai_controller.update(ctx, |controller, ctx| {
             let conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
@@ -3081,6 +3231,12 @@ impl TuiTerminalSessionView {
         ctx: &AppContext,
     ) -> Option<FooterHint<'_>> {
         if self.exit_confirmation.is_armed() {
+            // When the kill-child window is armed, show the child-specific hint
+            // so the user knows the next ctrl-c will kill the child agent rather
+            // than exiting the whole TUI.
+            if self.child_kill_armed_conversation.is_some() {
+                return Some(FooterHint::muted(CTRL_C_KILL_CHILD_HINT));
+            }
             return Some(FooterHint::muted(CTRL_C_EXIT_HINT));
         }
         if matches!(
@@ -3760,6 +3916,11 @@ impl TuiTerminalSessionView {
         let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
             controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
         });
+        if dispatched && let Some(publisher) = &self.cli_agent_osc_event_publisher {
+            publisher
+                .as_ref(ctx)
+                .publish_prompt_submit(prompt.clone(), ctx);
+        }
         if dispatched && let Some(block_id) = active_long_running_block_id {
             self.cli_subagent_controller.update(ctx, |controller, ctx| {
                 controller.set_latest_instruction(block_id, prompt, ctx);
@@ -4076,6 +4237,15 @@ impl TuiTerminalSessionView {
         {
             self.show_transient_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
             return false;
+        }
+        if let Some(conversation_id) = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.kill_descendant_agents(conversation_id, ctx);
+            });
         }
         self.cancel_active_conversation(ctx);
         let terminal_surface_id = ctx.view_id();

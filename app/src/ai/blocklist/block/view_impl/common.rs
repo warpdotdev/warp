@@ -3394,9 +3394,12 @@ pub(crate) fn render_debug_footer<V: View>(
 
     // Check if we should show the submit button (hide for dogfood and enterprise users)
     let is_dogfood = ChannelState::channel().is_dogfood();
-    let is_enterprise_user = UserWorkspaces::as_ref(app)
-        .current_team()
-        .is_some_and(|team| team.billing_metadata.customer_type == CustomerType::Enterprise);
+    let is_enterprise_user =
+        UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| {
+                workspace.billing_metadata.customer_type == CustomerType::Enterprise
+            });
     let submit_button = if !is_dogfood && !is_enterprise_user {
         let submit_button_style = UiComponentStyles {
             font_color: Some(

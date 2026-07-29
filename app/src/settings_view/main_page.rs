@@ -25,7 +25,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
     Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, id,
+    ViewHandle, WeakViewHandle, id,
 };
 
 use super::settings_page::{
@@ -160,6 +160,7 @@ pub enum MainSettingsPageEvent {
 }
 
 pub struct MainSettingsPageView {
+    self_handle: WeakViewHandle<Self>,
     page: PageType<Self>,
     auth_state: Arc<AuthState>,
 }
@@ -302,7 +303,11 @@ impl MainSettingsPageView {
 
         let page = PageType::new_uncategorized(widgets, Some("Account"));
 
-        MainSettingsPageView { page, auth_state }
+        MainSettingsPageView {
+            self_handle: ctx.handle(),
+            page,
+            auth_state,
+        }
     }
 
     fn handle_autoupdate_state_change(
@@ -417,6 +422,7 @@ impl AccountWidget {
 
     fn render_account_info(
         &self,
+        view: &MainSettingsPageView,
         profile_image_source: Option<&AssetSource>,
         auth_state: &AuthState,
         app: &AppContext,
@@ -497,18 +503,23 @@ impl AccountWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::End);
         let current_user_id = auth_state.user_id().unwrap_or_default();
         let workspaces = UserWorkspaces::as_ref(app);
-        if let Some(team) = workspaces.current_team() {
-            if team.billing_metadata.customer_type != CustomerType::Unknown {
-                plan_info.add_child(render_customer_type_badge(
-                    appearance,
-                    team.billing_metadata.customer_type.to_display_string(),
-                ));
-            }
-
+        let workspace = workspaces.current_workspace();
+        let billing_metadata = workspace.map(|workspace| &workspace.billing_metadata);
+        if let Some(billing_metadata) = billing_metadata
+            && billing_metadata.customer_type != CustomerType::Unknown
+        {
+            plan_info.add_child(render_customer_type_badge(
+                appearance,
+                billing_metadata.customer_type.to_display_string(),
+            ));
+        }
+        if let Some(team) = workspaces.team_for_view_handle(&view.self_handle, app) {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
             if has_admin_permissions {
-                if team.billing_metadata.customer_type == CustomerType::Enterprise {
+                if billing_metadata
+                    .is_some_and(|metadata| metadata.customer_type == CustomerType::Enterprise)
+                {
                     plan_info.add_child(
                         appearance
                             .ui_builder()
@@ -524,7 +535,7 @@ impl AccountWidget {
                             .finish(),
                     );
                 } else {
-                    if team.has_billing_history {
+                    if workspace.is_some_and(|workspace| workspace.has_billing_history) {
                         let team_uid = team.uid;
                         plan_info.add_child(
                             appearance
@@ -549,8 +560,10 @@ impl AccountWidget {
                     }
 
                     // If the team is upgradeable to self-serve tier, show them the upgrade link.
-                    if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
-                        let description = match team.billing_metadata.customer_type {
+                    if let Some(billing_metadata) = billing_metadata
+                        .filter(|metadata| metadata.can_upgrade_to_higher_tier_plan())
+                    {
+                        let description = match billing_metadata.customer_type {
                             CustomerType::Prosumer => "Upgrade to Turbo plan",
                             CustomerType::Turbo => "Upgrade to Lightspeed plan",
                             _ => "Compare plans",
@@ -637,6 +650,7 @@ impl SettingsWidget for AccountWidget {
                 asset_cache::url_source_with_persistence(url, &warp_core::paths::cache_dir())
             });
             self.render_account_info(
+                view,
                 profile_image_source.as_ref(),
                 view.auth_state.as_ref(),
                 app,

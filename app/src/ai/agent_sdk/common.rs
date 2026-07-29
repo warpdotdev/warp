@@ -103,7 +103,7 @@ pub(super) fn set_ambient_task_context_from_run_id(
 pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyhow::Result<Owner> {
     if team_flag {
         let team_id = UserWorkspaces::as_ref(ctx)
-            .current_team_uid()
+            .sole_team_uid()
             .ok_or_else(|| anyhow::anyhow!("User is not on a team"))?;
         return Ok(Owner::Team { team_uid: team_id });
     }
@@ -117,7 +117,7 @@ pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyh
     }
 
     // Default: try team first, fall back to user
-    if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+    if let Some(team_uid) = UserWorkspaces::as_ref(ctx).sole_team_uid() {
         return Ok(Owner::Team { team_uid });
     }
 

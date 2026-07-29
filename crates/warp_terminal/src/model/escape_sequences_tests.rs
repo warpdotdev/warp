@@ -71,6 +71,14 @@ fn test_shift_backspace_emits_del_sequence() {
 }
 
 #[test]
+fn tmux_passthrough_wraps_and_doubles_escapes() {
+    assert_eq!(
+        tmux_passthrough("\x1b]52;c;abc\x07"),
+        "\x1bPtmux;\x1b\x1b]52;c;abc\x07\x1b\\"
+    );
+}
+
+#[test]
 fn test_mouse_actions_to_escape_sequence() {
     // Validating we produce the correct escape sequences.
     let test_cases: &[(MouseState, Vec<u8>)] = &[

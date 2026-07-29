@@ -13,6 +13,7 @@ mod agent_message;
 mod alt_screen_view;
 mod attachment_bar;
 mod autoupdate;
+mod cli_agent_osc_event_publisher;
 mod clipboard;
 mod cloud_run;
 mod cloud_run_view;

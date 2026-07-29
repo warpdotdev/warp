@@ -19,7 +19,10 @@ use warpui::elements::{
 use warpui::fonts::Weight;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent as _, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, SingletonEntity as _, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, View, ViewContext, ViewHandle,
+    WeakViewHandle,
+};
 
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BuyCreditsBannerDisplayState,
@@ -45,6 +48,7 @@ struct MouseStates {
 }
 
 pub struct BuyCreditsBanner {
+    view_handle: WeakViewHandle<Self>,
     mouse_states: MouseStates,
     denomination_dropdown: ViewHandle<Dropdown<Action>>,
     addon_credits_options: Vec<AddonCreditsOption>,
@@ -104,6 +108,7 @@ impl BuyCreditsBanner {
         });
 
         let mut me = Self {
+            view_handle: ctx.handle(),
             mouse_states: Default::default(),
             denomination_dropdown,
             addon_credits_options: Default::default(),
@@ -139,7 +144,7 @@ impl BuyCreditsBanner {
                     .map(|option| option.credits);
                 let has_admin_permissions = {
                     let auth_state = AuthStateProvider::as_ref(ctx).get();
-                    let current_team = UserWorkspaces::as_ref(ctx).current_team();
+                    let current_team = UserWorkspaces::as_ref(ctx).team_for_view(ctx);
                     auth_state
                         .user_email()
                         .zip(current_team)
@@ -173,7 +178,10 @@ impl BuyCreditsBanner {
                     if has_admin_permissions && self.auto_reload_enabled {
                         self.banner_auto_reload_update_in_flight = true;
 
-                        if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+                        if let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+                            .team_for_view(ctx)
+                            .map(|team| team.uid)
+                        {
                             UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                                 user_workspaces.update_addon_credits_settings(
                                     team_uid,
@@ -408,7 +416,7 @@ impl BuyCreditsBanner {
         .finish();
 
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
+        let current_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app);
         let has_admin_permissions = auth_state
             .user_email()
             .zip(current_team)
@@ -531,7 +539,7 @@ impl BuyCreditsBanner {
         };
 
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
+        let current_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app);
         let has_admin_permissions = auth_state
             .user_email()
             .zip(current_team)

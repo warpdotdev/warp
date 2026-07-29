@@ -297,6 +297,7 @@ fn transferred_tab_workspace(
             global_resource_handles,
             None,
             NewWorkspaceSource::TransferredTab {
+                source_window_id: ctx.window_id(),
                 tab_color: None,
                 custom_title: None,
                 left_panel_open: false,

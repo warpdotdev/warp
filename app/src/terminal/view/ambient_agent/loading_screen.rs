@@ -15,7 +15,7 @@ use warpui::prelude::{CornerRadius, Radius};
 use warpui::text_layout::TextAlignment;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, WeakViewHandle};
 
 use crate::ai::agent_tips::{AITip, AITipModel};
 use crate::ai::loading::shimmering_warp_loading_text;
@@ -27,11 +27,12 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 const ERROR_ICON_SIZE: f32 = 24.;
 
 /// Renders the cloud mode loading screen with shimmering warp logo and tips.
-pub fn render_cloud_mode_loading_screen(
+pub fn render_cloud_mode_loading_screen<T: Entity>(
     message: &str,
     appearance: &Appearance,
     shimmer_handle: &ShimmeringTextStateHandle,
     tip_model: &ModelHandle<AITipModel<CloudModeTip>>,
+    view_handle: &WeakViewHandle<T>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -83,7 +84,7 @@ pub fn render_cloud_mode_loading_screen(
     };
 
     // Get tier info for the concurrency limits footer
-    let tier_footer_element = render_tier_limits_footer(appearance, app);
+    let tier_footer_element = render_tier_limits_footer(appearance, view_handle, app);
 
     // Vertical layout with centered main content and footer at bottom
     Flex::column()
@@ -130,25 +131,24 @@ pub fn render_cloud_mode_loading_screen(
 
 /// Renders the tier limits footer showing concurrency limits and upgrade suggestions.
 /// Returns None if there are no specs to display.
-fn render_tier_limits_footer(
+fn render_tier_limits_footer<T: Entity>(
     appearance: &Appearance,
+    view_handle: &WeakViewHandle<T>,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
     let theme = appearance.theme();
     let footer_font_size = appearance.monospace_font_size() - 2.;
-
-    // Get tier info and billing metadata from UserWorkspaces
-    let workspace = UserWorkspaces::as_ref(app).current_workspace()?;
-    let policy = workspace.billing_metadata.tier.ambient_agents_policy?;
+    let team = UserWorkspaces::as_ref(app).team_for_view_handle(view_handle, app)?;
+    let policy = team.billing_metadata.tier.ambient_agents_policy?;
 
     let shape = policy.instance_shape.as_ref()?;
     let specs = format!("{}CPU, {}GB", shape.vcpus, shape.memory_gb);
 
     // If there's no way to upgrade, don't render the footer at all
     // (Build Max users can still upgrade to Business plans)
-    if !workspace.billing_metadata.can_upgrade_to_build_plan()
-        && !workspace.billing_metadata.can_upgrade_to_build_max_plan()
-        && !workspace.billing_metadata.is_on_build_max_plan()
+    if !team.billing_metadata.can_upgrade_to_build_plan()
+        && !team.billing_metadata.can_upgrade_to_build_max_plan()
+        && !team.billing_metadata.is_on_build_max_plan()
     {
         return None;
     }
@@ -158,10 +158,7 @@ fn render_tier_limits_footer(
         specs
     ))];
 
-    // Get the upgrade URL for the current team
-    let upgrade_url = UserWorkspaces::as_ref(app)
-        .current_team()
-        .map(|team| UserWorkspaces::upgrade_link_for_team(team.uid))?;
+    let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
 
     fragments.push(FormattedTextFragment::hyperlink("Upgrade", upgrade_url));
     fragments.push(FormattedTextFragment::plain_text(

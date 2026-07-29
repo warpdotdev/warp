@@ -32,7 +32,7 @@ use warpui::ui_components::slider::SliderStateHandle;
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, id,
+    ViewHandle, WeakViewHandle, id,
 };
 
 use super::custom_inference_modal::{
@@ -2843,7 +2843,7 @@ impl AISettingsPageView {
                 // Full page: all widgets (legacy behavior)
                 widgets.push(Box::new(GlobalAIWidget::default()));
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::default()));
+                    widgets.push(Box::new(UsageWidget::new(ctx)));
                 }
                 if ai_settings
                     .intelligent_autosuggestions_enabled_internal
@@ -2864,7 +2864,7 @@ impl AISettingsPageView {
                             .git_operations_autogen_enabled_internal
                             .is_supported_on_current_platform())
                 {
-                    widgets.push(Box::new(ActiveAIWidget::default()));
+                    widgets.push(Box::new(ActiveAIWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
                 widgets.push(Box::new(AIInputWidget::default()));
@@ -2914,7 +2914,7 @@ impl AISettingsPageView {
                             .git_operations_autogen_enabled_internal
                             .is_supported_on_current_platform())
                 {
-                    widgets.push(Box::new(ActiveAIWidget::default()));
+                    widgets.push(Box::new(ActiveAIWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AIInputWidget::default()));
                 let voice_supported = cfg!(feature = "voice_input")
@@ -2939,7 +2939,7 @@ impl AISettingsPageView {
             }
             Some(AISubpage::Profiles) => {
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::default()));
+                    widgets.push(Box::new(UsageWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
             }
@@ -4987,12 +4987,18 @@ impl SettingsWidget for GlobalAIWidget {
     }
 }
 
-#[derive(Default)]
 struct UsageWidget {
+    view_handle: WeakViewHandle<AISettingsPageView>,
     requests_highlight_index: HighlightedHyperlink,
 }
 
 impl UsageWidget {
+    fn new(ctx: &ViewContext<AISettingsPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            requests_highlight_index: Default::default(),
+        }
+    }
     fn render_request_usage_count(
         &self,
         used: usize,
@@ -5153,7 +5159,7 @@ impl SettingsWidget for UsageWidget {
         let next_refresh_time = ai_request_usage_model.next_refresh_time();
         let formatted_next_refresh_time = next_refresh_time.format("%b %d").to_string();
         let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)
-            .current_team()
+            .team_for_view_handle(&self.view_handle, app)
             .map(|team| team.billing_metadata.is_delinquent_due_to_payment_issue())
             .unwrap_or_default();
 
@@ -5206,7 +5212,7 @@ impl SettingsWidget for UsageWidget {
 
         let auth_state = AuthStateProvider::as_ref(app).get();
         let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).current_team()
+            UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app)
         {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
@@ -5275,8 +5281,8 @@ impl SettingsWidget for UsageWidget {
     }
 }
 
-#[derive(Default)]
 struct ActiveAIWidget {
+    view_handle: WeakViewHandle<AISettingsPageView>,
     active_ai_toggle: SwitchStateHandle,
     intelligent_autosuggestions_toggle: SwitchStateHandle,
     prompt_suggestions_toggle: SwitchStateHandle,
@@ -5287,6 +5293,18 @@ struct ActiveAIWidget {
 }
 
 impl ActiveAIWidget {
+    fn new(ctx: &ViewContext<AISettingsPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            active_ai_toggle: Default::default(),
+            intelligent_autosuggestions_toggle: Default::default(),
+            prompt_suggestions_toggle: Default::default(),
+            code_suggestions_toggle: Default::default(),
+            natural_language_autosuggestions_toggle: Default::default(),
+            shared_block_title_generation_toggle: Default::default(),
+            git_operations_autogen_toggle: Default::default(),
+        }
+    }
     fn is_next_command_toggleable(&self, app: &AppContext) -> bool {
         UserWorkspaces::as_ref(app).is_next_command_enabled()
             && AISettings::as_ref(app)
@@ -5323,7 +5341,7 @@ impl ActiveAIWidget {
                 .shared_block_title_generation_enabled_internal
                 .is_supported_on_current_platform()
             && (!UserWorkspaces::as_ref(app)
-                .current_team()
+                .team_for_view_handle(&self.view_handle, app)
                 .is_some_and(|team| {
                     team.billing_metadata.customer_type == CustomerType::Enterprise
                 })
@@ -8231,6 +8249,7 @@ struct ProviderApiKeyEditor {
 }
 
 struct ApiKeysWidget {
+    view_handle: WeakViewHandle<AISettingsPageView>,
     provider_api_key_editors: Vec<ProviderApiKeyEditor>,
     /// Buttons for the SuperGrok (xAI) subscription row; which one renders
     /// depends on whether OAuth tokens are stored or a connect attempt is in
@@ -8437,6 +8456,7 @@ impl ApiKeysWidget {
         });
 
         Self {
+            view_handle: ctx.handle(),
             provider_api_key_editors,
 
             grok_connect_button,
@@ -9242,7 +9262,7 @@ impl SettingsWidget for ApiKeysWidget {
         if !is_byo_enabled && show_provider_keys {
             let auth_state = AuthStateProvider::as_ref(app).get();
             let upgrade_text_fragments = if let Some(team) =
-                UserWorkspaces::as_ref(app).current_team()
+                UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app)
             {
                 if team.billing_metadata.customer_type == CustomerType::Enterprise {
                     vec![

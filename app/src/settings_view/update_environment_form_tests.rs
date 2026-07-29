@@ -1016,6 +1016,8 @@ fn test_create_environment_form_with_team_can_toggle_share_with_team_and_renders
             UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                 user_workspaces.update_workspaces(vec![workspace], ctx);
                 user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
+                let team_uid = user_workspaces.inherited_or_default_team_uid(None);
+                user_workspaces.register_window(window_id, team_uid, ctx);
             });
 
             let view_handle = ctx.add_typed_action_view(window_id, |ctx| {

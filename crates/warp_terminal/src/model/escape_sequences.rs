@@ -138,6 +138,17 @@ pub mod C1 {
     }
 }
 
+/// Wraps an escape sequence in a tmux DCS passthrough, doubling inner escapes
+/// so tmux forwards the sequence to the hosting terminal rather than
+/// intercepting it.
+pub fn tmux_passthrough(sequence: &str) -> String {
+    let esc = char::from(C0::ESC);
+    let escaped = sequence.replace(esc, "\x1b\x1b");
+    let dcs = C1::to_utf8(C1::DCS);
+    let st = C1::to_utf8(C1::ST);
+    format!("{dcs}tmux;{escaped}{st}")
+}
+
 /// Escape sequences used to control 'bracketed paste' mode.
 ///
 /// If the shell supports bracketed paste mode, these control sequences should be inserted at the

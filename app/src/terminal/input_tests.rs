@@ -9499,3 +9499,142 @@ fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
         });
     });
 }
+
+/// Directly exercises `restore_cloud_followup_input_after_upload_failure`:
+/// after the editor is frozen into the loading state, calling the restore
+/// function must put the exact original prompt text back and leave the
+/// editor editable.
+#[test]
+fn restore_cloud_followup_input_after_upload_failure_restores_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model.lock().block_list_mut().set_bootstrapped();
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        // Write a prompt that should survive a failed upload.
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("cloud follow-up prompt", ctx);
+        });
+
+        // Freeze the editor (simulates the upload-in-progress loading state).
+        input.update(&mut app, |input, ctx| {
+            input.freeze_input_in_loading_state(ctx);
+        });
+        let frozen_text = input.read(&app, |i, ctx| i.buffer_text(ctx));
+        assert!(
+            frozen_text.contains("cloud follow-up prompt"),
+            "frozen text must contain the original prompt; got: {frozen_text:?}"
+        );
+        assert!(
+            frozen_text.contains('◌'),
+            "frozen text must contain the loading indicator '◌'; got: {frozen_text:?}"
+        );
+
+        // Simulate an upload failure restoring the input.
+        input.update(&mut app, |input, ctx| {
+            input.restore_cloud_followup_input_after_upload_failure("cloud follow-up prompt", ctx);
+        });
+
+        // The buffer must be restored to the original prompt without the loading marker.
+        assert_eq!(
+            input.read(&app, |i, ctx| i.buffer_text(ctx)),
+            "cloud follow-up prompt",
+            "restore must set the buffer back to the original prompt after upload failure"
+        );
+    });
+}
+
+#[test]
+fn should_upload_cloud_followup_attachments_matches_cloud_mode_image_context_flag() {
+    use base64::Engine as _;
+
+    let attachment = PendingAttachment::Image(ImageContext {
+        data: base64::engine::general_purpose::STANDARD.encode(b"fake image"),
+        mime_type: "image/png".to_string(),
+        file_name: "test.png".to_string(),
+        is_figma: false,
+    });
+
+    assert!(
+        !Input::should_upload_cloud_followup_attachments(&[]),
+        "no pending attachments should submit the text-only follow-up immediately"
+    );
+
+    let flag_guard = FeatureFlag::CloudModeImageContext.override_enabled(false);
+    assert!(
+        !Input::should_upload_cloud_followup_attachments(std::slice::from_ref(&attachment)),
+        "follow-up attachments should not upload while CloudModeImageContext is disabled"
+    );
+    drop(flag_guard);
+    let _flag_guard = FeatureFlag::CloudModeImageContext.override_enabled(true);
+    assert!(
+        Input::should_upload_cloud_followup_attachments(&[attachment]),
+        "follow-up attachments should upload when CloudModeImageContext is enabled"
+    );
+}
+
+/// Exercises the async failure path of `upload_files_then_submit_cloud_followup`:
+/// when the server API rejects the attachment upload (the test HTTP client never
+/// connects to a real server), the callback must restore the prompt text so the
+/// user can retry.
+#[test]
+fn upload_files_then_submit_cloud_followup_restores_input_on_upload_error() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model.lock().block_list_mut().set_bootstrapped();
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let prompt = "attach and follow up".to_string();
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content(&prompt, ctx);
+        });
+
+        // A tiny base64-encoded image used as the test attachment.  The decode
+        // succeeds in the async task, but `prepare_attachments_for_upload` then
+        // fails because the test HTTP client has no real server to contact.
+        use base64::Engine as _;
+        let attachment = PendingAttachment::Image(ImageContext {
+            data: base64::engine::general_purpose::STANDARD.encode(b"fake image"),
+            mime_type: "image/png".to_string(),
+            file_name: "test.png".to_string(),
+            is_figma: false,
+        });
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "11111111-1111-1111-1111-111111111111".parse().unwrap();
+
+        // Spawn the upload and await the completion of its foreground callback
+        // (which runs after the background tokio task finishes — immediately
+        // with an error in this test environment).
+        let await_future = input.update(&mut app, |input, ctx| {
+            let handle = input.upload_files_then_submit_cloud_followup(
+                task_id,
+                prompt.clone(),
+                vec![attachment],
+                ctx,
+            );
+            ctx.await_spawned_future(handle.future_id())
+        });
+        await_future.await;
+
+        // After the upload error, the callback must have restored the prompt.
+        assert_eq!(
+            input.read(&app, |i, ctx| i.buffer_text(ctx)),
+            prompt,
+            "input must be restored to the original prompt after a failed attachment upload"
+        );
+    });
+}
