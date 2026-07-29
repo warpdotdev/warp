@@ -4034,23 +4034,23 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
     });
 }
 
-/// Verifies that `/copy-debugging-link` is available for the TUI's eagerly-created blank
+/// Verifies that `/copy-debugging-id` is available for the TUI's eagerly-created blank
 /// conversation, matching the GUI's active-conversation semantics.
 #[test]
-fn copy_debugging_link_available_in_active_commands_at_zero_state() {
+fn copy_debugging_id_available_in_active_commands_at_zero_state() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
         view.read(&app, |view, ctx| {
-            let has_copy_debugging_link = view
+            let has_copy_debugging_id = view
                 .slash_commands_source
                 .as_ref(ctx)
                 .active_commands()
-                .any(|(_, cmd)| cmd.kind == SlashCommandKind::CopyDebuggingLink);
+                .any(|(_, cmd)| cmd.kind == SlashCommandKind::CopyDebuggingId);
             assert!(
-                has_copy_debugging_link,
-                "/copy-debugging-link must be available for the blank active conversation",
+                has_copy_debugging_id,
+                "/copy-debugging-id must be available for the blank active conversation",
             );
         });
     });
@@ -4082,7 +4082,7 @@ fn handoff_is_available_at_zero_state() {
 
 /// Verifies that the full TUI session renders the no-token error hint in its footer.
 #[test]
-fn copy_debugging_link_footer_hint_renders_in_session() {
+fn copy_debugging_id_footer_hint_renders_in_session() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
         let fixture = focus_test_fixture(&mut app);
@@ -4090,9 +4090,9 @@ fn copy_debugging_link_footer_hint_renders_in_session() {
 
         view.update(&mut app, |view, ctx| {
             view.input_view.update(ctx, |input, ctx| {
-                input.set_text(slash_commands::COPY_DEBUGGING_LINK.name, ctx);
+                input.set_text(slash_commands::COPY_DEBUGGING_ID.name, ctx);
             });
-            view.handle_submitted_input(slash_commands::COPY_DEBUGGING_LINK.name, ctx);
+            view.handle_submitted_input(slash_commands::COPY_DEBUGGING_ID.name, ctx);
         });
 
         // Render the full session and verify the error hint appears in the
@@ -4100,24 +4100,24 @@ fn copy_debugging_link_footer_hint_renders_in_session() {
         // the footer row at the bottom of the session canvas).
         let rendered = render_session(&mut app, &view, 80, 24).join("\n");
         assert!(
-            rendered.contains(super::COPY_DEBUGGING_LINK_NO_TOKEN_HINT),
+            rendered.contains(super::COPY_DEBUGGING_ID_NO_TOKEN_HINT),
             "rendered session must contain the no-token hint in the footer; got:\n{rendered}",
         );
     });
 }
 
 /// Verifies that the footer hint slot shows an error-toned notice after
-/// `/copy-debugging-link` is executed when the conversation has no server token.
+/// `/copy-debugging-id` is executed when the conversation has no server token.
 /// `transient_hint.current()` is the canonical source read by `footer_hint()`
 /// when rendering the footer row, so asserting it covers the rendered behavior.
 #[test]
-fn copy_debugging_link_shows_error_hint_when_no_server_token() {
+fn copy_debugging_id_shows_error_hint_when_no_server_token() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
         view.update(&mut app, |view, ctx| {
-            view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_LINK, None, ctx);
+            view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_ID, None, ctx);
         });
 
         // The hint slot must carry the no-token error text with Error tone.
@@ -4127,8 +4127,8 @@ fn copy_debugging_link_shows_error_hint_when_no_server_token() {
             let hint = view.transient_hint.current();
             assert_eq!(
                 hint.map(|(text, _)| text),
-                Some(super::COPY_DEBUGGING_LINK_NO_TOKEN_HINT),
-                "/copy-debugging-link with no server token must set the no-token error hint",
+                Some(super::COPY_DEBUGGING_ID_NO_TOKEN_HINT),
+                "/copy-debugging-id with no server token must set the no-token error hint",
             );
             assert_eq!(
                 hint.map(|(_, tone)| tone),

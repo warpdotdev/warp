@@ -112,7 +112,7 @@ pub enum SlashCommandKind {
     ExportToClipboard,
     ExportToFile,
     Status,
-    CopyDebuggingLink,
+    CopyDebuggingId,
 }
 
 /// The application surfaces on which a static slash command is implemented.

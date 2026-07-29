@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
+#[cfg(feature = "voice_input")]
+use warpui::SingletonEntity as _;
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
 use super::core::subscribe_to_shared_dependencies;
 use super::{

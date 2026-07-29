@@ -373,32 +373,32 @@ fn strip_command_prefix_substring_not_matched() {
 }
 
 #[test]
-fn copy_debugging_link_command_is_registered_only_for_tui_mode() {
-    assert!(
-        all_commands(settings::SettingsMode::Tui)
-            .iter()
-            .any(|command| command.kind == SlashCommandKind::CopyDebuggingLink),
-        "/copy-debugging-link should be registered in TUI mode"
-    );
-    assert!(
-        all_commands(settings::SettingsMode::Gui)
-            .iter()
-            .all(|command| command.kind != SlashCommandKind::CopyDebuggingLink),
-        "/copy-debugging-link should not be registered in GUI mode"
-    );
+fn copy_debugging_id_command_is_registered_for_gui_and_tui() {
+    for settings_mode in [settings::SettingsMode::Gui, settings::SettingsMode::Tui] {
+        assert!(
+            all_commands(settings_mode)
+                .iter()
+                .any(|command| command.kind == SlashCommandKind::CopyDebuggingId),
+            "/copy-debugging-id should be registered in {settings_mode:?} mode"
+        );
+    }
 }
 
 #[test]
-fn copy_debugging_link_command_has_correct_registry_metadata() {
+fn copy_debugging_id_command_has_correct_registry_metadata() {
     let command = all_commands(settings::SettingsMode::Tui)
         .into_iter()
-        .find(|command| command.kind == SlashCommandKind::CopyDebuggingLink)
-        .expect("expected /copy-debugging-link to be registered in TUI mode");
+        .find(|command| command.kind == SlashCommandKind::CopyDebuggingId)
+        .expect("expected /copy-debugging-id to be registered");
 
-    assert_eq!(command.name, "/copy-debugging-link");
-    assert_eq!(command.kind, SlashCommandKind::CopyDebuggingLink);
-    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
-    assert_eq!(command.supported_surfaces.gui_icon_path(), None);
+    assert_eq!(command.name, "/copy-debugging-id");
+    assert_eq!(command.kind, SlashCommandKind::CopyDebuggingId);
+    assert_eq!(
+        command.supported_surfaces,
+        SlashCommandSurfaces::GuiAndTui {
+            icon_path: "bundled/svg/copy.svg"
+        }
+    );
     assert!(!command.auto_enter_ai_mode);
     assert_eq!(command.availability, Availability::ACTIVE_CONVERSATION);
     assert!(command.argument.is_none());

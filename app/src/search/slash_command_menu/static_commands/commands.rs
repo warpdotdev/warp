@@ -837,11 +837,13 @@ pub static EXPORT_TO_FILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticComm
     argument: Some(Argument::optional().with_hint_text("<optional filename>")),
 });
 
-pub const COPY_DEBUGGING_LINK: StaticCommand = StaticCommand {
-    name: "/copy-debugging-link",
-    description: "Copy debugging link for this conversation",
-    kind: SlashCommandKind::CopyDebuggingLink,
-    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+pub const COPY_DEBUGGING_ID: StaticCommand = StaticCommand {
+    name: "/copy-debugging-id",
+    description: "Copy debugging information for this conversation",
+    kind: SlashCommandKind::CopyDebuggingId,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/copy.svg",
+    },
     availability: Availability::ACTIVE_CONVERSATION,
     auto_enter_ai_mode: false,
     argument: None,
@@ -947,7 +949,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
-        COPY_DEBUGGING_LINK,
+        COPY_DEBUGGING_ID,
         MODEL.clone(),
         STATUS,
         VIEW_LOGS,
