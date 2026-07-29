@@ -10,7 +10,7 @@ use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
-use warp::settings::{AISettings, TuiTheme, TuiThemeSettings};
+use warp::settings::{AISettings, AppEditorSettings, TuiTheme, TuiThemeSettings};
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, Appearance, ConversationSelectionHandle,
     ParsedSlashCommandInput, SlashCommandDataSource as _, SlashCommandMixer,
@@ -330,6 +330,11 @@ impl TuiSlashCommandModel {
             self.auto_approve_enabled(ctx)
         } else if title == slash_commands::NATURAL_LANGUAGE_DETECTION.name {
             AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
+        } else if title == slash_commands::VIM_MODE.name {
+            // Guard against contexts where AppEditorSettings is not registered
+            // (e.g. lightweight test fixtures), matching TuiInputView::vim_mode_enabled.
+            ctx.has_singleton_model::<AppEditorSettings>()
+                && AppEditorSettings::as_ref(ctx).vim_mode_enabled()
         } else {
             return None;
         };

@@ -129,7 +129,7 @@ pub(crate) enum TuiSessionsEvent {
 pub(crate) struct TuiSessions {
     /// TUI-specific process driver. Its handle restores terminal mode on
     /// drop, so the app-lifetime session singleton must retain it.
-    _driver: Option<TuiDriverHandle>,
+    driver: Option<TuiDriverHandle>,
     keyboard_enhancement_supported: bool,
     exit_summary: TuiExitSummaryHandle,
     sessions: Vec<TuiSession>,
@@ -441,7 +441,7 @@ impl TuiSessions {
     ) -> Self {
         let keyboard_enhancement_supported = driver.keyboard_enhancement_supported();
         Self {
-            _driver: Some(driver),
+            driver: Some(driver),
             keyboard_enhancement_supported,
             exit_summary,
             sessions: Vec::new(),
@@ -454,13 +454,39 @@ impl TuiSessions {
     #[cfg(test)]
     pub(crate) fn new_for_test() -> Self {
         Self {
-            _driver: None,
+            driver: None,
             keyboard_enhancement_supported: false,
             exit_summary: TuiExitSummaryHandle::default(),
             sessions: Vec::new(),
             focused_session_id: None,
             resume_token: None,
         }
+    }
+
+    pub(crate) fn set_modifier_key_lifecycle_enabled(
+        &mut self,
+        enabled: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> std::io::Result<()> {
+        let terminal_views = self
+            .sessions
+            .iter()
+            .filter_map(|session| match &session.view {
+                TuiSessionView::Terminal(view) => Some(view.clone()),
+                TuiSessionView::Cloud(_) => None,
+            })
+            .collect::<Vec<_>>();
+        // Reconfigure the terminal before the sessions react, so a failed write
+        // leaves them consistent with the reporting that is still in effect.
+        if let Some(driver) = self.driver.as_mut() {
+            driver.set_modifier_key_lifecycle_enabled(enabled)?;
+        }
+        for view in terminal_views {
+            view.update(ctx, |view, ctx| {
+                view.handle_voice_hold_key_setting_changed(enabled, ctx);
+            });
+        }
+        Ok(())
     }
 
     /// Removes a session. When the focused session is removed, focus falls

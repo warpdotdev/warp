@@ -470,13 +470,29 @@ fn is_gl_to_metal_adapter_on_windows_in_parallels(adapter_info: &wgpu::AdapterIn
 }
 
 /// Returns whether or not the provided adapter is an unsupported Intel UHD Mesa driver version for
-/// warpui to render properly. Currently, we limit this to "Intel UHD Graphics 620", but we do have
-/// some suspicion that more Intel UHD devices are affected, e.g. PLAT-599 has a "Intel(R) UHD
-/// Graphics (TGL GT1)" user seeing the exact same issue.
+/// warpui to render properly. Affected adapters include:
+/// - `Intel(R) HD Graphics 620` (KBL GT2) — flickering (PLAT-744)
+/// - `Intel(R) UHD Graphics (ICL GT1)` — stuck at "Starting zsh..." on Mesa 21.2.6 (GH #14325)
+/// - `Intel(R) UHD Graphics (TGL GT1)` — window flashing/flicker on older Mesa (PLAT-599, GH #4533)
+///
+/// See the Mesa 21.3.6 changelog for the upstream fix:
+/// <https://docs.mesa3d.org/relnotes/21.3.6.html#:~:text=Flickering%20Intel%20Uhd%20620%20Graphics>
 fn is_older_vulkan_intel_uhd_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
     if adapter_info.backend != wgpu::Backend::Vulkan
         || adapter_info.device_type != wgpu::DeviceType::IntegratedGpu
-        || !adapter_info.name.contains("Intel(R) HD Graphics 620")
+    {
+        return false;
+    }
+
+    let affected_names = [
+        "Intel(R) HD Graphics 620",
+        "Intel(R) UHD Graphics (ICL GT1)",
+        "Intel(R) UHD Graphics (TGL GT1)",
+    ];
+
+    if !affected_names
+        .iter()
+        .any(|name| adapter_info.name.contains(name))
     {
         return false;
     }

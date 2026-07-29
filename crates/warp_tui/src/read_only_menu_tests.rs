@@ -5,9 +5,9 @@ use warp::tui_export::Appearance;
 use warpui::event::ModifiersState;
 use warpui::{App, EntityId, EntityIdMap};
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition,
-    TuiSelectionHandle, TuiSize,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiContainer, TuiElement, TuiEvent, TuiEventContext,
+    TuiFlex, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect,
+    TuiScreenPosition, TuiSelectionHandle, TuiSize, TuiViewportPosition, TuiViewportedListState,
 };
 
 use super::{
@@ -87,6 +87,26 @@ fn left_up(x: u16, y: u16) -> TuiEvent {
         position: TuiPoint::new(x, y),
         modifiers: ModifiersState::default(),
     }
+}
+fn scroll_wheel(x: u16, y: u16, delta_y: isize) -> TuiEvent {
+    TuiEvent::ScrollWheel {
+        position: TuiPoint::new(x, y),
+        delta: (0, delta_y),
+        precise: false,
+        modifiers: ModifiersState::default(),
+    }
+}
+
+fn numbered_menu(builder: &TuiUiBuilder) -> TuiReadOnlyMenu {
+    let rows = (0..6)
+        .map(|index| {
+            TuiReadOnlyMenuRow::new([TuiReadOnlyMenuText::new([(
+                format!("Row {index}"),
+                builder.primary_text_style(),
+            )])])
+        })
+        .collect();
+    TuiReadOnlyMenu::new(vec![TuiReadOnlyMenuSection::new("Rows 6", rows)])
 }
 
 #[test]
@@ -192,6 +212,60 @@ fn background_fills_available_width_through_session_style_wrapper() {
     });
 }
 
+#[test]
+fn wheel_scrolling_persists_across_read_only_menu_rebuilds() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let viewport = TuiViewportedListState::new_at_end();
+        viewport.scroll_to_rows_from_top(0);
+        let mut element = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            numbered_menu(&builder).render_with_viewport(
+                TuiSelectionHandle::default(),
+                viewport.clone(),
+                &builder,
+                |_, _| {},
+                |_, _, _| {},
+            )
+        });
+        let size = TuiSize::new(20, 3);
+        assert_eq!(
+            render(&app, element.as_mut(), size)
+                .to_lines()
+                .into_iter()
+                .map(|line| line.trim().to_owned())
+                .collect::<Vec<_>>(),
+            vec!["Rows 6", "Row 0", "Row 1"],
+        );
+
+        assert!(dispatch_mouse(
+            &app,
+            element.as_mut(),
+            size,
+            scroll_wheel(1, 1, -1),
+        ));
+        assert_eq!(viewport.position(), TuiViewportPosition::RowsFromTop(2));
+
+        let mut rebuilt = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            numbered_menu(&builder).render_with_viewport(
+                TuiSelectionHandle::default(),
+                viewport.clone(),
+                &builder,
+                |_, _| {},
+                |_, _, _| {},
+            )
+        });
+        assert_eq!(
+            render(&app, rebuilt.as_mut(), size)
+                .to_lines()
+                .into_iter()
+                .map(|line| line.trim().to_owned())
+                .collect::<Vec<_>>(),
+            vec!["Row 1", "Row 2", "Row 3"],
+        );
+    });
+}
 #[test]
 fn selection_spans_section_titles_and_rows() {
     App::test((), |app| async move {

@@ -1,7 +1,9 @@
+use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerStatus,
-    TuiMcpTransport,
+    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
+    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
+use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
 use crate::inline_menu::{
@@ -15,9 +17,11 @@ const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, true, 
 
 #[derive(Clone, Debug)]
 struct TuiMcpMenuRow {
+    server_id: Option<TuiMcpServerId>,
     title: String,
     description: Option<String>,
-    action: Option<TuiMcpAction>,
+    primary_action: Option<TuiMcpAction>,
+    logout_action: Option<TuiMcpAction>,
 }
 
 #[derive(Default)]
@@ -35,15 +39,22 @@ pub(crate) enum TuiMcpMenuEvent {
 }
 
 pub(crate) struct TuiMcpMenuModel {
+    input_editor: ModelHandle<CodeEditorModel>,
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     state: TuiMcpMenuState,
 }
 
 impl TuiMcpMenuModel {
     pub(crate) fn new(
+        input_editor: ModelHandle<CodeEditorModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        ctx.subscribe_to_model(&input_editor, |model, _, event, ctx| {
+            if model.is_open(ctx) && matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
+                model.refresh_rows(ctx);
+            }
+        });
         ctx.subscribe_to_model(
             &TuiMcpManager::handle(ctx),
             |model, _, _: &TuiMcpManagerEvent, ctx| {
@@ -53,6 +64,7 @@ impl TuiMcpMenuModel {
             },
         );
         Self {
+            input_editor,
             suggestions_mode,
             state: TuiMcpMenuState::Closed,
         }
@@ -77,6 +89,8 @@ impl TuiMcpMenuModel {
         if !did_open {
             return;
         }
+        self.input_editor
+            .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
         self.state = TuiMcpMenuState::Open {
             list: TuiInlineMenuListState::default(),
         };
@@ -89,6 +103,8 @@ impl TuiMcpMenuModel {
             self.suggestions_mode.update(ctx, |mode, ctx| {
                 mode.close_if_active(TuiInputSuggestionsMode::Mcp, ctx);
             });
+            self.input_editor
+                .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
             ctx.emit(TuiMcpMenuEvent::Updated);
         }
     }
@@ -97,7 +113,7 @@ impl TuiMcpMenuModel {
         let TuiMcpMenuState::Open { list } = &mut self.state else {
             return;
         };
-        list.select_previous(MAX_VISIBLE_ROWS, |row| row.action.is_some());
+        list.select_previous(MAX_VISIBLE_ROWS, row_is_selectable);
         ctx.emit(TuiMcpMenuEvent::Updated);
     }
 
@@ -105,13 +121,13 @@ impl TuiMcpMenuModel {
         let TuiMcpMenuState::Open { list } = &mut self.state else {
             return;
         };
-        list.select_next(MAX_VISIBLE_ROWS, |row| row.action.is_some());
+        list.select_next(MAX_VISIBLE_ROWS, row_is_selectable);
         ctx.emit(TuiMcpMenuEvent::Updated);
     }
 
     /// Selects the row at absolute snapshot index `index` (for mouse click).
     /// Returns `true` when the row was actually selected, `false` when the
-    /// index is out of bounds, the menu is not open, or the row has no action.
+    /// index is out of bounds, the menu is not open, or the row is not selectable.
     pub(crate) fn select_at_snapshot_index(
         &mut self,
         index: usize,
@@ -120,7 +136,7 @@ impl TuiMcpMenuModel {
         let TuiMcpMenuState::Open { list } = &mut self.state else {
             return false;
         };
-        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, |row| row.action.is_some());
+        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, row_is_selectable);
         ctx.emit(TuiMcpMenuEvent::Updated);
         selected
     }
@@ -133,15 +149,35 @@ impl TuiMcpMenuModel {
         list.scroll_by(delta, MAX_VISIBLE_ROWS);
         ctx.emit(TuiMcpMenuEvent::Updated);
     }
-
-    pub(crate) fn accept_selected(
-        &mut self,
-        _ctx: &mut ModelContext<Self>,
-    ) -> Option<TuiMcpAction> {
+    pub(crate) fn selected_primary_action(&self, ctx: &AppContext) -> Option<TuiMcpAction> {
+        if !self.is_open(ctx) {
+            return None;
+        }
         let TuiMcpMenuState::Open { list } = &self.state else {
             return None;
         };
-        list.selected_row().and_then(|row| row.action)
+        list.selected_row().and_then(|row| row.primary_action)
+    }
+    pub(crate) fn accept_selected(&self, ctx: &AppContext) -> Option<TuiMcpAction> {
+        self.selected_primary_action(ctx)
+    }
+
+    pub(crate) fn logout_selected(&self, ctx: &AppContext) -> Option<TuiMcpAction> {
+        if !self.is_open(ctx) {
+            return None;
+        }
+        let TuiMcpMenuState::Open { list } = &self.state else {
+            return None;
+        };
+        list.selected_row().and_then(|row| row.logout_action)
+    }
+    pub(crate) fn can_log_out_selected(&self, ctx: &AppContext) -> bool {
+        self.logout_selected(ctx).is_some()
+    }
+
+    pub(crate) fn input_hint_text(&self, ctx: &AppContext) -> Option<&'static str> {
+        (self.is_open(ctx) && input_text(&self.input_editor, ctx).is_empty())
+            .then_some("Search MCP servers…")
     }
 
     pub(crate) fn snapshot(&self, app: &AppContext) -> Option<TuiInlineMenuSnapshot> {
@@ -153,14 +189,19 @@ impl TuiMcpMenuModel {
         };
         let mcp = TuiMcpManager::as_ref(app);
         let snapshot = mcp.snapshot();
+        let query = input_text(&self.input_editor, app);
         let status = list.rows().is_empty().then(|| {
-            let label = match &snapshot.config_state {
-                TuiMcpConfigState::Missing => format!(
-                    "No MCP config found at {}",
-                    abbreviate_home_prefix(&snapshot.config_path.display().to_string())
-                ),
-                TuiMcpConfigState::Ready => "No MCP servers configured".to_string(),
-                TuiMcpConfigState::Invalid { message } => format!("Config error: {message}"),
+            let label = if !query.trim().is_empty() {
+                "No matching MCP servers".to_owned()
+            } else {
+                match &snapshot.config_state {
+                    TuiMcpConfigState::Missing => format!(
+                        "No MCP config found at {}",
+                        abbreviate_home_prefix(&snapshot.config_path.display().to_string())
+                    ),
+                    TuiMcpConfigState::Ready => "No MCP servers configured".to_string(),
+                    TuiMcpConfigState::Invalid { message } => format!("Config error: {message}"),
+                }
             };
             TuiInlineMenuStatus::Empty(label)
         });
@@ -180,7 +221,7 @@ impl TuiMcpMenuModel {
                     prefix: None,
                     description: row.description.clone(),
                     state_suffix: None,
-                    is_selectable: row.action.is_some(),
+                    is_selectable: row_is_selectable(row),
                     style: TuiInlineMenuRowStyle::Default,
                 })
                 .collect(),
@@ -197,65 +238,106 @@ impl TuiMcpMenuModel {
             return;
         }
         let snapshot = TuiMcpManager::as_ref(ctx).snapshot();
-        let mut rows = Vec::new();
-        if let TuiMcpConfigState::Invalid { message } = &snapshot.config_state {
-            rows.push(TuiMcpMenuRow {
-                title: "Config error".to_string(),
-                description: Some(message.clone()),
-                action: None,
-            });
-        }
-        for server in &snapshot.servers {
-            let transport = match server.transport {
-                TuiMcpTransport::Stdio => "stdio",
-                TuiMcpTransport::HttpOrSse => "HTTP/SSE",
-            };
-            let (status, action) = match &server.status {
-                TuiMcpServerStatus::Offline => {
-                    ("offline".to_string(), Some(TuiMcpAction::Start(server.id)))
-                }
-                TuiMcpServerStatus::Starting => ("starting…".to_string(), None),
-                TuiMcpServerStatus::Authenticating => (
-                    "authentication required".to_string(),
-                    server
-                        .authorization_url
-                        .as_ref()
-                        .map(|_| TuiMcpAction::ReopenAuthorization(server.id)),
-                ),
-                TuiMcpServerStatus::Running => (
-                    format!("running · {} tools", server.tool_count),
-                    Some(TuiMcpAction::Stop(server.id)),
-                ),
-                TuiMcpServerStatus::Stopping => ("stopping…".to_string(), None),
-                TuiMcpServerStatus::Failed { message } => (
-                    format!("failed · {message}"),
-                    Some(TuiMcpAction::Retry(server.id)),
-                ),
-            };
-            rows.push(TuiMcpMenuRow {
-                title: server.name.clone(),
-                description: Some(format!("{transport} · {status}")),
-                action,
-            });
-            if server.has_credentials {
-                rows.push(TuiMcpMenuRow {
-                    title: format!("Log out {}", server.name),
-                    description: Some("Remove saved OAuth credentials".to_string()),
-                    action: Some(TuiMcpAction::LogOut(server.id)),
-                });
-            }
-        }
-
-        let preferred_index = rows.iter().position(|row| row.action.is_some());
-        let mut list = TuiInlineMenuListState::default();
-        list.replace_rows(rows, false, preferred_index, MAX_VISIBLE_ROWS, |row| {
-            row.action.is_some()
-        });
-        self.state = TuiMcpMenuState::Open { list };
+        let previous_server_id = match &self.state {
+            TuiMcpMenuState::Open { list } => list.selected_row().and_then(|row| row.server_id),
+            TuiMcpMenuState::Closed => return,
+        };
+        let rows = menu_rows(snapshot, &input_text(&self.input_editor, ctx));
+        let preferred_index = previous_server_id
+            .and_then(|server_id| {
+                rows.iter()
+                    .position(|row| row.server_id == Some(server_id) && row_is_selectable(row))
+            })
+            .or_else(|| rows.iter().position(row_is_selectable));
+        let TuiMcpMenuState::Open { list } = &mut self.state else {
+            return;
+        };
+        list.replace_rows(
+            rows,
+            false,
+            preferred_index,
+            MAX_VISIBLE_ROWS,
+            row_is_selectable,
+        );
         ctx.emit(TuiMcpMenuEvent::Updated);
+    }
+}
+fn menu_rows(snapshot: &TuiMcpSnapshot, query: &str) -> Vec<TuiMcpMenuRow> {
+    let mut rows = Vec::new();
+    if let TuiMcpConfigState::Invalid { message } = &snapshot.config_state {
+        rows.push(TuiMcpMenuRow {
+            server_id: None,
+            title: "Config error".to_string(),
+            description: Some(message.clone()),
+            primary_action: None,
+            logout_action: None,
+        });
+    }
+    let query = query.trim().to_lowercase();
+    rows.extend(
+        snapshot
+            .servers
+            .iter()
+            .filter(|server| query.is_empty() || server.name.to_lowercase().contains(&query))
+            .map(|server| {
+                let transport = match server.transport {
+                    TuiMcpTransport::Stdio => "stdio",
+                    TuiMcpTransport::HttpOrSse => "HTTP/SSE",
+                };
+                let (status, primary_action) = match &server.status {
+                    TuiMcpServerStatus::Offline => {
+                        ("offline".to_string(), Some(TuiMcpAction::Start(server.id)))
+                    }
+                    TuiMcpServerStatus::Starting => ("starting…".to_string(), None),
+                    TuiMcpServerStatus::Authenticating => (
+                        "authentication required".to_string(),
+                        server
+                            .authorization_url
+                            .as_ref()
+                            .map(|_| TuiMcpAction::ReopenAuthorization(server.id)),
+                    ),
+                    TuiMcpServerStatus::Running => (
+                        format!("running · {} tools", server.tool_count),
+                        Some(TuiMcpAction::Stop(server.id)),
+                    ),
+                    TuiMcpServerStatus::Stopping => ("stopping…".to_string(), None),
+                    TuiMcpServerStatus::Failed { message } => (
+                        format!("failed · {message}"),
+                        Some(TuiMcpAction::Retry(server.id)),
+                    ),
+                };
+                TuiMcpMenuRow {
+                    server_id: Some(server.id),
+                    title: server.name.clone(),
+                    description: Some(format!("{transport} · {status}")),
+                    primary_action,
+                    logout_action: server
+                        .can_log_out
+                        .then_some(TuiMcpAction::LogOut(server.id)),
+                }
+            }),
+    );
+    rows
+}
+
+fn row_is_selectable(row: &TuiMcpMenuRow) -> bool {
+    row.server_id.is_some()
+}
+
+fn input_text(editor: &ModelHandle<CodeEditorModel>, app: &AppContext) -> String {
+    let model = editor.as_ref(app);
+    let buffer = model.content().as_ref(app);
+    if buffer.is_empty() {
+        String::new()
+    } else {
+        buffer.text().into_string()
     }
 }
 
 impl Entity for TuiMcpMenuModel {
     type Event = TuiMcpMenuEvent;
 }
+
+#[cfg(test)]
+#[path = "mcp_menu_tests.rs"]
+mod tests;

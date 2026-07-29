@@ -257,6 +257,14 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
+    /// Returns `true` when the user belongs to more than one team in the current
+    /// workspace, meaning the team-switcher pill and dropdown should be shown.
+    /// Single-team and no-workspace users return `false` so their UI is unchanged.
+    pub fn can_switch_teams(&self) -> bool {
+        self.current_workspace()
+            .map(|ws| ws.teams.len() > 1)
+            .unwrap_or(false)
+    }
     pub fn team_for_window(&self, window_id: WindowId) -> Option<&Team> {
         self.team_uid_for_window(window_id)
             .and_then(|team_uid| self.team_from_uid(team_uid))
@@ -1735,6 +1743,7 @@ impl UserWorkspaces {
                 uid: ServerId::from(2),
                 name: "Test Team".to_string(),
                 settings: Default::default(),
+                color: None,
                 billing_metadata: BillingMetadata::default(),
                 members: vec![],
                 invite_code: None,

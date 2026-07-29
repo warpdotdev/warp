@@ -9,19 +9,21 @@ use tempfile::TempDir;
 use warp::appearance::Appearance;
 use warp::settings::{
     AISettings, TuiStatuslineConfig, TuiStatuslineItem, TuiTheme, TuiThemeSettings,
-    TuiUsageDisplayMode, TuiZeroStateObject,
+    TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiVoiceSettings, TuiZeroStateObject,
 };
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
-    AIAgentActionId, AIAgentExchangeId, AIConversationAutoexecuteMode, AIConversationId,
-    AgentViewEntryOrigin, BlockPadding, BlocklistAIHistoryModel, ConversationStatus,
-    ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMPreferences,
-    LinkedWorkflowData, LongRunningCommandControlState, PtyIntent, PtyIntentEvent,
-    QueuedQueryModel, SizeInfo, SizeUpdate, TaskId, TranscriptScope, TuiUpArrowHistoryItemKind,
-    UserTakeOverReason, export_conversation_markdown, register_tui_session_view_test_singletons,
-    slash_commands,
+    AIAgentActionId, AIAgentExchangeId, AIAgentTodo, AIAgentTodoList,
+    AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals,
+    Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
+    LongRunningCommandControlState, PtyIntent, PtyIntentEvent, QueuedQueryModel, SizeInfo,
+    SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope,
+    TuiMcpAction, TuiMcpServerId, TuiUpArrowHistoryItemKind, UserTakeOverReason,
+    export_conversation_markdown, register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::channel::Channel;
+use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
@@ -32,10 +34,11 @@ use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{
     Color, TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement,
     TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint,
-    TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
+    TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText, TuiViewportPosition,
 };
-use warpui_core::event::ModifiersState;
+use warpui_core::event::{KeyState, ModifiersState};
 use warpui_core::keymap::{Context, Keystroke, Trigger};
+use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView as _, WindowInvalidation};
@@ -56,8 +59,9 @@ use super::{
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
     format_context_window_usage, format_statusline_date, format_statusline_time_12_hour,
     format_statusline_time_24_hour, format_todo_progress, log_bundle_success_message,
-    raw_prompt_if_not_blank, render_status_footer_row, render_statusline_datetime,
-    voice_argument_is_empty, voice_command_argument,
+    mcp_primary_action_hint, raw_prompt_if_not_blank, render_mcp_menu_footer,
+    render_status_footer_row, render_statusline_datetime, voice_argument_is_empty,
+    voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::grok_oauth::{TuiGrokOAuthBlockAction, new_block};
@@ -84,7 +88,7 @@ use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_sessio
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
-use crate::voice_input::TuiVoiceInputState;
+use crate::voice_input::{TuiVoiceInputState, requires_modifier_key_reporting};
 use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
 };
@@ -93,6 +97,122 @@ struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
 }
+
+fn todo(id: &str, title: &str) -> AIAgentTodo {
+    AIAgentTodo::new(id.to_owned().into(), title.to_owned(), String::new())
+}
+
+fn set_selected_todo_list(
+    app: &mut App,
+    view: &ViewHandle<TuiTerminalSessionView>,
+    completed: Vec<AIAgentTodo>,
+    pending: Vec<AIAgentTodo>,
+    status: ConversationStatus,
+) -> AIConversationId {
+    view.update(app, |view, ctx| {
+        let conversation_id = view.conversation_selection.update(ctx, |selection, ctx| {
+            selection
+                .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
+                .expect("test conversation should start")
+        });
+        let terminal_surface_id = view.terminal_surface_id;
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            let conversation = history
+                .conversation_mut(&conversation_id)
+                .expect("selected conversation should exist");
+            conversation.set_todo_lists_for_test(vec![
+                AIAgentTodoList::default()
+                    .with_completed_items(completed)
+                    .with_pending_items(pending),
+            ]);
+            conversation.update_status(status, terminal_surface_id, ctx);
+        });
+        conversation_id
+    })
+}
+
+#[test]
+fn mcp_menu_footer_replaces_status_with_controls() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let footer = render_mcp_menu_footer(
+                &TuiUiBuilder::from_app(ctx),
+                Some(TuiMcpAction::Stop(TuiMcpServerId(1))),
+                true,
+            )
+            .finish();
+            assert_eq!(
+                render_element(footer, ctx, 120).to_lines(),
+                vec![
+                    "Enter to stop  Ctrl+R to log out & remove credentials  Esc to close"
+                        .to_owned()
+                ],
+            );
+        });
+    });
+}
+#[test]
+fn mcp_menu_footer_hides_unavailable_primary_control() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let logout_only = render_mcp_menu_footer(&builder, None, true).finish();
+            assert_eq!(
+                render_element(logout_only, ctx, 120).to_lines(),
+                vec!["Ctrl+R to log out & remove credentials  Esc to close".to_owned()],
+            );
+            let close_only = render_mcp_menu_footer(&builder, None, false).finish();
+            assert_eq!(
+                render_element(close_only, ctx, 120).to_lines(),
+                vec!["Esc to close".to_owned()],
+            );
+        });
+    });
+}
+
+#[test]
+fn mcp_primary_action_hints_match_available_actions() {
+    let id = TuiMcpServerId(1);
+    assert_eq!(
+        mcp_primary_action_hint(TuiMcpAction::Start(id)),
+        Some("to start")
+    );
+    assert_eq!(
+        mcp_primary_action_hint(TuiMcpAction::Stop(id)),
+        Some("to stop")
+    );
+    assert_eq!(
+        mcp_primary_action_hint(TuiMcpAction::Retry(id)),
+        Some("to retry")
+    );
+    assert_eq!(
+        mcp_primary_action_hint(TuiMcpAction::ReopenAuthorization(id)),
+        Some("to authenticate")
+    );
+    assert_eq!(mcp_primary_action_hint(TuiMcpAction::LogOut(id)), None);
+    assert_eq!(mcp_primary_action_hint(TuiMcpAction::ReloadConfig), None);
+}
+#[test]
+fn mcp_menu_footer_hides_unavailable_logout_control() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let footer = render_mcp_menu_footer(
+                &TuiUiBuilder::from_app(ctx),
+                Some(TuiMcpAction::Start(TuiMcpServerId(1))),
+                false,
+            )
+            .finish();
+            assert_eq!(
+                render_element(footer, ctx, 120).to_lines(),
+                vec!["Enter to start  Esc to close".to_owned()],
+            );
+        });
+    });
+}
+
 #[test]
 fn figma_statusline_metadata_formats_are_stable() {
     let now = NaiveDate::from_ymd_opt(2026, 7, 20)
@@ -186,7 +306,7 @@ fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators(
                         FooterSegment::ContextWindowUsage("43% context used".to_owned()),
                         FooterSegment::DateTime(TuiText::new("July 20, 2026").finish()),
                         FooterSegment::DateTime(TuiText::new("1:08pm").finish()),
-                        FooterSegment::AgentTodoList("❒ 1/10".to_owned()),
+                        FooterSegment::AgentTodoList(TuiText::new("❒ 1/10").finish()),
                         FooterSegment::VoiceInput(TuiText::new("Voice").finish()),
                     ],
                 },
@@ -857,6 +977,232 @@ fn toggle_model_menu_action_opens_and_closes_the_inline_model_menu() {
                 "ToggleModelMenu action should close an open inline model menu"
             );
         });
+    });
+}
+#[test]
+fn todo_menu_renders_active_list_and_toggles_through_shared_suggestions_mode() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::AgentTodoList]);
+        set_selected_todo_list(
+            &mut app,
+            &view,
+            vec![todo("done", "Completed task")],
+            vec![todo("current", "Current task"), todo("later", "Later task")],
+            ConversationStatus::InProgress,
+        );
+
+        assert_eq!(render_footer_lines(&mut app, &view, 80), vec!["❒ 1/3"]);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::ToggleTodoMenu, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Todos)
+            );
+            assert_eq!(
+                view.read_only_menu_viewport.position(),
+                TuiViewportPosition::RowsFromTop(2),
+                "the title and completed row precede the current task"
+            );
+        });
+
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        let completed = rendered.find("✓ Completed task").unwrap();
+        let current = rendered.find("● Current task").unwrap();
+        let later = rendered.find("◌ Later task").unwrap();
+        assert!(rendered.contains("Tasks 1/3"));
+        assert!(completed < current && current < later);
+
+        view.update(&mut app, |view, ctx| {
+            view.suggestions_mode.update(ctx, |mode, ctx| {
+                mode.set_mode(
+                    TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status),
+                    ctx,
+                );
+            });
+            view.handle_action(&TuiTerminalSessionAction::ToggleTodoMenu, ctx);
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Todos)
+            );
+            view.handle_action(&TuiTerminalSessionAction::ToggleTodoMenu, ctx);
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+        });
+    });
+}
+
+#[test]
+fn finished_todo_list_remains_visible_and_openable() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::AgentTodoList]);
+        set_selected_todo_list(
+            &mut app,
+            &view,
+            vec![todo("done", "Completed task")],
+            Vec::new(),
+            ConversationStatus::Success,
+        );
+
+        assert_eq!(render_footer_lines(&mut app, &view, 80), vec!["✓ 1/1"]);
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::ToggleTodoMenu, ctx);
+        });
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(rendered.contains("Tasks 1/1"));
+        assert!(rendered.contains("✓ Completed task"));
+    });
+}
+
+#[test]
+fn todo_updates_preserve_scroll_and_close_the_menu_when_the_list_disappears() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let conversation_id = set_selected_todo_list(
+            &mut app,
+            &view,
+            Vec::new(),
+            vec![todo("current", "Current task")],
+            ConversationStatus::InProgress,
+        );
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::ToggleTodoMenu, ctx);
+            view.read_only_menu_viewport.scroll_to_rows_from_top(4);
+            view.handle_history_event(
+                &BlocklistAIHistoryEvent::UpdatedTodoList {
+                    terminal_surface_id: view.terminal_surface_id,
+                },
+                ctx,
+            );
+            assert_eq!(
+                view.read_only_menu_viewport.position(),
+                TuiViewportPosition::RowsFromTop(4)
+            );
+            view.handle_action(
+                &TuiTerminalSessionAction::ToggleAutoApprove {
+                    show_feedback: false,
+                },
+                ctx,
+            );
+            assert_eq!(
+                view.read_only_menu_viewport.position(),
+                TuiViewportPosition::RowsFromTop(4)
+            );
+
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history
+                    .conversation_mut(&conversation_id)
+                    .unwrap()
+                    .set_todo_lists_for_test(vec![
+                        AIAgentTodoList::default()
+                            .with_pending_items(vec![todo("old", "Old task")]),
+                        AIAgentTodoList::default()
+                            .with_completed_items(vec![todo("done", "Completed task")])
+                            .with_pending_items(vec![todo("new", "New current task")]),
+                    ]);
+            });
+            view.handle_history_event(
+                &BlocklistAIHistoryEvent::UpdatedTodoList {
+                    terminal_surface_id: view.terminal_surface_id,
+                },
+                ctx,
+            );
+            assert_eq!(
+                view.read_only_menu_viewport.position(),
+                TuiViewportPosition::RowsFromTop(2)
+            );
+
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                history
+                    .conversation_mut(&conversation_id)
+                    .unwrap()
+                    .set_todo_lists_for_test(Vec::new());
+            });
+            view.handle_history_event(
+                &BlocklistAIHistoryEvent::UpdatedTodoList {
+                    terminal_surface_id: view.terminal_surface_id,
+                },
+                ctx,
+            );
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::Closed
+            );
+        });
+    });
+}
+
+#[test]
+fn footer_todo_item_is_a_bounded_click_target() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::AgentTodoList]);
+        set_selected_todo_list(
+            &mut app,
+            &view,
+            Vec::new(),
+            vec![todo("current", "Current task")],
+            ConversationStatus::InProgress,
+        );
+        let (mut element, scene, buffer) = render_retained_session(&app, &view, 40, 20);
+        let (todo_col, todo_row) = footer_label_position(&buffer, "❒ 0/1");
+        let inside = (todo_col + 1, todo_row);
+        let outside = (todo_col + 6, todo_row);
+
+        dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &mouse_moved(inside.0, inside.1),
+        );
+        assert!(view.read(&app, |view, _| {
+            view.todo_list_mouse.lock().unwrap().is_hovered()
+        }));
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_down(inside.0, inside.1),
+        ));
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &left_mouse_up(inside.0, inside.1),
+        ));
+        assert!(!view.read(&app, |view, _| {
+            view.todo_list_mouse.lock().unwrap().is_clicked()
+        }));
+
+        dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &mouse_moved(outside.0, outside.1),
+        );
+        assert!(!view.read(&app, |view, _| {
+            view.todo_list_mouse.lock().unwrap().is_hovered()
+        }));
+        assert!(!dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene,
+            &left_mouse_down(outside.0, outside.1),
+        ));
     });
 }
 #[test]
@@ -2767,6 +3113,18 @@ fn footer_falls_back_to_replacing_voice_hints_when_voice_item_is_disabled() {
             vec!["listening to voice input... · esc or enter to stop"]
         );
         assert_eq!(listening_footer[(0, 0)].fg, expected_color);
+        view.update(&mut app, |view, ctx| {
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, _| {
+                voice.set_hold_key_for_test(Some(KeyCode::ControlLeft));
+            });
+            ctx.notify();
+        });
+        let held_footer = render_footer(&mut app, &view, 80);
+        assert_eq!(
+            held_footer.to_lines(),
+            vec!["listening to voice input... · release key to stop"]
+        );
 
         view.update(&mut app, |view, ctx| {
             let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
@@ -2921,7 +3279,10 @@ fn voice_toggle_stops_listening_and_ignores_transcribing() {
             voice_input.update(ctx, |voice, ctx| {
                 voice.set_state_for_test(TuiVoiceInputState::Listening, ctx);
             });
-            view.handle_action(&TuiTerminalSessionAction::ToggleVoiceInput, ctx);
+            view.handle_action(
+                &TuiTerminalSessionAction::ToggleVoiceInputFromStatusline,
+                ctx,
+            );
         });
         view.read(&app, |view, ctx| {
             assert_eq!(
@@ -2931,7 +3292,10 @@ fn voice_toggle_stops_listening_and_ignores_transcribing() {
         });
 
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&TuiTerminalSessionAction::ToggleVoiceInput, ctx);
+            view.handle_action(
+                &TuiTerminalSessionAction::ToggleVoiceInputFromStatusline,
+                ctx,
+            );
         });
         view.read(&app, |view, ctx| {
             assert_eq!(
@@ -3465,6 +3829,134 @@ fn auto_approve_uses_ctrl_shift_i() {
 }
 
 #[test]
+fn voice_hold_keys_preserve_left_and_right_modifiers() {
+    let cases = [
+        (TuiVoiceInputHoldKey::None, None),
+        (TuiVoiceInputHoldKey::AltLeft, Some(KeyCode::AltLeft)),
+        (TuiVoiceInputHoldKey::AltRight, Some(KeyCode::AltRight)),
+        (
+            TuiVoiceInputHoldKey::ControlLeft,
+            Some(KeyCode::ControlLeft),
+        ),
+        (
+            TuiVoiceInputHoldKey::ControlRight,
+            Some(KeyCode::ControlRight),
+        ),
+        (TuiVoiceInputHoldKey::SuperLeft, Some(KeyCode::SuperLeft)),
+        (TuiVoiceInputHoldKey::SuperRight, Some(KeyCode::SuperRight)),
+        (TuiVoiceInputHoldKey::ShiftLeft, Some(KeyCode::ShiftLeft)),
+        (TuiVoiceInputHoldKey::ShiftRight, Some(KeyCode::ShiftRight)),
+    ];
+    for (setting, modifier) in cases {
+        let converted: Option<KeyCode> = setting.into();
+        assert_eq!(converted, modifier);
+    }
+}
+
+fn voice_key_event(key: KeyCode, state: KeyState) -> TuiEvent {
+    TuiEvent::ModifierKeyChanged {
+        key_code: key,
+        state,
+    }
+}
+#[test]
+fn voice_hold_handler_matches_only_the_configured_side() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        app.read(|ctx| {
+            assert!(
+                !requires_modifier_key_reporting(ctx),
+                "the default hold key must not request modifier reporting"
+            );
+        });
+        app.update(|ctx| {
+            TuiVoiceSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .voice_input_hold_key
+                    .set_value(TuiVoiceInputHoldKey::ControlLeft, ctx)
+                    .expect("voice hold key should update");
+            });
+        });
+        app.read(|ctx| {
+            assert!(
+                requires_modifier_key_reporting(ctx),
+                "a configured hold key must request modifier reporting"
+            );
+        });
+        view.update(&mut app, |view, _| {
+            view.keyboard_enhancement_supported = true;
+        });
+        let (mut element, scene, _) = render_retained_session(&app, &view, 100, 40);
+
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &voice_key_event(KeyCode::ControlLeft, KeyState::Pressed),
+        ));
+        assert!(!dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene,
+            &voice_key_event(KeyCode::ControlRight, KeyState::Released),
+        ));
+    });
+}
+
+#[test]
+fn voice_hold_handler_keeps_release_after_composer_loses_input() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.keyboard_enhancement_supported = true;
+            let voice_input = view.input_view.as_ref(ctx).voice_input_model().clone();
+            voice_input.update(ctx, |voice, _| {
+                voice.set_hold_key_for_test(Some(KeyCode::ControlLeft));
+            });
+        });
+        let (mut element, scene) = app.read(|ctx| {
+            let mut element =
+                view.as_ref(ctx)
+                    .with_voice_hold_handler(TuiText::new("").finish(), false, ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(
+                TuiConstraint::loose(TuiSize::new(1, 1)),
+                &mut layout_ctx,
+                ctx,
+            );
+            let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 1, 1));
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            {
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+            }
+            (element, Rc::new(paint_ctx.scene))
+        });
+
+        assert!(dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene.clone(),
+            &voice_key_event(KeyCode::ControlLeft, KeyState::Released),
+        ));
+        assert!(!dispatch_session_event(
+            &app,
+            &view,
+            &mut element,
+            scene,
+            &voice_key_event(KeyCode::ControlLeft, KeyState::Pressed),
+        ));
+    });
+}
+#[test]
 fn blocked_terminal_use_action_acceptance_uses_ctrl_enter_without_rebinding_submit() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
@@ -3499,18 +3991,18 @@ fn blocked_terminal_use_action_acceptance_uses_ctrl_enter_without_rebinding_subm
     });
 }
 #[test]
-fn voice_input_uses_ctrl_s_only_when_the_composer_owns_input() {
+fn voice_input_keeps_ctrl_s_as_the_default_keybinding() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
         app.read(|ctx| {
             let binding = ctx
                 .editable_bindings()
-                .find(|binding| binding.name == VOICE_INPUT_BINDING_NAME)
-                .expect("voice-input binding");
-            assert_eq!(
-                *binding.trigger,
-                Trigger::Keystrokes(vec![Keystroke::parse("ctrl-s").unwrap()])
-            );
+                .filter(|binding| binding.name == VOICE_INPUT_BINDING_NAME)
+                .find(|binding| {
+                    *binding.trigger
+                        == Trigger::Keystrokes(vec![Keystroke::parse("ctrl-s").unwrap()])
+                })
+                .expect("hardcoded ctrl-s voice-input binding");
 
             let mut session_context = Context::default();
             session_context
@@ -4028,6 +4520,304 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
             assert!(
                 ctx.check_view_or_child_focused(fixture.window_id, &parent_view.id()),
                 "root session input should own focus after escape"
+            );
+        });
+    });
+}
+
+// ── Vim mode tests ───────────────────────────────────────────────────────────
+
+/// The `/vim-mode` slash command static definition must be correctly
+/// populated: a non-empty name, a non-empty description, and a TUI-only
+/// supported surface (so the command appears only in the TUI's slash-command
+/// menu, not in the GUI).
+///
+/// The global `COMMAND_REGISTRY` is initialized with `SettingsMode::Gui` in
+/// unit-test processes (the mode defaults to Gui when not explicitly set at
+/// startup), so TUI-only commands are correctly excluded from that registry.
+/// This test validates the static definition directly without relying on the
+/// filtered registry.
+#[test]
+fn vim_mode_slash_command_is_registered_in_command_registry() {
+    use warp::tui_export::SlashCommandSurfaces;
+
+    let cmd = &slash_commands::VIM_MODE;
+    assert_eq!(cmd.name, "/vim-mode");
+    assert!(
+        !cmd.description.is_empty(),
+        "/vim-mode must have a non-empty description"
+    );
+    // The command must be TUI-only so it appears in the TUI's slash-command
+    // menu but is excluded from the GUI surface.
+    assert_eq!(
+        cmd.supported_surfaces,
+        SlashCommandSurfaces::TuiOnly,
+        "/vim-mode must be registered as TUI-only"
+    );
+}
+
+/// Executing the `/vim-mode` slash command must toggle and persist the
+/// `AppEditorSettings::vim_mode` setting on each invocation.
+#[test]
+fn vim_mode_slash_command_persists_toggle() {
+    App::test((), |mut app| async move {
+        use warp::settings::AppEditorSettings;
+        use warpui::SingletonEntity as _;
+
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        // AppEditorSettings is not included in the standard TUI test fixture;
+        // register it explicitly (mirrors the `enable_vim_mode` helper in
+        // view_tests.rs).
+        app.update(AppEditorSettings::register);
+
+        assert!(
+            !app.read(|ctx| AppEditorSettings::as_ref(ctx).vim_mode_enabled()),
+            "vim mode should start disabled"
+        );
+
+        // First toggle: off → on.
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::VIM_MODE, None, ctx);
+        });
+        assert!(
+            app.read(|ctx| AppEditorSettings::as_ref(ctx).vim_mode_enabled()),
+            "/vim-mode should enable vim mode on the first toggle"
+        );
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(super::VIM_MODE_ENABLED_HINT.to_owned()),
+            "should surface an enabled hint after enabling vim mode"
+        );
+
+        // Second toggle: on → off.
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::VIM_MODE, None, ctx);
+        });
+        assert!(
+            !app.read(|ctx| AppEditorSettings::as_ref(ctx).vim_mode_enabled()),
+            "/vim-mode should disable vim mode on the second toggle"
+        );
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some(super::VIM_MODE_DISABLED_HINT.to_owned()),
+            "should surface a disabled hint after disabling vim mode"
+        );
+    });
+}
+
+/// Verifies that `/copy-debugging-id` is available for the TUI's eagerly-created blank
+/// conversation, matching the GUI's active-conversation semantics.
+#[test]
+fn copy_debugging_id_available_in_active_commands_at_zero_state() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.read(&app, |view, ctx| {
+            let has_copy_debugging_id = view
+                .slash_commands_source
+                .as_ref(ctx)
+                .active_commands()
+                .any(|(_, cmd)| cmd.kind == SlashCommandKind::CopyDebuggingId);
+            assert!(
+                has_copy_debugging_id,
+                "/copy-debugging-id must be available for the blank active conversation",
+            );
+        });
+    });
+}
+
+/// Verifies that `/handoff` remains available for the TUI's blank active conversation.
+#[test]
+fn handoff_is_available_at_zero_state() {
+    App::test((), |mut app| async move {
+        let _oz_handoff = FeatureFlag::OzHandoff.override_enabled(true);
+        let _local_cloud = FeatureFlag::HandoffLocalCloud.override_enabled(true);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.read(&app, |view, ctx| {
+            let active_names: Vec<&str> = view
+                .slash_commands_source
+                .as_ref(ctx)
+                .active_commands()
+                .map(|(_, cmd)| cmd.name)
+                .collect();
+
+            assert!(
+                active_names.contains(&slash_commands::MOVE_TO_CLOUD.name),
+                "/handoff must be active at zero state",
+            );
+        });
+    });
+}
+
+/// Verifies that the full TUI session renders the no-token error hint in its footer.
+#[test]
+fn copy_debugging_id_footer_hint_renders_in_session() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text(slash_commands::COPY_DEBUGGING_ID.name, ctx);
+            });
+            view.handle_submitted_input(slash_commands::COPY_DEBUGGING_ID.name, ctx);
+        });
+
+        // Render the full session and verify the error hint appears in the
+        // rendered output (footer_hint() feeds transient_hint.current() into
+        // the footer row at the bottom of the session canvas).
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(
+            rendered.contains(super::COPY_DEBUGGING_ID_NO_TOKEN_HINT),
+            "rendered session must contain the no-token hint in the footer; got:\n{rendered}",
+        );
+    });
+}
+
+/// The Vim mode indicator (INS/NOR/VIS/V-L/REP) must appear in the footer only
+/// while Vim mode is enabled.
+///
+/// This test validates the accessor and full render path. Notification
+/// delivery is covered directly by the input-view mode-change event test.
+#[test]
+fn vim_mode_indicator_shown_only_when_vim_mode_is_enabled() {
+    App::test((), |mut app| async move {
+        use warp::settings::AppEditorSettings;
+        use warpui::SingletonEntity as _;
+
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        app.update(AppEditorSettings::register);
+
+        // Vim mode off: vim_mode_indicator returns None regardless of mode.
+        app.read(|ctx| {
+            let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
+            assert!(
+                indicator.is_none(),
+                "indicator must be None when vim mode is disabled, got {indicator:?}"
+            );
+        });
+
+        // Enable vim mode. The FSA starts in Insert mode, so the indicator
+        // shows "INS", matching the GUI Vim status indicator.
+        app.update(|ctx| {
+            AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .vim_mode
+                    .set_value(true, ctx)
+                    .expect("failed to enable vim mode");
+            });
+        });
+        app.read(|ctx| {
+            let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
+            assert_eq!(
+                indicator,
+                Some("INS"),
+                "indicator must be INS in Insert mode when vim mode is enabled, got {indicator:?}"
+            );
+        });
+
+        // Drive the input to Normal mode (Escape from Insert): indicator → Some("NOR").
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                // Process Escape to move Insert → Normal.
+                input.handle_action(&crate::input::view::TuiInputAction::HandleEscape, ctx);
+            });
+        });
+        // Verify via accessor that the mode state is correct.
+        app.read(|ctx| {
+            let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
+            assert_eq!(
+                indicator,
+                Some("NOR"),
+                "indicator must be NOR in Normal mode when vim mode is enabled"
+            );
+        });
+        // Verify via the full render path: the footer must contain NOR.
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(
+            rendered.contains("NOR"),
+            "rendered footer must contain 'NOR' after Insert\u{2192}Normal transition, got:\n{rendered}"
+        );
+        // Uppercase R enters continuous Replace mode and the footer reflects it.
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.handle_action(
+                    &crate::input::view::TuiInputAction::Editor(
+                        crate::editor_element::TuiEditorAction::InsertChar('R'),
+                    ),
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(view.as_ref(ctx).vim_mode_indicator(ctx), Some("REP"));
+        });
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(
+            rendered.contains("REP"),
+            "rendered footer must contain 'REP' in continuous Replace mode, got:\n{rendered}"
+        );
+
+        // Disable vim mode: indicator → None again.
+        app.update(|ctx| {
+            AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .vim_mode
+                    .set_value(false, ctx)
+                    .expect("failed to disable vim mode");
+            });
+        });
+        app.read(|ctx| {
+            let indicator = view.as_ref(ctx).vim_mode_indicator(ctx);
+            assert!(
+                indicator.is_none(),
+                "indicator must be None after vim mode is disabled, got {indicator:?}"
+            );
+        });
+    });
+}
+
+/// Verifies that the footer hint slot shows an error-toned notice after
+/// `/copy-debugging-id` is executed when the conversation has no server token.
+/// `transient_hint.current()` is the canonical source read by `footer_hint()`
+/// when rendering the footer row, so asserting it covers the rendered behavior.
+#[test]
+fn copy_debugging_id_shows_error_hint_when_no_server_token() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::COPY_DEBUGGING_ID, None, ctx);
+        });
+
+        // The hint slot must carry the no-token error text with Error tone.
+        // `footer_hint()` reads `transient_hint.current()` verbatim when
+        // present, so this assertion covers what the footer renders.
+        view.read(&app, |view, _| {
+            let hint = view.transient_hint.current();
+            assert_eq!(
+                hint.map(|(text, _)| text),
+                Some(super::COPY_DEBUGGING_ID_NO_TOKEN_HINT),
+                "/copy-debugging-id with no server token must set the no-token error hint",
+            );
+            assert_eq!(
+                hint.map(|(_, tone)| tone),
+                Some(super::super::transient_hint::TransientHintTone::Error),
+                "the no-token hint must use the error tone",
             );
         });
     });

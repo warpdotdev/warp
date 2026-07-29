@@ -130,12 +130,13 @@ pub use crate::ai::harness_availability::{
 };
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::ai::orchestration::{
-    AuthSecretSelection, CloudAgentStartupBlocker, CloudAgentStartupFailure,
-    CloudAgentStartupIssue, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
-    OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
-    OrchestrationConfigState, OrchestrationEditState, PrepareRemoteChildLaunchError,
-    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, accept_disabled_reason_with_auth,
-    api_key_snapshot, auth_secret_selection_required, classify_cloud_agent_startup_error,
+    AuthSecretSelection, CloudAgentStartupAuthFlow, CloudAgentStartupBlocker,
+    CloudAgentStartupFailure, CloudAgentStartupIssue, CloudAgentStartupPresentation,
+    ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST, OptionBadge, OptionFooter,
+    OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
+    OrchestrationEditState, PrepareRemoteChildLaunchError, PreparedRemoteChildLaunch,
+    RemoteChildLaunchConfig, accept_disabled_reason_with_auth, api_key_snapshot,
+    auth_secret_selection_required, classify_cloud_agent_startup_error,
     empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
     harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_model_snapshot,
     oz_run_url, persist_environment_selection, persist_host_selection, prepare_remote_child_launch,

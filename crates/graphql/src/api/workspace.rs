@@ -300,6 +300,7 @@ pub struct Team {
     pub name: String,
     pub members: Vec<TeamMember>,
     pub settings: TeamSettings,
+    pub color: Option<String>,
 }
 
 /// The effective settings that apply to a team, combining the workspace layer

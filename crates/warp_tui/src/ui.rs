@@ -109,15 +109,20 @@ fn vertically_centered(content: TuiFlex) -> Box<dyn TuiElement> {
         .finish()
 }
 
-/// Centers `content` horizontally and vertically within the viewport.
-pub(crate) fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
-    let centered_row = TuiFlex::row()
+/// Centers `content` horizontally within its available row.
+pub(crate) fn horizontally_centered(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
+    TuiFlex::row()
         .flex_child(TuiFlex::row().finish())
         .child(content)
-        .flex_child(TuiFlex::row().finish());
+        .flex_child(TuiFlex::row().finish())
+        .finish()
+}
+
+/// Centers `content` horizontally and vertically within the viewport.
+pub(crate) fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
     TuiFlex::column()
         .flex_child(TuiFlex::column().finish())
-        .child(centered_row.finish())
+        .child(horizontally_centered(content))
         .flex_child(TuiFlex::column().finish())
         .finish()
 }

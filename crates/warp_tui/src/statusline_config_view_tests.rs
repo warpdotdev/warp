@@ -78,6 +78,9 @@ fn toggle_and_reorder_are_reflected_in_saved_config() {
             [
                 TuiStatuslineItem::AutoQueue,
                 TuiStatuslineItem::AutoApprove,
+                // VimModeIndicator is a default-on statusline item, so it is expected
+                // in the saved order at its position in TuiStatuslineItem::ALL.
+                TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,
@@ -96,6 +99,7 @@ fn toggle_and_reorder_are_reflected_in_saved_config() {
             saved.enabled,
             [
                 TuiStatuslineItem::AutoApprove,
+                TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,

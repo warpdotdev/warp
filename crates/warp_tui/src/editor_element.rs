@@ -103,8 +103,8 @@ pub(crate) struct TuiEditorElement {
     text: String,
     /// Cursor gap offset (1-based) captured at construction.
     cursor_offset: CharOffset,
-    /// Selection as a 0-based character-offset range, if any.
-    sel_char_range: Option<Range<CharOffset>>,
+    /// Selections as 0-based character-offset ranges.
+    selection_ranges: Vec<Range<CharOffset>>,
     /// Model-derived hidden line ranges captured at construction. Structural
     /// extras are folded in via [`Self::effective_hidden_ranges`], which is
     /// also what the event path uses over fresh model state.
@@ -177,11 +177,14 @@ impl TuiEditorElement {
             .unwrap_or_default();
         let sel = inner.buffer_selection_model().as_ref(app);
         let (head, tail) = (sel.first_selection_head(), sel.first_selection_tail());
-        let sel_char_range = (head != tail).then(|| {
-            let start = CharOffset::from(head.min(tail).as_usize().saturating_sub(1));
-            let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
-            start..end
-        });
+        let selection_ranges = (head != tail)
+            .then(|| {
+                let start = CharOffset::from(head.min(tail).as_usize().saturating_sub(1));
+                let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
+                start..end
+            })
+            .into_iter()
+            .collect();
         let render_state = inner.render_state().as_ref(app);
         let hidden_line_ranges = render_state
             .char_cell()
@@ -192,7 +195,7 @@ impl TuiEditorElement {
             model: model.clone(),
             text,
             cursor_offset,
-            sel_char_range,
+            selection_ranges,
             hidden_line_ranges,
             editable: false,
             is_focused: false,
@@ -222,6 +225,19 @@ impl TuiEditorElement {
     /// editing input, not a mode).
     pub(crate) fn editable(mut self) -> Self {
         self.editable = true;
+        self
+    }
+
+    /// Replace the model selection snapshot with 1-based buffer ranges from a
+    /// non-mutating projection such as Vim Visual mode.
+    pub(crate) fn with_selection_ranges(mut self, ranges: Vec<Range<CharOffset>>) -> Self {
+        self.selection_ranges = ranges
+            .into_iter()
+            .map(|range| {
+                CharOffset::from(range.start.as_usize().saturating_sub(1))
+                    ..CharOffset::from(range.end.as_usize().saturating_sub(1))
+            })
+            .collect();
         self
     }
 
@@ -560,8 +576,9 @@ impl TuiEditorElement {
         row: &DisplayRow,
         lattice: &DisplayLattice<'_>,
     ) -> Option<(u16, u16)> {
-        let selection = self.sel_char_range.clone()?;
-        Self::char_range_span_in_row(row, lattice, selection)
+        self.selection_ranges
+            .iter()
+            .find_map(|selection| Self::char_range_span_in_row(row, lattice, selection.clone()))
     }
 
     fn char_range_span_in_row(
@@ -859,7 +876,8 @@ impl TuiElement for TuiEditorElement {
                     handler(TuiEditorAction::PasteText(text.clone()), event_ctx);
                     return true;
                 }
-                TuiEvent::ScrollWheel { .. }
+                TuiEvent::ModifierKeyChanged { .. }
+                | TuiEvent::ScrollWheel { .. }
                 | TuiEvent::LeftMouseDown { .. }
                 | TuiEvent::LeftMouseUp { .. }
                 | TuiEvent::LeftMouseDragged { .. }

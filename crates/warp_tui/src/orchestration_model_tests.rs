@@ -1,8 +1,8 @@
 use warp::tui_export::{
-    AIConversationId, BlocklistAIHistoryModel, CloudAgentStartupBlocker, CloudAgentStartupIssue,
-    ConversationStatus, Harness, OrchestrationEventStreamerEvent, StartAgentExecutionMode,
-    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
-    register_tui_session_view_test_singletons,
+    AIConversationId, BlocklistAIHistoryModel, CloudAgentStartupBlocker, CloudAgentStartupFailure,
+    CloudAgentStartupIssue, ConversationStatus, Harness, OrchestrationEventStreamerEvent,
+    RenderableAIError, StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent,
+    StartAgentOutcome, StartAgentRequest, register_tui_session_view_test_singletons,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
@@ -338,6 +338,55 @@ fn github_auth_blocker_keeps_the_remote_session_and_actionable_url() {
                 panic!("expected blocked cloud startup state");
             };
             assert_eq!(blocker.primary_url(), "https://example.com/auth");
+        });
+    });
+}
+
+#[test]
+fn failed_remote_launch_records_cloud_startup_error_for_tui_rendering() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = app.read(|ctx| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(parent_session_id.surface_id())
+                .unwrap()
+                .id()
+        });
+        let request = remote_request(parent_conversation_id);
+        let (conversation_id, surface_id, cloud_run_state) = add_remote_child_session(
+            &mut app,
+            &fixture,
+            parent_session_id,
+            &request,
+            "cloud-researcher".to_string(),
+            Harness::Oz,
+        );
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.finish_remote_child_launch(
+                    conversation_id,
+                    surface_id,
+                    cloud_run_state,
+                    Err(CloudAgentStartupIssue::Failed(
+                        CloudAgentStartupFailure::Other {
+                            message: "Environment failed to start".to_string(),
+                        },
+                    )),
+                    ctx,
+                );
+            });
+        });
+        app.read(|ctx| {
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("remote child conversation");
+            assert_eq!(conversation.status(), &ConversationStatus::Error);
+            assert!(matches!(
+                conversation.status_error(),
+                Some(RenderableAIError::CloudStartupFailed(message))
+                    if message == "Environment failed to start"
+            ));
         });
     });
 }

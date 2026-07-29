@@ -69,6 +69,7 @@ tokio.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 vec1.workspace = true
+vim.workspace = true
 warp = { workspace = true, features = ["image_as_context", "tui", "voice_input"] }
 warp_channel_config.workspace = true
 warp_completer.workspace = true

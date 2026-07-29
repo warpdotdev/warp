@@ -15,8 +15,8 @@ use std::cell::Cell;
 use warp::tui_export::{AIConversationId, OZ_ENVIRONMENTS_URL};
 use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiSize,
-    TuiText,
+    Modifier, TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
+    TuiSize, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, FixedBinding};
@@ -37,8 +37,12 @@ use crate::option_selector::{
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 use crate::tui_ask_question_view::PageNavigationDirection;
 use crate::tui_builder::TuiUiBuilder;
+use crate::ui::horizontally_centered;
 
 const HANDOFF_TITLE: &str = "Hand off to cloud";
+const EMPTY_CONVERSATION_HANDOFF_EXPLANATION: &str =
+    "The agent will work on this session in the cloud.";
+const EXISTING_CONVERSATION_HANDOFF_EXPLANATION: &str = "The agent will continue working on your session in the cloud. You will be able to continue the conversation here at any point.";
 const HANDOFF_PAGE_SEQUENCE: [TuiHandoffSelectorKind; 2] = [
     TuiHandoffSelectorKind::Environment,
     TuiHandoffSelectorKind::Model,
@@ -109,6 +113,8 @@ pub(crate) fn init(app: &mut AppContext) {
             committed(),
         )
         .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new("escape", TuiHandoffBlockAction::Cancel, committed())
+            .with_group(TUI_BINDING_GROUP),
         FixedBinding::new("enter", TuiHandoffBlockAction::OpenRun, created())
             .with_group(TUI_BINDING_GROUP),
         FixedBinding::new("numpadenter", TuiHandoffBlockAction::OpenRun, created())
@@ -383,8 +389,20 @@ impl TuiHandoffBlock {
         builder: &TuiUiBuilder,
     ) -> Box<dyn TuiElement> {
         let model = self.model.as_ref(ctx);
+        let explanation = if model.forked_existing_conversation() {
+            EXISTING_CONVERSATION_HANDOFF_EXPLANATION
+        } else {
+            EMPTY_CONVERSATION_HANDOFF_EXPLANATION
+        };
+        let explanation_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
         if model.no_environments(ctx) {
             return TuiFlex::column()
+                .child(
+                    TuiText::new(explanation)
+                        .with_style(explanation_style)
+                        .finish(),
+                )
+                .child(TuiText::new(" ").finish())
                 .child(
                     TuiText::new("A cloud environment is required to hand off this conversation.")
                         .with_style(builder.primary_text_style())
@@ -399,25 +417,16 @@ impl TuiHandoffBlock {
         }
         let mut content = TuiFlex::column()
             .child(
-                TuiText::from_spans([
-                    ("Environment: ".to_owned(), builder.primary_text_style()),
-                    (
-                        model.environment_label(ctx),
-                        builder.orchestration_selected_value_style(),
-                    ),
-                ])
-                .finish(),
+                TuiText::new(explanation)
+                    .with_style(explanation_style)
+                    .finish(),
             )
-            .child(
-                TuiText::from_spans([
-                    ("Model: ".to_owned(), builder.primary_text_style()),
-                    (
-                        model.model_label(ctx),
-                        builder.orchestration_selected_value_style(),
-                    ),
-                ])
-                .finish(),
-            );
+            .child(TuiText::new(" ").finish())
+            .child(render_metadata_line(
+                model.environment_label(ctx),
+                model.model_label(ctx),
+                builder,
+            ));
         if let Some(error) = model.validation_error() {
             content = content.child(
                 TuiText::new(error.to_owned())
@@ -438,10 +447,15 @@ impl TuiHandoffBlock {
                 state: TuiHandoffEditableState::Configuring { .. },
                 ..
             } => TuiChildView::new(&self.selector).finish(),
-            TuiHandoffPhase::Committed { .. } => TuiText::new("Creating cloud run…")
-                .with_style(builder.primary_text_style())
-                .finish(),
-            TuiHandoffPhase::Created { url } => TuiFlex::column()
+            TuiHandoffPhase::Committed { .. } => TuiText::from_spans([
+                ("● ".to_owned(), builder.attention_glyph_style()),
+                (
+                    "Creating cloud run…".to_owned(),
+                    builder.primary_text_style(),
+                ),
+            ])
+            .finish(),
+            TuiHandoffPhase::Created { url, .. } => TuiFlex::column()
                 .child(
                     TuiText::new("Cloud run created.")
                         .with_style(builder.primary_text_style())
@@ -491,10 +505,9 @@ impl TuiHandoffBlock {
                 ("Esc ".to_owned(), builder.primary_text_style()),
                 ("to go back".to_owned(), builder.muted_text_style()),
             ],
-            TuiHandoffPhase::Committed { .. } => vec![(
-                "Handoff is in progress…".to_owned(),
-                builder.muted_text_style(),
-            )],
+            TuiHandoffPhase::Committed { .. } => {
+                vec![("esc to cancel".to_owned(), builder.muted_text_style())]
+            }
             TuiHandoffPhase::Created { .. } => {
                 let mut spans = vec![
                     ("Enter ".to_owned(), builder.primary_text_style()),
@@ -517,31 +530,43 @@ impl TuiHandoffBlock {
         TuiText::from_spans(spans).finish()
     }
 
-    fn render_completed(&self, url: &str, ctx: &AppContext) -> Box<dyn TuiElement> {
+    fn render_completed(
+        &self,
+        url: &str,
+        completed_at: &str,
+        continuing_locally: bool,
+        ctx: &AppContext,
+    ) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(ctx);
         let content = TuiFlex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .child(
+            .child(horizontally_centered(
                 TuiText::from_spans([
-                    ("■ ".to_owned(), builder.option_selector_selected_style()),
+                    ("⟣ ".to_owned(), builder.option_selector_selected_style()),
                     (
-                        "Conversation forked to cloud; continuing locally".to_owned(),
+                        format!(
+                            "Conversation forked to cloud on {completed_at}{}",
+                            if continuing_locally {
+                                "; continuing locally"
+                            } else {
+                                ""
+                            }
+                        ),
                         builder.primary_text_style(),
                     ),
                 ])
                 .finish(),
-            )
-            .child(
-                TuiFlex::row()
-                    .child(self.link.render(url.to_owned(), ctx, move |event_ctx, _| {
-                        event_ctx.dispatch_typed_action(TuiHandoffBlockAction::OpenRun);
-                    }))
-                    .finish(),
-            )
+            ))
+            .child(horizontally_centered(self.link.render(
+                url.to_owned(),
+                ctx,
+                move |event_ctx, _| {
+                    event_ctx.dispatch_typed_action(TuiHandoffBlockAction::OpenRun);
+                },
+            )))
             .finish();
         let banner = TuiContainer::new(content)
             .with_background(builder.orchestration_header_background())
-            .with_padding_x(1)
             .finish();
         TuiContainer::new(banner)
             .with_padding_top(BLOCK_TOP_PADDING_ROWS)
@@ -573,6 +598,21 @@ impl TuiHandoffBlock {
                 .height,
         )
     }
+}
+
+fn render_metadata_line(
+    environment: String,
+    model: String,
+    builder: &TuiUiBuilder,
+) -> Box<dyn TuiElement> {
+    TuiText::from_spans([
+        ("Environment: ".to_owned(), builder.primary_text_style()),
+        (environment, builder.orchestration_selected_value_style()),
+        ("  •  ".to_owned(), builder.muted_text_style()),
+        ("Model: ".to_owned(), builder.primary_text_style()),
+        (model, builder.orchestration_selected_value_style()),
+    ])
+    .finish()
 }
 
 impl Entity for TuiHandoffBlock {
@@ -637,8 +677,13 @@ impl TuiView for TuiHandoffBlock {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        if let TuiHandoffPhase::Persisted { url } = self.model.as_ref(ctx).phase() {
-            return self.render_completed(url, ctx);
+        if let TuiHandoffPhase::Persisted {
+            url,
+            completed_at,
+            continuing_locally,
+        } = self.model.as_ref(ctx).phase()
+        {
+            return self.render_completed(url, completed_at, *continuing_locally, ctx);
         }
         let builder = TuiUiBuilder::from_app(ctx);
         let header = TuiContainer::new(
@@ -723,3 +768,7 @@ impl TypedActionView for TuiHandoffBlock {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "block_tests.rs"]
+mod tests;

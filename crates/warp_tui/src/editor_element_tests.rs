@@ -35,7 +35,7 @@ fn selection_span_uses_grapheme_width() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let model = model(ctx, "a\u{2328}\u{fe0f}b");
             let mut element = TuiEditorElement::new(&model, ctx);
-            element.sel_char_range = Some(CharOffset::range(1..3));
+            element.selection_ranges = vec![CharOffset::range(1..3)];
             let buffer = render_buffer(ctx, element, 10, 1);
 
             // The selection style uses a solid bg color (theme foreground);
@@ -587,7 +587,7 @@ fn tab_indent_selection_columns_follow_expanded_tab_width() {
             let m = model(ctx, "\tfoo");
             let mut element = TuiEditorElement::new(&m, ctx);
             // Select chars 1..3 — that is 'f' and 'o' at display columns 4-5.
-            element.sel_char_range = Some(CharOffset::range(1..3));
+            element.selection_ranges = vec![CharOffset::range(1..3)];
             let buffer = render_buffer(ctx, element, 10, 1);
             let selection_bg = TuiUiBuilder::from_app(ctx).selection_style().bg;
             // Columns 0-3 are the expanded tab — must NOT be highlighted.
@@ -707,7 +707,7 @@ fn tab_on_continuation_row_paint_and_selection_agree() {
             // Verify selection highlight agrees with paint position.
             let mut element = TuiEditorElement::new(&m, ctx);
             // Select 'X' (char offset 6, one past the tab at offset 5).
-            element.sel_char_range = Some(CharOffset::range(6..7));
+            element.selection_ranges = vec![CharOffset::range(6..7)];
             let buffer = render_buffer(ctx, element, 6, 2);
             let selection_bg = TuiUiBuilder::from_app(ctx).selection_style().bg;
             // Tab columns 0-2 on row 1 must NOT be selected.
