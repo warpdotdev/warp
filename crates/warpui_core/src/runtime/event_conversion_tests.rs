@@ -1,12 +1,14 @@
 use std::time::Duration;
 
 use instant::Instant;
+#[cfg(not(windows))]
+use ratatui::crossterm::event::KeyEventState;
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
-    ModifierKeyCode, MouseButton, MouseEvent, MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
+    MouseButton, MouseEvent, MouseEventKind,
 };
 
-use super::{ClickTracker, crossterm_event_to_tui_event};
+use super::{ClickTracker, crossterm_event_to_tui_event, produced_chars};
 use crate::elements::tui::{TuiEvent, TuiPoint};
 use crate::event::KeyState;
 use crate::keymap::Keystroke;
@@ -15,6 +17,7 @@ use crate::platform::keyboard::KeyCode as PhysicalKeyCode;
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Option<TuiEvent> {
     crossterm_event_to_tui_event(CrosstermEvent::Key(KeyEvent::new(code, modifiers)))
 }
+#[cfg(not(windows))]
 fn key_with_state(
     code: KeyCode,
     modifiers: KeyModifiers,
@@ -27,6 +30,7 @@ fn key_with_state(
         state,
     )))
 }
+#[cfg(not(windows))]
 #[test]
 fn caps_lock_and_shift_apply_xor_casing_to_ascii_text() {
     let cases = [
@@ -52,6 +56,20 @@ fn caps_lock_and_shift_apply_xor_casing_to_ascii_text() {
         };
         assert_eq!(chars, expected_chars);
         assert_eq!(keystroke.shift, modifiers.contains(KeyModifiers::SHIFT));
+    }
+}
+
+#[test]
+fn backend_produced_text_is_not_recased() {
+    let cases = [
+        (KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SHIFT), "a"),
+        (
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()),
+            "A",
+        ),
+    ];
+    for (event, expected_chars) in cases {
+        assert_eq!(produced_chars(event, true), expected_chars);
     }
 }
 

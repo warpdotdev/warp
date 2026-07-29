@@ -417,7 +417,7 @@ impl TuiSessions {
         exit_summary: TuiExitSummaryHandle,
         resume_token: Option<ServerConversationToken>,
     ) -> Self {
-        let keyboard_enhancement_supported = driver.modifier_key_lifecycle_enabled();
+        let keyboard_enhancement_supported = driver.keyboard_enhancement_supported();
         Self {
             _driver: Some(driver),
             keyboard_enhancement_supported,

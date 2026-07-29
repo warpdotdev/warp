@@ -120,7 +120,7 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
             meta: event.modifiers.contains(KeyModifiers::META),
             key,
         },
-        chars: produced_chars(event.code, event.modifiers, event.state),
+        chars: produced_chars(event, cfg!(windows)),
         details: KeyEventDetails {
             key_without_modifiers: key_without_modifiers(event.code),
             ..Default::default()
@@ -193,19 +193,22 @@ fn modifier_key(code: ModifierKeyCode) -> Option<PhysicalKeyCode> {
     }
 }
 
-fn produced_chars(code: KeyCode, modifiers: KeyModifiers, state: KeyEventState) -> String {
-    let KeyCode::Char(char) = code else {
+fn produced_chars(event: KeyEvent, key_code_contains_produced_text: bool) -> String {
+    let KeyCode::Char(char) = event.code else {
         return String::new();
     };
-    if char.is_ascii_alphabetic() && state.contains(KeyEventState::CAPS_LOCK) {
-        return if modifiers.contains(KeyModifiers::SHIFT) {
+    if key_code_contains_produced_text {
+        return char.to_string();
+    }
+    if char.is_ascii_alphabetic() && event.state.contains(KeyEventState::CAPS_LOCK) {
+        return if event.modifiers.contains(KeyModifiers::SHIFT) {
             char.to_ascii_lowercase()
         } else {
             char.to_ascii_uppercase()
         }
         .to_string();
     }
-    if modifiers.contains(KeyModifiers::SHIFT) {
+    if event.modifiers.contains(KeyModifiers::SHIFT) {
         return char.to_uppercase().collect();
     }
     char.to_string()
