@@ -72,7 +72,6 @@ pub unsafe fn from_native(
                     left_alt: (native_modifiers.bits() & LEFT_ALT_MASK) != 0,
                     right_alt: (native_modifiers.bits() & RIGHT_ALT_MASK) != 0,
                     key_without_modifiers,
-                    shifted_key_without_base: false,
                 };
                 let unmodified_chars = native_event.charactersIgnoringModifiers()?;
                 let unmodified_chars = CStr::from_ptr(unmodified_chars.UTF8String())

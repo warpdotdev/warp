@@ -27,6 +27,7 @@ use warp::tui_export::{
 use warp_terminal::model::Point;
 use warp_terminal::model::escape_sequences::{
     BRACKETED_PASTE_END, BRACKETED_PASTE_START, ModeProvider, alt_screen_scroll_to_pty_bytes,
+    maybe_kitty_keyboard_escape_sequence,
 };
 use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use warpui_core::AppContext;
@@ -35,8 +36,7 @@ use warpui_core::elements::tui::{
     TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
     TuiScreenRect, TuiSize,
 };
-use warpui_core::event::KeyEventDetails;
-use warpui_core::keymap::Keystroke;
+use warpui_core::event::KeyState;
 
 use crate::terminal_session_view::TuiTerminalSessionAction;
 /// Which terminal mouse reports the active process and user settings allow.
@@ -160,8 +160,23 @@ impl TuiElement for TuiTerminalContentElement {
                 TuiEvent::KeyDown {
                     is_composing: true, ..
                 } => return false,
-                TuiEvent::ModifierKeyChanged { .. }
-                | TuiEvent::ScrollWheel { .. }
+                // A process that asked for the Kitty protocol's all-keys mode
+                // wants standalone modifier press/release reports, mirroring the
+                // GUI's block list.
+                TuiEvent::ModifierKeyChanged { key_code, state } => {
+                    let bytes = maybe_kitty_keyboard_escape_sequence(
+                        model.lock().deref(),
+                        key_code,
+                        matches!(state, KeyState::Pressed),
+                    );
+                    if let Some(bytes) = bytes {
+                        event_ctx.dispatch_typed_action(
+                            TuiTerminalSessionAction::ForwardUserPtyBytes(bytes),
+                        );
+                        return true;
+                    }
+                }
+                TuiEvent::ScrollWheel { .. }
                 | TuiEvent::LeftMouseDown { .. }
                 | TuiEvent::LeftMouseUp { .. }
                 | TuiEvent::LeftMouseDragged { .. }
@@ -198,22 +213,6 @@ struct ForwardedPtyInput<'a> {
     possible_typeahead: Option<Cow<'a, str>>,
 }
 
-fn pty_keystroke<'a>(
-    keystroke: &'a Keystroke,
-    details: &'a KeyEventDetails,
-) -> (Cow<'a, Keystroke>, Option<&'a str>) {
-    if details.shifted_key_without_base {
-        let mut fallback = keystroke.clone();
-        fallback.shift = false;
-        (Cow::Owned(fallback), None)
-    } else {
-        (
-            Cow::Borrowed(keystroke),
-            details.key_without_modifiers.as_deref(),
-        )
-    }
-}
-
 /// Converts one semantic input event into the PTY bytes and any text that the
 /// shell may echo as typeahead.
 fn forwarded_pty_input_for_event<'a>(
@@ -227,10 +226,9 @@ fn forwarded_pty_input_for_event<'a>(
             details,
             is_composing: false,
         } => {
-            let (keystroke, key_without_modifiers) = pty_keystroke(keystroke, details);
             let bytes = KeystrokeWithDetails {
-                keystroke: keystroke.as_ref(),
-                key_without_modifiers,
+                keystroke,
+                key_without_modifiers: details.key_without_modifiers.as_deref(),
                 chars: Some(chars.as_str()),
             }
             .to_pty_bytes(model)?;

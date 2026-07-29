@@ -129,6 +129,29 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
     })
 }
 
+/// Whether Crossterm's alternate-key substitution consumed a held Shift, and
+/// whether the character it substituted still yields its own base key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShiftRestoration {
+    /// Shift was reported accurately, so nothing was restored.
+    Unchanged,
+    /// A letter, whose base key is recoverable by lowercasing it.
+    Letter,
+    /// A symbol, which encodes the shifted state in the character itself and
+    /// leaves the base key unrecoverable.
+    Symbol,
+}
+
+/// Tracks the physically held Shift keys so a character event whose Shift bit
+/// Crossterm consumed — while substituting the layout's shifted character — can
+/// have it restored.
+///
+/// Only a character event can lose the bit that way, so every other event
+/// reports Shift accurately and re-syncs the tracked state. A dropped release
+/// therefore desyncs input until the next non-character key or mouse report
+/// rather than indefinitely. Re-syncing eagerly is deliberate: stale state
+/// force-uppercases everything the user types, while clearing it while Shift is
+/// still held only drops Shift from a symbol keystroke.
 #[derive(Default)]
 pub(crate) struct ShiftKeyTracker {
     left_pressed: bool,
@@ -136,33 +159,61 @@ pub(crate) struct ShiftKeyTracker {
 }
 
 impl ShiftKeyTracker {
-    pub(crate) fn update(&mut self, event: &mut CrosstermEvent) -> bool {
-        if matches!(event, CrosstermEvent::FocusLost) {
-            self.left_pressed = false;
-            self.right_pressed = false;
-            return false;
+    pub(crate) fn update(&mut self, event: &mut CrosstermEvent) -> ShiftRestoration {
+        match event {
+            CrosstermEvent::Key(key_event) => self.update_from_key(key_event),
+            CrosstermEvent::Mouse(mouse_event) => {
+                self.sync(mouse_event.modifiers);
+                ShiftRestoration::Unchanged
+            }
+            CrosstermEvent::FocusGained | CrosstermEvent::FocusLost => {
+                self.release_all();
+                ShiftRestoration::Unchanged
+            }
+            CrosstermEvent::Paste(_) | CrosstermEvent::Resize(_, _) => ShiftRestoration::Unchanged,
         }
-        let CrosstermEvent::Key(key_event) = event else {
-            return false;
-        };
-        match key_event.code {
+    }
+
+    fn update_from_key(&mut self, event: &mut KeyEvent) -> ShiftRestoration {
+        match event.code {
             KeyCode::Modifier(ModifierKeyCode::LeftShift) => {
-                update_pressed(&mut self.left_pressed, key_event.kind);
-                false
+                update_pressed(&mut self.left_pressed, event.kind);
+                ShiftRestoration::Unchanged
             }
             KeyCode::Modifier(ModifierKeyCode::RightShift) => {
-                update_pressed(&mut self.right_pressed, key_event.kind);
-                false
+                update_pressed(&mut self.right_pressed, event.kind);
+                ShiftRestoration::Unchanged
             }
-            KeyCode::Modifier(_) => false,
-            _ if (self.left_pressed || self.right_pressed)
-                && !key_event.modifiers.contains(KeyModifiers::SHIFT) =>
+            KeyCode::Char(character)
+                if (self.left_pressed || self.right_pressed)
+                    && !event.modifiers.contains(KeyModifiers::SHIFT) =>
             {
-                key_event.modifiers.insert(KeyModifiers::SHIFT);
-                true
+                event.modifiers.insert(KeyModifiers::SHIFT);
+                if character.is_alphabetic() {
+                    ShiftRestoration::Letter
+                } else {
+                    ShiftRestoration::Symbol
+                }
             }
-            _ => false,
+            KeyCode::Char(_) => ShiftRestoration::Unchanged,
+            _ => {
+                self.sync(event.modifiers);
+                ShiftRestoration::Unchanged
+            }
         }
+    }
+
+    /// Drops tracked state when an event that reports Shift accurately shows it
+    /// is not held.
+    fn sync(&mut self, modifiers: KeyModifiers) {
+        if !modifiers.contains(KeyModifiers::SHIFT) {
+            self.release_all();
+        }
+    }
+
+    fn release_all(&mut self) {
+        self.left_pressed = false;
+        self.right_pressed = false;
     }
 }
 

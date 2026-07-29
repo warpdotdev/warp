@@ -67,9 +67,6 @@ pub struct KeyEventDetails {
     pub right_alt: bool,
     /// The key that would have been produced without any modifiers (including Shift).
     pub key_without_modifiers: Option<String>,
-    /// Whether Shift was restored from a standalone modifier event after the
-    /// input decoder replaced a symbol's base key with its shifted result.
-    pub shifted_key_without_base: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default)]

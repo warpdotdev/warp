@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use ratatui::crossterm::event::{
     Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
+    MouseEvent, MouseEventKind,
 };
 
 use super::*;
@@ -286,7 +287,7 @@ fn repeats_dispatch_keymaps_while_modifier_events_bypass_them() {
 }
 
 #[test]
-fn shift_lifecycle_restores_shift_to_alternate_key_events() {
+fn shift_lifecycle_restores_shift_and_normalizes_symbol_keystrokes() {
     App::test((), |mut app| async move {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
@@ -301,7 +302,10 @@ fn shift_lifecycle_restores_shift_to_alternate_key_events() {
             )))
             .expect("shift press");
 
-        for (char, expected_shifted_key_without_base) in [('A', false), ('!', true)] {
+        // A letter keeps Shift because lowercasing recovers its base key; a
+        // symbol is spelled as the produced character with no Shift, since its
+        // base key cannot be derived from it.
+        for (char, expected_shift, expected_base) in [('A', true, Some("a")), ('!', false, None)] {
             let Some(TuiEvent::KeyDown {
                 keystroke,
                 chars,
@@ -315,13 +319,10 @@ fn shift_lifecycle_restores_shift_to_alternate_key_events() {
                 panic!("expected KeyDown");
             };
             assert!(keystroke.ctrl);
-            assert!(keystroke.shift);
+            assert_eq!(keystroke.shift, expected_shift);
             assert_eq!(keystroke.key, char.to_string());
             assert_eq!(chars, char.to_string());
-            assert_eq!(
-                details.shifted_key_without_base,
-                expected_shifted_key_without_base
-            );
+            assert_eq!(details.key_without_modifiers.as_deref(), expected_base);
         }
 
         screen
@@ -364,8 +365,10 @@ fn shift_remains_active_until_both_shift_keys_are_released() {
             KeyEventKind::Release,
         )));
 
+        // A letter probes the tracked state directly, since a restored Shift
+        // survives on letters but is normalized away on symbols.
         let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
-            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()),
         )) else {
             panic!("expected KeyDown");
         };
@@ -377,7 +380,7 @@ fn shift_remains_active_until_both_shift_keys_are_released() {
             KeyEventKind::Release,
         )));
         let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
-            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::empty()),
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()),
         )) else {
             panic!("expected KeyDown");
         };
@@ -385,27 +388,60 @@ fn shift_remains_active_until_both_shift_keys_are_released() {
     });
 }
 
+/// A dropped Shift release would otherwise latch Shift on forever, so every
+/// event that reports Shift accurately re-syncs the tracked state.
 #[test]
-fn focus_loss_clears_shift_state() {
+fn stale_shift_state_is_cleared_by_events_that_report_shift_accurately() {
     App::test((), |mut app| async move {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
         let mut screen = TuiScreen::new(window_id, root, terminal);
 
-        screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
-            KeyCode::Modifier(ModifierKeyCode::LeftShift),
-            KeyModifiers::SHIFT,
-            KeyEventKind::Press,
-        )));
-        assert!(screen.convert_event(CrosstermEvent::FocusLost).is_none());
-
-        let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
-            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::empty()),
-        )) else {
-            panic!("expected KeyDown");
+        let shift_press = || {
+            CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            ))
         };
-        assert!(!keystroke.shift);
+        let letter =
+            || CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()));
+        let mouse_move = |modifiers| {
+            CrosstermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 1,
+                row: 1,
+                modifiers,
+            })
+        };
+
+        for clearing_event in [
+            CrosstermEvent::FocusLost,
+            CrosstermEvent::FocusGained,
+            CrosstermEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty())),
+            mouse_move(KeyModifiers::empty()),
+        ] {
+            screen.convert_event(shift_press());
+            screen.convert_event(clearing_event);
+            let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(letter()) else {
+                panic!("expected KeyDown");
+            };
+            assert!(!keystroke.shift);
+        }
+
+        // Shift reported on such an event instead confirms it is still held.
+        screen.convert_event(shift_press());
+        for confirming_event in [
+            CrosstermEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT)),
+            mouse_move(KeyModifiers::SHIFT),
+        ] {
+            screen.convert_event(confirming_event);
+            let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(letter()) else {
+                panic!("expected KeyDown");
+            };
+            assert!(keystroke.shift);
+        }
     });
 }
 /// End-to-end regression for the Shift+Enter fix: a Shift+Enter key event —

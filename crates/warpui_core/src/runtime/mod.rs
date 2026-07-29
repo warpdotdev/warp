@@ -31,8 +31,8 @@ use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    EnableFocusChange, EnableMouseCapture, Event as CrosstermEvent, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -49,7 +49,7 @@ mod renderer;
 mod terminal_probe;
 
 pub use event_conversion::crossterm_event_to_tui_event;
-use event_conversion::{ClickTracker, ShiftKeyTracker};
+use event_conversion::{ClickTracker, ShiftKeyTracker, ShiftRestoration};
 pub use renderer::TuiFrameRenderer;
 pub use terminal_probe::{
     BackgroundLuminance, ProbedRgb, ProbedTerminalColors, probe_terminal_colors,
@@ -171,18 +171,20 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     /// from modifier lifecycle events and synthesizing mouse multi-click counts.
     /// Returns `None` for events with no TUI equivalent.
     fn convert_event(&mut self, mut event: CrosstermEvent) -> Option<TuiEvent> {
-        let shift_restored = self.shift_key_tracker.update(&mut event);
-        let shifted_key_without_base = shift_restored
-            && matches!(
-                &event,
-                CrosstermEvent::Key(KeyEvent {
-                    code: KeyCode::Char(character),
-                    ..
-                }) if !character.is_alphabetic()
-            );
+        let restoration = self.shift_key_tracker.update(&mut event);
         let mut tui_event = crossterm_event_to_tui_event(event)?;
-        if let TuiEvent::KeyDown { details, .. } = &mut tui_event {
-            details.shifted_key_without_base = shifted_key_without_base;
+        if restoration == ShiftRestoration::Symbol
+            && let TuiEvent::KeyDown {
+                keystroke, details, ..
+            } = &mut tui_event
+        {
+            // Crossterm replaced the symbol's base key with the character the
+            // layout produced, which already encodes Shift. Keeping the bit
+            // would make one chord need two spellings: `ctrl-shift-!` where the
+            // layout shifts the symbol and `ctrl-!` where it does not. The base
+            // key is also unrecoverable from the produced character.
+            keystroke.shift = false;
+            details.key_without_modifiers = None;
         }
         self.click_tracker.annotate(&mut tui_event, Instant::now());
         Some(tui_event)

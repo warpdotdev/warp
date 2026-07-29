@@ -158,19 +158,27 @@ fn shifted_letter_preserves_case_and_base_key() {
     // casing to the decoder, while the Windows console sends the character the
     // layout already produced. Both must decode to the same keystroke.
     let reported = if cfg!(windows) { 'A' } else { 'a' };
-    let Some(TuiEvent::KeyDown {
-        keystroke,
-        chars,
-        details,
-        ..
-    }) = key(KeyCode::Char(reported), KeyModifiers::SHIFT)
-    else {
-        panic!("expected KeyDown");
-    };
-    assert!(keystroke.shift);
-    assert_eq!(keystroke.key, "A");
-    assert_eq!(chars, "A");
-    assert_eq!(details.key_without_modifiers.as_deref(), Some("a"));
+    // Ctrl must not change the naming: `ctrl-shift-A` is the form the TUI's
+    // select-all, copy, and redo bindings are registered under.
+    for modifiers in [
+        KeyModifiers::SHIFT,
+        KeyModifiers::SHIFT | KeyModifiers::CONTROL,
+    ] {
+        let Some(TuiEvent::KeyDown {
+            keystroke,
+            chars,
+            details,
+            ..
+        }) = key(KeyCode::Char(reported), modifiers)
+        else {
+            panic!("expected KeyDown");
+        };
+        assert!(keystroke.shift);
+        assert_eq!(keystroke.ctrl, modifiers.contains(KeyModifiers::CONTROL));
+        assert_eq!(keystroke.key, "A");
+        assert_eq!(chars, "A");
+        assert_eq!(details.key_without_modifiers.as_deref(), Some("a"));
+    }
 }
 
 #[test]
