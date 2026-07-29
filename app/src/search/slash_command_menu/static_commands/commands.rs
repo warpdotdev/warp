@@ -615,7 +615,7 @@ pub static ORCHESTRATE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     name: ORCHESTRATE_NAME,
     description: "Break a task into subtasks and run them in parallel with multiple agents",
     kind: SlashCommandKind::Orchestrate,
-    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
         icon_path: "bundled/svg/oz.svg",
     },
     availability: Availability::LOCAL | Availability::AI_ENABLED,

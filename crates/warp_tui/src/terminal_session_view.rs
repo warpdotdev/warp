@@ -4788,7 +4788,7 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            SlashCommandKind::Compact | SlashCommandKind::Plan => {
+            SlashCommandKind::Compact | SlashCommandKind::Plan | SlashCommandKind::Orchestrate => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 let command_name = command.name;
                 let prompt = argument
@@ -4838,7 +4838,6 @@ impl TuiTerminalSessionView {
             | SlashCommandKind::Harness
             | SlashCommandKind::Environment
             | SlashCommandKind::Profile
-            | SlashCommandKind::Orchestrate
             | SlashCommandKind::CompactAnd
             | SlashCommandKind::Queue
             | SlashCommandKind::ForkAndCompact
