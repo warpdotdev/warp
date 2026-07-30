@@ -1,21 +1,21 @@
 use warpui::{AddSingletonModel, Entity, ModelContext, SingletonEntity};
-use windows::core::{Interface, HSTRING, PCWSTR};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Title;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED,
+    CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CoUninitialize,
 };
 use windows::Win32::UI::Shell::Common::{IObjectArray, IObjectCollection};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::Win32::UI::Shell::{
     DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW, ShellLink,
 };
+use windows::core::{HSTRING, Interface, PCWSTR};
 
+use crate::ChannelState;
 use crate::features::FeatureFlag;
 use crate::tab_configs::TabConfig;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
-use crate::ChannelState;
 
 pub struct JumpEntry {
     label: String,

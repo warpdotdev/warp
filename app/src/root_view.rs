@@ -1650,7 +1650,8 @@ impl NewWorkspaceSource {
             | Self::NotebookById { .. }
             | Self::WorkflowById { .. }
             | Self::AgentSession { .. }
-            | Self::AmbientAgent => None,
+            | Self::AmbientAgent
+            | Self::TabConfig { .. } => None,
             Self::TeamSwitched { team_uid } => return Some(*team_uid),
             Self::Restored {
                 window_snapshot, ..
