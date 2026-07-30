@@ -2850,11 +2850,9 @@ impl AISettingsPageView {
             ctx.notify();
         }
     }
-    fn knowledge_widgets(show_section_header: bool) -> Vec<Box<dyn SettingsWidget<View = Self>>> {
-        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![Box::new(RulesWidget {
-            show_section_header,
-            ..Default::default()
-        })];
+    fn knowledge_widgets() -> Vec<Box<dyn SettingsWidget<View = Self>>> {
+        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
+            vec![Box::new(RulesWidget::default())];
         if FeatureFlag::SuggestedRules.is_enabled() {
             widgets.push(Box::new(SuggestedRulesWidget::default()));
         }
@@ -2906,7 +2904,8 @@ impl AISettingsPageView {
                     widgets.push(Box::new(MCPServersWidget::default()));
                 }
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.extend(Self::knowledge_widgets(true));
+                    widgets.push(Box::new(KnowledgeHeaderWidget));
+                    widgets.extend(Self::knowledge_widgets());
                 }
                 if cfg!(feature = "voice_input")
                     && ai_settings
@@ -2979,7 +2978,7 @@ impl AISettingsPageView {
             }
             Some(AISubpage::Knowledge) => {
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.extend(Self::knowledge_widgets(false));
+                    widgets.extend(Self::knowledge_widgets());
                 }
             }
             Some(AISubpage::ThirdPartyCLIAgents) => {
@@ -7095,18 +7094,50 @@ impl SettingsWidget for MCPServersWidget {
         column.finish()
     }
 }
+
+struct KnowledgeHeaderWidget;
+
+impl SettingsWidget for KnowledgeHeaderWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "fact memory memories rules conventions"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled()
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        build_sub_header(
+            appearance,
+            "Knowledge",
+            Some(styles::header_font_color(
+                AISettings::as_ref(app).is_any_ai_enabled(app),
+                app,
+            )),
+        )
+        .with_margin_bottom(HEADER_PADDING)
+        .finish()
+    }
+}
+
 #[derive(Default)]
 struct RulesWidget {
     rules_toggle: SwitchStateHandle,
     rules_link_index: HighlightedHyperlink,
-    show_section_header: bool,
 }
 
 impl SettingsWidget for RulesWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "agent oz ai a.i. fact memory memories rules conventions codebases workflows learn more"
+        "fact memory memories rules conventions"
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
@@ -7159,22 +7190,10 @@ impl SettingsWidget for RulesWidget {
         .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
         .finish();
 
-        let mut column = Flex::column();
-        if self.show_section_header {
-            column.add_child(
-                build_sub_header(
-                    appearance,
-                    "Knowledge",
-                    Some(styles::header_font_color(
-                        ai_settings.is_any_ai_enabled(app),
-                        app,
-                    )),
-                )
-                .with_margin_bottom(HEADER_PADDING)
-                .finish(),
-            );
-        }
-        column.with_child(toggle).with_child(description).finish()
+        Flex::column()
+            .with_child(toggle)
+            .with_child(description)
+            .finish()
     }
 }
 
@@ -7187,7 +7206,7 @@ impl SettingsWidget for SuggestedRulesWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "suggested rules suggest save interactions ai"
+        "suggested rules suggest save"
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
