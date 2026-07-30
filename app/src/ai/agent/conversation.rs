@@ -1128,9 +1128,9 @@ impl AIConversation {
     pub fn set_server_metadata(&mut self, metadata: ServerAIConversationMetadata) {
         // An absent field (legacy server or conversation) must not erase a
         // known baseline. Asynchronous metadata snapshots can also be stale
-        // relative to live `StreamFinished` accounting, so a snapshot may
+        // relative to live per-request cost accounting, so a snapshot may
         // only seed or advance the displayed total — never regress it or
-        // re-add costs the stream already counted.
+        // re-add costs the client already counted.
         if let Some(total_provider_cost_in_cents) = metadata.usage.total_provider_cost_in_cents
             && self
                 .total_provider_cost_in_cents
@@ -2204,28 +2204,10 @@ impl AIConversation {
     ) -> Result<(), UpdateConversationError> {
         self.has_usage_metadata |=
             request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
-        // Reconcile the cumulative provider cost. When the stream reports the
-        // server's cumulative total, that snapshot is authoritative for this
-        // turn: it already includes this response's per-request costs, so
-        // applying it *instead of* summing them guarantees the same response
-        // is never counted twice, and it recovers a restored legacy
-        // conversation's unknown baseline. Without the field (older server),
-        // per-request costs accumulate onto a known baseline; an unknown
-        // baseline stays unknown rather than presenting an increment as a
-        // total.
-        let stream_cumulative_provider_cost = usage_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.total_provider_cost_in_cents);
-        if let Some(cumulative) = stream_cumulative_provider_cost {
-            self.total_provider_cost_in_cents = Some(cumulative);
-        } else if let Some(total_provider_cost_in_cents) =
-            self.total_provider_cost_in_cents.as_mut()
-        {
-            for usage in &token_usage {
+        for usage in token_usage.into_iter() {
+            if let Some(total_provider_cost_in_cents) = self.total_provider_cost_in_cents.as_mut() {
                 *total_provider_cost_in_cents += usage.cost_in_cents;
             }
-        }
-        for usage in token_usage.into_iter() {
             let entry = self
                 .total_token_usage_by_model
                 .entry(usage.model_id.clone())
