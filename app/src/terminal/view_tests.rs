@@ -9,6 +9,7 @@ use std::sync::Arc;
 use chrono::{Local, Utc};
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
+use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
@@ -1476,6 +1477,121 @@ fn escape_does_not_exit_local_agent_view_with_long_running_command() {
     })
 }
 
+#[test]
+fn escape_navigates_child_when_only_parent_agent_id_is_available() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let parent_run_id = Uuid::new_v4().to_string();
+            let parent_conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    let parent_conversation_id = history_model.start_new_conversation(
+                        view.view_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    history_model.assign_run_id_for_conversation(
+                        parent_conversation_id,
+                        parent_run_id.clone(),
+                        None,
+                        view.view_id,
+                        ctx,
+                    );
+                    parent_conversation_id
+                });
+
+            let mut child_conversation = AIConversation::new(false, false);
+            let child_conversation_id = child_conversation.id();
+            child_conversation.set_parent_agent_id(parent_run_id);
+            child_conversation.set_agent_name("Agent 1".to_string());
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                history_model.restore_conversations(view.view_id, vec![child_conversation], ctx);
+            });
+
+            view.enter_agent_view(
+                None,
+                Some(child_conversation_id),
+                AgentViewEntryOrigin::ChildAgent,
+                ctx,
+            );
+
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .resolved_parent_conversation_id_for_conversation(
+                        BlocklistAIHistoryModel::as_ref(ctx)
+                            .conversation(&child_conversation_id)
+                            .expect("child conversation should exist"),
+                    ),
+                Some(parent_conversation_id),
+            );
+            assert!(
+                view.try_navigate_to_parent_conversation(ctx),
+                "parent-agent linkage should be enough to navigate out of the child",
+            );
+            assert!(
+                view.agent_view_controller().as_ref(ctx).is_active(),
+                "navigating to a resolved parent should not exit the child in place",
+            );
+        });
+    })
+}
+
+#[test]
+fn escape_exits_long_running_child_when_parent_linkage_is_missing() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let child_conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    let child_conversation_id = history_model.start_new_conversation(
+                        view.view_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    history_model
+                        .conversation_mut(&child_conversation_id)
+                        .expect("child conversation should exist")
+                        .set_agent_name("Agent 1".to_string());
+                    child_conversation_id
+                });
+
+            view.enter_agent_view(
+                None,
+                Some(child_conversation_id),
+                AgentViewEntryOrigin::ChildAgent,
+                ctx,
+            );
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "running");
+            view.update_agent_view_back_button_state(ctx);
+
+            assert!(
+                !view.agent_view_back_button.as_ref(ctx).is_disabled(),
+                "child escape affordance should stay enabled without parent linkage",
+            );
+
+            view.handle_input_event(&InputEvent::Escape, ctx);
+
+            assert!(
+                !view.agent_view_controller().as_ref(ctx).is_active(),
+                "a child with missing parent linkage must still have a way out",
+            );
+        });
+    })
+}
 #[test]
 fn root_cloud_mode_pane_sets_root_cloud_mode_context_key() {
     App::test((), |mut app| async move {

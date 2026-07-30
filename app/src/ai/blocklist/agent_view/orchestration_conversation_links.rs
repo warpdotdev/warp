@@ -12,7 +12,6 @@ use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
 
-use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent_conversations_model::entry::AgentConversationEntryId;
 use crate::ai::agent_conversations_model::{
@@ -23,20 +22,6 @@ use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::workspace::{RestoreConversationLayout, WorkspaceAction, WorkspaceRegistry};
-
-pub(crate) fn conversation_id_for_agent_id(
-    agent_id: &str,
-    app: &AppContext,
-) -> Option<AIConversationId> {
-    let history_model = BlocklistAIHistoryModel::as_ref(app);
-    history_model
-        .conversation_id_for_agent_id(agent_id)
-        .or_else(|| {
-            history_model.find_conversation_id_by_server_token(&ServerConversationToken::new(
-                agent_id.to_string(),
-            ))
-        })
-}
 
 /// True if the conversation is open in some other visible pane. Hidden
 /// child-agent panes are excluded so unopened children don't look
@@ -111,11 +96,8 @@ pub(crate) fn parent_conversation_id(
     active_conversation: &AIConversation,
     app: &AppContext,
 ) -> Option<AIConversationId> {
-    active_conversation.parent_conversation_id().or_else(|| {
-        active_conversation
-            .parent_agent_id()
-            .and_then(|id| conversation_id_for_agent_id(id, app))
-    })
+    BlocklistAIHistoryModel::as_ref(app)
+        .resolved_parent_conversation_id_for_conversation(active_conversation)
 }
 
 pub(crate) fn conversation_navigation_action(

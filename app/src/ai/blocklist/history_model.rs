@@ -516,6 +516,13 @@ impl BlocklistAIHistoryModel {
             conversation.parent_conversation_id(),
             conversation.parent_agent_id(),
         )
+        .or_else(|| {
+            self.children_by_parent
+                .iter()
+                .find_map(|(parent_id, child_ids)| {
+                    child_ids.contains(&conversation.id()).then_some(*parent_id)
+                })
+        })
     }
 
     fn index_child_conversation(

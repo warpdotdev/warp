@@ -215,6 +215,9 @@ use crate::ai::agent::{
 };
 #[cfg(feature = "local_fs")]
 use crate::ai::agent::{CurrentHead, DiffBase};
+use crate::ai::agent_conversations_model::entry::{
+    AgentConversationEntryId, AgentConversationNavigationSubject,
+};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::{
     AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
@@ -537,7 +540,8 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant;
 use crate::workspace::{
     CommandSearchOptions, ForkAIConversationParams, ForkFromExchange,
-    ForkedConversationDestination, OneTimeModalModel, ToastStack, WorkspaceAction,
+    ForkedConversationDestination, OneTimeModalModel, RestoreConversationLayout, ToastStack,
+    WorkspaceAction,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
@@ -601,6 +605,12 @@ lazy_static! {
     ///
     /// See [`TerminalView::resize_alt_screen_redundantly`] for more details.
     static ref ALT_SCREEN_APPS_THAT_MUST_MATCH_BLOCKLIST_PADDING: HashSet<&'static str> = HashSet::from(["k9s", "lazygit"]);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChildAgentNavigation {
+    Parent(AIConversationId),
+    ExitWithoutParent,
 }
 
 pub const AI_CONTROL_PANEL_MARGIN: f32 = 10.;
@@ -4834,31 +4844,53 @@ impl TerminalView {
         callback(self, ctx);
     }
 
+    fn child_agent_navigation(&self, ctx: &AppContext) -> Option<ChildAgentNavigation> {
+        let agent_view_state = self.agent_view_controller.as_ref(ctx).agent_view_state();
+        let active_conversation_id = agent_view_state.active_conversation_id()?;
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let active_conversation = history.conversation(&active_conversation_id)?;
+
+        if let Some(parent_id) =
+            history.resolved_parent_conversation_id_for_conversation(active_conversation)
+        {
+            return Some(ChildAgentNavigation::Parent(parent_id));
+        }
+
+        let has_child_identity = active_conversation.is_child_agent_conversation()
+            || active_conversation.agent_name().is_some()
+            || active_conversation.is_remote_child()
+            || matches!(
+                agent_view_state.origin(),
+                Some(AgentViewEntryOrigin::ChildAgent)
+            );
+        has_child_identity.then_some(ChildAgentNavigation::ExitWithoutParent)
+    }
+
     /// If the active conversation is a child agent, navigate to the parent
     /// and return `true`; otherwise return `false` so the caller can run
-    /// the normal exit-agent-view flow. Cross-tab and swap-target cases
-    /// are handled by the workspace's focus path; falls back to emitting
-    /// a swap event when the parent has no canonical owner. Runs before
-    /// any can-exit gating so long-running children can still navigate back.
+    /// the normal exit-agent-view flow. When the child linkage is incomplete,
+    /// exit the child view directly rather than applying the root-conversation
+    /// exit gates that can otherwise trap the user. Runs before any can-exit
+    /// gating so long-running children can still navigate back or exit.
     fn try_navigate_to_parent_conversation(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         if !FeatureFlag::AgentView.is_enabled() {
             return false;
         }
-        let active_conv_id = self
-            .agent_view_controller
-            .as_ref(ctx)
-            .agent_view_state()
-            .active_conversation_id();
-        let Some(active_conv_id) = active_conv_id else {
+        let Some(navigation) = self.child_agent_navigation(ctx) else {
             return false;
         };
+
+        let ChildAgentNavigation::Parent(parent_id) = navigation else {
+            log::warn!(
+                "Exiting child agent view without parent linkage; the parent conversation could not be resolved"
+            );
+            self.agent_view_controller.update(ctx, |controller, ctx| {
+                controller.exit_child_agent_view_without_confirmation(ctx);
+            });
+            return true;
+        };
+
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        let parent_id = history
-            .conversation(&active_conv_id)
-            .and_then(|c| c.parent_conversation_id());
-        let Some(parent_id) = parent_id else {
-            return false;
-        };
         let parent_terminal_view_id = history.terminal_surface_id_for_conversation(&parent_id);
 
         if let Some(parent_terminal_view_id) = parent_terminal_view_id {
@@ -4866,6 +4898,14 @@ impl TerminalView {
             ctx.dispatch_typed_action_deferred(WorkspaceAction::FocusTerminalViewInWorkspace {
                 terminal_view_id: parent_terminal_view_id,
             });
+        } else if let Some(action) = AgentConversationsModel::resolve_open_action(
+            AgentConversationNavigationSubject::Entry(AgentConversationEntryId::Conversation(
+                parent_id,
+            )),
+            Some(RestoreConversationLayout::ActivePane),
+            ctx,
+        ) {
+            ctx.dispatch_typed_action_deferred(action);
         } else {
             ctx.emit(Event::SwapPaneToConversation {
                 conversation_id: parent_id,
@@ -11318,19 +11358,12 @@ impl TerminalView {
         conversation_id
     }
 
-    /// Updates the back button's state and label. For child agents the
-    /// label becomes "for Orchestrator" since ESC swaps to the parent
-    /// instead of exiting in place.
+    /// Updates the back button's state and label. Linked child agents navigate
+    /// to their orchestrator; children with incomplete linkage still get an
+    /// enabled, explicit exit instead of inheriting root-conversation gating.
     pub(crate) fn update_agent_view_back_button_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let active_conv_id = self
-            .agent_view_controller
-            .as_ref(ctx)
-            .agent_view_state()
-            .active_conversation_id();
-        let is_child_agent = active_conv_id
-            .and_then(|id| BlocklistAIHistoryModel::as_ref(ctx).conversation(&id))
-            .and_then(|c| c.parent_conversation_id())
-            .is_some();
+        let child_navigation = self.child_agent_navigation(ctx);
+        let is_child_agent = child_navigation.is_some();
 
         // Never disable for child agents: the swap-back path can't be blocked.
         let disabled_reason = if is_child_agent {
@@ -11342,10 +11375,10 @@ impl TerminalView {
                 .err()
                 .map(|e| e.to_string())
         };
-        let label = if is_child_agent {
-            "for Orchestrator"
-        } else {
-            "for terminal"
+        let label = match child_navigation {
+            Some(ChildAgentNavigation::Parent(_)) => "for Orchestrator",
+            Some(ChildAgentNavigation::ExitWithoutParent) => "exit child agent",
+            None => "for terminal",
         };
 
         self.agent_view_back_button.update(ctx, |button, ctx| {

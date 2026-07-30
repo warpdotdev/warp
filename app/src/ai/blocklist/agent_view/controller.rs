@@ -568,6 +568,22 @@ impl AgentViewController {
             ctx,
         );
     }
+    /// Exits an orchestration child even when a root-agent constraint, such as
+    /// an active long-running command, would normally block leaving Agent View.
+    pub(crate) fn exit_child_agent_view_without_confirmation(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.exit_agent_view_internal(
+            ExitAgentViewOptions {
+                should_confirm: ExitConfirmationRequirement::None,
+            },
+            ExitConfirmationTrigger::Escape,
+            false,
+            true,
+            ctx,
+        );
+    }
 
     fn is_exit_confirmation_active_for(&self, conversation_id: AIConversationId) -> bool {
         matches!(
@@ -796,6 +812,7 @@ impl AgentViewController {
                         },
                         ExitConfirmationTrigger::Escape,
                         true,
+                        false,
                         ctx,
                     );
                 }
@@ -866,6 +883,7 @@ impl AgentViewController {
             },
             trigger,
             false,
+            false,
             ctx,
         );
     }
@@ -877,6 +895,7 @@ impl AgentViewController {
                 should_confirm: ExitConfirmationRequirement::None,
             },
             ExitConfirmationTrigger::Escape,
+            false,
             false,
             ctx,
         );
@@ -893,6 +912,7 @@ impl AgentViewController {
             ExitAgentViewOptions { should_confirm },
             ExitConfirmationTrigger::Escape,
             false,
+            false,
             ctx,
         );
     }
@@ -902,11 +922,12 @@ impl AgentViewController {
         options: ExitAgentViewOptions,
         trigger: ExitConfirmationTrigger,
         is_exit_before_new_entrance: bool,
+        bypass_exit_gate: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         self.clear_new_conversation_keybinding_confirmation(ctx);
         // Check if exiting agent view is allowed.
-        if self.can_exit_agent_view().is_err() {
+        if !bypass_exit_gate && self.can_exit_agent_view().is_err() {
             return;
         }
 
