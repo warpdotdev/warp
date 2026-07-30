@@ -3,31 +3,31 @@
 ## Product
 
 ### Summary
-Make the spinning object in the Warp Agent CLI zero state respond to left-mouse dragging. A drag directly scrubs the object forward while held; releasing it produces a same-direction momentum flick that smoothly settles back to the configured idle velocity. The interaction is an undisclosed easter egg: the screen gains no hint, hover treatment, setting, or unsupported-terminal warning.
+Make the spinning object in the Warp Agent CLI zero state respond to left-mouse dragging. A horizontal drag directly scrubs the object in either direction with deliberately low sensitivity; releasing it produces a same-direction momentum flick whose strength scales with total mouse-down-to-mouse-up distance, then smoothly settles back to the configured forward idle velocity. The interaction is an undisclosed easter egg: the screen gains no hint, hover treatment, setting, or unsupported-terminal warning.
 
 ### Key design choices
 - Reuse the TUI's existing session-wide mouse capture and `LeftMouseDown` / `LeftMouseDragged` / `LeftMouseUp` event path; do not change terminal mouse mode.
 - Store interaction state outside the rendered element so view rebuilds and terminal resizes preserve the current angle, active drag, and momentum.
-- Ship same-direction control only. Rightward horizontal motion scrubs forward; opposite motion can pause a qualified drag but never rotates the object backward. Direction reversal is future work.
+- Support signed horizontal control. Rightward motion scrubs and flicks forward; leftward motion scrubs and flicks backward. Vertical-only movement does not drive rotation, and user-driven reverse motion still settles back to the configured forward idle direction.
 - Apply a high but hard velocity cap of 1.5 revolutions per second and ease a released velocity back to the configured idle velocity over 3 seconds.
 
 ### Behavior
 1. With no mouse interaction, the active zero-state object and background starfield render and animate exactly as they do today, including the configured rotation period and custom ASCII object support.
 2. A left-mouse press starts an interaction only when it lands inside the tight bounding rectangle of the currently rendered non-background object cells. Background stars and the rest of the zero-state panel are not drag targets. Once a valid press starts a drag, subsequent drag and release events remain captured even if the pointer leaves the object's bounds.
 3. Pressing the object never changes its angle. A click with no horizontal cell movement has no effect on phase or velocity.
-4. After a valid press, each rightward terminal-cell delta directly advances the object by `1/32` revolution, subject to the velocity cap. Leftward and vertical deltas do not reduce the accumulated angle; leftward motion therefore cannot reverse the object. The background starfield is not scrubbed.
-5. The interaction becomes a drag after the first horizontal one-cell delta. While a qualified drag is held, rightward movement advances the object without input-event latency beyond the next scheduled repaint; opposite horizontal movement holds the directly manipulated phase rather than rotating backward.
-6. On release, the object continues at the velocity derived from the most recent 120 ms of horizontal drag samples. The release velocity is clamped to the inclusive range from 0 through 1.5 revolutions per second. A sample window containing no forward travel yields zero release velocity.
-7. From release, total angular velocity transitions from the clamped release velocity to the configured idle angular velocity over exactly 3 seconds using cubic smoothstep interpolation. Angle remains continuous at release and throughout settling. At 3 seconds and afterward, the object rotates at the configured idle velocity from its new phase.
+4. After a valid press, signed horizontal displacement directly scrubs the object at `1/96` revolution per terminal column, subject to the 1.5 revolutions-per-second held-motion cap measured from monotonic press time. Rightward displacement rotates forward and leftward displacement rotates backward. Vertical-only displacement leaves the ordinary idle solution untouched. The background starfield is not scrubbed.
+5. The interaction becomes a drag after the first nonzero horizontal cell displacement. While held, the object tracks the signed mouse-down-to-current-position displacement without input-event latency beyond the next scheduled repaint. Short gestures therefore produce modest, readable turns instead of complete revolutions.
+6. On release, velocity is proportional to the signed horizontal distance between mouse down and mouse up across the whole gesture. The angle represented by that distance is mapped through a 500 ms response interval, then clamped to the inclusive range from -1.5 through 1.5 revolutions per second. Pausing before release does not erase the flick; returning to the original horizontal position yields zero release velocity.
+7. From release, total angular velocity transitions from the signed clamped release velocity to the configured forward idle angular velocity over exactly 3 seconds using cubic smoothstep interpolation. Angle remains continuous at release and throughout settling. A reverse flick may cross zero during the settle. At 3 seconds and afterward, the object rotates at the current configured idle velocity from its new phase.
 8. All phase and velocity integration uses elapsed monotonic time and radians per second, not angle per repaint tick. Equivalent timestamped input produces the same phase and velocity at 15 fps, 30 fps, or delayed repaint schedules.
-9. The current phase, active drag, sampled velocity, and settling state survive a terminal resize. New layout geometry is used for later hit tests, but a drag that began before resize may continue through it.
+9. The current phase, active drag origin/displacement, and settling state survive a terminal resize. New layout geometry is used for later hit tests, but a drag that began before resize may continue through it.
 10. Interaction state resets when the session replaces the zero state with transcript content or another surface. If the zero state later returns, it is at the ordinary idle animation with no previous drag or momentum contribution.
 11. The interaction applies to whichever object the zero-state animation is already rendering: the built-in Warp mark or configured custom ASCII art. The same physics, target calculation, and reset rules apply to both.
 12. If the host terminal ignores mouse reporting or otherwise sends no mouse events, the zero state remains exactly today's idle animation. There is no warning, hint, disabled state, or other visible difference.
 13. Mouse events outside the current object target remain unhandled by the animation so existing or future zero-state children can receive them. A valid object drag consumes its down, drag, and up events.
 
 ### Non-goals
-- Reverse-direction rotation, including persistent reversal.
+- Persistent reversal of the configured idle animation; reverse motion is user-driven only and always settles back to forward idle.
 - Keyboard controls, scroll-wheel control, touchpad gesture abstraction, saved momentum, preferences, telemetry, sound, or reuse on other Warp logo surfaces.
 - Hint copy, hover affordances, cursor changes, or other discoverability UI.
 - Changes to Crossterm mouse capture, terminal capability negotiation, background-star motion, object shape, extrusion, styling, frame cadence, or the existing rotation-period setting.
@@ -46,8 +46,8 @@ Make the spinning object in the Warp Agent CLI zero state respond to left-mouse 
 ### Constants
 Keep the interaction tuning together in `zero_state_animation.rs` so later adjustment does not alter the state machine:
 
-- `DRAG_RADIANS_PER_COLUMN = TAU / 32.0`
-- `RELEASE_SAMPLE_WINDOW = 120 ms`
+- `DRAG_RADIANS_PER_COLUMN = TAU / 96.0`
+- `FLICK_DISTANCE_RESPONSE_DURATION = 500 ms`
 - `MAX_INTERACTIVE_REVOLUTIONS_PER_SECOND = 1.5`
 - `MOMENTUM_SETTLE_DURATION = 3 s`
 
@@ -59,8 +59,8 @@ The cap applies to total interactive velocity, not to the configured idle settin
   - Rejected: drag displacement directly sets velocity. This makes small pointer corrections abruptly change speed and does not feel like grabbing the object.
   - Rejected: flick-only input. It is simpler but provides no direct response while held.
 - **Direction**
-  - Selected: same-direction-only control. Rightward deltas advance; opposite deltas cannot decrease phase. This keeps the first version small and honors the requester's explicit willingness to defer reversal.
-  - Rejected for this change: signed scrubbing and signed release velocity. It naturally supports reversal but adds settling semantics the requester said can wait.
+  - Selected: signed scrubbing and signed release velocity. Rightward gestures rotate forward and leftward gestures rotate backward, while the fixed three-second settle always returns to the configured forward idle velocity.
+  - Rejected: forward-only control. Requester testing showed that inert left drags made the interaction feel incomplete.
 - **State ownership**
   - Selected: a cloneable, interior-mutable interaction handle owned by `TuiTerminalSessionView`, shared with `TuiZeroStateView` and each animation element. The session synchronizes its existing zero-state visibility decision into the handle. This preserves state through invalidation/resize and resets it exactly at a visible-to-hidden transition.
   - Rejected: state only on `ZeroStateAnimationElement`. Resize calls `invalidate_all_views`, and asynchronous zero-state updates rebuild the element, losing the drag.
@@ -80,10 +80,10 @@ The cap applies to total interactive velocity, not to the configured idle settin
 
 ### Proposed changes
 1. In `crates/warp_tui/src/zero_state_animation.rs`, introduce a session-local interaction state and cloneable handle with these responsibilities:
-   - Track whether the zero state is visible, whether a valid press/qualified drag is active, the last pointer position, timestamped samples within the 120 ms window, accumulated interactive phase, release velocity, and the start time/velocity of the current settle.
+   - Track whether the zero state is visible, whether a valid press/qualified drag is active, mouse-down and current pointer positions, monotonic press time, directly manipulated phase, signed release velocity, and the start time/velocity of the current settle.
    - Expose pure time-parameterized functions for press, drag, release, visibility transition, and resolving angle/velocity at a supplied `Instant`. Production calls use `Instant::now`; tests supply deterministic timestamps.
    - Integrate configured idle velocity and the interactive contribution analytically from elapsed time. Never advance phase by a fixed amount per render.
-   - On visible-to-hidden, clear drag, samples, phase offset, and momentum. Hidden-to-visible begins a fresh interaction episode while the existing `AnimationClock` continues to define ordinary idle phase.
+   - On visible-to-hidden, clear drag, phase offset, and momentum. Hidden-to-visible begins a fresh interaction episode while the existing `AnimationClock` continues to define ordinary idle phase.
 2. Pass the shared interaction handle into `ZeroStateAnimationElement`.
    - During paint, resolve the object angle from idle clock plus interaction state, pass that angle into frame generation, and retain the tight non-background object-cell bounding rectangle for the current frame.
    - Split frame generation so object rotation accepts an explicit angle while background stars continue to use ordinary elapsed time. Preserve the existing test helper behavior for idle frames.
@@ -96,15 +96,15 @@ The cap applies to total interactive velocity, not to the configured idle settin
 - **Is mouse capture already enabled?** Yes. The TUI enables capture when entering its alternate screen and already converts and dispatches left down/drag/up events. This feature must not alter terminal mouse mode.
 - **What does drag control?** Direct horizontal phase scrubbing while held, then momentum on release. The requester delegated this choice; it is selected for immediate feedback.
 - **How does momentum end?** It eases to the configured idle velocity over 3 seconds, then remains at idle from the new phase.
-- **Can dragging reverse direction?** No. Reversal is explicitly out of scope. Rightward movement advances; opposite movement cannot decrease phase.
-- **How fast can it spin?** At most 1.5 revolutions per second, with zero release velocity allowed.
+- **Can dragging reverse direction?** Yes. Rightward movement rotates forward and leftward movement rotates backward; reverse release momentum smoothly crosses back to the configured forward idle direction during settling.
+- **How fast can it spin?** User-driven held and release motion are capped at 1.5 revolutions per second in either direction, with zero release velocity allowed.
 - **How is the interaction discovered?** It is not; this is an easter egg with no hint or hover state.
 - **What happens without mouse support?** No events means no interaction and no visible difference.
 - **What survives resize and state changes?** Interaction survives resize, including an active drag, and resets when the zero state exits.
 - **Does custom ASCII art participate?** Yes. It uses the same animation element and is the active zero-state object; special-casing it would make the existing surface inconsistent.
 
 ### Risks and mitigations
-- **Input feels jumpy or laggy.** Retain the current angle on press, use a one-cell threshold, update on each drag event, and verify the first post-drag frame and low-frame-rate behavior deterministically.
+- **Input feels jumpy or laggy.** Retain the current angle on press, use the single documented `TAU / 96` sensitivity constant, rate-limit held motion with monotonic elapsed time, update on each drag event, and verify short gestures plus low-frame-rate behavior deterministically and live.
 - **Fast motion aliases at the 66 ms repaint cadence.** Enforce the 1.5 revolutions-per-second cap and verify live legibility at the cap. If the cap cannot remain legible on the current cadence, lower the constant rather than increasing global repaint frequency.
 - **Resize or unrelated view updates lose state.** Keep interaction state in the shared session-owned handle and test reconstruction plus resize explicitly.
 - **The animation steals unrelated mouse input.** Start only inside the retained non-background target; return `false` outside it; capture drag/up only after a valid start.
@@ -120,8 +120,8 @@ All criteria must pass before merge.
 2. **Mouse plumbing needs no runtime change.** Existing `warpui_core` tests continue to prove Crossterm down/drag/up conversion, and review confirms `EnableMouseCapture` remains present with no new capture toggle or terminal capability UI. Check with `cargo nextest run -p warpui_core --features tui`.
 3. **Hit testing is object-only.** A new `drag_starts_only_inside_current_object_bounds` test must show that a press on the rendered built-in object starts capture, while presses on a background star and blank panel cell return unhandled. Repeat against a custom ASCII object and an edge-on frame.
 4. **Press and click never snap.** A new `press_and_click_without_horizontal_motion_preserve_phase_and_velocity` test must compare the resolved angle immediately before press, after press, and after release with no horizontal movement; values must follow the uninterrupted idle solution with no discontinuity or momentum.
-5. **Direct drag is same-direction and deterministic.** A new `horizontal_drag_scrubs_forward_without_reversal` test must show that 32 rightward cell deltas produce one revolution before time-based clamping, leftward/vertical deltas never reduce accumulated phase, and drag/up remain consumed after the pointer leaves bounds.
-6. **Velocity is hard-clamped and zero is valid.** A new `release_velocity_clamps_to_zero_and_playful_maximum` test must cover a counter-direction/no-forward sample window resolving to 0 and an arbitrarily fast forward flick resolving to exactly 1.5 revolutions per second.
+5. **Direct drag is bidirectional, retuned, and deterministic.** `horizontal_drag_scrubs_both_directions_with_retuned_sensitivity` must show that eight-cell right and left gestures produce equal and opposite `1/12`-revolution turns, `held_drag_is_rate_limited_by_monotonic_elapsed_time` must prove the 1.5 revolutions-per-second held cap, vertical-only motion must preserve ordinary idle motion, and drag/up remain consumed after the pointer leaves bounds.
+6. **Whole-distance velocity is signed and hard-clamped.** `release_velocity_scales_with_signed_total_drag_distance_even_after_a_pause` must cover proportional short/long forward flicks, an equal reverse flick, pause independence, and exact clamping at ±1.5 revolutions per second.
 7. **Momentum returns slowly and exactly to idle.** A new `released_velocity_smoothly_settles_to_idle_in_three_seconds` test must assert continuity at release, intermediate smoothstep velocities at fixed timestamps, configured idle velocity at 3 seconds, and idle velocity thereafter for both the 1-second and 60-second configured periods.
 8. **Physics is frame-rate independent.** A new `interaction_phase_is_independent_of_repaint_schedule` test must feed identical timestamped drag/release input and resolve it under 15 fps, 30 fps, and irregular/delayed render schedules; angle and velocity at common timestamps must agree within a small floating-point tolerance.
 9. **Resize preserves; exit resets.** New focused tests must rebuild/layout the element at a different `TuiSize` during an active drag and during momentum without changing resolved phase/velocity, then drive a zero-state visible-to-hidden-to-visible transition and assert that drag/momentum state is cleared.
@@ -135,5 +135,5 @@ All criteria must pass before merge.
     - `cargo clippy -p warp_completer --all-targets --tests -- -D warnings`
     - `CARGO_BUILD_JOBS=2 cargo build -p warp_tui --bin warp-tui-oss`
     The PR's CI is the full-suite backstop for this bounded TUI change.
-14. **The running TUI proves the complete gesture.** After the build passes, launch the authenticated zero state with `./script/run-tui` in a real terminal and use computer use to perform and record: idle spin, valid press with no angle jump, forward drag response, release flick at a visibly faster speed, gradual 3-second return to idle, drag continuation outside the object, and resize during momentum. Attach a short video and a representative screenshot to the task/run and PR; validate them against Behavior 1–10.
-15. **Live edge cases are checked.** In the same running-TUI verification, confirm a press on stars/blank space does nothing, a click without drag does nothing, counter-direction drag never reverses the object, the high clamp remains legible without visible flicker, and leaving/re-entering the zero state removes prior momentum. Supplement the visual artifacts with `tmux capture-pane` or the TUI-native asciinema/agg capture workflow where useful.
+14. **The running TUI proves the complete gesture.** After the build passes, launch the authenticated zero state with `./script/run-tui` in a real terminal and use computer use to perform and durably record: a no-input idle baseline, valid press with no angle jump, a modest short forward drag, a longer faster forward flick, a reverse drag/flick, gradual 3-second return to forward idle, drag continuation outside the object, and resize during momentum. Show the pointer and contrast interaction segments against baseline so gesture-driven motion is distinguishable from the five-second idle loop.
+15. **Live edge cases are checked.** In the same running-TUI verification, confirm a press on stars/blank space does nothing, a click without drag does nothing, vertical-only drag does not freeze or drive the object, the high clamp remains legible without visible flicker, and leaving/re-entering the zero state removes prior momentum. Attach durable video and representative screenshots to the PR, and state plainly which criteria remain deterministic-test-only if the capture cannot establish them visually.
