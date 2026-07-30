@@ -967,3 +967,7 @@ async fn read_files(
         }
     }
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "maa_tests.rs"]
+mod tests;
