@@ -342,13 +342,16 @@ clone_repo() {
   checkout_ref="$4"
   if [ -d "$target" ]; then
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
-    return 0
+  else
+    printf '%s\n' "Cloning repository $repo_name..."
+    git clone --filter=tree:0 "$repo_url" "$target" || return 1
   fi
-  printf '%s\n' "Cloning repository $repo_name..."
-  git clone --filter=tree:0 "$repo_url" "$target" || return 1
+  # Pin after clone or reuse: a reused directory may still be on an old ref.
   if [ -n "$checkout_ref" ]; then
     printf '%s\n' "Checking out $checkout_ref in $repo_name..."
-    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout "$checkout_ref"
+    # Fetch leaves the object in FETCH_HEAD; check that out detached so we
+    # never prefer a stale local branch with the same name.
+    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
   fi
 }
 "#,
@@ -530,7 +533,9 @@ pub(super) async fn clone_repo(
 ///
 /// A partial clone (`--filter=tree:0`) only fetches the default branch, so an
 /// arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch it
-/// first, then check it out. A detached HEAD is expected and fine — trials
+/// first, then check out the resulting `FETCH_HEAD` detached. Checking out the
+/// original ref name can prefer a stale local branch or fail when the object
+/// only landed in `FETCH_HEAD`. Detached HEAD is expected and fine — trials
 /// never merge.
 fn checkout_command_for(
     repo: &SourceRepo,
@@ -543,7 +548,7 @@ fn checkout_command_for(
     let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
     Some(format!(
         "git -C '{escaped_dir}' fetch --filter=tree:0 origin '{escaped_ref}' && \
-         git -C '{escaped_dir}' checkout '{escaped_ref}'"
+         git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
     ))
 }
 

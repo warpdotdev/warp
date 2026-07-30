@@ -168,17 +168,41 @@ fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
 
     let command = build_parallel_clone_command(&repos, ShellType::Bash);
 
-    // The shell function fetches then checks out the ref only when one is set.
+    // The shell function fetches then checks out FETCH_HEAD only when a ref is set.
     assert!(command.contains("checkout_ref=\"$4\""));
     assert!(command.contains("if [ -n \"$checkout_ref\" ]; then"));
     assert!(command.contains("git -C \"$target\" fetch --filter=tree:0 origin \"$checkout_ref\""));
-    assert!(command.contains("git -C \"$target\" checkout \"$checkout_ref\""));
+    assert!(command.contains("git -C \"$target\" checkout --detach FETCH_HEAD"));
+    // Pinning must not be nested under the "directory missing" branch — reused
+    // target directories still need fetch/checkout when a ref is set.
+    assert!(command.contains("already exists, skipping clone..."));
+    assert!(!command.contains("already exists, skipping clone...\n    return 0"));
     // A clone failure must short-circuit before any checkout attempt.
     assert!(command.contains("git clone --filter=tree:0 \"$repo_url\" \"$target\" || return 1"));
     // The pinned repo's ref is threaded into the command (as the 4th positional
     // arg to clone_repo). The whole script is single-quote-escaped for `sh -c`,
     // so assert on the ref content rather than the surrounding quoting.
     assert!(command.contains("abc123"));
+}
+
+#[test]
+fn checkout_command_checks_out_fetch_head_not_ref_name() {
+    let repo = SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )
+    .with_checkout_ref(Some("abc123".to_string()));
+
+    let command =
+        checkout_command_for(&repo, Path::new("/tmp/work"), ShellType::Bash).expect("ref set");
+
+    assert!(command.contains("fetch --filter=tree:0 origin 'abc123'"));
+    assert!(command.contains("checkout --detach FETCH_HEAD"));
+    // Must not check out the original ref name after fetch (stale local branch
+    // risk / FETCH_HEAD-only objects).
+    assert!(!command.contains("checkout 'abc123'"));
+    assert!(!command.contains("checkout \"abc123\""));
 }
 
 #[test]
@@ -329,6 +353,64 @@ fn run_command(command: &str) -> std::process::ExitStatus {
         .expect("sh should be runnable")
 }
 
+/// Unwrap the outer `sh -c '...'` quoting produced by `build_parallel_clone_command`
+/// so tests can execute the embedded shell script directly.
+fn unwrap_sh_c_script(command: &str) -> String {
+    let prefix = "sh -c '";
+    let suffix = "'";
+    let inner = command
+        .strip_prefix(prefix)
+        .and_then(|s| s.strip_suffix(suffix))
+        .unwrap_or_else(|| panic!("expected sh -c '...' wrapper, got: {command}"));
+    // Reverse the single-quote escaping used by shell_escape_single_quotes:
+    // interior `'` becomes `'"'"'`.
+    inner.replace("'\"'\"'", "'")
+}
+
+/// Extract the `clone_repo` function body from the parallel clone script and
+/// invoke it once against a local fixture origin/target.
+fn run_parallel_clone_repo_helper(
+    fixture: &Fixture,
+    target: &Path,
+    checkout_ref: Option<&str>,
+) -> std::process::ExitStatus {
+    // Two dummy repos so we hit the parallel path (and its shell helper).
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            fixture.repo_name.clone(),
+        )
+        .with_checkout_ref(checkout_ref.map(str::to_string)),
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "other".to_string(),
+        ),
+    ];
+    let script = unwrap_sh_c_script(&build_parallel_clone_command(&repos, ShellType::Bash));
+
+    // Keep only the clone_repo function definition; drop background clones /
+    // waits / logs. Locate by name so we don't grab cleanup_clone_logs instead.
+    let helper_start = script
+        .find("clone_repo() {")
+        .expect("clone_repo function definition");
+    let helper_end = script[helper_start..]
+        .find("\n}")
+        .expect("clone_repo function terminator")
+        + helper_start
+        + 2;
+    let helper = &script[helper_start..helper_end];
+    let invoke = format!(
+        "set -e\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}'\n",
+        repo = fixture.repo_name,
+        origin = fixture.origin_url,
+        target = target.display(),
+        checkout_ref = checkout_ref.unwrap_or(""),
+    );
+    run_command(&invoke)
+}
+
 #[test]
 fn checkout_command_pins_head_to_commit_absent_from_default_branch() {
     let fixture = build_fixture();
@@ -350,6 +432,83 @@ fn checkout_command_pins_head_to_commit_absent_from_default_branch() {
     assert_eq!(
         git_stdout(&["rev-parse", "HEAD"], &repo_dir),
         fixture.pinned_sha
+    );
+    // Detached HEAD is intentional for trial pins.
+    assert_eq!(
+        git_stdout(&["rev-parse", "--abbrev-ref", "HEAD"], &repo_dir),
+        "HEAD"
+    );
+}
+
+#[test]
+fn checkout_command_prefers_fetched_object_over_stale_local_branch() {
+    let fixture = build_fixture();
+    let repo_dir = partial_clone(&fixture);
+
+    // Create a local branch named like the remote branch we will fetch, but
+    // pointing at the default-branch tip (stale). Checking out the branch name
+    // would stay on base_sha; FETCH_HEAD must win.
+    git(&["branch", "feature", &fixture.base_sha], &repo_dir);
+
+    // Publish the pinned commit under refs/heads/feature on the origin.
+    git(
+        &[
+            "push",
+            &fixture.origin_url,
+            &format!("{}:refs/heads/feature", fixture.pinned_sha),
+        ],
+        &repo_dir,
+    );
+
+    let repo = SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        fixture.repo_name.clone(),
+    )
+    .with_checkout_ref(Some("feature".to_string()));
+    let command =
+        checkout_command_for(&repo, &fixture.working_dir, ShellType::Bash).expect("a ref was set");
+
+    assert!(run_command(&command).success());
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha,
+        "must pin to the just-fetched remote tip, not the stale local branch"
+    );
+}
+
+#[test]
+fn parallel_clone_shell_pins_existing_target_dir_when_checkout_ref_set() {
+    let fixture = build_fixture();
+    // Simulate a reused multi-repo target directory already present on the
+    // default branch tip.
+    let repo_dir = partial_clone(&fixture);
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.base_sha
+    );
+
+    // Drive the real shell helper extracted from build_parallel_clone_command.
+    assert!(
+        run_parallel_clone_repo_helper(&fixture, &repo_dir, Some(&fixture.pinned_sha)).success()
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha,
+        "reused target directory must still pin when checkout_ref is set"
+    );
+}
+
+#[test]
+fn parallel_clone_shell_leaves_existing_target_dir_when_no_checkout_ref() {
+    let fixture = build_fixture();
+    let repo_dir = partial_clone(&fixture);
+
+    assert!(run_parallel_clone_repo_helper(&fixture, &repo_dir, None).success());
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.base_sha,
+        "no checkout_ref must leave an existing directory untouched"
     );
 }
 
