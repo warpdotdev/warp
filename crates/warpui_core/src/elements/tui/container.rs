@@ -1,5 +1,5 @@
 //! [`TuiContainer`]: a single-child decorator that adds a background fill, an
-//! optional box-drawing border, and padding around its child.
+//! optional hairline border, and padding around its child.
 //!
 //! # Construction
 //! Wrap a child with [`TuiContainer::new`] and layer decorations:
@@ -11,8 +11,8 @@
 //! - [`with_padding_top`](TuiContainer::with_padding_top) and sibling side
 //!   methods: cells of empty space on one side.
 //! - [`with_border`](TuiContainer::with_border) /
-//!   [`with_border_style`](TuiContainer::with_border_style): a one-cell box-drawn
-//!   frame.
+//!   [`with_border_style`](TuiContainer::with_border_style): a one-cell hairline
+//!   frame drawn with eighth-block glyphs (`▁▏▕▔`).
 //! - [`with_background`](TuiContainer::with_background): a fill color painted
 //!   behind the border and padding.
 //!
@@ -272,7 +272,18 @@ impl TuiElement for TuiContainer {
     }
 }
 
-/// Paints a single-cell box-drawing frame around the perimeter of `size`.
+/// Paints a single-cell hairline frame around the perimeter of `size`, using
+/// the eighth-block profile of ratatui's `symbols::border::ONE_EIGHTH_WIDE`.
+///
+/// Every stroke's ink sits on a cell boundary, unlike box-drawing glyphs
+/// (`┌─│`) whose strokes run through cell centers: the vertical rails `▏`/`▕`
+/// hug the outer edges of their cells, so the frame lines up exactly with
+/// cell-edge-aligned neighbors (text, menu/selection backgrounds); the top
+/// rule `▁` inks the bottom edge of the top border row and the bottom rule
+/// `▔` the top edge of the bottom border row, so both hug the content. The
+/// horizontal rules span the full width (corner cells included) and the rails
+/// cover only the interior rows — the strokes meet exactly at the row
+/// boundaries, closing the corners without dedicated corner glyphs.
 fn draw_border(
     origin: TuiScreenPosition,
     size: TuiSize,
@@ -285,42 +296,26 @@ fn draw_border(
     let multi_row = size.height > 1;
 
     for x in 0..size.width {
-        put(surface, origin.offset(i32::from(x), 0), "─", style);
+        put(surface, origin.offset(i32::from(x), 0), "▁", style);
         if multi_row {
             put(
                 surface,
                 origin.offset(i32::from(x), i32::from(bottom)),
-                "─",
+                "▔",
                 style,
             );
         }
     }
-    for y in 0..size.height {
-        put(surface, origin.offset(0, i32::from(y)), "│", style);
+    for y in 1..bottom {
+        put(surface, origin.offset(0, i32::from(y)), "▏", style);
         if multi_column {
             put(
                 surface,
                 origin.offset(i32::from(right), i32::from(y)),
-                "│",
+                "▕",
                 style,
             );
         }
-    }
-
-    put(surface, origin, "┌", style);
-    if multi_column {
-        put(surface, origin.offset(i32::from(right), 0), "┐", style);
-    }
-    if multi_row {
-        put(surface, origin.offset(0, i32::from(bottom)), "└", style);
-    }
-    if multi_column && multi_row {
-        put(
-            surface,
-            origin.offset(i32::from(right), i32::from(bottom)),
-            "┘",
-            style,
-        );
     }
 }
 

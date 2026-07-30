@@ -20,8 +20,9 @@ use warp::tui_export::{
     AIBlockModelHelper, AIBlockOutputStatus, AIConversationId, BlockId, BlocklistAIActionEvent,
     BlocklistAIActionModel, BlocklistAIHistoryModel, CancellationReason,
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, MessageId, ModelEvent,
-    ModelEventDispatcher, ReceivedMessageDisplay, SummarizationType, TerminalModel, TodoOperation,
-    TodoStatus, failed_output_presentation, should_show_failed_output_usage_notice,
+    ModelEventDispatcher, ReceivedMessageDisplay, RenderableAIError, SummarizationType,
+    TerminalModel, TodoOperation, TodoStatus, failed_output_presentation,
+    should_show_failed_output_usage_notice,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::MouseStateHandle;
@@ -56,11 +57,12 @@ use crate::tui_markdown::{
 };
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
 use crate::tui_review_comments::render_review_comments_tool_call;
-const PLANS_URL: &str = "https://www.warp.dev/pricing";
-const BYOK_DOCS_URL: &str =
-    "https://docs.warp.dev/agent-platform/inference/bring-your-own-api-key/";
-const COMPARE_PLANS_LABEL: &str = "Compare plans";
-const USE_YOUR_OWN_API_KEYS_LABEL: &str = "Use your own API keys";
+pub(crate) const OUT_OF_CREDITS_URL: &str = "https://www.warp.dev/pricing";
+const OUT_OF_CREDITS_TITLE: &str = "I’m sorry, I couldn’t complete that request.";
+const OUT_OF_CREDITS_DETAIL: &str =
+    "In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits.";
+const OUT_OF_CREDITS_ACTION_LABEL: &str = "Get started with AI";
+const OUT_OF_CREDITS_ACTION_HINT: &str = "(ctrl+o)";
 const FAILURE_WARNING_PREFIX: &str = "⚠ ";
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -172,8 +174,7 @@ impl CollapsibleSectionStates {
 
 fn render_failure_section(
     presentation: &FailedOutputPresentation,
-    compare_plans_hover_state: &MouseStateHandle,
-    byok_hover_state: &MouseStateHandle,
+    out_of_credits_hover_state: &MouseStateHandle,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
@@ -201,59 +202,52 @@ fn render_failure_section(
             (detail.clone(), body_style),
         ])
         .finish(),
-        FailedOutputPresentation::OutOfCredits {
-            message,
-            can_use_own_api_keys,
-        } => {
+        FailedOutputPresentation::OutOfCredits { .. } => {
             let primary_style = builder.primary_text_style();
             let link_style = primary_style.add_modifier(Modifier::UNDERLINED);
-            let (title, detail) = message.split_once("\n\n").unwrap_or((message.as_str(), ""));
-            let compare_plans = TuiHoverable::new(
-                compare_plans_hover_state.clone(),
-                TuiText::new(COMPARE_PLANS_LABEL)
+            let action = TuiHoverable::new(
+                out_of_credits_hover_state.clone(),
+                TuiText::new(OUT_OF_CREDITS_ACTION_LABEL)
                     .with_style(link_style)
                     .finish(),
             )
-            .on_click(|_, app| app.open_url(PLANS_URL))
+            .on_click(|_, app| app.open_url(OUT_OF_CREDITS_URL))
             .finish();
-            let mut actions = TuiFlex::row()
+            let actions = TuiFlex::row()
                 .child(TuiText::new("  ").with_style(primary_style).finish())
-                .child(compare_plans);
-            if *can_use_own_api_keys {
-                actions = actions
-                    .child(
-                        TuiText::new("  or  ")
-                            .with_style(builder.muted_text_style())
+                .child(action)
+                .child(TuiText::new(" ").with_style(primary_style).finish())
+                .child(
+                    TuiText::new(OUT_OF_CREDITS_ACTION_HINT)
+                        .with_style(builder.accent_text_style())
+                        .finish(),
+                )
+                .finish();
+            TuiFlex::column()
+                .child(
+                    TuiText::from_spans([
+                        (FAILURE_WARNING_PREFIX.to_owned(), error_style),
+                        (OUT_OF_CREDITS_TITLE.to_owned(), primary_style),
+                    ])
+                    .finish(),
+                )
+                .child(
+                    TuiContainer::new(
+                        TuiText::new(OUT_OF_CREDITS_DETAIL)
+                            .with_style(primary_style)
                             .finish(),
                     )
-                    .child(
-                        TuiHoverable::new(
-                            byok_hover_state.clone(),
-                            TuiText::new(USE_YOUR_OWN_API_KEYS_LABEL)
-                                .with_style(link_style)
-                                .finish(),
-                        )
-                        .on_click(|_, app| app.open_url(BYOK_DOCS_URL))
-                        .finish(),
-                    );
-            }
-            let mut content = TuiFlex::column().child(
-                TuiText::from_spans([
-                    (FAILURE_WARNING_PREFIX.to_owned(), error_style),
-                    (title.to_owned(), primary_style),
-                ])
-                .finish(),
-            );
-            if !detail.is_empty() {
-                content = content.child(
-                    TuiText::new(format!("  {detail}"))
+                    .with_padding_left(2)
+                    .finish(),
+                )
+                .child(TuiText::new(" ").finish())
+                .child(actions)
+                .child(TuiText::new(" ").finish())
+                .child(
+                    TuiText::new(format!("  {OUT_OF_CREDITS_URL}"))
                         .with_style(primary_style)
                         .finish(),
-                );
-            }
-            content
-                .child(TuiText::new(" ").finish())
-                .child(actions.finish())
+                )
                 .finish()
         }
         FailedOutputPresentation::ContextWindowExceeded { message } => TuiText::from_spans([
@@ -280,17 +274,9 @@ fn failure_text(presentation: &FailedOutputPresentation) -> String {
             fallback_message: message,
         }
         | FailedOutputPresentation::ContextWindowExceeded { message } => message.clone(),
-        FailedOutputPresentation::OutOfCredits {
-            message,
-            can_use_own_api_keys,
-        } => {
-            let actions = if *can_use_own_api_keys {
-                format!("{COMPARE_PLANS_LABEL}  or  {USE_YOUR_OWN_API_KEYS_LABEL}")
-            } else {
-                COMPARE_PLANS_LABEL.to_owned()
-            };
-            format!("{message}\n\n{actions}")
-        }
+        FailedOutputPresentation::OutOfCredits { .. } => format!(
+            "{OUT_OF_CREDITS_TITLE}\n  {OUT_OF_CREDITS_DETAIL}\n\n  {OUT_OF_CREDITS_ACTION_LABEL} {OUT_OF_CREDITS_ACTION_HINT}\n\n  {OUT_OF_CREDITS_URL}"
+        ),
         FailedOutputPresentation::InvalidApiKey { title, detail } => {
             format!("{title}\n{detail}")
         }
@@ -378,8 +364,7 @@ pub(super) struct TuiAIBlock {
     /// Per-message UI state for this exchange's collapsible sections
     /// (thinking blocks and task lists).
     collapsible_states: CollapsibleSectionStates,
-    compare_plans_hover_state: MouseStateHandle,
-    byok_hover_state: MouseStateHandle,
+    out_of_credits_hover_state: MouseStateHandle,
     /// Every tool-call action id seen in this exchange's output, maintained by
     /// [`Self::sync_action_views`]. Mirrors the GUI `AIBlock`'s
     /// `requested_action_ids` so per-action-event lookups are a cheap set
@@ -421,8 +406,7 @@ impl TuiAIBlock {
             action_model: action_model.clone(),
             terminal_model,
             collapsible_states: Default::default(),
-            compare_plans_hover_state: MouseStateHandle::default(),
-            byok_hover_state: MouseStateHandle::default(),
+            out_of_credits_hover_state: MouseStateHandle::default(),
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
             code_block_views: HashMap::new(),
@@ -1100,6 +1084,33 @@ impl TuiAIBlock {
         self.last_measured_width.set(Some(width));
     }
 
+    /// Returns the failure that is visible in this block.
+    ///
+    /// This is the single source of truth for both failure rendering and
+    /// contextual failure actions. Restored active failures remain visible;
+    /// restoration only suppresses the separate usage notice.
+    fn visible_failure<'a>(
+        &self,
+        status: &'a AIBlockOutputStatus,
+        app: &AppContext,
+    ) -> Option<(&'a RenderableAIError, FailedOutputPresentation)> {
+        if !self.block_model.request_type(app).is_active() {
+            return None;
+        }
+        let AIBlockOutputStatus::Failed { error, .. } = status else {
+            return None;
+        };
+        failed_output_presentation(error, app).map(|presentation| (error, presentation))
+    }
+
+    pub(super) fn has_out_of_credits_failure(&self, app: &AppContext) -> bool {
+        let status = self.block_model.status(app);
+        matches!(
+            self.visible_failure(&status, app),
+            Some((_, FailedOutputPresentation::OutOfCredits { .. }))
+        )
+    }
+
     /// Returns this block's wrapped height using the live layout context.
     pub(super) fn desired_height(
         &self,
@@ -1307,12 +1318,9 @@ impl TuiAIBlock {
                 )
             }
             TuiAIBlockSection::AgentMessage(_) => return None,
-            TuiAIBlockSection::Failure(presentation) => render_failure_section(
-                presentation,
-                &self.compare_plans_hover_state,
-                &self.byok_hover_state,
-                app,
-            ),
+            TuiAIBlockSection::Failure(presentation) => {
+                render_failure_section(presentation, &self.out_of_credits_hover_state, app)
+            }
             TuiAIBlockSection::UsageNotice => render_usage_notice(app),
         })
     }
@@ -1446,10 +1454,7 @@ impl TuiAIBlock {
             }
         }
 
-        if self.block_model.request_type(app).is_active()
-            && let AIBlockOutputStatus::Failed { error, .. } = &status
-            && let Some(presentation) = failed_output_presentation(error, app)
-        {
+        if let Some((error, presentation)) = self.visible_failure(&status, app) {
             sections.push(TuiAIBlockSection::Failure(presentation));
             if should_show_failed_output_usage_notice(
                 error,
@@ -1699,12 +1704,9 @@ impl TuiAIBlock {
                     self.conversation_id,
                     app,
                 ),
-                TuiAIBlockSection::Failure(presentation) => render_failure_section(
-                    presentation,
-                    &self.compare_plans_hover_state,
-                    &self.byok_hover_state,
-                    app,
-                ),
+                TuiAIBlockSection::Failure(presentation) => {
+                    render_failure_section(presentation, &self.out_of_credits_hover_state, app)
+                }
                 TuiAIBlockSection::UsageNotice => render_usage_notice(app),
             };
 

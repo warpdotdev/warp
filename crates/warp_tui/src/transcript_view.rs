@@ -392,6 +392,12 @@ impl TuiTranscriptView {
             .any(|block| block.as_ref(ctx).has_exposed_plan(ctx))
     }
 
+    pub(super) fn latest_agent_block_is_out_of_credits(&self, ctx: &AppContext) -> bool {
+        self.agent_blocks_in_canonical_order()
+            .last()
+            .is_some_and(|block| block.as_ref(ctx).has_out_of_credits_failure(ctx))
+    }
+
     /// Returns the view id of the agent block rendering `exchange_id`, if any.
     fn view_id_for_exchange(
         &self,
