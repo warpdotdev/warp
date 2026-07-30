@@ -3,6 +3,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
+use warp::settings::SettingsFileError;
 use warp::tui_export::{
     AIConversationAutoexecuteMode, ActiveSession, Appearance, BlocklistAIActionModel,
     BlocklistAIHistoryModel, ConversationSelection, ConversationSelectionHandle,
@@ -137,6 +138,17 @@ pub(crate) fn add_test_terminal_session(
     ViewHandle<TuiTerminalSessionView>,
     ModelHandle<Box<dyn TerminalManagerTrait>>,
 ) {
+    add_test_terminal_session_with_settings_file_error(app, window_id, None)
+}
+
+pub(crate) fn add_test_terminal_session_with_settings_file_error(
+    app: &mut App,
+    window_id: WindowId,
+    initial_settings_file_error: Option<SettingsFileError>,
+) -> (
+    ViewHandle<TuiTerminalSessionView>,
+    ModelHandle<Box<dyn TerminalManagerTrait>>,
+) {
     app.update(|ctx| {
         if !ctx.has_singleton_model::<ZeroStateAnimationConfig>() {
             ctx.add_singleton_model(|_| ZeroStateAnimationConfig::default());
@@ -149,6 +161,7 @@ pub(crate) fn add_test_terminal_session(
                 TuiExitSummaryHandle::default(),
                 false,
                 AIConversationAutoexecuteMode::RespectUserSettings,
+                initial_settings_file_error,
                 ctx,
             )
         });

@@ -159,6 +159,7 @@ pub use crate::code_review::git_repo_model::{
 };
 pub use crate::code_review::github_repo_model::GitHubRepoModel;
 pub use crate::completer::SessionContext;
+pub use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub use crate::persistence::PersistenceWriter;
 pub use crate::prefix::longest_common_prefix;
 pub use crate::search::slash_command_menu::static_commands::commands::{
@@ -243,6 +244,7 @@ pub use crate::tui_test_support::{
     blocklist_ai_history_model_with_queries, queue_tui_permission_action,
     register_tui_input_mode_test_settings, register_tui_session_view_test_singletons,
 };
+pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{
     MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES, MIME_SNIFF_BYTES, ProcessImageResult,
     infer_mime_type, is_supported_image_mime_type, process_image_for_agent,

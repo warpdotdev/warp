@@ -12,8 +12,8 @@ use parking_lot::FairMutex;
 use warp::appearance::AppearanceEvent;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{
-    AISettings, AISettingsChangedEvent, AppEditorSettings, TuiStatuslineConfig, TuiTheme,
-    TuiThemeSettings, TuiVoiceSettings,
+    AISettings, AISettingsChangedEvent, AppEditorSettings, SettingsFileError, TuiStatuslineConfig,
+    TuiTheme, TuiThemeSettings, TuiVoiceSettings,
 };
 use warp::tui_export::{
     AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentExchangeId,
@@ -36,11 +36,11 @@ use warp::tui_export::{
     TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiMcpAction,
     TuiMcpManager, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
     TuiUpArrowHistoryItemKind, TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource,
-    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, block_context_from_terminal_model,
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
-    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
-    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent,
+    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
+    export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event,
+    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, slash_commands, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -167,6 +167,15 @@ const RUNNING_COMMAND_DETACH_HINT: &str = "ctrl-c to return to command";
 /// Replaces the exit hint when viewing a child agent conversation.
 pub(crate) const CTRL_C_KILL_CHILD_HINT: &str = "ctrl-c again to kill child agent";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
+const SETTINGS_PARSE_FAILED_HINT: &str = "Settings failed to load: invalid syntax.";
+const SETTINGS_INVALID_VALUES_HINT: &str = "Settings failed to load: invalid values.";
+
+fn settings_file_error_hint(error: &SettingsFileError) -> &'static str {
+    match error {
+        SettingsFileError::FileParseFailed(_) => SETTINGS_PARSE_FAILED_HINT,
+        SettingsFileError::InvalidSettings(_) => SETTINGS_INVALID_VALUES_HINT,
+    }
+}
 
 /// Fallback strings for the /status status menu.
 const STATUS_UNAVAILABLE: &str = "\u{2014}"; // em dash
@@ -1249,6 +1258,7 @@ impl TuiTerminalSessionView {
         exit_summary: TuiExitSummaryHandle,
         keyboard_enhancement_supported: bool,
         default_autoexecute_mode: AIConversationAutoexecuteMode,
+        initial_settings_file_error: Option<SettingsFileError>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let TerminalSurfaceInit {
@@ -1266,6 +1276,11 @@ impl TuiTerminalSessionView {
             .set_transcript_scope(TranscriptScope::Unfiltered);
         ctx.subscribe_to_model(&Appearance::handle(ctx), |view, _, event, ctx| {
             view.handle_appearance_event(event, ctx);
+        });
+        ctx.subscribe_to_model(&WarpConfig::handle(ctx), |view, _, event, ctx| {
+            if let WarpConfigUpdateEvent::SettingsErrors(error) = event {
+                view.show_settings_file_error(error, ctx);
+            }
         });
 
         let terminal_surface_id: EntityId = ctx.view_id();
@@ -1976,6 +1991,9 @@ impl TuiTerminalSessionView {
         };
         if let Some(failure) = initial_zero_state_load_failure {
             view.show_zero_state_ascii_load_failure(failure, ctx);
+        }
+        if let Some(error) = initial_settings_file_error {
+            view.show_settings_file_error(&error, ctx);
         }
         view
     }
@@ -3000,6 +3018,10 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.show_error_hint(zero_state_ascii_load_failure_hint(failure).to_owned(), ctx);
+    }
+
+    fn show_settings_file_error(&mut self, error: &SettingsFileError, ctx: &mut ViewContext<Self>) {
+        self.show_error_hint(settings_file_error_hint(error).to_owned(), ctx);
     }
 
     /// Displays success-colored feedback in the transient footer slot.

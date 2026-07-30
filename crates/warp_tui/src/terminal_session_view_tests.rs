@@ -10,8 +10,9 @@ use instant::Instant;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
 use warp::settings::{
-    AISettings, TuiStatuslineConfig, TuiStatuslineItem, TuiTheme, TuiThemeSettings,
-    TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiVoiceSettings, TuiZeroStateObject,
+    AISettings, SettingsFileError, TuiStatuslineConfig, TuiStatuslineItem, TuiTheme,
+    TuiThemeSettings, TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiVoiceSettings,
+    TuiZeroStateObject,
 };
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
@@ -21,8 +22,9 @@ use warp::tui_export::{
     Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
     LongRunningCommandControlState, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
     SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
-    TuiMcpServerId, TuiUpArrowHistoryItemKind, UserTakeOverReason, export_conversation_markdown,
-    light_theme, register_tui_session_view_test_singletons, slash_commands,
+    TuiMcpServerId, TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig,
+    WarpConfigUpdateEvent, export_conversation_markdown, light_theme,
+    register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::channel::Channel;
 use warp_core::features::FeatureFlag;
@@ -92,7 +94,10 @@ use crate::statusline_config_view::TuiStatuslineConfigEvent;
 use crate::terminal_background::TuiHostTerminalBackground;
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
-use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
+use crate::test_fixtures::{
+    add_test_semantic_selection, add_test_terminal_session,
+    add_test_terminal_session_with_settings_file_error,
+};
 use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::transient_hint::TransientHintTone;
 use crate::tui_builder::TuiUiBuilder;
@@ -977,6 +982,42 @@ fn zero_state_reload_failure_renders_as_an_error_footer_hint() {
 }
 
 #[test]
+fn settings_reload_failure_renders_as_an_error_footer_hint() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        app.update(|ctx| {
+            WarpConfig::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(WarpConfigUpdateEvent::SettingsErrors(
+                    SettingsFileError::InvalidSettings(vec!["Theme".to_owned()]),
+                ));
+            });
+        });
+
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, tone)| (text.to_owned(), tone))
+            }),
+            Some((
+                super::SETTINGS_INVALID_VALUES_HINT.to_owned(),
+                TransientHintTone::Error
+            ))
+        );
+
+        app.read(|ctx| {
+            let footer = view.as_ref(ctx).render_footer(ctx).finish();
+            assert_eq!(
+                render_element(footer, ctx, 120).to_lines(),
+                vec![super::SETTINGS_INVALID_VALUES_HINT.to_owned()]
+            );
+        });
+    });
+}
+
+#[test]
 fn theme_slash_command_accepts_direct_selection_and_rejects_invalid_values() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -1097,6 +1138,38 @@ fn zero_state_initial_load_failure_shows_an_error_footer_hint() {
                 TransientHintTone::Error
             ))
         );
+    });
+}
+
+#[test]
+fn startup_settings_parse_failure_renders_as_an_error_footer_hint() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let view = add_focus_test_session_with_settings_file_error(
+            &mut app,
+            &fixture,
+            SettingsFileError::FileParseFailed("expected a value".to_owned()),
+        );
+
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, tone)| (text.to_owned(), tone))
+            }),
+            Some((
+                super::SETTINGS_PARSE_FAILED_HINT.to_owned(),
+                TransientHintTone::Error
+            ))
+        );
+
+        app.read(|ctx| {
+            let footer = view.as_ref(ctx).render_footer(ctx).finish();
+            assert_eq!(
+                render_element(footer, ctx, 120).to_lines(),
+                vec![super::SETTINGS_PARSE_FAILED_HINT.to_owned()]
+            );
+        });
     });
 }
 
@@ -2131,6 +2204,19 @@ fn add_focus_test_session(
         TuiSessions::register_session(&fixture.sessions, view.clone(), manager, focus, ctx)
     });
     (view, session_id)
+}
+
+fn add_focus_test_session_with_settings_file_error(
+    app: &mut App,
+    fixture: &FocusTestFixture,
+    error: SettingsFileError,
+) -> ViewHandle<super::TuiTerminalSessionView> {
+    let (view, manager) =
+        add_test_terminal_session_with_settings_file_error(app, fixture.window_id, Some(error));
+    app.update(|ctx| {
+        TuiSessions::register_session(&fixture.sessions, view.clone(), manager, true, ctx);
+    });
+    view
 }
 
 fn render_element(element: Box<dyn TuiElement>, ctx: &AppContext, width: u16) -> TuiBuffer {
