@@ -211,31 +211,78 @@ impl CustomModelRouter {
         match &self.routing {
             CustomModelRouting::Complexity(c) => {
                 if c.default.trim().is_empty() {
-                    return Err(
-                        "complexity routing requires a non-empty `default` model".to_owned()
-                    );
+                    return Err(crate::menu_label(
+                        "settings.custom_router.routes.complexity_requires_default",
+                        "complexity routing requires a non-empty `default` model",
+                    )
+                    .to_owned());
                 }
-                validate_target(&c.default).map_err(|e| format!("`default`: {e}"))?;
+                validate_target(&c.default).map_err(|e| {
+                    i18n::interpolate(
+                        crate::menu_label(
+                            "settings.custom_router.routes.default_error",
+                            "`default`: {e}",
+                        ),
+                        &[("e", e)],
+                    )
+                    .into_owned()
+                })?;
                 for (bucket, target) in
                     [("easy", &c.easy), ("medium", &c.medium), ("hard", &c.hard)]
                 {
                     if let Some(model) = target {
-                        validate_target(model)
-                            .map_err(|e| format!("complexity bucket `{bucket}`: {e}"))?;
+                        validate_target(model).map_err(|e| {
+                            i18n::interpolate(
+                                crate::menu_label(
+                                    "settings.custom_router.routes.complexity_bucket_error",
+                                    "complexity bucket `{bucket}`: {e}",
+                                ),
+                                &[("bucket", bucket.to_string()), ("e", e)],
+                            )
+                            .into_owned()
+                        })?;
                     }
                 }
             }
             CustomModelRouting::Prompt(p) => {
                 if p.default_model.trim().is_empty() {
-                    return Err("prompt routing requires a non-empty `default` model".to_owned());
+                    return Err(crate::menu_label(
+                        "settings.custom_router.routes.prompt_requires_default",
+                        "prompt routing requires a non-empty `default` model",
+                    )
+                    .to_owned());
                 }
-                validate_target(&p.default_model).map_err(|e| format!("`default`: {e}"))?;
+                validate_target(&p.default_model).map_err(|e| {
+                    i18n::interpolate(
+                        crate::menu_label(
+                            "settings.custom_router.routes.default_error",
+                            "`default`: {e}",
+                        ),
+                        &[("e", e)],
+                    )
+                    .into_owned()
+                })?;
                 for (index, rule) in p.rules.iter().enumerate() {
                     if rule.description.trim().is_empty() {
-                        return Err(format!("prompt rule {index}: `description` is empty"));
+                        return Err(i18n::interpolate(
+                            crate::menu_label(
+                                "settings.custom_router.routes.prompt_rule_description_empty",
+                                "prompt rule {index}: `description` is empty",
+                            ),
+                            &[("index", index.to_string())],
+                        )
+                        .into_owned());
                     }
-                    validate_target(&rule.model)
-                        .map_err(|e| format!("prompt rule {index}: {e}"))?;
+                    validate_target(&rule.model).map_err(|e| {
+                        i18n::interpolate(
+                            crate::menu_label(
+                                "settings.custom_router.routes.prompt_rule_error",
+                                "prompt rule {index}: {e}",
+                            ),
+                            &[("index", index.to_string()), ("e", e)],
+                        )
+                        .into_owned()
+                    })?;
                 }
             }
         }
@@ -260,12 +307,21 @@ fn local_id_from_path(source_path: Option<&Path>, fallback: &str) -> String {
 fn validate_target(model_id: &str) -> Result<(), String> {
     let trimmed = model_id.trim();
     if trimmed.is_empty() {
-        return Err("target model id is empty".to_owned());
+        return Err(crate::menu_label(
+            "settings.custom_router.routes.target_empty",
+            "target model id is empty",
+        )
+        .to_owned());
     }
     if is_auto_target(trimmed) {
-        return Err(format!(
-            "target `{trimmed}` is an auto model; custom model routers must route to concrete models"
-        ));
+        return Err(i18n::interpolate(
+            crate::menu_label(
+                "settings.custom_router.routes.target_is_auto",
+                "target `{trimmed}` is an auto model; custom model routers must route to concrete models",
+            ),
+            &[("trimmed", trimmed.to_string())],
+        )
+        .into_owned());
     }
     Ok(())
 }

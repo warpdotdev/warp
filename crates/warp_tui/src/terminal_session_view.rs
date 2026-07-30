@@ -37,7 +37,7 @@ use warp::tui_export::{
     TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
     TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
     block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
-    export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event,
+    export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event, menu_label,
     prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
     record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, slash_commands, throttle,
@@ -494,11 +494,19 @@ enum ConversationRestoreState {
 }
 
 fn export_file_success_message(export: &ConversationFileExport) -> String {
-    let path = export.path().display();
+    let path = export.path().display().to_string();
     if export.overwrote_existing() {
-        format!("Conversation exported to {path} (overwrote existing file)")
+        menu_label(
+            "tui.terminal.export_overwrote",
+            "Conversation exported to {path} (overwrote existing file)",
+        )
+        .replace("{path}", &path)
     } else {
-        format!("Conversation exported to {path}")
+        menu_label(
+            "tui.terminal.export_success",
+            "Conversation exported to {path}",
+        )
+        .replace("{path}", &path)
     }
 }
 
@@ -642,7 +650,7 @@ pub(crate) struct TuiTerminalSessionView {
     /// the same way the request path does.
     terminal_surface_id: EntityId,
     /// Armed by a ctrl-c press; a second press while armed exits the TUI.
-    /// The footer shows [`CTRL_C_EXIT_HINT`] while armed.
+    /// The footer shows the localized ctrl-c exit hint while armed.
     exit_confirmation: ExitConfirmation,
     /// Credits⇄cost display state for the footer's clickable usage entry.
     usage_toggle: UsageToggle,
@@ -1481,8 +1489,11 @@ impl TuiTerminalSessionView {
             TuiConversationMenuEvent::Updated => ctx.notify(),
             TuiConversationMenuEvent::CloudMetadataUnavailable => {
                 view.show_transient_hint(
-                    "Could not load cloud conversations. Showing local conversations only."
-                        .to_owned(),
+                    menu_label(
+                        "tui.conversation.cloud_load_failed",
+                        "Could not load cloud conversations. Showing local conversations only.",
+                    )
+                    .to_owned(),
                     ctx,
                 );
             }
@@ -1644,8 +1655,12 @@ impl TuiTerminalSessionView {
             TuiTranscriptViewEvent::SelectionEnded(text) => match copy_to_clipboard(text) {
                 Ok(()) => view.show_copy_hint(ctx),
                 Err(error) => {
-                    log::warn!("Failed to copy TUI selection: {error}");
-                    view.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
+                    log::warn!("Failed to copy TUI selection via OSC 52: {error}");
+                    view.show_transient_hint(
+                        menu_label("tui.footer.copy_failed", "failed to copy to clipboard")
+                            .to_owned(),
+                        ctx,
+                    );
                 }
             },
             TuiTranscriptViewEvent::BlockingStateChanged => {
@@ -2535,7 +2550,11 @@ impl TuiTerminalSessionView {
             Some(CloudConversationData::CLIAgent(_)) => {
                 self.fail_conversation_restore(
                     request_id,
-                    "Warp Agent CLI only supports Oz/Warp conversations.".to_owned(),
+                    menu_label(
+                        "tui.terminal.restore_only_oz_supported",
+                        "Warp Agent CLI only supports Oz/Warp conversations.",
+                    )
+                    .to_owned(),
                     ctx,
                 );
                 return;
@@ -2543,7 +2562,11 @@ impl TuiTerminalSessionView {
             None => {
                 self.fail_conversation_restore(
                     request_id,
-                    "The conversation could not be loaded.".to_owned(),
+                    menu_label(
+                        "tui.terminal.restore_load_failed",
+                        "The conversation could not be loaded.",
+                    )
+                    .to_owned(),
                     ctx,
                 );
                 return;
@@ -2561,7 +2584,11 @@ impl TuiTerminalSessionView {
         if !matches_target {
             self.fail_conversation_restore(
                 request_id,
-                "The restored conversation did not match the requested conversation.".to_owned(),
+                menu_label(
+                    "tui.terminal.restore_token_mismatch",
+                    "The restored conversation did not match the requested conversation.",
+                )
+                .to_owned(),
                 ctx,
             );
             return;
@@ -3005,7 +3032,10 @@ impl TuiTerminalSessionView {
 
     /// Displays success-colored feedback in the transient footer slot.
     fn show_copy_hint(&mut self, ctx: &mut ViewContext<Self>) {
-        self.show_success_hint(COPY_SELECTION_HINT.to_owned(), ctx);
+        self.show_success_hint(
+            menu_label("tui.footer.copied_hint", "copied to clipboard").to_owned(),
+            ctx,
+        );
     }
 
     /// Handles a ctrl-c press.
@@ -3483,7 +3513,14 @@ impl TuiTerminalSessionView {
             return;
         };
         if is_pty_busy {
-            self.show_transient_hint(COMMAND_ALREADY_RUNNING_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.terminal.cannot_run_command",
+                    "cannot run — command already running",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
 
@@ -3718,7 +3755,14 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .local_skills_available(ctx)
         {
-            self.show_transient_hint(LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "terminal.skills.remote_execution_error",
+                    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         let result = self.ai_controller.update(ctx, |controller, ctx| {
@@ -3773,7 +3817,14 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         if self.is_conversation_restore_loading() {
-            self.show_transient_hint(SWITCH_LOADING_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.loading",
+                    "Another conversation is already loading.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         if !self
@@ -3781,7 +3832,14 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .can_start_new_conversation()
         {
-            self.show_transient_hint(SWITCH_COMMAND_RUNNING_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.command_running",
+                    "Cannot switch conversations while a command is in progress.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         let current_conversation_is_busy = self
@@ -3792,13 +3850,27 @@ impl TuiTerminalSessionView {
                 !conversation.is_empty() && !conversation.status().is_done()
             });
         if current_conversation_is_busy {
-            self.show_transient_hint(SWITCH_CONVERSATION_RUNNING_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.conversation_running",
+                    "Cannot switch conversations while the current conversation is in progress.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
 
         let Some(entry) = AgentConversationsModel::as_ref(ctx).get_entry_by_id(&entry_id, ctx)
         else {
-            self.show_transient_hint(SWITCH_UNAVAILABLE_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.unavailable",
+                    "That conversation is no longer available.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         };
         if self
@@ -3807,7 +3879,14 @@ impl TuiTerminalSessionView {
             .classify_entry(&entry, ctx)
             != AgentConversationListEntryState::Available
         {
-            self.show_transient_hint(SWITCH_UNAVAILABLE_HINT.to_owned(), ctx);
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.switch.unavailable",
+                    "That conversation is no longer available.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         let target = match (
@@ -3817,7 +3896,14 @@ impl TuiTerminalSessionView {
             (Some(conversation_id), _) => TuiConversationRestoreTarget::Local(conversation_id),
             (None, Some(server_token)) => TuiConversationRestoreTarget::Server(server_token),
             (None, None) => {
-                self.show_transient_hint(SWITCH_UNAVAILABLE_HINT.to_owned(), ctx);
+                self.show_transient_hint(
+                    menu_label(
+                        "tui.conversation.switch.unavailable",
+                        "That conversation is no longer available.",
+                    )
+                    .to_owned(),
+                    ctx,
+                );
                 return;
             }
         };
@@ -3833,7 +3919,15 @@ impl TuiTerminalSessionView {
             preferences.update_active_profile_base_model(id, Some(terminal_view_id), ctx)
         });
         if !persisted {
-            self.show_transient_hint(MODEL_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
+            log::warn!("Failed to persist the TUI agent model");
+            self.show_transient_hint(
+                menu_label(
+                    "tui.conversation.model_persistence_failed",
+                    "Could not save the selected model.",
+                )
+                .to_owned(),
+                ctx,
+            );
             return;
         }
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
@@ -4093,8 +4187,11 @@ impl TuiTerminalSessionView {
                     .filter(|argument| !argument.is_empty())
                 else {
                     self.show_transient_hint(
-                        "Please describe the project you want to create after /create-new-project"
-                            .to_owned(),
+                        menu_label(
+                            "tui.terminal.create_new_project_missing_query",
+                            "Please describe the project you want to create after /create-new-project",
+                        )
+                        .to_owned(),
                         ctx,
                     );
                     return;
@@ -4116,17 +4213,32 @@ impl TuiTerminalSessionView {
                     match copy_to_clipboard(&markdown) {
                         Ok(()) => {
                             self.show_success_hint(
-                                "Conversation copied to clipboard".to_owned(),
+                                menu_label(
+                                    "tui.terminal.copied_to_clipboard",
+                                    "Conversation copied to clipboard",
+                                )
+                                .to_owned(),
                                 ctx,
                             );
                         }
                         Err(error) => {
-                            log::warn!("Failed to export TUI conversation: {error}");
-                            self.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
+                            log::warn!("Failed to export TUI conversation via OSC 52: {error}");
+                            self.show_transient_hint(
+                                menu_label("tui.footer.copy_failed", "failed to copy to clipboard")
+                                    .to_owned(),
+                                ctx,
+                            );
                         }
                     }
                 } else {
-                    self.show_transient_hint("No active conversation to export".to_owned(), ctx);
+                    self.show_transient_hint(
+                        menu_label(
+                            "tui.terminal.no_active_conversation_to_export",
+                            "No active conversation to export",
+                        )
+                        .to_owned(),
+                        ctx,
+                    );
                 }
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
@@ -4137,7 +4249,14 @@ impl TuiTerminalSessionView {
                     .as_ref(ctx)
                     .selected_conversation(ctx)
                 else {
-                    self.show_transient_hint("No active conversation to export".to_owned(), ctx);
+                    self.show_transient_hint(
+                        menu_label(
+                            "tui.terminal.no_active_conversation_to_export",
+                            "No active conversation to export",
+                        )
+                        .to_owned(),
+                        ctx,
+                    );
                     return;
                 };
                 let title = conversation.title();
@@ -4795,9 +4914,9 @@ impl TuiTerminalSessionView {
                     .and_then(|exchange| exchange.time_since_start());
                 if let Some(elapsed) = warping_elapsed {
                     let label = if conversation.is_summarizing() {
-                        "Summarizing conversation"
+                        menu_label("tui.warping.summarizing", "Summarizing conversation")
                     } else {
-                        "Warping"
+                        menu_label("tui.warping.label", "Warping")
                     };
                     content = content.child(
                         TuiContainer::new(self.render_warping_indicator(label, elapsed, ctx))

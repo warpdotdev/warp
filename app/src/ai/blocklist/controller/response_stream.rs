@@ -157,6 +157,7 @@ impl ResponseStream {
             event,
         ))));
     }
+
     #[cfg(test)]
     pub fn new_for_test(id: ResponseStreamId) -> Self {
         let (cancellation_tx, _rx) = oneshot::channel();

@@ -1,0 +1,15 @@
+[package]
+name = "i18n"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+log = { workspace = true }
+serde_yaml.workspace = true
+sys-locale = "0.3.2"
+
+[dev-dependencies]
+regex.workspace = true

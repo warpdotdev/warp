@@ -10,6 +10,7 @@ pub use ::ai::agent::{
 };
 pub use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 pub use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+pub use crate::menu_label;
 pub use repo_metadata::repositories::RepoDetectionSource;
 #[cfg(feature = "voice_input")]
 pub use voice_input::{

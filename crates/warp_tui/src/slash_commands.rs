@@ -30,7 +30,6 @@ use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestions
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, false, false);
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct TuiSlashCommandRow {
     pub(crate) title: String,
@@ -67,7 +66,6 @@ fn argument_hint_text_for_parsed_input(
         .map(|hint| hint.text)
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) enum TuiSlashCommandState {
     #[default]
@@ -277,9 +275,13 @@ impl TuiSlashCommandModel {
         };
         let status = if list.rows().is_empty() {
             Some(if list.is_loading() {
-                TuiInlineMenuStatus::Loading("Loading slash commands…".to_owned())
+                TuiInlineMenuStatus::Loading(
+                    menu_label("tui.inline_menu.loading", "Loading slash commands…").to_owned(),
+                )
             } else {
-                TuiInlineMenuStatus::Empty("No slash commands found".to_owned())
+                TuiInlineMenuStatus::Empty(
+                    menu_label("tui.inline_menu.empty", "No slash commands found").to_owned(),
+                )
             })
         } else {
             None

@@ -1003,16 +1003,16 @@ pub enum Space {
 impl Space {
     pub fn name(&self, app: &AppContext) -> String {
         match self {
-            Space::Personal => "Personal".to_string(),
+            Space::Personal => crate::menu_label("drive.space.personal", "Personal").to_string(),
             Space::Team { team_uid, .. } => {
                 let user_workspaces = UserWorkspaces::as_ref(app);
                 if let Some(team) = user_workspaces.team_from_uid(*team_uid) {
                     team.name.clone()
                 } else {
-                    "Team".to_string()
+                    crate::menu_label("drive.space.team", "Team").to_string()
                 }
             }
-            Space::Shared => "Shared with me".to_string(),
+            Space::Shared => crate::menu_label("drive.space.shared", "Shared with me").to_string(),
         }
     }
 }

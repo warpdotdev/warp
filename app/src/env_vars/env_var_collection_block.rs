@@ -44,9 +44,6 @@ use crate::view_components::compactible_action_button::{
 /// For horizontal padding, use [`INLINE_ACTION_HORIZONTAL_PADDING`] for consistency.
 const ENV_VAR_COLLECTION_BODY_VERTICAL_PADDING: f32 = 16.;
 
-const ENV_VAR_COLLECTION_CANCEL_LABEL: &str = "Cancel";
-const ENV_VAR_COLLECTION_ACCEPT_LABEL: &str = "Run";
-
 lazy_static! {
     static ref CANCEL_ENV_VAR_COLLECTION_KEYSTROKE: Keystroke = Keystroke {
         ctrl: true,
@@ -147,7 +144,7 @@ impl EnvVarCollectionBlock {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let cancel_button = CompactibleActionButton::new(
-            ENV_VAR_COLLECTION_CANCEL_LABEL.to_string(),
+            crate::menu_label("common.cancel", "Cancel").to_string(),
             Some(KeystrokeSource::Fixed(
                 CANCEL_ENV_VAR_COLLECTION_KEYSTROKE.clone(),
             )),
@@ -159,7 +156,7 @@ impl EnvVarCollectionBlock {
         );
 
         let accept_button = CompactibleActionButton::new(
-            ENV_VAR_COLLECTION_ACCEPT_LABEL.to_string(),
+            crate::menu_label("requested_command.accept_label", "Run").to_string(),
             Some(KeystrokeSource::Fixed(
                 ACCEPT_ENV_VAR_COLLECTION_KEYSTROKE.clone(),
             )),
@@ -255,11 +252,12 @@ impl EnvVarCollectionBlock {
     }
 
     fn render_header(&self, app: &AppContext) -> Box<dyn Element> {
-        const COMMAND_WAITING_FOR_USER_MESSAGE: &str =
-            "OK if I run this command and read the output?";
-
         let title: Cow<'static, str> = if self.state == EnvVarCollectionState::WaitingForUser {
-            COMMAND_WAITING_FOR_USER_MESSAGE.into()
+            crate::menu_label(
+                "requested_command.command_waiting_message",
+                "OK if I run this command and read the output?",
+            )
+            .into()
         } else {
             self.command.clone().into()
         };

@@ -97,7 +97,7 @@ impl BlockInsertionMenuState {
 
         if embedded_objects_enabled {
             menu.add_item(
-                MenuItemFields::new("Embed")
+                MenuItemFields::new(crate::menu_label("notebook.block_insertion.embed", "Embed"))
                     .with_icon(Icon::EmbedBlock)
                     .with_on_select_action(EditorViewAction::OpenEmbeddedObjectSearch)
                     .into_item(),
@@ -117,13 +117,16 @@ impl BlockInsertionMenuState {
         }
 
         menu.add_item(
-            MenuItemFields::new("Divider")
-                .with_icon(Icon::HorizontalRuleBlock)
-                .with_on_select_action(EditorViewAction::InsertBlock(
-                    warp_editor::content::text::BlockType::Item(BufferBlockItem::HorizontalRule),
-                ))
-                .with_override_icon_color(Fill::Solid(appearance.theme().ui_warning_color()))
-                .into_item(),
+            MenuItemFields::new(crate::menu_label(
+                "notebook.block_insertion.divider",
+                "Divider",
+            ))
+            .with_icon(Icon::HorizontalRuleBlock)
+            .with_on_select_action(EditorViewAction::InsertBlock(
+                warp_editor::content::text::BlockType::Item(BufferBlockItem::HorizontalRule),
+            ))
+            .with_override_icon_color(Fill::Solid(appearance.theme().ui_warning_color()))
+            .into_item(),
         );
 
         menu
@@ -306,7 +309,13 @@ impl RichTextEditorView {
         })
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Insert block".to_string())
+                .tool_tip(
+                    crate::menu_label(
+                        "notebook.block_insertion.insert_block_tooltip",
+                        "Insert block",
+                    )
+                    .to_string(),
+                )
                 .build()
                 .finish()
         })

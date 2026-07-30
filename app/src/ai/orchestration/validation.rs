@@ -100,7 +100,13 @@ pub fn accept_disabled_reason_with_auth(
         }
     }
     if auth_secret_selection_required(state, ctx) {
-        return Some("Select an API key for this harness to continue.".to_string());
+        return Some(
+            crate::menu_label(
+                "agent.orchestration.select_api_key_to_continue",
+                "Select an API key for this harness to continue.",
+            )
+            .to_string(),
+        );
     }
     None
 }
@@ -127,9 +133,17 @@ pub fn empty_env_recommendation_message(
     }
     let env_count = CloudAmbientAgentEnvironment::get_all(app).len();
     Some(if env_count > 0 {
-        "We recommend selecting an environment for cloud agents.".to_string()
+        crate::menu_label(
+            "agent.orchestration.recommend_selecting_environment",
+            "We recommend selecting an environment for cloud agents.",
+        )
+        .to_string()
     } else {
-        "We recommend creating an environment for cloud agents.".to_string()
+        crate::menu_label(
+            "agent.orchestration.recommend_creating_environment",
+            "We recommend creating an environment for cloud agents.",
+        )
+        .to_string()
     })
 }
 

@@ -103,14 +103,20 @@ impl AuthSecretSelector {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new(NO_SECRET_LABEL, NakedHeaderButtonTheme)
-                .with_size(ButtonSize::AgentInputButton)
-                .with_menu(true)
-                .with_icon(Icon::Key)
-                .with_tooltip(BUTTON_TOOLTIP)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AuthSecretSelectorAction::ToggleMenu);
-                })
+            ActionButton::new(
+                crate::menu_label("agent.ambient.auth_secret.no_secret_label", NO_SECRET_LABEL),
+                NakedHeaderButtonTheme,
+            )
+            .with_size(ButtonSize::AgentInputButton)
+            .with_menu(true)
+            .with_icon(Icon::Key)
+            .with_tooltip(crate::menu_label(
+                "agent.ambient.auth_secret.button_tooltip",
+                BUTTON_TOOLTIP,
+            ))
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AuthSecretSelectorAction::ToggleMenu);
+            })
         });
 
         let menu = ctx.add_typed_action_view(|_ctx| {
@@ -315,7 +321,7 @@ impl AuthSecretSelector {
                 .get(hovered_index)
                 .map(|item| {
                     matches!(item,
-                    MenuItem::Item(fields) if fields.label() == NEW_ITEM_LABEL)
+                    MenuItem::Item(fields) if fields.label() == crate::menu_label("agent.ambient.auth_secret.new_item", NEW_ITEM_LABEL))
                 })
                 .unwrap_or(false)
         });
@@ -335,7 +341,10 @@ impl AuthSecretSelector {
             .as_ref(ctx)
             .selected_harness_auth_secret_name()
             .map(|s| s.to_string())
-            .unwrap_or_else(|| NO_SECRET_LABEL.to_string());
+            .unwrap_or_else(|| {
+                crate::menu_label("agent.ambient.auth_secret.no_secret_label", NO_SECRET_LABEL)
+                    .to_string()
+            });
         self.button.update(ctx, |button, ctx| {
             button.set_label(label, ctx);
         });
@@ -567,11 +576,14 @@ fn build_main_menu_items(
     header_text_color: pathfinder_color::ColorU,
 ) -> Vec<MenuItem<AuthSecretSelectorAction>> {
     let header = MenuItem::Header {
-        fields: MenuItemFields::new(MENU_HEADER_LABEL)
-            .with_font_size_override(HEADER_FONT_SIZE)
-            .with_override_text_color(header_text_color)
-            .with_padding_override(6., MENU_HORIZONTAL_PADDING)
-            .with_no_interaction_on_hover(),
+        fields: MenuItemFields::new(crate::menu_label(
+            "agent.ambient.auth_secret.menu_header",
+            MENU_HEADER_LABEL,
+        ))
+        .with_font_size_override(HEADER_FONT_SIZE)
+        .with_override_text_color(header_text_color)
+        .with_padding_override(6., MENU_HORIZONTAL_PADDING)
+        .with_no_interaction_on_hover(),
         clickable: false,
         right_side_fields: None,
     };
@@ -579,11 +591,14 @@ fn build_main_menu_items(
     let mut items = vec![header];
 
     items.push(MenuItem::Item(
-        MenuItemFields::new(NO_SECRET_LABEL)
-            .with_font_size_override(ITEM_FONT_SIZE)
-            .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-            .with_override_hover_background_color(hover_background)
-            .with_on_select_action(AuthSecretSelectorAction::ClearSecret),
+        MenuItemFields::new(crate::menu_label(
+            "agent.ambient.auth_secret.no_secret_label",
+            NO_SECRET_LABEL,
+        ))
+        .with_font_size_override(ITEM_FONT_SIZE)
+        .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+        .with_override_hover_background_color(hover_background)
+        .with_on_select_action(AuthSecretSelectorAction::ClearSecret),
     ));
 
     match fetch_state {
@@ -610,32 +625,41 @@ fn build_main_menu_items(
         }
         AuthSecretFetchState::NotFetched | AuthSecretFetchState::Loading => {
             items.push(MenuItem::Item(
-                MenuItemFields::new("Loading…")
-                    .with_font_size_override(ITEM_FONT_SIZE)
-                    .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-                    .with_disabled(true)
-                    .with_override_text_color(header_text_color),
+                MenuItemFields::new(crate::menu_label(
+                    "agent.ambient.auth_secret.loading",
+                    "Loading…",
+                ))
+                .with_font_size_override(ITEM_FONT_SIZE)
+                .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+                .with_disabled(true)
+                .with_override_text_color(header_text_color),
             ));
         }
         AuthSecretFetchState::Failed(_) => {
             items.push(MenuItem::Item(
-                MenuItemFields::new("Unable to load secrets")
-                    .with_font_size_override(ITEM_FONT_SIZE)
-                    .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-                    .with_disabled(true)
-                    .with_override_text_color(header_text_color),
+                MenuItemFields::new(crate::menu_label(
+                    "agent.ambient.auth_secret.load_failed",
+                    "Unable to load secrets",
+                ))
+                .with_font_size_override(ITEM_FONT_SIZE)
+                .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+                .with_disabled(true)
+                .with_override_text_color(header_text_color),
             ));
         }
     }
 
     items.push(MenuItem::Item(
-        MenuItemFields::new(NEW_ITEM_LABEL)
-            .with_font_size_override(ITEM_FONT_SIZE)
-            .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-            .with_override_hover_background_color(hover_background)
-            .with_icon(Icon::Plus)
-            .with_right_side_icon(Icon::ChevronRight)
-            .with_on_select_action(AuthSecretSelectorAction::OpenNewTypeSidecar),
+        MenuItemFields::new(crate::menu_label(
+            "agent.ambient.auth_secret.new_item",
+            NEW_ITEM_LABEL,
+        ))
+        .with_font_size_override(ITEM_FONT_SIZE)
+        .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+        .with_override_hover_background_color(hover_background)
+        .with_icon(Icon::Plus)
+        .with_right_side_icon(Icon::ChevronRight)
+        .with_on_select_action(AuthSecretSelectorAction::OpenNewTypeSidecar),
     ));
 
     items
@@ -660,11 +684,14 @@ fn build_sidecar_items(
     header_text_color: pathfinder_color::ColorU,
 ) -> Vec<MenuItem<AuthSecretSelectorAction>> {
     let header = MenuItem::Header {
-        fields: MenuItemFields::new(SIDECAR_HEADER_LABEL)
-            .with_font_size_override(HEADER_FONT_SIZE)
-            .with_override_text_color(header_text_color)
-            .with_padding_override(6., MENU_HORIZONTAL_PADDING)
-            .with_no_interaction_on_hover(),
+        fields: MenuItemFields::new(crate::menu_label(
+            "agent.ambient.auth_secret.sidecar_header",
+            SIDECAR_HEADER_LABEL,
+        ))
+        .with_font_size_override(HEADER_FONT_SIZE)
+        .with_override_text_color(header_text_color)
+        .with_padding_override(6., MENU_HORIZONTAL_PADDING)
+        .with_no_interaction_on_hover(),
         clickable: false,
         right_side_fields: None,
     };

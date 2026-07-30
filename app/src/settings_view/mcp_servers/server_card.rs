@@ -30,6 +30,49 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::red_notification_dot::RedNotificationDot;
 
+fn card_status_offline() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.status_offline", "Offline")
+}
+fn card_status_starting() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.status_starting", "Starting server...")
+}
+fn card_status_authenticating() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.status_authenticating", "Authenticating...")
+}
+fn card_status_shutting_down() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.status_shutting_down", "Shutting down...")
+}
+fn card_no_tools_available() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.no_tools_available", "No tools available")
+}
+fn card_tools_available_count_template() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.tools_available_count", "{} tools available")
+}
+fn card_show_logs_tooltip() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.show_logs_tooltip", "Show logs")
+}
+fn card_log_out_tooltip() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.log_out_tooltip", "Log out")
+}
+fn card_share_server_tooltip() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.share_server_tooltip", "Share server")
+}
+fn card_edit_tooltip() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.edit_tooltip", "Edit")
+}
+fn card_view_logs_button() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.view_logs_button", "View logs")
+}
+fn card_edit_config_button() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.edit_config_button", "Edit config")
+}
+fn card_set_up_button() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.set_up_button", "Set up")
+}
+fn card_update_available_tooltip() -> &'static str {
+    crate::menu_label("settings.mcp_servers.server_card.update_available_tooltip", "Server update available")
+}
+
 /// A chip displayed inline with the server card title, optionally with a leading icon.
 #[derive(Debug, Clone)]
 pub struct TitleChip {
@@ -223,7 +266,7 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     indicator_type: StatusElementTypes::Circle,
                     color: StatusColor::Neutral,
                 }),
-                status_line: Some("Offline".to_string()),
+                status_line: Some(card_status_offline().to_string()),
                 background: Background::Filled,
                 full_card_clickable: false,
             },
@@ -243,7 +286,7 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     indicator_type: StatusElementTypes::Circle,
                     color: StatusColor::Yellow,
                 }),
-                status_line: Some("Starting server...".to_string()),
+                status_line: Some(card_status_starting().to_string()),
                 background: Background::Filled,
                 full_card_clickable: false,
             },
@@ -263,7 +306,7 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     indicator_type: StatusElementTypes::Circle,
                     color: StatusColor::Yellow,
                 }),
-                status_line: Some("Authenticating...".to_string()),
+                status_line: Some(card_status_authenticating().to_string()),
                 background: Background::Filled,
                 full_card_clickable: false,
             },
@@ -303,7 +346,7 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     indicator_type: StatusElementTypes::Circle,
                     color: StatusColor::Neutral,
                 }),
-                status_line: Some("Shutting down...".to_string()),
+                status_line: Some(card_status_shutting_down().to_string()),
                 background: Background::Filled,
                 full_card_clickable: false,
             },
@@ -474,7 +517,7 @@ impl ServerCardView {
 
         if tools.is_empty() {
             return Text::new(
-                "No tools available".to_string(),
+                card_no_tools_available().to_string(),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -496,7 +539,7 @@ impl ServerCardView {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
                     Text::new(
-                        format!("{} tools available", tools.len()),
+                        card_tools_available_count_template().replace("{}", &tools.len().to_string()),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
@@ -745,7 +788,7 @@ impl ServerCardView {
                     self.build_icon_button(
                         appearance,
                         Icon::Code1,
-                        "Show logs".to_string(),
+                        card_show_logs_tooltip().to_string(),
                         self.mouse_handles.show_logs_icon_button.clone(),
                     )
                     .on_click(move |ctx, _, _| {
@@ -760,7 +803,7 @@ impl ServerCardView {
                     self.build_icon_button(
                         appearance,
                         Icon::LogOut,
-                        "Log out".to_string(),
+                        card_log_out_tooltip().to_string(),
                         self.mouse_handles.logout_icon_button.clone(),
                     )
                     .on_click(move |ctx, _, _| {
@@ -775,7 +818,7 @@ impl ServerCardView {
                     self.build_icon_button(
                         appearance,
                         Icon::Share,
-                        "Share server".to_string(),
+                        card_share_server_tooltip().to_string(),
                         self.mouse_handles.share_icon_button.clone(),
                     )
                     .on_click(move |ctx, _, _| {
@@ -790,7 +833,7 @@ impl ServerCardView {
                     self.build_icon_button(
                         appearance,
                         Icon::Pencil,
-                        "Edit".to_string(),
+                        card_edit_tooltip().to_string(),
                         self.mouse_handles.edit_icon_button.clone(),
                     )
                     .on_click(move |ctx, _, _| {
@@ -812,7 +855,7 @@ impl ServerCardView {
                     ButtonVariant::Secondary,
                     self.mouse_handles.view_logs_button.clone(),
                 )
-                .with_centered_text_label("View logs".to_string())
+                .with_centered_text_label(card_view_logs_button().to_string())
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(ServerCardAction::ViewLogs(item_id))
@@ -828,7 +871,7 @@ impl ServerCardView {
                     ButtonVariant::Accent,
                     self.mouse_handles.edit_config_button.clone(),
                 )
-                .with_centered_text_label("Edit config".to_string())
+                .with_centered_text_label(card_edit_config_button().to_string())
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(ServerCardAction::Edit(item_id));
@@ -844,7 +887,7 @@ impl ServerCardView {
                     ButtonVariant::Accent,
                     self.mouse_handles.setup_button.clone(),
                 )
-                .with_centered_text_label("Set up".to_string())
+                .with_centered_text_label(card_set_up_button().to_string())
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(ServerCardAction::Install(item_id));
@@ -892,7 +935,7 @@ impl ServerCardView {
             .build_icon_button(
                 appearance,
                 Icon::Refresh,
-                "Server update available".to_string(),
+                card_update_available_tooltip().to_string(),
                 self.mouse_handles.update_icon_button.clone(),
             )
             .on_click(move |ctx, _, _| {

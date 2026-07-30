@@ -4,7 +4,7 @@ use onboarding::components::feature_optout_dialog::{
     FeatureOptOutDialog, render_feature_optout_dialog,
 };
 use onboarding::slides::{layout, onboarding_bottom_nav, slide_content};
-use onboarding::{OnboardingEvent, OnboardingIntention, WARP_DRIVE_FEATURES};
+use onboarding::{OnboardingEvent, OnboardingIntention, warp_drive_features};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{Component as _, Options as _, button};
@@ -41,7 +41,7 @@ use crate::server::telemetry::{LoginEventSource, TelemetryEvent};
 use crate::settings::PrivacySettings;
 use crate::themes::theme::Fill as ThemeFill;
 use crate::util::bindings::CustomAction;
-use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
+use crate::{menu_label, send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
 
 const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
 
@@ -351,7 +351,7 @@ impl LoginSlideView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Auth Token", ctx);
+            editor.set_placeholder_text(menu_label("auth.token_placeholder", "Auth Token"), ctx);
             editor
         });
 
@@ -585,9 +585,15 @@ impl LoginSlideView {
     /// Terminal+Drive), since there are no AI features to opt out of there.
     fn privacy_disclaimer_prefix(&self) -> &'static str {
         if self.ai_enabled {
-            "If you'd like to opt out of analytics and AI features, you can adjust your "
+            menu_label(
+                "onboarding.select_auth.privacy_prefix_with_ai",
+                "If you'd like to opt out of analytics and AI features, you can adjust your ",
+            )
         } else {
-            "If you'd like to opt out of analytics, you can adjust your "
+            menu_label(
+                "onboarding.select_auth.privacy_prefix_no_ai",
+                "If you'd like to opt out of analytics, you can adjust your ",
+            )
         }
     }
 
@@ -675,7 +681,7 @@ impl LoginSlideView {
             .with_child(
                 ui_builder
                     .link(
-                        "Privacy Settings".into(),
+                        menu_label("common.privacy_settings", "Privacy Settings").into(),
                         None,
                         Some(Box::new(|ctx| {
                             ctx.dispatch_typed_action(LoginSlideAction::ShowPrivacySettings);
@@ -783,7 +789,7 @@ impl LoginSlideView {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -825,7 +831,7 @@ impl LoginSlideView {
         let login_button = self.login_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Continue".into()),
+                content: button::Content::Label(menu_label("common.continue", "Continue").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),
@@ -875,7 +881,10 @@ impl LoginSlideView {
         };
 
         let title = FormattedTextElement::from_str(
-            "Sign in on your browser to continue",
+            menu_label(
+                "onboarding.browser_open.sign_in_title",
+                "Sign in on your browser to continue",
+            ),
             appearance.ui_font_family(),
             36.,
         )
@@ -1005,7 +1014,7 @@ impl LoginSlideView {
         let back_button = self.browser_back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -1037,15 +1046,18 @@ impl LoginSlideView {
     ) -> Vec<Box<dyn Element>> {
         let theme = appearance.theme();
 
-        let title =
-            FormattedTextElement::from_str("Privacy Settings", appearance.ui_font_family(), 36.)
-                .with_color(internal_colors::text_main(
-                    theme,
-                    theme.background().into_solid(),
-                ))
-                .with_weight(Weight::Medium)
-                .with_alignment(TextAlignment::Left)
-                .finish();
+        let title = FormattedTextElement::from_str(
+            menu_label("common.privacy_settings", "Privacy Settings"),
+            appearance.ui_font_family(),
+            36.,
+        )
+        .with_color(internal_colors::text_main(
+            theme,
+            theme.background().into_solid(),
+        ))
+        .with_weight(Weight::Medium)
+        .with_alignment(TextAlignment::Left)
+        .finish();
 
         let actions = PrivacySettingsActions {
             toggle_telemetry: LoginSlideAction::ToggleTelemetry,
@@ -1069,7 +1081,7 @@ impl LoginSlideView {
         let back_button = self.done_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -1107,16 +1119,25 @@ impl LoginSlideView {
             &'static str,
         ) = match self.login_purpose() {
             LoginPurpose::WarpDrive => (
-                "Are you sure you want to disable Warp Drive?",
-                "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
-                WARP_DRIVE_FEATURES,
-                "Enable Warp Drive",
+                menu_label(
+                    "onboarding.skip_dialog.warp_drive.title",
+                    "Are you sure you want to disable Warp Drive?",
+                ),
+                menu_label(
+                    "onboarding.skip_dialog.warp_drive.body",
+                    "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
+                ),
+                warp_drive_features(),
+                menu_label(
+                    "onboarding.skip_dialog.warp_drive.enable",
+                    "Enable Warp Drive",
+                ),
             ),
             LoginPurpose::WarpAgent | LoginPurpose::ThirdParty | LoginPurpose::AccountFirst => (
                 "Continue without signing in?",
                 "Without an account, you won't have access to Warp's AI features. Sign in anytime to unlock agents and other AI features.",
                 &[],
-                "Sign in",
+                menu_label("workspace.sign_in", "Sign in"),
             ),
         };
 
@@ -1155,7 +1176,9 @@ impl LoginSlideView {
         let confirm_button = self.dialog_skip_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Skip for now".into()),
+                content: button::Content::Label(
+                    menu_label("common.skip_for_now", "Skip for now").into(),
+                ),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(dialog_enter),

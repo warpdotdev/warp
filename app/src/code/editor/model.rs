@@ -335,7 +335,6 @@ impl CodeEditorModel {
         content.update(ctx, |buffer, _| {
             buffer.set_session_platform(session_platform);
         });
-
         Self::from_content(
             content,
             true,        // show_current_line_highlights

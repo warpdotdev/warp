@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use chrono::Local;
 
+use crate::menu_label;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationFileExport {
     path: PathBuf,
@@ -33,25 +35,34 @@ impl ConversationFileExportError {
 
     pub fn user_message(&self) -> String {
         match self.source.kind() {
-            io::ErrorKind::PermissionDenied => format!(
+            io::ErrorKind::PermissionDenied => menu_label(
+                "tui.terminal.export_error.permission_denied",
                 "Permission denied writing to {}. Check file permissions.",
-                self.path.display()
-            ),
-            io::ErrorKind::NotFound => format!(
+            )
+            .replace("{}", &self.path.display().to_string()),
+            io::ErrorKind::NotFound => menu_label(
+                "tui.terminal.export_error.not_found",
                 "Directory not found: {}",
-                self.path
+            )
+            .replace(
+                "{}",
+                &self
+                    .path
                     .parent()
                     .map(|path| path.display().to_string())
-                    .unwrap_or_default()
+                    .unwrap_or_default(),
             ),
-            io::ErrorKind::AlreadyExists => {
-                format!("File {} already exists", self.path.display())
-            }
-            _ => format!(
-                "Failed to export to {}: {}",
-                self.path.display(),
-                self.source
-            ),
+            io::ErrorKind::AlreadyExists => menu_label(
+                "tui.terminal.export_error.already_exists",
+                "File {} already exists",
+            )
+            .replace("{}", &self.path.display().to_string()),
+            _ => menu_label(
+                "tui.terminal.export_error.failed",
+                "Failed to export to {path}: {source}",
+            )
+            .replace("{path}", &self.path.display().to_string())
+            .replace("{source}", &self.source.to_string()),
         }
     }
 }

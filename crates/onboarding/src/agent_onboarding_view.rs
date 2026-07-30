@@ -462,7 +462,13 @@ impl AgentOnboardingView {
         let cancel_button = self.no_ai_cancel_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Give me AI features".into()),
+                content: button::Content::Label(
+                    crate::menu_label(
+                        "onboarding.agent.give_me_ai_features",
+                        "Give me AI features",
+                    )
+                    .into(),
+                ),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -477,7 +483,9 @@ impl AgentOnboardingView {
         let confirm_button = self.no_ai_confirm_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("I don't want AI".into()),
+                content: button::Content::Label(
+                    crate::menu_label("onboarding.ai_access.no_ai", "I don't want AI").into(),
+                ),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),
@@ -492,9 +500,14 @@ impl AgentOnboardingView {
         render_feature_optout_dialog(
             appearance,
             FeatureOptOutDialog {
-                title: "Are you sure you don't want AI?",
-                body: "Without AI, you'll still get Warp's terminal experience, but you'll miss \
-                       our agentic features like automatic fixes for terminal errors.",
+                title: crate::menu_label(
+                    "onboarding.agent.no_ai_dialog_title",
+                    "Are you sure you don't want AI?",
+                ),
+                body: crate::menu_label(
+                    "onboarding.agent.no_ai_dialog_body",
+                    "Without AI, you'll still get Warp's terminal experience, but you'll miss our agentic features like automatic fixes for terminal errors.",
+                ),
                 features: &[],
                 close_button,
                 cancel_button,
@@ -559,7 +572,10 @@ impl AgentOnboardingView {
         .finish();
 
         let text = ui_builder
-            .span("Plan successfully activated!")
+            .span(crate::menu_label(
+                "onboarding.agent.plan_activated_toast",
+                "Plan successfully activated!",
+            ))
             .with_style(UiComponentStyles {
                 font_color: Some(text_color),
                 font_size: Some(FONT_SIZE),
@@ -714,7 +730,9 @@ impl View for AgentOnboardingView {
             let close_button = self.close_button.render(
                 appearance,
                 button::Params {
-                    content: button::Content::Label("Skip".into()),
+                    content: button::Content::Label(
+                        crate::menu_label("onboarding.agent.skip", "Skip").into(),
+                    ),
                     theme: &button::themes::Naked,
                     options: button::Options {
                         size: button::Size::Small,

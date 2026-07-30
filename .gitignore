@@ -69,4 +69,11 @@ __pycache__/
 
 # Project notes
 .note/
+
+# Local-only artifacts that were accidentally tracked by 1113b8459.
+# Keep on disk (developer tools), but never commit.
+.playwright-mcp/
+.settings_schema_cache.json
+
 .claude/scheduled_tasks.lock
+
