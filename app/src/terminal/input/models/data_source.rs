@@ -22,9 +22,9 @@ use warpui::{
 };
 
 use super::model_spec_scores::{
-    CUSTOM_MODEL_ROUTER_DESCRIPTION, CUSTOM_MODEL_ROUTER_TITLE, CostRow, CostRowTooltip,
-    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, ModelSpecScoresLayout, REASONING_LEVEL_DESCRIPTION,
-    REASONING_LEVEL_TITLE, render_model_spec_header, render_model_spec_scores,
+    CUSTOM_MODEL_ROUTER_DESCRIPTION, CUSTOM_MODEL_ROUTER_TITLE, CostRow, MODEL_SPECS_DESCRIPTION,
+    MODEL_SPECS_TITLE, ModelSpecScoresLayout, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
+    render_model_spec_header, render_model_spec_scores,
 };
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
@@ -50,8 +50,8 @@ use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
-const AUTO_GEMINI_ENTERPRISE_AGENT_PLATFORM_TOOLTIP: &str = "Warp uses Gemini Enterprise Agent Platform when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
+/// Auto models pick their concrete model server-side, so the cost line names the
+/// class of inference rather than a host the request may never reach.
 const AUTO_HOSTED_INFERENCE_LABEL: &str = "Inference may use your hosted inference";
 
 #[derive(Clone, Debug)]
@@ -364,7 +364,6 @@ struct ModelSearchItem {
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
     manage_api_key_mouse_state: MouseStateHandle,
-    cost_row_tooltip_mouse_state: MouseStateHandle,
     reasoning_level: Option<String>,
     discount_percentage: Option<f32>,
 }
@@ -414,7 +413,6 @@ impl ModelSearchItem {
             name_match_result: choice.name_match_result,
             score: choice.score,
             manage_api_key_mouse_state: Default::default(),
-            cost_row_tooltip_mouse_state: Default::default(),
             reasoning_level: llm.reasoning_level(),
             discount_percentage: llm.discount_percentage,
         }
@@ -663,19 +661,6 @@ impl SearchItem for ModelSearchItem {
                     source.inference_label()
                 } else {
                     "Inference via API key"
-                },
-                tooltip: if self.is_using_bedrock && self.is_auto {
-                    Some(CostRowTooltip {
-                        text: AUTO_BEDROCK_TOOLTIP,
-                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
-                    })
-                } else if self.is_using_gemini_enterprise_agent_platform && self.is_auto {
-                    Some(CostRowTooltip {
-                        text: AUTO_GEMINI_ENTERPRISE_AGENT_PLATFORM_TOOLTIP,
-                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
-                    })
-                } else {
-                    None
                 },
                 manage_button: Container::new(manage_button).finish(),
             }
