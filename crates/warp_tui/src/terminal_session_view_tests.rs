@@ -91,6 +91,7 @@ use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::statusline_config_view::TuiStatuslineConfigEvent;
+use crate::telemetry::TuiConversationRestoreTelemetryTarget;
 use crate::terminal_background::TuiHostTerminalBackground;
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
@@ -110,6 +111,12 @@ use crate::zero_state_animation::{
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
+}
+
+#[test]
+fn only_conversation_list_restores_emit_restore_telemetry() {
+    assert!(!TuiConversationRestoreOrigin::Startup.records_telemetry());
+    assert!(TuiConversationRestoreOrigin::ConversationList.records_telemetry());
 }
 
 fn todo(id: &str, title: &str) -> AIAgentTodo {
@@ -4231,6 +4238,7 @@ fn footer_transient_state_replaces_all_sections() {
             view.exit_confirmation.disarm();
             view.conversation_restore_state = ConversationRestoreState::Loading {
                 origin: TuiConversationRestoreOrigin::ConversationList,
+                target: TuiConversationRestoreTelemetryTarget::Local,
                 request_id: 0,
                 future: None,
             };
@@ -4254,6 +4262,7 @@ fn footer_transient_state_replaces_all_sections() {
             view.exit_confirmation.arm(Instant::now());
             view.conversation_restore_state = ConversationRestoreState::Loading {
                 origin: TuiConversationRestoreOrigin::ConversationList,
+                target: TuiConversationRestoreTelemetryTarget::Local,
                 request_id: 1,
                 future: None,
             };

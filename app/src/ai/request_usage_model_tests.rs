@@ -4,6 +4,7 @@ use ai::LLMProvider;
 use ai::api_keys::{ApiKeyManager, GrokTokens};
 use chrono::Duration;
 use warp_core::features::FeatureFlag;
+use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
 use warpui::{App, ModelHandle};
 
@@ -65,6 +66,7 @@ fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestU
     register_user_preferences_for_tests(app);
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
+        MockTelemetryContextProvider::register(ctx);
         ctx.add_singleton_model(ApiKeyManager::new);
     });
     app.add_singleton_model(|_| PricingInfoModel::new());

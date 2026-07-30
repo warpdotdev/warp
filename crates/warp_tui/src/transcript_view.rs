@@ -255,7 +255,7 @@ impl TuiTranscriptView {
                     .and_then(|conversation| conversation.get_task(task_id))
                     .is_some_and(should_show_task_in_blocklist);
                 if should_show {
-                    self.insert_agent_block(*conversation_id, *exchange_id, None, ctx);
+                    self.insert_agent_block(*conversation_id, *exchange_id, None, false, ctx);
                 }
             }
             BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
@@ -417,6 +417,7 @@ impl TuiTranscriptView {
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
         command_block_index: Option<BlockIndex>,
+        is_restored: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.view_id_for_exchange(exchange_id, ctx).is_some() {
@@ -438,12 +439,12 @@ impl TuiTranscriptView {
         let terminal_model = self.model.clone();
         let view = ctx.add_typed_action_tui_view(|ctx| {
             TuiAIBlock::new(
-                conversation_id,
-                exchange_id,
+                (conversation_id, exchange_id),
                 block_model,
                 action_model,
                 &model_events,
                 terminal_model,
+                is_restored,
                 ctx,
             )
         });
@@ -497,6 +498,7 @@ impl TuiTranscriptView {
                 conversation_id,
                 restored_exchange.exchange().id,
                 restored_exchange.command_block_index(),
+                true,
                 ctx,
             );
         }

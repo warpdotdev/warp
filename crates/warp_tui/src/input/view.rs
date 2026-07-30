@@ -329,7 +329,7 @@ impl TuiInputView {
         session_state: ModelHandle<TuiTerminalSessionStateModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let voice_input = ctx.add_model(TuiVoiceInputModel::new);
+        let voice_input = ctx.add_model(|ctx| TuiVoiceInputModel::new(input_mode.clone(), ctx));
         let vim_model = ctx.add_model(|_| VimModel::new());
         // Subscribe to vim events: VimSubscriber blanket impl (TuiInputView: VimHandler)
         // dispatches each VimEvent to the appropriate VimHandler method.

@@ -49,7 +49,9 @@ pub use crate::ai::agent_conversations_model::{
     query_conversation_entries,
 };
 pub use crate::ai::ambient_agents::AmbientAgentTaskId;
-pub use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffSurface};
+pub use crate::ai::ambient_agents::telemetry::{
+    CloudAgentTelemetryEvent, HandoffEntryPoint, HandoffSurface,
+};
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
@@ -76,7 +78,8 @@ pub use crate::ai::blocklist::handoff::{
     HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated, HandoffLaunchAttachments,
     HandoffPrepareError, HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
     HandoffTargetMaterialization, MaterializeHandoffTarget, PendingCloudLaunch, PendingHandoff,
-    SnapshotUploadTarget, execute_handoff, prepare_handoff, suggest_handoff_environment,
+    SnapshotUploadTarget, execute_handoff, handoff_dispatch_error, prepare_handoff,
+    suggest_handoff_environment,
 };
 pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
@@ -92,6 +95,11 @@ pub use crate::ai::blocklist::orchestration_topology::{
     descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
     orchestration_root_conversation_id, orchestrator_agent_id_for_conversation,
     resolve_orchestration_participant,
+};
+pub use crate::ai::blocklist::telemetry::{
+    BlocklistOrchestrationTelemetryEvent, OrchestrationEnteredEvent, OrchestrationEntrySource,
+    PillBarActionKind, PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome,
+    RunAgentsCardDecision, run_agents_card_decision_event,
 };
 pub use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
@@ -178,14 +186,15 @@ pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
-pub use crate::settings::AISettingsChangedEvent;
+pub use crate::server::telemetry::{SlashMenuSource, TelemetryEvent};
+pub use crate::settings::{AISettingsChangedEvent, InputSettings};
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::conversation_restoration::{
     ConversationBlockRestorationPlan, RestoredConversationExchange,
     prepare_conversation_block_restoration,
 };
-pub use crate::terminal::event::AfterBlockCompletedEvent;
+pub use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, UserBlockCompleted};
 pub use crate::terminal::input::CommandExecutionSource;
 pub use crate::terminal::input::decorations::parse_current_commands_and_tokens;
 pub use crate::terminal::input::models::{ModelPickerChoice, query_model_picker_choices};
@@ -224,6 +233,7 @@ pub use crate::terminal::model::session::Sessions;
 pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+pub use crate::terminal::session_settings::SessionSettings;
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
 pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
