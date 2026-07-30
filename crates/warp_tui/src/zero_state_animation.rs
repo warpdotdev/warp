@@ -217,7 +217,8 @@ impl InteractionMotion {
 struct ActivePress {
     start_position: TuiPoint,
     last_position: TuiPoint,
-    pressed_at: Instant,
+    last_applied_at: Instant,
+    last_applied_offset: f64,
     drag_origin_angle: Option<f64>,
     drag_angle: Option<f64>,
 }
@@ -227,7 +228,8 @@ impl ActivePress {
         Self {
             start_position: position,
             last_position: position,
-            pressed_at: now,
+            last_applied_at: now,
+            last_applied_offset: 0.0,
             drag_origin_angle: None,
             drag_angle: None,
         }
@@ -237,11 +239,30 @@ impl ActivePress {
         f64::from(i32::from(position.x) - i32::from(self.start_position.x))
     }
 
-    fn clamped_drag_offset(&self, position: TuiPoint, now: Instant) -> f64 {
+    fn rate_limited_drag_offset(
+        &mut self,
+        position: TuiPoint,
+        now: Instant,
+        is_first_update: bool,
+    ) -> f64 {
         let requested = self.horizontal_columns_to(position) * DRAG_RADIANS_PER_COLUMN;
-        let maximum = MAX_INTERACTIVE_RADIANS_PER_SECOND
-            * now.saturating_duration_since(self.pressed_at).as_secs_f64();
-        requested.clamp(-maximum, maximum)
+        let elapsed = now.saturating_duration_since(self.last_applied_at);
+        // Time spent holding before the first movement must not buy an
+        // arbitrarily large jump. One repaint interval keeps the first visible
+        // response immediate while bounding it like every later update.
+        let elapsed = if is_first_update {
+            elapsed.min(REPAINT_INTERVAL)
+        } else {
+            elapsed
+        };
+        let maximum_delta = MAX_INTERACTIVE_RADIANS_PER_SECOND * elapsed.as_secs_f64();
+        let applied = requested.clamp(
+            self.last_applied_offset - maximum_delta,
+            self.last_applied_offset + maximum_delta,
+        );
+        self.last_applied_at = now;
+        self.last_applied_offset = applied;
+        applied
     }
 
     fn release_velocity(&self, position: TuiPoint) -> f64 {
@@ -308,6 +329,7 @@ impl ZeroStateInteractionHandle {
         let mut press = state.active_press.take().expect("checked above");
         let horizontal_columns = press.horizontal_columns_to(position);
         if horizontal_columns != 0.0 || press.drag_origin_angle.is_some() {
+            let is_first_update = press.drag_origin_angle.is_none();
             let origin_angle = if let Some(origin_angle) = press.drag_origin_angle {
                 origin_angle
             } else {
@@ -318,7 +340,8 @@ impl ZeroStateInteractionHandle {
                 press.drag_origin_angle = Some(origin_angle);
                 origin_angle
             };
-            press.drag_angle = Some(origin_angle + press.clamped_drag_offset(position, now));
+            let drag_offset = press.rate_limited_drag_offset(position, now, is_first_update);
+            press.drag_angle = Some(origin_angle + drag_offset);
         }
         press.last_position = position;
         state.active_press = Some(press);
@@ -342,6 +365,7 @@ impl ZeroStateInteractionHandle {
         if position != press.last_position {
             let horizontal_columns = press.horizontal_columns_to(position);
             if horizontal_columns != 0.0 || press.drag_origin_angle.is_some() {
+                let is_first_update = press.drag_origin_angle.is_none();
                 let origin_angle = if let Some(origin_angle) = press.drag_origin_angle {
                     origin_angle
                 } else {
@@ -352,7 +376,8 @@ impl ZeroStateInteractionHandle {
                     press.drag_origin_angle = Some(origin_angle);
                     origin_angle
                 };
-                press.drag_angle = Some(origin_angle + press.clamped_drag_offset(position, now));
+                let drag_offset = press.rate_limited_drag_offset(position, now, is_first_update);
+                press.drag_angle = Some(origin_angle + drag_offset);
             }
         }
         let Some(release_angle) = press.drag_angle else {

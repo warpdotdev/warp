@@ -29,10 +29,10 @@ use super::config::{
 };
 use super::{
     BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoSurface, MAX_INTERACTIVE_RADIANS_PER_SECOND,
-    MIN_ANIMATION_COLS, MIN_ANIMATION_ROWS, MOMENTUM_SETTLE_DURATION, WarpLogoStyles,
-    ZeroStateAnimationElement, ZeroStateInteractionHandle, configured_idle_velocity,
-    fitted_logo_size, idle_angle, logo_frame_at, object_frame_at, object_frame_at_angle,
-    star_count_for_size, warp_logo_contains,
+    MIN_ANIMATION_COLS, MIN_ANIMATION_ROWS, MOMENTUM_SETTLE_DURATION, REPAINT_INTERVAL,
+    WarpLogoStyles, ZeroStateAnimationElement, ZeroStateInteractionHandle,
+    configured_idle_velocity, fitted_logo_size, idle_angle, logo_frame_at, object_frame_at,
+    object_frame_at_angle, star_count_for_size, warp_logo_contains,
 };
 
 const PANEL_SIZE: TuiSize = TuiSize::new(52, 20);
@@ -594,24 +594,54 @@ fn horizontal_drag_scrubs_both_directions_with_retuned_sensitivity() {
 }
 
 #[test]
-fn held_drag_is_rate_limited_by_monotonic_elapsed_time() {
+fn pause_before_first_drag_does_not_accumulate_rate_limit_allowance() {
     let interaction = ZeroStateInteractionHandle::default();
     let start = Instant::now();
     let idle_velocity = TAU / 5.0;
-    let drag_at = start + Duration::from_millis(100);
+    let drag_at = start + Duration::from_secs(5);
     assert!(interaction.press_at(TuiPoint::new(1, 1), start));
     assert!(interaction.drag_at(
         TuiPoint::new(33, 1),
-        Duration::from_millis(100),
+        Duration::from_secs(5),
         idle_velocity,
         drag_at,
     ));
     assert_approx_eq(
         interaction
-            .resolve_at(Duration::from_millis(100), idle_velocity, drag_at)
+            .resolve_at(Duration::from_secs(5), idle_velocity, drag_at)
             .angle,
-        idle_angle(Duration::from_millis(100), idle_velocity)
-            + MAX_INTERACTIVE_RADIANS_PER_SECOND * 0.1,
+        idle_angle(Duration::from_secs(5), idle_velocity)
+            + MAX_INTERACTIVE_RADIANS_PER_SECOND * REPAINT_INTERVAL.as_secs_f64(),
+    );
+}
+
+#[test]
+fn fast_direction_reversal_is_rate_limited_from_the_last_applied_angle() {
+    let interaction = ZeroStateInteractionHandle::default();
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    assert!(interaction.press_at(TuiPoint::new(100, 1), start));
+
+    let forward_at = start + Duration::from_millis(100);
+    assert!(interaction.drag_at(
+        TuiPoint::new(200, 1),
+        Duration::from_millis(100),
+        idle_velocity,
+        forward_at,
+    ));
+    let forward = interaction.resolve_at(Duration::from_millis(100), idle_velocity, forward_at);
+
+    let reverse_at = start + Duration::from_millis(110);
+    assert!(interaction.drag_at(
+        TuiPoint::new(0, 1),
+        Duration::from_millis(110),
+        idle_velocity,
+        reverse_at,
+    ));
+    let reversed = interaction.resolve_at(Duration::from_millis(110), idle_velocity, reverse_at);
+    assert_approx_eq(
+        forward.angle - reversed.angle,
+        MAX_INTERACTIVE_RADIANS_PER_SECOND * 0.01,
     );
 }
 
