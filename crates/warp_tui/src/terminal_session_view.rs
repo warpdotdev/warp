@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::agent_block::OUT_OF_CREDITS_URL;
 use async_channel::Sender;
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -195,6 +196,7 @@ const SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG: &str =
     "TuiSessionCanDetachAgentFromRunningCommand";
 const SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG: &str =
     "TuiSessionCanAcceptBlockedTerminalUseAction";
+const SESSION_CAN_OPEN_OUT_OF_CREDITS_URL_FLAG: &str = "TuiSessionCanOpenOutOfCreditsUrl";
 pub(crate) const SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG: &str = "TuiSessionComposerShortcutsActive";
 pub(crate) const PASTE_IMAGE_BINDING_NAME: &str = "tui:session:paste_image";
 pub(crate) const AUTO_APPROVE_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_auto_approve";
@@ -509,6 +511,8 @@ pub(crate) enum TuiTerminalSessionAction {
     /// conversation, else clear the input; a second press within
     /// [`CTRL_C_EXIT_WINDOW`] exits the TUI.
     Interrupt,
+    /// Open the out-of-credits upgrade and credit-pack flow.
+    OpenOutOfCreditsUrl,
     /// Cancel an in-flight conversation restore.
     CancelRestore,
     /// Return a user-controlled terminal-use command to the agent.
@@ -695,6 +699,13 @@ pub(crate) fn init(app: &mut AppContext) {
             HAND_BACK_KEY_BINDING,
             TuiTerminalSessionAction::HandBackTerminalUseControl,
             id!(SESSION_CAN_HAND_BACK_CONTROL_FLAG),
+        )
+        .with_group(TUI_BINDING_GROUP),
+        FixedBinding::new(
+            "ctrl-o",
+            TuiTerminalSessionAction::OpenOutOfCreditsUrl,
+            (id!(TuiInputView::ui_name()) | view_context.clone())
+                & id!(SESSION_CAN_OPEN_OUT_OF_CREDITS_URL_FLAG),
         )
         .with_group(TUI_BINDING_GROUP),
     ]);
@@ -4513,6 +4524,13 @@ impl TuiView for TuiTerminalSessionView {
                 .set
                 .insert(SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG);
         }
+        if self
+            .transcript
+            .as_ref(ctx)
+            .latest_agent_block_is_out_of_credits(ctx)
+        {
+            context.set.insert(SESSION_CAN_OPEN_OUT_OF_CREDITS_URL_FLAG);
+        }
         if state.as_ref().is_some_and(|state| state.plan_available()) {
             context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
         }
@@ -4874,6 +4892,7 @@ impl TypedActionView for TuiTerminalSessionView {
     fn handle_action(&mut self, action: &TuiTerminalSessionAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
+            TuiTerminalSessionAction::OpenOutOfCreditsUrl => ctx.open_url(OUT_OF_CREDITS_URL),
             TuiTerminalSessionAction::Eof => self.handle_eof(ctx),
             TuiTerminalSessionAction::CancelRestore => {
                 self.cancel_conversation_restore(ctx);

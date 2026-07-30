@@ -162,6 +162,52 @@ fn mcp_menu_footer_replaces_status_with_controls() {
 }
 
 #[test]
+fn out_of_credits_ctrl_o_binding_opens_pricing() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            assert!(
+                ctx.get_key_bindings().any(|binding| {
+                    *binding.trigger == ctrl_o
+                        && binding.name.is_empty()
+                        && binding.group == Some(TUI_BINDING_GROUP)
+                }),
+                "out-of-credits ctrl-o binding should be registered"
+            );
+        });
+
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            let input_view_id = view.as_ref(ctx).input_view.id();
+            assert!(
+                !ctx.key_bindings_for_view(fixture.window_id, input_view_id)
+                    .iter()
+                    .any(|binding| *binding.trigger == ctrl_o),
+                "ctrl-o should not be active without an out-of-credits failure"
+            );
+        });
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::OpenOutOfCreditsUrl, ctx);
+        });
+        assert_eq!(
+            opened_urls.borrow().as_slice(),
+            &["https://www.warp.dev/pricing".to_owned()]
+        );
+    });
+}
+
+#[test]
 fn mcp_menu_footer_hides_unavailable_primary_control() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
