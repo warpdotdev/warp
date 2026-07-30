@@ -2836,7 +2836,7 @@ fn long_running_command_keeps_input_hidden() {
         assert!(
             !lines
                 .iter()
-                .any(|line| line.contains('▏') || line.contains('─')),
+                .any(|line| line.chars().any(|glyph| "┌┐└┘─│▁▏▕▔".contains(glyph))),
             "LRC must keep the input editor hidden:\n{}",
             lines.join("\n")
         );
@@ -3268,7 +3268,10 @@ fn user_controlled_alt_screen_keeps_full_session_input_on_the_pty() {
         assert!(
             !lines
                 .iter()
-                .any(|line| line.contains('▏') || line.contains("auto (cost-efficient)")),
+                .any(|line| {
+                    line.chars().any(|glyph| "┌┐└┘─│▁▏▕▔".contains(glyph))
+                        || line.contains("auto (cost-efficient)")
+                }),
             "user-controlled alternate screen should not render the agent composer:\n{}",
             lines.join("\n")
         );
