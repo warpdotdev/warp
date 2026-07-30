@@ -50,7 +50,7 @@ use crate::completion_menu::TuiCompletionAcceptance;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::editor_interaction::{
     TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
-    apply_editor_action, apply_editor_clipboard_action, follow_editor_cursor,
+    apply_editor_action, apply_editor_clipboard_action, apply_editor_paste, follow_editor_cursor,
 };
 use crate::inline_menu::{
     TuiInlineMenu, TuiInlineMenuAccepted, TuiInlineMenuInputOwnership, active_inline_menu,
@@ -881,9 +881,12 @@ impl TypedActionView for TuiInputView {
                     | TuiEditorCommand::SelectDown
                     | TuiEditorCommand::SelectWordLeft
                     | TuiEditorCommand::SelectWordRight
+                    | TuiEditorCommand::SelectToLineStart
+                    | TuiEditorCommand::SelectToLineEnd
                     | TuiEditorCommand::SelectAll
                     | TuiEditorCommand::Copy
                     | TuiEditorCommand::Cut
+                    | TuiEditorCommand::Paste
                     | TuiEditorCommand::KillToLineEnd
                     | TuiEditorCommand::KillToLineStart
                     | TuiEditorCommand::Yank
@@ -968,6 +971,12 @@ impl TypedActionView for TuiInputView {
                         log::error!("Failed to copy TUI input selection: {error}");
                         ctx.emit(TuiInputViewEvent::ClipboardCopyFailed);
                     }
+                }
+                TuiEditorInteractionOutcome::FollowCursor
+            }
+            TuiEditorInteractionOutcome::Paste => {
+                if let Err(error) = apply_editor_paste(&self.model, self.editor_behavior, ctx) {
+                    log::error!("Failed to paste into TUI input: {error}");
                 }
                 TuiEditorInteractionOutcome::FollowCursor
             }

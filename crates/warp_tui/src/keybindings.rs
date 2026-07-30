@@ -47,6 +47,14 @@ pub(crate) const KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG: &str = "TuiKeyboardEnhance
 pub(crate) const PLAN_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_plan";
 pub(crate) const CONTEXTUAL_PLAN_TOGGLE_BINDING_NAME: &str =
     "tui:session:toggle_plan_when_available";
+
+fn is_tui_binding_cross_platform(binding: BindingLens) -> IsBindingValid {
+    if is_tui_owned(binding.name, binding.group) {
+        IsBindingValid::Yes
+    } else {
+        warp::util::bindings::is_binding_cross_platform(binding)
+    }
+}
 pub(crate) fn binding_hint(name: &str, context: &Context, ctx: &AppContext) -> Option<String> {
     ctx.editable_bindings()
         .find(|binding| binding.name == name && binding.in_context(context))
@@ -72,6 +80,10 @@ pub(crate) fn plan_toggle_hint(ctx: &AppContext) -> Option<String> {
 /// Registers all TUI view keybindings and the cross-surface binding
 /// validators. Called once at TUI startup, before the driver starts.
 pub(crate) fn init(app: &mut AppContext) {
+    // The headless TUI receives Super/Cmd through enhanced terminal keyboard
+    // reporting on every supported OS. Keep the GUI's cross-platform validator
+    // for all non-TUI bindings, while allowing TUI-owned cmd chords.
+    app.set_default_binding_validator(is_tui_binding_cross_platform);
     crate::root_view::init(app);
     crate::cloud_run_view::init(app);
     crate::terminal_session_view::init(app);
