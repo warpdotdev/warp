@@ -52,15 +52,14 @@ pub enum PointerEventKind {
 }
 
 /// Returns true if a `UseComputer` action batch contains at least one real
-/// interaction — any non-`Wait` action (keyboard, typing, pointer, or scroll).
-/// A wait-only or zero-duration no-op batch (for example a screenshot-only
-/// call, which emits a single `Wait(0)`) is not a qualifying action group and is
-/// not committed to the recording timeline. A pointer-only batch still
-/// qualifies (with empty labels) so its on-screen effects are retained.
+/// interaction — any non-`Wait` action (keyboard, typing, pointer, or scroll)
+/// or an explicit non-zero wait, whose settling time should be kept in the
+/// recording. Only batches made entirely of `Wait(0)` no-ops (for example a
+/// screenshot-only call) fail to qualify and are not committed to the
+/// recording timeline. A pointer-only batch still qualifies (with empty
+/// labels) so its on-screen effects are retained.
 pub fn is_meaningful_action_group(actions: &[TargetedAction]) -> bool {
-    actions
-        .iter()
-        .any(|targeted| !matches!(targeted.action, Action::Wait(_)))
+    actions.iter().any(|targeted| !targeted.action.is_no_op())
 }
 
 enum LabelCandidate {
