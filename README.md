@@ -87,3 +87,37 @@ We'd like to call out a few of the [open source dependencies](https://docs.warp.
 * [FontKit](https://github.com/servo/font-kit)
 * [Core-foundation](https://github.com/servo/core-foundation-rs)
 * [Smol](https://github.com/smol-rs/smol)
+
+## Repo map
+
+Generated — do not hand-edit below the markers. Refresh with
+`./scripts/lint-docs.sh --fix`; CI fails when these disagree with the tree.
+
+<!-- BEGIN:GENERATED cmd="scripts/docs/gen-repo-map.sh" -->
+| Path | Tracked files | Primary type | Purpose |
+|------|---------------|--------------|---------|
+| `app/` | 2730 | .rs | — |
+| `command-signatures-v2/` | 2 | .gz | — |
+| `crates/` | 1702 | .rs | — |
+| `docker/` | 3 | .md | — |
+| `resources/` | 137 | .md | — |
+| `script/` | 61 | .ps1 | — |
+| `scripts/` | 3 | .sh | — |
+| `specs/` | 240 | .md | — |
+| `templates/` | 1 | .sh | — |
+
+**Root files:** `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `Cargo.lock`, `Cargo.toml`, `FAQ.md`, `LICENSE-AGPL`, `LICENSE-MIT`, `PSScriptAnalyzerCustomRules.psm1`, `README.md`, `SECURITY.md`, `WARP.md`, `about.hbs`, `about.toml`, `deny.toml`, `diesel.toml`, `rust-toolchain.toml`
+<!-- END:GENERATED -->
+
+## Commands
+
+<!-- BEGIN:GENERATED cmd="scripts/docs/gen-commands.sh" -->
+| Command | Source | What it does |
+|---------|--------|--------------|
+| `cargo build` | Cargo.toml | Build the crate |
+| `cargo test` | Cargo.toml | Run the test suite |
+| `cargo clippy` | Cargo.toml | Lint |
+| `scripts/docs/gen-commands.sh` | shell | Renders the repo's runnable commands as a markdown table. Stdout only. |
+| `scripts/docs/gen-repo-map.sh` | shell | Renders the repo's top-level structure as a markdown table. Stdout only. |
+| `scripts/lint-docs.sh` | shell | Doc-drift gate. Portable across repos — carries no repo-specific paths. |
+<!-- END:GENERATED -->

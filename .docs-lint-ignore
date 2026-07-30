@@ -1,0 +1,4 @@
+# Upstream content in this fork. Prefix, then "#", then why it is not ours to fix.
+resources/bundled/  # Vendored upstream skill docs; their refs are illustrative examples, not typed paths.
+crates/editor/test_fixtures/  # Fixtures deliberately carry broken and absolute refs; the editor tests assert on them.
+crates/integration/tests/INTEGRATION_TESTING.md  # Upstream doc rot (href says .ts, text says .rs, target moved). Not ours to fix.

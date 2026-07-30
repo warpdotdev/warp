@@ -1,0 +1,23 @@
+# Doc-drift gate. Installed by workstation-setup/scripts/install-doc-hooks.sh.
+# Required and blocking by design — see repo-docs-contract.md #6.5.
+name: doc-lint
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  doc-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the verification-stamp check reads `git log` for the
+          # paths a doc claims to describe, which a shallow clone truncates.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install jq
+        run: sudo apt-get install -y jq
+      - name: Doc-drift gate
+        run: ./scripts/lint-docs.sh
