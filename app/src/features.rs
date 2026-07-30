@@ -63,6 +63,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::DefaultWaterfallMode,
         #[cfg(feature = "settings_file")]
         FeatureFlag::SettingsFile,
+        #[cfg(feature = "file_backed_execution_profiles")]
+        FeatureFlag::FileBackedExecutionProfiles,
         #[cfg(feature = "rect_selection")]
         FeatureFlag::RectSelection,
         #[cfg(feature = "alacritty_settings_import")]
@@ -85,6 +87,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudEnvironments,
         #[cfg(feature = "cloud_runners")]
         FeatureFlag::CloudRunners,
+        #[cfg(feature = "cloud_agent_runners")]
+        FeatureFlag::CloudAgentRunners,
+        #[cfg(feature = "account_first_onboarding")]
+        FeatureFlag::AccountFirstOnboarding,
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
         FeatureFlag::SimulateGithubUnauthed,
         #[cfg(feature = "session_sharing_acls")]
@@ -159,6 +165,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::McpDebuggingIds,
         #[cfg(feature = "markdown_tables")]
         FeatureFlag::MarkdownTables,
+        #[cfg(feature = "jupyter_notebook_rendering")]
+        FeatureFlag::JupyterNotebookRendering,
         #[cfg(feature = "blocklist_markdown_table_rendering")]
         FeatureFlag::BlocklistMarkdownTableRendering,
         #[cfg(feature = "blocklist_markdown_images")]
@@ -241,8 +249,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::Projects,
         #[cfg(feature = "drive_objects_as_context")]
         FeatureFlag::DriveObjectsAsContext,
-        #[cfg(feature = "pr_comments_slash_command")]
-        FeatureFlag::PRCommentsSlashCommand,
         #[cfg(feature = "pr_comments_v2")]
         FeatureFlag::PRCommentsV2,
         #[cfg(feature = "pr_comments_skill")]
@@ -277,8 +283,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationApi,
         #[cfg(feature = "code_launch_modal")]
         FeatureFlag::CodeLaunchModal,
-        #[cfg(feature = "api_key_authentication")]
-        FeatureFlag::APIKeyAuthentication,
         #[cfg(feature = "api_key_management")]
         FeatureFlag::APIKeyManagement,
         #[cfg(feature = "mcp_oauth")]
@@ -417,12 +421,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "run_agents_tool")]
-        FeatureFlag::RunAgentsTool,
-        #[cfg(feature = "orchestration_viewer_streamer")]
-        FeatureFlag::OrchestrationViewerStreamer,
-        #[cfg(feature = "owner_orchestration_ancestor_streamer")]
-        FeatureFlag::OwnerOrchestrationAncestorStreamer,
         #[cfg(feature = "wait_for_events_parent_registration")]
         FeatureFlag::WaitForEventsParentRegistration,
         #[cfg(feature = "pending_user_query_indicator")]
@@ -507,8 +505,14 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SuperGrok,
         #[cfg(feature = "gemini_enterprise")]
         FeatureFlag::GeminiEnterprise,
+        #[cfg(feature = "nld_prompt_history_match")]
+        FeatureFlag::NldPromptHistoryMatch,
         #[cfg(feature = "prompt_cache_expiry_warning")]
         FeatureFlag::PromptCacheExpiryWarning,
+        #[cfg(feature = "osc_hyperlinks")]
+        FeatureFlag::OscHyperlinks,
+        #[cfg(feature = "terminal_lifecycle_recovery")]
+        FeatureFlag::TerminalLifecycleRecovery,
     ]);
 
     flags

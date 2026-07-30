@@ -64,7 +64,7 @@ pub use min_size::*;
 pub use new_scrollable::NewScrollable;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 pub use percentage::*;
 pub use rect::*;
 pub use resizable::*;
@@ -81,12 +81,12 @@ pub use text::*;
 pub use uniform_list::*;
 pub use viewported_list::*;
 
+use crate::Gradient;
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::platform::Cursor;
 pub use crate::scene::{Dash, ZIndex};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{IsRect, SelectionDirection, SelectionType};
-use crate::Gradient;
 pub use crate::{
     AfterLayoutContext, AppContext, Event, EventContext, LayoutContext, PaintContext,
     SizeConstraint,

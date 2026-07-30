@@ -2,7 +2,7 @@
 name = "warp_util"
 authors = ["Warp Team <dev@warp.dev>"]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "General utilities and helpers used across warp crates"
 publish.workspace = true
 license.workspace = true
@@ -29,6 +29,7 @@ serde_json.workspace = true
 pin-project.workspace = true
 futures-util.workspace = true
 log.workspace = true
+warp_errors.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

@@ -8,6 +8,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 use super::event_listener::ChannelEventListener;
 use super::model::session::Sessions;
 use super::model_events::ModelEventDispatcher;
+use super::terminal_manager::BlockSpacing;
 use super::{ShellLaunchState, TerminalManager, TerminalModel, TerminalView};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::blocklist::SerializedBlockListItem;
@@ -48,6 +49,7 @@ impl MockTerminalManager {
             initial_size,
             channel_event_proxy,
             shell_state,
+            BlockSpacing::for_gui(ctx),
             ctx,
         );
         let colors = model.colors();
@@ -142,8 +144,8 @@ mod testing {
 
     use super::*;
     use crate::server::server_api::ServerApiProvider;
-    use crate::terminal::shell::{ShellName, ShellType};
     use crate::terminal::ShellLaunchState;
+    use crate::terminal::shell::{ShellName, ShellType};
 
     struct TerminalRootView {
         terminal_view: ViewHandle<TerminalView>,

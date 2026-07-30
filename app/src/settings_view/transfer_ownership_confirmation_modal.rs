@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::elements::{
     Align, Container, CrossAxisAlignment, Flex, MouseStateHandle, ParentElement, Text,
 };
@@ -136,7 +137,9 @@ impl TypedActionView for TransferOwnershipConfirmationModal {
             TransferOwnershipConfirmationAction::Confirm => {
                 let (Some(new_owner_uid), Some(team_uid)) = (self.new_owner_uid, self.team_uid)
                 else {
-                    log::error!("Transfer ownership confirm button pressed with no new owner set");
+                    report_error!(
+                        "Transfer ownership confirm button pressed with no new owner set"
+                    );
                     return;
                 };
                 ctx.emit(TransferOwnershipConfirmationEvent::Confirm {

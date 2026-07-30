@@ -9,15 +9,16 @@ use std::sync::{Arc, Mutex, Once};
 use itertools::Itertools;
 use markdown_parser::{Action, FormattedText, FormattedTextFragment, FormattedTextLine, Hyperlink};
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::vec1;
+use warp_errors::report_error;
 
 use super::{Highlight, ListNumbering, Selection};
 use crate::elements::{
     Axis, ClickableCharRange, CornerRadius, Fill, HighlightedRange, HoverableCharRange,
-    MouseStateHandle, PartialClickableElement, Point, Radius, SecretRange, SelectableElement,
-    SelectionFragment, SmartSelectFn, ZIndex, SELECTED_HIGHLIGHT_COLOR,
+    MouseStateHandle, PartialClickableElement, Point, Radius, SELECTED_HIGHLIGHT_COLOR,
+    SecretRange, SelectableElement, SelectionFragment, SmartSelectFn, ZIndex,
 };
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::fonts::{FamilyId, Properties, Style, Weight};
@@ -25,11 +26,11 @@ use crate::geometry::rect::RectF;
 use crate::platform::{Cursor, LineStyle};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{
-    char_slice, count_chars_up_to_byte, BlockHeaderSize, IsRect, SelectionDirection, SelectionType,
-    TextBuffer,
+    BlockHeaderSize, IsRect, SelectionDirection, SelectionType, TextBuffer, char_slice,
+    count_chars_up_to_byte,
 };
 use crate::text_layout::{
-    ClipConfig, StyleAndFont, TextAlignment, TextFrame, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
+    ClipConfig, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextAlignment, TextFrame, TextStyle,
 };
 use crate::{
     AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
@@ -1290,11 +1291,11 @@ impl FormattedTextElement {
             let end_glyph_index = end_bound.glyph_index.min(end_text.chars().count());
 
             // This is to prevent slicing an empty string (i.e. a newline frame) and returning a None.
-            if let Some(text) = char_slice(end_text, 0, end_glyph_index) {
-                if !text.is_empty() {
-                    result.push('\n');
-                    result.push_str(text);
-                }
+            if let Some(text) = char_slice(end_text, 0, end_glyph_index)
+                && !text.is_empty()
+            {
+                result.push('\n');
+                result.push_str(text);
             }
 
             Some(result)
@@ -1605,7 +1606,12 @@ fn apply_secret_replacements(
     }
 
     if let Some(msg) = out_of_bound_message {
-        SECRET_REPLACEMENT_OOB_ONCE.call_once(|| log::error!("{msg}"));
+        SECRET_REPLACEMENT_OOB_ONCE.call_once(|| {
+            report_error!(
+                "Secret redaction out of bounds during formatting",
+                extra: { "details" => %msg }
+            )
+        });
     }
 }
 
@@ -1791,13 +1797,12 @@ impl Element for FormattedTextElement {
                         let mut style = Properties::default();
                         let mut text_style = TextStyle::default();
 
-                        if let Some(style) = link_styles_iter.peek() {
-                            if style.highlight_indices[0] + glyph_offset
+                        if let Some(style) = link_styles_iter.peek()
+                            && style.highlight_indices[0] + glyph_offset
                                 == prev_index + character_count
-                            {
-                                current_link_style = Some((*style).clone());
-                                link_styles_iter.next();
-                            }
+                        {
+                            current_link_style = Some((*style).clone());
+                            link_styles_iter.next();
                         }
 
                         let start_char_index = prev_index + character_count;
@@ -1850,15 +1855,15 @@ impl Element for FormattedTextElement {
                         if inline.styles.inline_code {
                             // If we have existing background and foreground highlighting from, for example,
                             // a link or a search, we don't want to override it.
-                            if let Some(font_color) = self.inline_code_font_color {
-                                if text_style.foreground_color.is_none() {
-                                    text_style.foreground_color = Some(font_color);
-                                }
+                            if let Some(font_color) = self.inline_code_font_color
+                                && text_style.foreground_color.is_none()
+                            {
+                                text_style.foreground_color = Some(font_color);
                             }
-                            if let Some(bg_color) = self.inline_code_bg_color {
-                                if text_style.background_color.is_none() {
-                                    text_style.background_color = Some(bg_color);
-                                }
+                            if let Some(bg_color) = self.inline_code_bg_color
+                                && text_style.background_color.is_none()
+                            {
+                                text_style.background_color = Some(bg_color);
                             }
                         }
 
@@ -2303,11 +2308,7 @@ impl Element for FormattedTextElement {
     }
 
     fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
-        if self.is_selectable {
-            Some(self)
-        } else {
-            None
-        }
+        if self.is_selectable { Some(self) } else { None }
     }
 }
 

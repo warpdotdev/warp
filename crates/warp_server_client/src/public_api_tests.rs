@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use warp_core::channel::ChannelState;
-use warp_core::errors::AnyhowErrorExt as _;
+use warp_errors::AnyhowErrorExt as _;
 use warp_server_auth::auth_state::AuthState;
 
 use super::HttpStatusError;

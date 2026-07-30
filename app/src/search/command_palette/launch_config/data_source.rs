@@ -193,7 +193,9 @@ mod full_text_searcher {
                 .map(|config| (config.name.to_lowercase(), config.clone()))
                 .collect();
             if self.rebuild_search_index().is_err() {
-                log::error!("Failed to create search index writer for launch configs");
+                warp_errors::report_error!(
+                    "Failed to create search index writer for launch configs"
+                );
                 self.clear_search_index();
             }
         }

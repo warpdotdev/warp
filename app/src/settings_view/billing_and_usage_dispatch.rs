@@ -6,12 +6,12 @@ use warp_core::ui::appearance::Appearance;
 use warpui::elements::{ChildView, Container};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext, ViewHandle};
 
+use super::SettingsSection;
 use super::billing_and_usage_page::{BillingAndUsagePageEvent, BillingAndUsagePageView};
 use super::billing_and_usage_page_v2::BillingAndUsagePageV2View;
 use super::settings_page::{
-    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
+    HEADER_PADDING, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
 };
-use super::SettingsSection;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;

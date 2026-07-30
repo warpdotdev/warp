@@ -1,6 +1,6 @@
 //! Module containing a macOS implementation of an audible bell.
 
-extern "C" {
+unsafe extern "C" {
     pub fn NSBeep();
 }
 

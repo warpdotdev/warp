@@ -12,10 +12,10 @@ use warp_cli::agent::Harness;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
 
+use super::TerminalView;
 use super::queued_prompts_panel::{
     QueuedPromptsPanelAction, QueuedPromptsPanelEvent, QueuedPromptsPanelView,
 };
-use super::TerminalView;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{ImageContext, UserQueryMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -363,9 +363,11 @@ fn failed_event_removes_locked_queue_row_without_cloud_mode_setup_v2() {
                 },
                 ctx,
             );
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
         });
     });
 }
@@ -430,9 +432,11 @@ fn cloud_setup_enter_does_not_queue_followup_for_third_party_harness() {
                 input.input_enter(ctx);
             });
 
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
             assert_eq!(view.input.as_ref(ctx).buffer_text(ctx), "do not queue this");
         });
     });
@@ -504,9 +508,11 @@ fn cloud_setup_enter_remains_blocked_when_v2_is_disabled() {
                 input.input_enter(ctx);
             });
 
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
             assert_eq!(view.input.as_ref(ctx).buffer_text(ctx), "blocked prompt");
         });
     });
@@ -650,9 +656,11 @@ fn promptless_setup_complete_auto_sends_queued_prompt_to_viewer() {
 
         assert_eq!(sent_prompts.borrow().as_slice(), ["queued during setup"]);
         terminal.read(&app, |_, ctx| {
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
         });
     });
 }
@@ -1288,9 +1296,11 @@ fn enqueue_followup_prompt_falls_back_to_pending_block_when_v2_is_disabled() {
                 ctx,
             );
 
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
             assert!(view.queued_prompt_callback.is_some());
             assert!(view.pending_user_query_view_id.is_some());
         });
@@ -1470,6 +1480,40 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
                 panel.send_now_button_disabled_for_test(followup_id, ctx),
                 Some(false)
             );
+        });
+    });
+}
+
+#[test]
+fn copying_locked_initial_cloud_mode_prompt_copies_full_prompt_to_clipboard() {
+    // The locked initial cloud-mode prompt can't be edited or deleted, so its row offers a Copy
+    // action instead. Firing it (the same action the Copy button dispatches) puts the full,
+    // untruncated prompt — long, multiline content included — on the clipboard and leaves the row
+    // in the queue.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
+
+        let long_prompt = format!("line one\nline two\n{}", "x".repeat(1000));
+        let long_prompt_for_assert = long_prompt.clone();
+        let initial_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(long_prompt, QueuedQueryOrigin::InitialCloudMode),
+                ctx,
+            )
+        });
+
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&QueuedPromptsPanelAction::CopyRow(initial_id), ctx);
+        });
+
+        app.update(|ctx| {
+            assert_eq!(ctx.clipboard().read().plain_text, long_prompt_for_assert);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(model.queue(conversation_id).len(), 1);
         });
     });
 }

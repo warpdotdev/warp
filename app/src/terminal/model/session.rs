@@ -2,6 +2,8 @@ pub mod active_session;
 pub mod command_executor;
 
 use std::collections::{HashMap, HashSet};
+#[cfg(windows)]
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
@@ -13,8 +15,8 @@ use async_channel::Sender;
 #[cfg(feature = "local_tty")]
 use command_executor::remote_server_executor::RemoteServerCommandExecutor;
 pub use command_executor::*;
-use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use instant::Instant;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
@@ -24,9 +26,10 @@ use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
+use warp_errors::{ErrorExt, register_error};
 use warp_util::path::{
-    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
-    ShellFamily,
+    ShellFamily, convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path,
+    msys2_exe_to_root,
 };
 use warpui::platform::OperatingSystem;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -44,28 +47,62 @@ use crate::terminal::warpify::SubshellSource;
 use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
-pub enum ReadHistoryContentsError {
+#[allow(
+    clippy::enum_variant_names,
+    reason = "Each variant names a distinct read failure, so the shared `Error` suffix is intentional."
+)]
+enum ReadHistoryContentsError {
+    /// Intentionally omit this source anyhow error as it may contain stderr contents which can be
+    /// lengthy.
     #[cfg(windows)]
-    #[error("Couldn't get path to history file")]
-    HistoryFilePathError,
-
-    #[cfg(windows)]
-    #[error("Error running PowerShell commands to read history file: {0}")]
+    #[error("Error running PowerShell commands to read history file")]
     PowerShellError(anyhow::Error),
 
+    #[error("Error reading history file from filesystem")]
+    AsyncFsError(#[source] std::io::Error),
+
     #[cfg(windows)]
-    #[error("Error running PowerShell commands and reading from filesystem to read history file. PowerShell error: {powershell_error}, filesystem error: {async_fs_error}")]
+    #[error("Error running PowerShell commands and reading from filesystem to read history file.")]
     PowerShellAndAsyncFsError {
         powershell_error: anyhow::Error,
         async_fs_error: std::io::Error,
     },
+}
 
-    #[error("Error reading history file from filesystem: {0}")]
-    AsyncFsError(std::io::Error),
+impl ErrorExt for ReadHistoryContentsError {
+    fn is_actionable(&self) -> bool {
+        true
+    }
+}
+register_error!(ReadHistoryContentsError);
+
+#[cfg(windows)]
+fn powershell_read_all_text_command(path: &OsStr) -> OsString {
+    let mut command = OsString::from("[System.IO.File]::ReadAllText('");
+    command.push(escape_powershell_single_quotes(path));
+    command.push("')");
+    command
+}
+
+/// Doubles every single quote in `path` so it is safe to embed inside a
+/// PowerShell single-quoted string literal.
+#[cfg(windows)]
+fn escape_powershell_single_quotes(path: &OsStr) -> OsString {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    const SINGLE_QUOTE: u16 = b'\'' as u16;
+    let mut escaped = Vec::new();
+    for unit in path.encode_wide() {
+        escaped.push(unit);
+        if unit == SINGLE_QUOTE {
+            escaped.push(SINGLE_QUOTE);
+        }
+    }
+    OsString::from_wide(&escaped)
 }
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
 pub use warp_core::SessionId;
+use warp_errors::report_error;
 
 /// Information about the sessions within a given terminal pane/top-level
 /// shell.
@@ -232,7 +269,7 @@ impl Sessions {
             .unwrap_or(false)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test() -> Self {
         let (executor_command_tx, _executor_command_rx) = async_channel::unbounded();
         Self {
@@ -372,11 +409,9 @@ impl Sessions {
                 session_info.session_type,
                 BootstrapSessionType::WarpifiedRemote
             )
+            && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
         {
-            if let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
-            {
-                session.set_remote_host_id(Some(host_id.clone()));
-            }
+            session.set_remote_host_id(Some(host_id.clone()));
         }
 
         let bootstrap_duration_seconds =
@@ -489,12 +524,11 @@ impl Sessions {
         event: ExecutedExecutorCommandEvent,
     ) {
         if let Some(in_band_command_output_tx) = self.in_band_command_output_tx_map.get(&session_id)
+            && let Err(e) = in_band_command_output_tx.try_send(event)
         {
-            if let Err(e) = in_band_command_output_tx.try_send(event) {
-                log::error!(
-                    "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:?}"
-                );
-            }
+            log::warn!(
+                "Failed to send ExecutedExecutorCommandEvent to InBandCommandExecutor: {e:#}"
+            );
         }
     }
 
@@ -703,7 +737,7 @@ impl SessionInfo {
                 }
             }
             Err(e) => {
-                crate::report_error!(e);
+                log::warn!("Failed to get local hostname when determining session type: {e:#}");
                 BootstrapSessionType::Local
             }
         }
@@ -730,7 +764,10 @@ impl SessionInfo {
         let shell_type = match ShellType::from_name(bootstrapped_value.shell.as_str()) {
             Some(value) => {
                 if value != self.shell.shell_type() {
-                    log::error!("Received ShellType {:?} in BootstrappedValue that conflicts with pending ShellType {:?}", value, self.shell.shell_type());
+                    report_error!(
+                        "Received ShellType in BootstrappedValue that conflicts with pending ShellType",
+                        extra: { "value" => ?value, "pending" => ?self.shell.shell_type() }
+                    );
                 }
                 value
             }
@@ -1371,7 +1408,7 @@ impl Session {
                 {
                     Ok(contents) => contents,
                     Err(e) => {
-                        log::error!("Failed to read history contents for file: {e:?}");
+                        report_error!(e);
                         continue;
                     }
                 };
@@ -1413,15 +1450,16 @@ impl Session {
         history_file: &Path,
         is_kaspersky_running: bool,
     ) -> Result<Vec<u8>, ReadHistoryContentsError> {
-        let Some(history_file_path) = history_file.as_os_str().to_str() else {
-            return Err(ReadHistoryContentsError::HistoryFilePathError);
-        };
-
         // Try reading the history file using PowerShell commands first.
-        let powershell_error = match Self::read_history_via_powershell(history_file_path).await {
-            Ok(result) => return Ok(result),
-            Err(e) => e,
-        };
+        let powershell_error =
+            match Self::read_history_via_powershell(history_file.as_os_str()).await {
+                Ok(result) => return Ok(result),
+                Err(e) => e,
+            };
+        // Log the detailed error locally as a breadcrumb only; the failure is reported once at the
+        // sink via the registered `ReadHistoryContentsError`, whose static message keeps Sentry
+        // grouping stable and omits the (potentially sensitive/lengthy) PowerShell stderr.
+        log::error!("{powershell_error:?}");
 
         // If Kaspersky is running, early return since we can't use [`async_fs`] to read the history
         // file.
@@ -1430,45 +1468,16 @@ impl Session {
         }
 
         // Otherwise, fall back to using [`async_fs`] to read the history file.
-        match async_fs::read(history_file).await {
-            Ok(contents) => {
-                // Report this error so we have some data on whether this method of running
-                // PowerShell commands is reliable. If this turns out to be noisy, we can remove
-                // this log line.
-                log::warn!(
-                    "Failed to read history using PowerShell commands: {powershell_error:?}"
-                );
-                #[cfg(feature = "crash_reporting")]
-                sentry::with_scope(
-                    |scope| {
-                        let mut context = std::collections::BTreeMap::new();
-                        context.insert(
-                            "powershell_error".to_string(),
-                            format!("{powershell_error:?}").into(),
-                        );
-                        scope.set_context(
-                            "powershell_history",
-                            sentry::protocol::Context::Other(context),
-                        );
-                    },
-                    || {
-                        sentry::capture_message(
-                            "Failed to read history using PowerShell commands",
-                            sentry::Level::Error,
-                        )
-                    },
-                );
-                Ok(contents)
-            }
-            Err(e) => Err(ReadHistoryContentsError::PowerShellAndAsyncFsError {
+        async_fs::read(history_file).await.map_err(|e| {
+            ReadHistoryContentsError::PowerShellAndAsyncFsError {
                 powershell_error,
                 async_fs_error: e,
-            }),
-        }
+            }
+        })
     }
 
     #[cfg(windows)]
-    async fn read_history_via_powershell(history_file_path: &str) -> Result<Vec<u8>> {
+    async fn read_history_via_powershell(history_file_path: &OsStr) -> Result<Vec<u8>> {
         let Some(powershell_command) = crate::util::windows::any_powershell_path() else {
             return Err(anyhow::anyhow!(
                 "Failed to find powershell executable to read history"
@@ -1479,9 +1488,7 @@ impl Session {
             .arg("-NoProfile")
             .arg("-NoLogo")
             .arg("-Command")
-            .arg(format!(
-                "[System.IO.File]::ReadAllText('{history_file_path}')"
-            ))
+            .arg(powershell_read_all_text_command(history_file_path))
             .output()
             .await;
         match read_result {
@@ -1550,7 +1557,7 @@ impl Session {
                 )
             }
             CommandExitStatus::Failure => {
-                log::error!("Failed to parse history file from file");
+                log::warn!("Failed to read history file from remote session");
                 None
             }
         }
@@ -1638,11 +1645,11 @@ impl Session {
                     );
                     return vec![];
                 };
-                let res = output_string
+
+                output_string
                     .lines()
                     .map(|s| s.trim().to_string())
-                    .collect();
-                res
+                    .collect()
             }
             _ => {
                 log::warn!("failed to get git_branches_for_command_corrections");
@@ -1678,6 +1685,14 @@ impl Session {
             // Cases: powershell sessions
             ShellFamily::PowerShell => TypedPathBuf::from_windows(pwd),
         }
+    }
+
+    /// Returns whether `cwd` (a working directory reported for this session)
+    /// can be resolved to a usable native path.
+    pub fn can_resolve_cwd_to_native_path(&self, cwd: &str) -> bool {
+        let typed_path = self.convert_directory_to_typed_path_buf(cwd.to_string());
+        self.maybe_convert_to_native_path(&typed_path.to_path())
+            .is_ok()
     }
 }
 
@@ -1912,7 +1927,9 @@ pub mod testing {
                 .set(external_commands_with_values(commands))
                 .is_err()
             {
-                log::warn!("Ignored call to set_external_commands, as external commands had already been set!");
+                log::warn!(
+                    "Ignored call to set_external_commands, as external commands had already been set!"
+                );
             };
         }
 

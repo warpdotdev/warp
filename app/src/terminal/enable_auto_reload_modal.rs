@@ -16,7 +16,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity as _, View, ViewContex
 
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
-use crate::modal::{Modal, ModalEvent, MODAL_PADDING, MODAL_WIDTH};
+use crate::modal::{MODAL_PADDING, MODAL_WIDTH, Modal, ModalEvent};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{AutoReloadModalAction, TelemetryEvent};
@@ -389,7 +389,7 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
             }
             Action::Enable => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let Some(team_uid) = workspaces.current_team_uid() else {
+                let Some(team_uid) = workspaces.team_uid_for_window(ctx.window_id()) else {
                     ctx.emit(EnableAutoReloadModalBodyEvent::ShowToast {
                         message: "Oops, something went wrong; your team's data could not be found."
                             .to_string(),

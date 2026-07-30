@@ -6,7 +6,7 @@ use objc2_app_kit::{NSAlert, NSApplication, NSModalResponse};
 /// in `app.m` can call it by its C symbol; `app.m` invokes it inside a
 /// main-queue block, so this runs on the main thread and `runModal` stays
 /// synchronous.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C-unwind" fn configureAndRunModal(
     alert: &NSAlert,
     app: &NSApplication,

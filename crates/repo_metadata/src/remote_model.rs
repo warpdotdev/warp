@@ -12,12 +12,12 @@ use warp_core::HostId;
 use warpui_core::ModelContext;
 
 use super::local_model::collect_contents_recursive;
+use crate::RepoMetadataError;
 use crate::file_tree_store::{FileTreeEntry, FileTreeState};
 use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{GetContentsArgs, IndexedRepoState, RepoContents};
 use crate::repository_identifier::RemoteRepositoryIdentifier;
 use crate::standing_queries::{StandingQueryResults, StandingQueryResultsDelta};
-use crate::RepoMetadataError;
 
 /// Events emitted by the [`RemoteRepoMetadataModel`].
 #[derive(Debug)]

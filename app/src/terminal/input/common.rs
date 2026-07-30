@@ -13,16 +13,16 @@ use warpui::elements::{
 use warpui::fonts::Weight;
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle};
+use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WeakViewHandle};
 
-use crate::ai::llms::{is_using_api_key_for_provider, LLMPreferences};
+use crate::ai::llms::{LLMPreferences, should_show_key_icon_for_model};
 use crate::ai::{AIRequestUsageModel, BuyCreditsBannerDisplayState};
 use crate::appearance::Appearance;
 use crate::settings::{AISettings, InputSettings};
 use crate::terminal::buy_credits_banner::BuyCreditsBanner;
 use crate::terminal::input::{Input, InputAction, InputSuggestionsMode, MenuPositioning};
 use crate::terminal::model::TerminalModel;
-use crate::terminal::view::{TerminalAction, PADDING_LEFT};
+use crate::terminal::view::{PADDING_LEFT, TerminalAction};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -477,13 +477,14 @@ fn render_command_token_description(
 pub(super) fn maybe_add_buy_credits_banner(
     stack: &mut Stack,
     buy_credits_banner: &ViewHandle<BuyCreditsBanner>,
+    input_view_handle: &WeakViewHandle<Input>,
     is_focused: bool,
     terminal_view_id: EntityId,
     is_input_at_top: bool,
     app: &AppContext,
 ) {
     let can_purchase_addon_credits = UserWorkspaces::as_ref(app)
-        .current_team()
+        .team_for_view_handle(input_view_handle, app)
         .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
         .is_some_and(|policy| policy.enabled);
 
@@ -496,10 +497,8 @@ pub(super) fn maybe_add_buy_credits_banner(
         ai_request_usage.compute_buy_addon_credits_banner_display_state(app),
         BuyCreditsBannerDisplayState::Hidden
     );
-    let is_using_api_key_for_current_model = is_using_api_key_for_provider(
-        &LLMPreferences::as_ref(app)
-            .get_active_base_model(app, Some(terminal_view_id))
-            .provider,
+    let is_using_api_key_for_current_model = should_show_key_icon_for_model(
+        LLMPreferences::as_ref(app).get_active_base_model(app, Some(terminal_view_id)),
         app,
     );
     if can_purchase_addon_credits

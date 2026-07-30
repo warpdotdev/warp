@@ -15,6 +15,7 @@ pub mod get_oauth_connect_tx_status;
 pub mod get_referral_info;
 pub mod get_relevant_fragments;
 pub mod get_request_limit_info;
+pub mod get_runners;
 pub mod get_scheduled_agent_history;
 pub mod get_simple_integrations;
 pub mod get_updated_cloud_objects;

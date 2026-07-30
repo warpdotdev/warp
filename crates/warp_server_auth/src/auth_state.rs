@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use parking_lot::RwLock;
 use uuid::Uuid;
 use warp_core::channel::{Channel, ChannelState};
-use warp_core::report_error;
+use warp_errors::report_error;
 use warp_graphql::object_permissions::OwnerType;
 use warpui_core::{AppContext, Entity, SingletonEntity};
 

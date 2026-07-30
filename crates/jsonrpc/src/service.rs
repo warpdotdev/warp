@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::channel::oneshot;
 use futures::lock::Mutex as AsyncMutex;
 use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
 use serde_json::Value;
+use serde_json::value::RawValue;
+use warp_errors::report_error;
 use warpui_core::r#async::executor::Background;
 
 use crate::transport::Transport;
@@ -65,6 +66,7 @@ pub struct AnyResponse<'a> {
     pub id: RequestId,
 }
 
+#[derive(Debug)]
 pub struct ServerNotificationEvent {
     pub method: String,
     pub params: Value,
@@ -112,7 +114,7 @@ impl JsonRpcService {
                 )
                 .await
                 {
-                    log::error!("JSON-RPC read loop error: {e}");
+                    report_error!(e.context("JSON-RPC read loop error"));
                 }
             })
             .detach();
@@ -285,13 +287,13 @@ impl JsonRpcService {
         notification_subscriptions: &AsyncMutex<HashMap<String, Subscription>>,
     ) {
         let subs = notification_subscriptions.lock().await;
-        if let Some(subscription) = subs.get(method) {
-            if let Err(e) = subscription.try_send(ServerNotificationEvent {
+        if let Some(subscription) = subs.get(method)
+            && let Err(e) = subscription.try_send(ServerNotificationEvent {
                 method: method.to_string(),
                 params,
-            }) {
-                log::error!("Failed to send notification: {e}");
-            }
+            })
+        {
+            report_error!(anyhow::Error::new(e).context("Failed to send notification"));
         }
     }
 
@@ -349,7 +351,7 @@ impl JsonRpcService {
         let transport = self.transport.clone();
         let future = async move {
             if let Err(e) = transport.write(&content).await {
-                log::error!("Failed to send notification: {e}");
+                report_error!(e.context("Failed to send notification"));
             };
         };
 

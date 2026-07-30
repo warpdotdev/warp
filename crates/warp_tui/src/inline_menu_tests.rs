@@ -1,0 +1,804 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use warp::appearance::Appearance;
+use warpui::event::ModifiersState;
+use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{
+    Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
+};
+use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::{App, AppContext, EntityId, EntityIdMap};
+
+use super::{
+    InlineMenuScrollFn, TuiInlineMenuElement, TuiInlineMenuHeader, TuiInlineMenuListState,
+    TuiInlineMenuRow, TuiInlineMenuRowStyle, TuiInlineMenuScrollAnchor, TuiInlineMenuSnapshot,
+    TuiInlineMenuStatus, TuiInlineMenuTab, render_inline_menu,
+};
+use crate::tui_builder::TuiUiBuilder;
+struct InteractiveMenuHarness {
+    element: TuiInlineMenuElement,
+    area: TuiRect,
+    accepted_index: Rc<RefCell<Option<usize>>>,
+    scroll_delta: Rc<RefCell<Option<isize>>>,
+}
+
+impl InteractiveMenuHarness {
+    fn new(snapshot: TuiInlineMenuSnapshot, ctx: &AppContext) -> Self {
+        let accepted_index = Rc::new(RefCell::new(None));
+        let scroll_delta = Rc::new(RefCell::new(None));
+        let on_accept = {
+            let accepted_index = Rc::clone(&accepted_index);
+            move |index, _: &mut TuiEventContext<'_>, _: &AppContext| {
+                *accepted_index.borrow_mut() = Some(index);
+            }
+        };
+        let on_scroll: Box<InlineMenuScrollFn> = {
+            let scroll_delta = Rc::clone(&scroll_delta);
+            Box::new(move |delta, _, _| *scroll_delta.borrow_mut() = Some(delta))
+        };
+        let item_mouse_states = Rc::new(RefCell::new(
+            (0..snapshot.rows.len())
+                .map(|_| MouseStateHandle::default())
+                .collect(),
+        ));
+        let mut harness = Self {
+            element: TuiInlineMenuElement {
+                snapshot,
+                builder: TuiUiBuilder::from_app(ctx),
+                content: None,
+                item_mouse_states,
+                on_accept: Some(Rc::new(on_accept)),
+                on_scroll: Some(on_scroll),
+            },
+            area: TuiRect::new(0, 0, 50, 3),
+            accepted_index,
+            scroll_delta,
+        };
+        harness.layout(ctx);
+        harness
+    }
+
+    fn layout(&mut self, ctx: &AppContext) {
+        let mut rendered_views = EntityIdMap::default();
+        let mut layout_ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        self.element.layout(
+            TuiConstraint::tight(TuiSize::new(self.area.width, self.area.height)),
+            &mut layout_ctx,
+            ctx,
+        );
+    }
+
+    fn dispatch(&mut self, event: &TuiEvent, ctx: &AppContext) -> bool {
+        let mut rendered_views = EntityIdMap::default();
+        let mut buffer = TuiBuffer::empty(self.area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        {
+            let mut surface = TuiPaintSurface::new(&mut buffer);
+            self.element.render(
+                TuiScreenPosition::new(i32::from(self.area.x), i32::from(self.area.y)),
+                &mut surface,
+                &mut paint_ctx,
+            );
+        }
+        let scene = Rc::new(paint_ctx.scene.clone());
+        drop(paint_ctx);
+        let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+        event_ctx.set_origin_view(Some(EntityId::new()));
+        self.element.dispatch_event(event, &mut event_ctx, ctx)
+    }
+
+    fn click_row(&mut self, row: u16, ctx: &AppContext) {
+        let position = (5, row).into();
+        let events = [
+            TuiEvent::LeftMouseDown {
+                position,
+                modifiers: ModifiersState::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+            TuiEvent::LeftMouseUp {
+                position,
+                modifiers: ModifiersState::default(),
+            },
+        ];
+        for event in &events {
+            self.dispatch(event, ctx);
+        }
+    }
+
+    fn scroll_at(&mut self, row: u16, delta: isize, ctx: &AppContext) -> bool {
+        self.dispatch(
+            &TuiEvent::ScrollWheel {
+                position: (5, row).into(),
+                delta: (0, delta),
+                precise: false,
+                modifiers: ModifiersState::default(),
+            },
+            ctx,
+        )
+    }
+
+    fn hover_row(&mut self, row: u16, ctx: &AppContext) {
+        self.dispatch(
+            &TuiEvent::MouseMoved {
+                position: (5, row).into(),
+                modifiers: ModifiersState::default(),
+                is_synthetic: false,
+            },
+            ctx,
+        );
+        self.layout(ctx);
+    }
+
+    fn modifier_at(&mut self, x: u16, y: u16) -> Modifier {
+        let mut rendered_views = EntityIdMap::default();
+        let mut buffer = TuiBuffer::empty(self.area);
+        let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+        {
+            let mut surface = TuiPaintSurface::new(&mut buffer);
+            self.element.render(
+                TuiScreenPosition::new(i32::from(self.area.x), i32::from(self.area.y)),
+                &mut surface,
+                &mut paint_ctx,
+            );
+        }
+        buffer[(x, y)].modifier
+    }
+}
+
+fn render_at_size(snapshot: TuiInlineMenuSnapshot, width: u16, height: u16) -> Vec<String> {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(move |ctx| {
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_inline_menu(&snapshot, &TuiUiBuilder::from_app(ctx)),
+                TuiRect::new(0, 0, width, height),
+                ctx,
+            );
+            frame.buffer.to_lines()
+        })
+    })
+}
+
+fn render_at_height(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String> {
+    render_at_size(snapshot, 50, height)
+}
+fn render(snapshot: TuiInlineMenuSnapshot) -> Vec<String> {
+    render_at_height(snapshot, 12)
+}
+fn rendered_labels(snapshot: TuiInlineMenuSnapshot, height: u16) -> Vec<String> {
+    let mut lines = render_at_height(snapshot, height)
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .collect::<Vec<_>>();
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+fn rows_snapshot(
+    row_count: usize,
+    selected_index: usize,
+    scroll_offset: usize,
+    max_visible_rows: usize,
+) -> TuiInlineMenuSnapshot {
+    TuiInlineMenuSnapshot {
+        header: None,
+        rows: (0..row_count)
+            .map(|index| TuiInlineMenuRow {
+                title: format!("Conversation {index}"),
+                prefix: None,
+                description: None,
+                state_suffix: None,
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::Default,
+            })
+            .collect(),
+        selected_index: Some(selected_index),
+        scroll_offset,
+        scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+        max_visible_rows,
+        status: None,
+    }
+}
+
+fn status_snapshot(status: TuiInlineMenuStatus) -> TuiInlineMenuSnapshot {
+    TuiInlineMenuSnapshot {
+        header: None,
+        rows: Vec::new(),
+        selected_index: None,
+        scroll_offset: 0,
+        scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+        max_visible_rows: 8,
+        status: Some(status),
+    }
+}
+
+#[test]
+fn renders_loading_and_empty_statuses_left_aligned() {
+    let loading = render(status_snapshot(TuiInlineMenuStatus::Loading(
+        "Loading conversations…".to_owned(),
+    )));
+    assert!(
+        loading
+            .iter()
+            .any(|line| line.starts_with("Loading conversations…"))
+    );
+
+    let empty = render(status_snapshot(TuiInlineMenuStatus::Empty(
+        "No conversations found".to_owned(),
+    )));
+    assert!(
+        empty
+            .iter()
+            .any(|line| line.starts_with("No conversations found"))
+    );
+}
+
+#[test]
+fn renders_only_the_visible_row_window() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 3, 2, 2), 12),
+        vec!["Conversation 2", "Conversation 3"]
+    );
+}
+
+#[test]
+fn fitting_rows_render_without_overflow_indicators() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(3, 1, 0, 4), 4),
+        vec!["Conversation 0", "Conversation 1", "Conversation 2"]
+    );
+}
+
+#[test]
+fn lower_overflow_renders_a_down_arrow_as_the_last_row() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 1, 0, 4), 4),
+        vec!["Conversation 0", "Conversation 1", "Conversation 2", "↓"]
+    );
+}
+#[test]
+fn multiline_conversation_title_is_ellipsized_without_hiding_lower_overflow() {
+    let mut snapshot = rows_snapshot(5, 0, 0, 4);
+    snapshot.rows[0].title = "Conversation 0\ncontinued title".to_owned();
+
+    assert_eq!(
+        rendered_labels(snapshot, 4),
+        vec!["Conversation 0...", "Conversation 1", "Conversation 2", "↓"]
+    );
+}
+
+#[test]
+fn upper_overflow_renders_an_up_arrow_as_the_first_row() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(5, 4, 3, 4), 4),
+        vec!["↑", "Conversation 2", "Conversation 3", "Conversation 4"]
+    );
+}
+
+#[test]
+fn overflow_in_both_directions_renders_both_arrows_and_keeps_selection_visible() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(7, 4, 0, 5), 5),
+        vec![
+            "↑",
+            "Conversation 2",
+            "Conversation 3",
+            "Conversation 4",
+            "↓"
+        ]
+    );
+}
+
+#[test]
+fn short_viewport_prioritizes_three_real_rows_over_scroll_indicators() {
+    assert_eq!(
+        rendered_labels(rows_snapshot(7, 3, 0, 4), 4),
+        vec![
+            "Conversation 0",
+            "Conversation 1",
+            "Conversation 2",
+            "Conversation 3"
+        ]
+    );
+}
+
+#[test]
+fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
+    let lines = render(TuiInlineMenuSnapshot {
+        header: Some(TuiInlineMenuHeader {
+            title: Some("Conversations".to_owned()),
+            tabs: vec![
+                TuiInlineMenuTab {
+                    label: "All".to_owned(),
+                    is_selected: true,
+                },
+                TuiInlineMenuTab {
+                    label: "Pinned".to_owned(),
+                    is_selected: false,
+                },
+            ],
+        }),
+        rows: vec![
+            TuiInlineMenuRow {
+                title: "Current project".to_owned(),
+                prefix: None,
+                description: Some("2 minutes ago".to_owned()),
+                state_suffix: None,
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::Default,
+            },
+            TuiInlineMenuRow {
+                title: "Archived".to_owned(),
+                prefix: None,
+                description: None,
+                state_suffix: None,
+                is_selectable: false,
+                style: TuiInlineMenuRowStyle::Default,
+            },
+        ],
+        selected_index: Some(0),
+        scroll_offset: 0,
+        scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+        max_visible_rows: 8,
+        status: None,
+    });
+    let rendered = lines.join("\n");
+    assert!(rendered.contains("Conversations"));
+    assert!(rendered.contains("[All]  Pinned"));
+    assert!(!rendered.chars().any(|glyph| "┌┐└┘─│▏▕▁▔".contains(glyph)));
+    assert!(rendered.contains("Current project  2 minutes ago"));
+    assert!(rendered.contains("Archived"));
+}
+
+#[test]
+fn default_row_state_suffix_is_muted_and_italic() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let snapshot = TuiInlineMenuSnapshot {
+                header: None,
+                rows: vec![TuiInlineMenuRow {
+                    title: "GPT 5".to_owned(),
+                    prefix: None,
+                    description: None,
+                    state_suffix: Some("(key connected)".to_owned()),
+                    is_selectable: true,
+                    style: TuiInlineMenuRowStyle::Default,
+                }],
+                selected_index: Some(0),
+                scroll_offset: 0,
+                scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+                max_visible_rows: 8,
+                status: None,
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_inline_menu(&snapshot, &builder),
+                TuiRect::new(0, 0, 50, 1),
+                ctx,
+            );
+            let line = frame.buffer.to_lines().remove(0);
+            let suffix_column = line.find("(key connected)").expect("suffix should render");
+            let suffix_cell = &frame.buffer[(u16::try_from(suffix_column).unwrap(), 0)];
+
+            assert_eq!(
+                suffix_cell.fg,
+                builder
+                    .muted_text_style()
+                    .fg
+                    .expect("muted text should have a foreground")
+            );
+            assert!(suffix_cell.modifier.contains(Modifier::ITALIC));
+        });
+    });
+}
+
+#[test]
+fn conversation_like_snapshot_keeps_selection_visible_within_production_height() {
+    let lines = render_at_height(
+        TuiInlineMenuSnapshot {
+            header: Some(TuiInlineMenuHeader {
+                title: Some("Conversations".to_owned()),
+                tabs: vec![
+                    TuiInlineMenuTab {
+                        label: "All".to_owned(),
+                        is_selected: true,
+                    },
+                    TuiInlineMenuTab {
+                        label: "Pinned".to_owned(),
+                        is_selected: false,
+                    },
+                ],
+            }),
+            rows: (0..8)
+                .map(|index| TuiInlineMenuRow {
+                    title: format!("Conversation {index}"),
+                    prefix: None,
+                    description: None,
+                    state_suffix: None,
+                    is_selectable: true,
+                    style: TuiInlineMenuRowStyle::Default,
+                })
+                .collect(),
+            selected_index: Some(7),
+            scroll_offset: 0,
+            scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+            max_visible_rows: 8,
+            status: None,
+        },
+        10,
+    );
+
+    assert_eq!(lines.len(), 10);
+    let rendered = lines.join("\n");
+    assert!(rendered.contains("Conversations"));
+    assert!(rendered.contains("[All]  Pinned"));
+    assert!(rendered.contains("Conversation 0"));
+    assert!(rendered.contains("Conversation 1"));
+    assert!(rendered.contains("Conversation 2"));
+    assert!(rendered.contains("Conversation 7"));
+}
+
+#[test]
+fn slash_command_rows_match_figma_layout_and_colors() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let snapshot = TuiInlineMenuSnapshot {
+                header: None,
+                rows: vec![
+                    TuiInlineMenuRow {
+                        title: "/agent".to_owned(),
+                        prefix: None,
+                        description: Some("Start a new agent conversation".to_owned()),
+                        state_suffix: Some("(currently on)".to_owned()),
+                        is_selectable: true,
+                        style: TuiInlineMenuRowStyle::InlineMenuItem,
+                    },
+                    TuiInlineMenuRow {
+                        title: "/plan".to_owned(),
+                        prefix: None,
+                        description: Some("Create a plan".to_owned()),
+                        state_suffix: Some("(currently off)".to_owned()),
+                        is_selectable: true,
+                        style: TuiInlineMenuRowStyle::InlineMenuItem,
+                    },
+                ],
+                selected_index: Some(0),
+                scroll_offset: 0,
+                scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+                max_visible_rows: 8,
+                status: None,
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_inline_menu(&snapshot, &builder),
+                TuiRect::new(0, 0, 80, 2),
+                ctx,
+            );
+            let lines = frame.buffer.to_lines();
+
+            assert!(lines[0].starts_with(
+                "/agent                       Start a new agent conversation (currently on)"
+            ));
+            assert!(lines[1].starts_with("/plan                        Create"));
+            assert!(
+                !lines
+                    .iter()
+                    .any(|line| line.chars().any(|glyph| "┌┐└┘─│▏▕▁▔".contains(glyph)))
+            );
+            assert_eq!(
+                frame.buffer[(0, 0)].bg,
+                builder.slash_command_selection_background()
+            );
+            assert_eq!(frame.buffer[(0, 0)].bg, Color::Rgb(208, 209, 254));
+            assert_eq!(
+                frame.buffer[(0, 0)].fg,
+                builder
+                    .slash_command_selection_text_style()
+                    .fg
+                    .expect("selected slash-command text has a foreground")
+            );
+            assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+            assert_eq!(
+                frame.buffer[(0, 1)].fg,
+                builder
+                    .slash_command_text_style()
+                    .fg
+                    .expect("slash-command text has a foreground")
+            );
+            assert_eq!(
+                frame.buffer[(29, 1)].fg,
+                builder
+                    .primary_text_style()
+                    .fg
+                    .expect("slash-command descriptions use primary text")
+            );
+            let suffix_column = lines[0]
+                .find("(currently on)")
+                .expect("state suffix should render");
+            assert_eq!(
+                frame.buffer[(u16::try_from(suffix_column).unwrap(), 0)].fg,
+                builder
+                    .slash_command_selection_state_suffix_style()
+                    .fg
+                    .expect("selected state suffix should use muted theme green")
+            );
+            let unselected_suffix_column = lines[1]
+                .find("(currently off)")
+                .expect("unselected state suffix should render");
+            assert_eq!(
+                frame.buffer[(u16::try_from(unselected_suffix_column).unwrap(), 1)].fg,
+                builder
+                    .success_glyph_style()
+                    .fg
+                    .expect("unselected state suffix should use theme green")
+            );
+            assert_eq!(
+                frame.buffer[(u16::try_from(unselected_suffix_column).unwrap(), 1)].fg,
+                Color::Rgb(180, 250, 114)
+            );
+        });
+    });
+}
+
+#[test]
+fn long_slash_command_titles_are_ellipsized_before_the_description() {
+    let lines = render(TuiInlineMenuSnapshot {
+        header: None,
+        rows: vec![TuiInlineMenuRow {
+            title: "/respond-to-pr-comments-in-blocklist".to_owned(),
+            prefix: None,
+            description: Some("Walk users through PR review comments".to_owned()),
+            state_suffix: None,
+            is_selectable: true,
+            style: TuiInlineMenuRowStyle::InlineMenuItem,
+        }],
+        selected_index: Some(0),
+        scroll_offset: 0,
+        scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+        max_visible_rows: 8,
+        status: None,
+    });
+
+    assert!(lines[0].starts_with("/respond-to-pr-comments-i... Walk users"));
+}
+
+#[test]
+fn wide_slash_command_rows_expand_to_show_long_titles() {
+    let lines = render_at_size(
+        TuiInlineMenuSnapshot {
+            header: None,
+            rows: vec![TuiInlineMenuRow {
+                title: "/respond-to-pr-comments-in-blocklist".to_owned(),
+                prefix: None,
+                description: Some("Walk users through PR review comments".to_owned()),
+                state_suffix: None,
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::InlineMenuItem,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+            scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+            max_visible_rows: 8,
+            status: None,
+        },
+        80,
+        1,
+    );
+
+    assert!(
+        lines[0].starts_with(
+            "/respond-to-pr-comments-in-blocklist Walk users through PR review comments"
+        )
+    );
+}
+
+#[test]
+fn boundary_width_preserves_useful_title_and_description_columns() {
+    let lines = render_at_size(
+        TuiInlineMenuSnapshot {
+            header: None,
+            rows: vec![TuiInlineMenuRow {
+                title: "/agent".to_owned(),
+                prefix: None,
+                description: Some("Start a new agent conversation".to_owned()),
+                state_suffix: None,
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::InlineMenuItem,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+            scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+            max_visible_rows: 8,
+            status: None,
+        },
+        20,
+        1,
+    );
+
+    assert!(lines[0].starts_with("/agent  Start a new"));
+}
+
+#[test]
+fn narrow_slash_command_rows_use_the_full_width_for_titles() {
+    let lines = render_at_size(
+        TuiInlineMenuSnapshot {
+            header: None,
+            rows: vec![TuiInlineMenuRow {
+                title: "/12345678901234567890".to_owned(),
+                prefix: None,
+                description: Some("Description hidden at narrow widths".to_owned()),
+                state_suffix: None,
+                is_selectable: true,
+                style: TuiInlineMenuRowStyle::InlineMenuItem,
+            }],
+            selected_index: Some(0),
+            scroll_offset: 0,
+            scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+            max_visible_rows: 8,
+            status: None,
+        },
+        19,
+        1,
+    );
+
+    assert_eq!(lines[0], "/123456789012345...");
+}
+
+#[test]
+fn list_select_absolute_requires_a_selectable_in_bounds_row() {
+    let mut list = TuiInlineMenuListState::default();
+    list.replace_rows(
+        vec![true, false, true, true, true],
+        false,
+        Some(0),
+        2,
+        |row| *row,
+    );
+
+    assert!(list.select_absolute(3, 2, |row| *row));
+    assert_eq!(list.selected_index(), Some(3));
+    assert_eq!(list.scroll_offset(), 2);
+    assert!(!list.select_absolute(1, 2, |row| *row));
+    assert!(!list.select_absolute(10, 2, |row| *row));
+    assert_eq!(list.selected_index(), Some(3));
+}
+
+#[test]
+fn list_scroll_by_moves_offset_without_changing_selection() {
+    let mut list = TuiInlineMenuListState::default();
+    list.replace_rows(vec![(); 8], false, Some(1), 3, |_| true);
+
+    list.scroll_by(2, 3);
+    assert_eq!(list.selected_index(), Some(1));
+    assert_eq!(list.scroll_offset(), 2);
+    list.scroll_by(-1, 3);
+    assert_eq!(list.scroll_offset(), 1);
+    list.scroll_by(100, 3);
+    assert_eq!(list.scroll_offset(), 5);
+}
+#[test]
+fn explicit_scroll_offset_renders_independently_from_selection() {
+    let mut list = TuiInlineMenuListState::default();
+    list.replace_rows(vec![(); 8], false, Some(0), 4, |_| true);
+
+    list.scroll_by(100, 4);
+
+    assert_eq!(list.selected_index(), Some(0));
+    assert_eq!(
+        list.scroll_anchor(),
+        TuiInlineMenuScrollAnchor::ScrollOffset
+    );
+    let mut snapshot = rows_snapshot(8, 0, list.scroll_offset(), 4);
+    snapshot.scroll_anchor = list.scroll_anchor();
+    assert_eq!(
+        rendered_labels(snapshot, 4),
+        vec!["↑", "Conversation 5", "Conversation 6", "Conversation 7"]
+    );
+}
+
+#[test]
+fn shared_list_navigation_wraps_skips_disabled_rows_and_scrolls() {
+    let mut list = TuiInlineMenuListState::default();
+    list.replace_rows(vec![true, false, true, true], false, Some(0), 2, |row| *row);
+
+    list.select_next(2, |row| *row);
+    assert_eq!(list.selected_index(), Some(2));
+    assert_eq!(list.scroll_offset(), 1);
+
+    list.select_next(2, |row| *row);
+    assert_eq!(list.selected_index(), Some(3));
+    assert_eq!(list.scroll_offset(), 2);
+
+    list.select_next(2, |row| *row);
+    assert_eq!(list.selected_index(), Some(0));
+    assert_eq!(list.scroll_offset(), 0);
+
+    list.select_previous(2, |row| *row);
+    assert_eq!(list.selected_index(), Some(3));
+    assert_eq!(list.scroll_offset(), 2);
+}
+
+#[test]
+fn shared_list_reserves_space_for_scroll_indicators() {
+    let mut list = TuiInlineMenuListState::default();
+
+    list.replace_rows(vec![(); 11], false, Some(10), 10, |_| true);
+
+    assert_eq!(list.selected_index(), Some(10));
+    assert_eq!(list.scroll_offset(), 2);
+}
+
+#[test]
+fn shared_list_preserves_ready_rows_while_a_mixer_query_loads() {
+    let mut list = TuiInlineMenuListState::default();
+    list.replace_rows(vec!["ready"], false, Some(0), 2, |_| true);
+
+    let update = list.reconcile_mixer_rows(vec!["pending"], true, 2, |_| true);
+
+    assert_eq!(
+        update,
+        warp_search_core::inline_menu::InlineMenuResultsUpdate::Loading
+    );
+    assert_eq!(list.rows(), &["ready"]);
+    assert_eq!(list.selected_index(), Some(0));
+    assert!(list.is_loading());
+}
+
+#[test]
+fn interactive_menu_clicks_only_selectable_rows() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(move |ctx| {
+            let mut menu = InteractiveMenuHarness::new(rows_snapshot(3, 0, 0, 5), ctx);
+            menu.click_row(1, ctx);
+            assert_eq!(*menu.accepted_index.borrow(), Some(1));
+            assert_eq!(*menu.scroll_delta.borrow(), None);
+
+            let mut snapshot = rows_snapshot(3, 0, 0, 5);
+            snapshot.rows[1].is_selectable = false;
+            let mut menu = InteractiveMenuHarness::new(snapshot, ctx);
+            menu.click_row(1, ctx);
+            assert_eq!(*menu.accepted_index.borrow(), None);
+        });
+    });
+}
+
+#[test]
+fn interactive_menu_scrolls_only_within_its_bounds() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(move |ctx| {
+            let mut menu = InteractiveMenuHarness::new(rows_snapshot(3, 0, 0, 5), ctx);
+            assert!(menu.scroll_at(1, 2, ctx));
+            assert_eq!(menu.scroll_delta.borrow_mut().take(), Some(-2));
+            assert!(!menu.scroll_at(10, 1, ctx));
+            assert_eq!(*menu.scroll_delta.borrow(), None);
+            assert_eq!(*menu.accepted_index.borrow(), None);
+        });
+    });
+}
+
+#[test]
+fn interactive_menu_hovered_selectable_row_renders_bold() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(move |ctx| {
+            let mut menu = InteractiveMenuHarness::new(rows_snapshot(3, 0, 0, 5), ctx);
+            menu.hover_row(1, ctx);
+            assert!(menu.modifier_at(0, 1).contains(Modifier::BOLD));
+            assert!(!menu.modifier_at(0, 2).contains(Modifier::BOLD));
+        });
+    });
+}

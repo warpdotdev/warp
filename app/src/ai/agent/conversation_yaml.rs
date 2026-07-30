@@ -9,9 +9,9 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use api::message::Message;
 use api::message::tool_call::Tool;
 use api::message::tool_call_result::Result as ToolCallResultType;
-use api::message::Message;
 use warp_multi_agent_api as api;
 
 use super::task::helper::{SubagentExt, ToolExt};
@@ -93,12 +93,11 @@ fn write_task_messages(
                 content.push_str("type: user_query\n");
                 content.push_str("query: |\n");
                 write_block_scalar(&mut content, &uq.query);
-                if let Some(ctx) = &uq.context {
-                    if let Some(dir_ctx) = &ctx.directory {
-                        if !dir_ctx.pwd.is_empty() {
-                            content.push_str(&format!("working_directory: {}\n", dir_ctx.pwd));
-                        }
-                    }
+                if let Some(ctx) = &uq.context
+                    && let Some(dir_ctx) = &ctx.directory
+                    && !dir_ctx.pwd.is_empty()
+                {
+                    content.push_str(&format!("working_directory: {}\n", dir_ctx.pwd));
                 }
                 write_yaml_file(dir, &filename, &content)?;
                 *index += 1;
@@ -389,16 +388,6 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
                 }
             }
         }
-        Tool::StartAgent(sa) => {
-            out.push_str(&format!("name: \"{}\"\n", escape_yaml_string(&sa.name)));
-            out.push_str("prompt: |\n");
-            write_block_scalar(out, &sa.prompt);
-        }
-        Tool::StartAgentV2(sa) => {
-            out.push_str(&format!("name: \"{}\"\n", escape_yaml_string(&sa.name)));
-            out.push_str("prompt: |\n");
-            write_block_scalar(out, &sa.prompt);
-        }
         #[allow(deprecated)]
         Tool::FileGlob(fg) => {
             out.push_str("patterns:\n");
@@ -590,15 +579,6 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
                     "error: \"{}\"\n",
                     escape_yaml_string(&failure.error)
                 ));
-            }
-            None => {}
-        },
-        ToolCallResultType::StartAgentV2(r) => match &r.result {
-            Some(api::start_agent_v2_result::Result::Success(s)) => {
-                out.push_str(&format!("agent_id: {}\n", s.agent_id));
-            }
-            Some(api::start_agent_v2_result::Result::Error(e)) => {
-                out.push_str(&format!("error: {}\n", e.error));
             }
             None => {}
         },
@@ -993,19 +973,6 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
                 }
             }
         }
-        ToolCallResultType::StartAgent(r) => {
-            if let Some(res) = &r.result {
-                use api::start_agent_result::Result;
-                match res {
-                    Result::Success(s) => {
-                        out.push_str(&format!("agent_id: {}\n", s.agent_id));
-                    }
-                    Result::Error(e) => {
-                        out.push_str(&format!("error: {}\n", e.error));
-                    }
-                }
-            }
-        }
         ToolCallResultType::SendMessageToAgent(r) => {
             if let Some(res) = &r.result {
                 use api::send_message_to_agent_result::Result;
@@ -1115,12 +1082,11 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
 /// matching Subagent tool call.
 fn find_subtask_id_for_tool_call(task: &api::Task, tool_call_id: &str) -> Option<String> {
     task.messages.iter().find_map(|m| {
-        if let Some(Message::ToolCall(tc)) = &m.message {
-            if tc.tool_call_id == tool_call_id {
-                if let Some(Tool::Subagent(sub)) = &tc.tool {
-                    return Some(sub.task_id.clone());
-                }
-            }
+        if let Some(Message::ToolCall(tc)) = &m.message
+            && tc.tool_call_id == tool_call_id
+            && let Some(Tool::Subagent(sub)) = &tc.tool
+        {
+            return Some(sub.task_id.clone());
         }
         None
     })

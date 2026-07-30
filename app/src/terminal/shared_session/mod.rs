@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::{Role, Scrollback, ScrollbackBlock, SessionId};
 use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::keymap::ContextPredicate;
-use warpui::{id, AppContext};
+use warpui::{AppContext, WindowId, id};
 
 use super::model::block::SerializedBlock;
 use super::model::terminal_model::BlockIndex;
@@ -240,7 +240,7 @@ impl SharedSessionScrollbackType {
             .iter()
             .skip(first_block_index.into())
             .filter(|block| {
-                block.is_scrollback_block_for_shared_session(model.block_list().agent_view_state())
+                block.is_scrollback_block_for_shared_session(model.block_list().transcript_scope())
             })
             .filter_map(|block| {
                 let serialized_block: SerializedBlock = block.into();
@@ -268,7 +268,7 @@ impl SharedSessionScrollbackType {
                 .skip(block_index.into())
                 .find(|block| {
                     block.is_scrollback_block_for_shared_session(
-                        model.block_list().agent_view_state(),
+                        model.block_list().transcript_scope(),
                     )
                 })
                 .map_or(model.block_list().active_block_index(), |block| {
@@ -283,20 +283,19 @@ impl SharedSessionScrollbackType {
 }
 
 #[cfg(not(test))]
-pub fn max_session_size(ctx: &AppContext) -> Byte {
+pub fn max_session_size(window_id: WindowId, app: &AppContext) -> Byte {
     use warpui::SingletonEntity;
 
     use crate::workspaces::user_workspaces::UserWorkspaces;
-
-    UserWorkspaces::as_ref(ctx)
-        .current_team()
+    UserWorkspaces::as_ref(app)
+        .team_for_window(window_id)
         .and_then(|team| team.billing_metadata.tier.session_sharing_policy)
         .map(|policy| Byte::from_u64(policy.max_session_size))
         .unwrap_or(Byte::from_u64_with_unit(100, byte_unit::Unit::MB).unwrap())
 }
 
 #[cfg(test)]
-pub fn max_session_size(_ctx: &AppContext) -> Byte {
+pub fn max_session_size(_window_id: WindowId, _app: &AppContext) -> Byte {
     Byte::from_u64(MAX_BYTES_SHAREABLE as u64)
 }
 

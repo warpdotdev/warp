@@ -5,9 +5,9 @@ use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
 use super::{
-    artifacts_match_filter, AgentManagementFilters, AgentRunDisplayStatus, ArtifactFilter,
-    ConversationMetadata, CreatedOnFilter, CreatorFilter, EnvironmentFilter, HarnessFilter,
-    OwnerFilter, SessionStatus, SourceFilter, StatusFilter,
+    AgentManagementFilters, AgentRunDisplayStatus, ArtifactFilter, ConversationMetadata,
+    CreatedOnFilter, CreatorFilter, EnvironmentFilter, HarnessFilter, OwnerFilter, SessionStatus,
+    SourceFilter, StatusFilter, artifacts_match_filter,
 };
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::api::ServerConversationToken;
@@ -166,6 +166,13 @@ pub struct AgentConversationCapabilities {
 }
 
 impl AgentConversationEntry {
+    /// Returns whether this entry represents a cloud agent run.
+    pub fn is_cloud_agent_run(&self) -> bool {
+        matches!(self.provenance, AgentConversationProvenance::AmbientRun)
+            || self.backing.has_ambient_run
+            || self.identity.ambient_agent_task_id.is_some()
+    }
+
     pub(super) fn matches_filters(
         &self,
         filters: &AgentManagementFilters,

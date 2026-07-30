@@ -1,7 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 use ai::agent::action_result::{RecordingStopped, StopRecordingResult};
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 #[cfg(not(target_family = "wasm"))]
 use warpui::SingletonEntity;
 use warpui::{Entity, ModelContext};
@@ -9,27 +9,19 @@ use warpui::{Entity, ModelContext};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
 #[cfg(not(target_family = "wasm"))]
-use crate::{
-    ai::{
-        agent::AIAgentActionResultType,
-        agent_sdk::artifact_upload::{FileArtifactUploadRequest, FileArtifactUploader},
-        blocklist::action_model::recording_controller::{
-            RecordingController, StopRecordingControllerError,
+use crate::ai::{
+    agent::AIAgentActionResultType,
+    blocklist::{
+        BlocklistAIHistoryModel,
+        action_model::{
+            RecordingTelemetryEvent,
+            recording_controller::{RecordingController, StopRecordingControllerError},
+            recording_finalize::{FinalizeReason, finalize_recording_by_id},
         },
-        blocklist::BlocklistAIHistoryModel,
     },
-    server::server_api::ServerApiProvider,
 };
-
 #[cfg(not(target_family = "wasm"))]
-fn format_stop_recording_error(err: &anyhow::Error) -> String {
-    let error_chain = format!("{err:#}");
-    if error_chain != err.to_string() {
-        format!("Recording upload failed: {error_chain}")
-    } else {
-        error_chain
-    }
-}
+use crate::send_telemetry_from_ctx;
 
 pub struct StopRecordingExecutor;
 
@@ -66,27 +58,47 @@ impl StopRecordingExecutor {
                 action,
                 conversation_id,
             } = input;
-            let AIAgentActionType::StopRecording { recording_id } = &action.action else {
+            let AIAgentActionType::StopRecording {
+                recording_id,
+                should_persist,
+            } = &action.action
+            else {
                 return ActionExecution::<()>::InvalidAction.into();
             };
-            let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
+            // A persisting stop remains retry-safe while the conversation is
+            // syncing: do not claim the handle until it can be associated with
+            // the conversation for upload. A discard needs no upload
+            // association or server token, so it proceeds regardless of sync
+            // state.
+            let conversation_is_synced = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&conversation_id)
                 .and_then(|conversation| conversation.server_conversation_token())
-                .cloned();
-            let Some(server_conversation_token) = server_conversation_token else {
+                .is_some();
+            if *should_persist && !conversation_is_synced {
                 return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
                     StopRecordingResult::Error(
                         StopRecordingControllerError::ConversationNotSynced.to_string(),
                     ),
                 ))
                 .into();
-            };
+            }
 
-            let handle = RecordingController::handle(ctx).update(ctx, |controller, _| {
-                controller.take_handle_or_err(recording_id)
-            });
-            let handle = match handle {
-                Ok(handle) => handle,
+            // Atomically claim an active recording, join an upload another
+            // terminal path already started, or read the retained result. The
+            // controller owns the actual stop/upload task in every case.
+            //
+            // `claimed_reason` only applies when this call actually starts
+            // finalization. When it instead joins work another path began, the
+            // resolved `RecordingFinalization` reports that path's actual reason
+            // and this claim is ignored.
+            let claimed_reason = FinalizeReason::StoppedByAgent;
+            let finalization = match finalize_recording_by_id(
+                recording_id,
+                claimed_reason,
+                *should_persist,
+                ctx,
+            ) {
+                Ok(finalization) => finalization,
                 Err(error) => {
                     return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
                         StopRecordingResult::Error(error.to_string()),
@@ -94,61 +106,24 @@ impl StopRecordingExecutor {
                     .into();
                 }
             };
+            let recording_id = recording_id.clone();
 
-            let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-            let server_api = ServerApiProvider::as_ref(ctx).get();
-
+            // Consume `Finalized` only from the completion callback, after the
+            // result is delivered through this action. If the action is
+            // cancelled, the callback is skipped while controller-owned
+            // finalization continues and retains its result for a later stop.
             ActionExecution::new_async(
-                async move {
-                    let recorder = computer_use::create_recorder();
-                    let output = match recorder.stop(handle).await {
-                        Ok(output) => output,
-                        Err(error) => return StopRecordingResult::Error(error.to_string()),
-                    };
-
-                    // The local file is an implementation detail; publish it and
-                    // delete it so results only ever carry the artifact ref.
-                    let local_path = output.path.clone();
-                    let uploader = FileArtifactUploader::new(ai_client, server_api);
-                    let request = FileArtifactUploadRequest {
-                        path: output.path,
-                        run_id: None,
-                        conversation_id: Some(server_conversation_token),
-                        description: None,
-                    };
-                    let upload_result = async {
-                        let association = uploader.resolve_upload_association(&request).await?;
-                        uploader.upload_with_association(request, association).await
-                    }
-                    .await;
-                    // TODO(vkodithala): Retain or retry the local file if upload fails.
-                    let _ = std::fs::remove_file(&local_path);
-
-                    match upload_result {
-                        Ok(upload) => {
-                            let completion_status = output.completion_status;
-                            let termination_reason = match completion_status {
-                                computer_use::RecordingCompletionStatus::Completed => {
-                                    "Stopped by agent".to_string()
-                                }
-                                computer_use::RecordingCompletionStatus::StoppedEarly => {
-                                    "Recording stopped before the agent requested it".to_string()
-                                }
-                            };
-                            StopRecordingResult::Success(RecordingStopped {
-                                artifact_uid: upload.artifact.artifact_uid,
-                                duration: output.duration,
-                                width_px: output.width as i32,
-                                height_px: output.height as i32,
-                                size_bytes: output.size_bytes as i64,
-                                completion_status,
-                                termination_reason,
-                            })
-                        }
-                        Err(err) => StopRecordingResult::Error(format_stop_recording_error(&err)),
-                    }
+                async move { finalization.resolve().await },
+                move |(result, actual_reason), ctx| {
+                    RecordingController::handle(ctx).update(ctx, |controller, _| {
+                        controller.consume_finalized(&recording_id);
+                    });
+                    send_telemetry_from_ctx!(
+                        recording_stopped_telemetry(&recording_id, actual_reason, &result),
+                        ctx
+                    );
+                    AIAgentActionResultType::StopRecording(result)
                 },
-                |result, _ctx| AIAgentActionResultType::StopRecording(result),
             )
             .into()
         }
@@ -166,3 +141,63 @@ impl StopRecordingExecutor {
 impl Entity for StopRecordingExecutor {
     type Event = ();
 }
+
+/// Builds the `Recording.Stopped` telemetry event from a resolved
+/// [`StopRecordingResult`] and the *actual* [`FinalizeReason`] that drove
+/// finalization to completion (as reported by the controller through
+/// [`RecordingFinalization::resolve`]).
+///
+/// `outcome` is `"success"` only when an artifact was published; deliberate
+/// discards and cancellations map to `"cancelled"`, and errors to `"error"`.
+/// The `termination_reason` key comes directly from the actual `reason`, so a
+/// stop action that only joined an in-progress finalization reports the
+/// trigger that actually ran (e.g. `limit_reached`, `run_ended`) rather than
+/// its own claimed reason.
+///
+/// [`RecordingFinalization::resolve`]: super::super::recording_finalize::RecordingFinalization::resolve
+#[cfg(not(target_family = "wasm"))]
+fn recording_stopped_telemetry(
+    recording_id: &str,
+    reason: FinalizeReason,
+    result: &StopRecordingResult,
+) -> RecordingTelemetryEvent {
+    let termination_reason = reason.telemetry_key().to_string();
+    match result {
+        StopRecordingResult::Success(RecordingStopped {
+            duration,
+            size_bytes,
+            ..
+        }) => RecordingTelemetryEvent::Stopped {
+            recording_id: recording_id.to_string(),
+            outcome: "success".to_string(),
+            duration_secs: Some(duration.as_secs_f64()),
+            size_bytes: Some(*size_bytes),
+            termination_reason,
+        },
+        StopRecordingResult::Discarded => RecordingTelemetryEvent::Stopped {
+            recording_id: recording_id.to_string(),
+            outcome: "cancelled".to_string(),
+            duration_secs: None,
+            size_bytes: None,
+            termination_reason,
+        },
+        StopRecordingResult::Cancelled => RecordingTelemetryEvent::Stopped {
+            recording_id: recording_id.to_string(),
+            outcome: "cancelled".to_string(),
+            duration_secs: None,
+            size_bytes: None,
+            termination_reason,
+        },
+        StopRecordingResult::Error(_) => RecordingTelemetryEvent::Stopped {
+            recording_id: recording_id.to_string(),
+            outcome: "error".to_string(),
+            duration_secs: None,
+            size_bytes: None,
+            termination_reason,
+        },
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "stop_recording_tests.rs"]
+mod tests;

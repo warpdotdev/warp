@@ -1,7 +1,8 @@
 use std::ffi::OsStr;
 use std::os::windows::process::CommandExt as _;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use warp_errors::report_error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JobObjectError {
@@ -115,8 +116,9 @@ pub fn init() {
         .kill_children_on_close()
         .assign_current_process()
         .create()
+        .context("Failed to create job object for the program")
     {
-        log::error!("Failed to create job object for the program: {e:#}");
+        report_error!(e);
     }
 }
 

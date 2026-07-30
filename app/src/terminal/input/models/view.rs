@@ -4,8 +4,8 @@ use std::sync::LazyLock;
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{ChildView, MainAxisSize};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, View, ViewContext,
@@ -111,6 +111,10 @@ pub struct InlineModelSelectorView {
     /// prompt is stashed in the suggestions-mode buffer snapshot and restored
     /// when the selector closes.
     prompt_parked_for_search: bool,
+    /// Retained so a lazily-created ambient view model can be attached after construction on the
+    /// shared-session viewer path (see `set_ambient_agent_view_model`). It also lives inside the
+    /// search mixer; this handle points at the same model.
+    model_selector_data_source: ModelHandle<ModelSelectorDataSource>,
 }
 
 impl InlineModelSelectorView {
@@ -125,8 +129,11 @@ impl InlineModelSelectorView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|_| {
-            ModelSelectorDataSource::new(terminal_view_id, ambient_agent_view_model)
+        let window_id = ctx.window_id();
+        let data_source = ctx.add_model(move |_| {
+            // Built without the ambient model; the setter (called below for construction and by
+            // the lazy shared-session viewer path) is the single point that attaches it.
+            ModelSelectorDataSource::new(terminal_view_id, window_id, None)
         });
 
         let tab_configs = TAB_CONFIGS.clone();
@@ -333,7 +340,8 @@ impl InlineModelSelectorView {
             | CLISubagentEvent::UpdatedControl { .. } => {
                 me.menu_view.update(ctx, |_, ctx| ctx.notify());
             }
-            CLISubagentEvent::UpdatedLastSnapshot
+            CLISubagentEvent::UpdatedInstruction { .. }
+            | CLISubagentEvent::UpdatedLastSnapshot
             | CLISubagentEvent::ToggledHideResponses
             | CLISubagentEvent::ControlHandedBackAfterTransfer => {}
         });
@@ -345,10 +353,9 @@ impl InlineModelSelectorView {
                     terminal_surface_id: event_terminal_surface_id,
                     ..
                 } = event
+                    && *event_terminal_surface_id == terminal_view_id
                 {
-                    if *event_terminal_surface_id == terminal_view_id {
-                        me.menu_view.update(ctx, |_, ctx| ctx.notify());
-                    }
+                    me.menu_view.update(ctx, |_, ctx| ctx.notify());
                 }
             },
         );
@@ -373,14 +380,12 @@ impl InlineModelSelectorView {
                         menu.select_first_where(|item| item.id == id, ctx)
                     })
                 });
-                if !found_by_id {
-                    if let Some(idx) = selection.index {
-                        let count = me.menu_view.as_ref(ctx).result_count();
-                        if count > 0 {
-                            me.menu_view.update(ctx, |menu, ctx| {
-                                menu.select_idx(idx.min(count - 1), ctx);
-                            });
-                        }
+                if !found_by_id && let Some(idx) = selection.index {
+                    let count = me.menu_view.as_ref(ctx).result_count();
+                    if count > 0 {
+                        me.menu_view.update(ctx, |menu, ctx| {
+                            menu.select_idx(idx.min(count - 1), ctx);
+                        });
                     }
                 }
                 return;
@@ -400,7 +405,7 @@ impl InlineModelSelectorView {
             });
         });
 
-        Self {
+        let mut me = Self {
             menu_view,
             mixer,
             suggestions_mode_model,
@@ -409,7 +414,28 @@ impl InlineModelSelectorView {
             selection_before_tab_switch: None,
             filter_results_by_input: true,
             prompt_parked_for_search: false,
+            model_selector_data_source: data_source,
+        };
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
         }
+        me
+    }
+
+    /// Attaches a lazily-created ambient agent view model to the picker's data source so a
+    /// shared-session viewer's follow-up lists the correct (cloud-pane) model set. Used when a
+    /// raw-link viewer only learns the run is ambient at `SessionJoined`. Idempotent.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model_selector_data_source
+            .update(ctx, |data_source, ctx| {
+                data_source.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
+            });
     }
 
     fn menu_model<'a>(

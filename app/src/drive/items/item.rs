@@ -19,20 +19,20 @@ use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{CloudObject, CloudObjectLocation, CloudObjectMetadataExt, Owner, Space};
+use crate::drive::CloudObjectTypeAndId;
 use crate::drive::index::{
-    DriveIndexAction, AUTOSCROLL_DETECTION_DISTANCE, AUTOSCROLL_SPEED_MULTIPLIER,
-    DRIVE_INDEX_VIEW_POSITION_ID, FOLDER_DEPTH_INDENT, INDEX_CONTENT_MARGIN_LEFT, ITEM_FONT_SIZE,
+    AUTOSCROLL_DETECTION_DISTANCE, AUTOSCROLL_SPEED_MULTIPLIER, DRIVE_INDEX_VIEW_POSITION_ID,
+    DriveIndexAction, FOLDER_DEPTH_INDENT, INDEX_CONTENT_MARGIN_LEFT, ITEM_FONT_SIZE,
     ITEM_MARGIN_BOTTOM, ITEM_PADDING_HORIZONTAL, ITEM_PADDING_VERTICAL,
 };
 use crate::drive::items::WarpDriveItem;
 use crate::drive::panel::WARP_DRIVE_POSITION_ID;
-use crate::drive::CloudObjectTypeAndId;
 use crate::menu::Menu;
 use crate::ui_components::blended_colors;
-use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
+use crate::ui_components::icons::{ICON_DIMENSIONS, Icon};
 use crate::ui_components::menu_button::{
-    highlight_icon_button_with_context_menu_drive, icon_button_with_context_menu_drive,
-    MenuDirection,
+    MenuDirection, highlight_icon_button_with_context_menu_drive,
+    icon_button_with_context_menu_drive,
 };
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabSettings;
@@ -289,10 +289,11 @@ impl<'a> WarpDriveRow<'a> {
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         self.item.preview(appearance).map(|content_preview| {
-            let mut stacked_preview_panels: Vec<Box<dyn Element>> =
-                vec![Container::new(content_preview)
+            let mut stacked_preview_panels: Vec<Box<dyn Element>> = vec![
+                Container::new(content_preview)
                     .with_uniform_padding(16.)
-                    .finish()];
+                    .finish(),
+            ];
 
             stacked_preview_panels.extend(self.render_shared_object_owner(appearance, app));
 

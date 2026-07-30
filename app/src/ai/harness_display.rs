@@ -29,7 +29,7 @@ pub fn display_name(harness: Harness) -> &'static str {
 /// Leading icon for a [`Harness`].
 pub fn icon_for(harness: Harness) -> Icon {
     match harness {
-        Harness::Oz => Icon::Warp,
+        Harness::Oz => Icon::Agent,
         Harness::Claude => Icon::ClaudeLogo,
         Harness::OpenCode => Icon::OpenCodeLogo,
         Harness::Gemini => Icon::GeminiLogo,

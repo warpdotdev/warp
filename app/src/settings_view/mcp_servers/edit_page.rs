@@ -16,6 +16,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_errors::report_error;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
@@ -25,10 +26,12 @@ use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    WeakViewHandle,
 };
 
+use crate::GlobalResourceHandlesProvider;
 use crate::ai::blocklist::secret_redaction::find_secrets_in_text;
-use crate::ai::mcp::parsing::{prettify_json, resolve_json, ParsedTemplatableMCPServerResult};
+use crate::ai::mcp::parsing::{ParsedTemplatableMCPServerResult, prettify_json, resolve_json};
 use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
 use crate::ai::mcp::{
     MCPServer, TemplatableMCPServer, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
@@ -39,24 +42,23 @@ use crate::cloud_object::{CloudObject, Space};
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::telemetry::{MCPTemplateCreationSource, TelemetryEvent};
 use crate::settings_view::mcp_servers::destructive_mcp_confirmation_dialog::{
     DestructiveMCPConfirmationDialog, DestructiveMCPConfirmationDialogEvent,
     DestructiveMCPConfirmationDialogVariant,
 };
-use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::settings_view::mcp_servers::{ServerCardItemId, style};
 use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, DangerNakedTheme, DangerSecondaryTheme, PrimaryTheme,
 };
-use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::GlobalResourceHandlesProvider;
 
 const DEFAULT_JSON_TEXT: &str = r#"{
     "": {
@@ -110,6 +112,7 @@ impl ServerModel {
 }
 
 pub struct MCPServersEditPageView {
+    handle: WeakViewHandle<Self>,
     server_card_item_id: Option<ServerCardItemId>,
     server_model: ServerModel,
     save_button: ViewHandle<ActionButton>,
@@ -191,15 +194,17 @@ impl MCPServersEditPageView {
         });
 
         #[cfg(feature = "local_fs")]
-        let database_connection = database_file_path_for_scope(&PersistenceScope::App)
-            .to_str()
-            .and_then(|db_url| {
-                establish_ro_connection(db_url)
-                    .ok()
-                    .map(|conn| Arc::new(Mutex::new(conn)))
-            });
+        let database_connection =
+            database_file_path_for_current_scope()
+                .to_str()
+                .and_then(|db_url| {
+                    establish_ro_connection(db_url)
+                        .ok()
+                        .map(|conn| Arc::new(Mutex::new(conn)))
+                });
 
         Self {
+            handle: ctx.handle(),
             server_card_item_id: None,
             server_model: ServerModel::None,
             save_button,
@@ -272,7 +277,7 @@ impl MCPServersEditPageView {
             }
         }
 
-        if Self::is_editable(item_id, ctx) {
+        if self.is_editable(item_id, ctx) {
             self.json_editor.update(ctx, |editor, ctx| {
                 editor.set_interaction_state(crate::editor::InteractionState::Editable, ctx);
             });
@@ -334,7 +339,7 @@ impl MCPServersEditPageView {
         if self.should_show_oauth_components(app) {
             rhs_row.add_child(log_out_icon_button);
         }
-        if Self::is_editable(self.server_card_item_id, app) {
+        if self.is_editable(self.server_card_item_id, app) {
             rhs_row.add_child(
                 Container::new(ChildView::new(&self.save_button).finish())
                     .with_margin_left(style::EDIT_PAGE_BUTTON_SPACING)
@@ -399,7 +404,10 @@ impl MCPServersEditPageView {
         }
     }
 
-    fn is_editable(item_id: Option<ServerCardItemId>, app: &AppContext) -> bool {
+    fn is_editable(&self, item_id: Option<ServerCardItemId>, app: &AppContext) -> bool {
+        let team_uid = UserWorkspaces::as_ref(app)
+            .team_for_view_handle(&self.handle, app)
+            .map(|team| team.uid);
         match item_id {
             Some(ServerCardItemId::TemplatableMCPInstallation(installation_uuid)) => {
                 let template_uuid =
@@ -407,7 +415,7 @@ impl MCPServersEditPageView {
 
                 if let Some(template_uuid) = template_uuid {
                     let is_authorized_editor = TemplatableMCPServerManager::as_ref(app)
-                        .is_authorized_editor(template_uuid, app);
+                        .is_authorized_editor(template_uuid, team_uid, app);
                     let is_shared = TemplatableMCPServerManager::as_ref(app)
                         .is_server_template_shared(template_uuid, app);
 
@@ -420,7 +428,7 @@ impl MCPServersEditPageView {
                 let is_shared = TemplatableMCPServerManager::as_ref(app)
                     .is_server_template_shared(template_uuid, app);
                 let is_authorized_editor = TemplatableMCPServerManager::as_ref(app)
-                    .is_authorized_editor(template_uuid, app);
+                    .is_authorized_editor(template_uuid, team_uid, app);
 
                 is_authorized_editor || !is_shared
             }
@@ -447,8 +455,8 @@ impl MCPServersEditPageView {
         false
     }
 
-    fn is_deletable(item_id: ServerCardItemId, app: &AppContext) -> bool {
-        Self::is_editable(Some(item_id), app)
+    fn is_deletable(&self, item_id: ServerCardItemId, app: &AppContext) -> bool {
+        self.is_editable(Some(item_id), app)
     }
 
     fn is_unshareable(item_id: ServerCardItemId, app: &AppContext) -> bool {
@@ -512,7 +520,7 @@ impl MCPServersEditPageView {
             .with_spacing(style::EDIT_PAGE_BUTTON_SPACING);
 
         if let Some(server_card_item_id) = self.server_card_item_id {
-            if Self::is_deletable(server_card_item_id, app) {
+            if self.is_deletable(server_card_item_id, app) {
                 footer.add_child(ChildView::new(&self.delete_button).finish());
             }
             if Self::is_unshareable(server_card_item_id, app) {
@@ -699,21 +707,23 @@ impl MCPServersEditPageView {
                 .map(|env_var| (env_var.name.clone(), env_var.value.clone()))
                 .collect();
             let Ok(env_vars_string) = serde_json::to_string(&env_vars) else {
-                log::error!("Could not serialize MCP env vars");
+                report_error!("Could not serialize MCP env vars");
                 return;
             };
             let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
 
-            if let Some(model_event_sender) = &global_resource_handles.model_event_sender {
-                if let Err(e) =
+            if let Some(model_event_sender) = &global_resource_handles.model_event_sender
+                && let Err(e) =
                     model_event_sender.send(ModelEvent::UpsertMCPServerEnvironmentVariables {
                         mcp_server_uuid: mcp_server.uuid.as_bytes().to_vec(),
                         environment_variables: env_vars_string,
                     })
-                {
-                    log::error!("Error persisting MCP server env vars to database: {e:?}");
-                };
-            }
+            {
+                report_error!(
+                    anyhow::Error::new(e)
+                        .context("Error persisting MCP server env vars to database")
+                );
+            };
         }
     }
 
@@ -781,7 +791,7 @@ impl View for MCPServersEditPageView {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_spacing(style::PAGE_SPACING);
         main_content.add_child(header);
-        if !Self::is_editable(self.server_card_item_id, app) {
+        if !self.is_editable(self.server_card_item_id, app) {
             main_content.add_child(ChildView::new(&self.editing_disabled_banner).finish());
         }
         main_content.add_child(Shrinkable::new(1., editor).finish());

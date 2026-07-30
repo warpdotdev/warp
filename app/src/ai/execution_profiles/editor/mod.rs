@@ -22,11 +22,11 @@ use warpui::{
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::execution_profiles::profiles::{
-    AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
+    AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, AIExecutionProfileAppExt as _, ActionPermission, RunAgentsPermission,
-    WriteToPtyPermission,
+    AIExecutionProfile, AIExecutionProfileAppExt as _, ActionPermission, ExecutionProfileId,
+    RunAgentsPermission, WriteToPtyPermission,
 };
 use crate::ai::llms::{
     DisableReason, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent,
@@ -236,7 +236,7 @@ pub enum ExecutionProfileEditorViewAction {
 }
 
 pub struct ExecutionProfileEditorView {
-    profile_id: ClientProfileId,
+    profile_id: ExecutionProfileId,
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
     clipped_scroll_state: ClippedScrollStateHandle,
@@ -277,7 +277,7 @@ pub struct ExecutionProfileEditorView {
 }
 
 impl ExecutionProfileEditorView {
-    pub fn new(profile_id: ClientProfileId, ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(profile_id: ExecutionProfileId, ctx: &mut ViewContext<Self>) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(HEADER_TEXT));
 
         let apply_code_diffs_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -517,7 +517,7 @@ impl ExecutionProfileEditorView {
         });
 
         let permissions = BlocklistAIPermissions::as_ref(ctx);
-        let profile_data = permissions.permissions_profile_for_id(ctx, profile_id);
+        let profile_data = permissions.permissions_profile_for_id(ctx, &profile_id);
 
         let mcp_allowlist_mouse_state_handles = profile_data
             .mcp_allowlist
@@ -708,7 +708,7 @@ impl ExecutionProfileEditorView {
                     }
                 };
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.add_to_command_allowlist(view.profile_id, &predicate, ctx);
+                    profiles_model.add_to_command_allowlist(&view.profile_id, &predicate, ctx);
                 });
                 ctx.notify();
             }
@@ -726,7 +726,7 @@ impl ExecutionProfileEditorView {
                     }
                 };
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.add_to_command_denylist(view.profile_id, &predicate, ctx);
+                    profiles_model.add_to_command_denylist(&view.profile_id, &predicate, ctx);
                 });
                 ctx.notify();
             }
@@ -737,7 +737,7 @@ impl ExecutionProfileEditorView {
                 let expanded = host_native_absolute_path(s, &None, &None);
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
                     profiles_model.add_to_directory_allowlist(
-                        view.profile_id,
+                        &view.profile_id,
                         &PathBuf::from(expanded),
                         ctx,
                     );
@@ -748,7 +748,7 @@ impl ExecutionProfileEditorView {
 
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             let permissions = BlocklistAIPermissions::as_ref(ctx);
-            let current_permissions = permissions.permissions_profile_for_id(ctx, me.profile_id);
+            let current_permissions = permissions.permissions_profile_for_id(ctx, &me.profile_id);
 
             match event {
                 LLMPreferencesEvent::UpdatedAvailableLLMs => {
@@ -814,7 +814,7 @@ impl ExecutionProfileEditorView {
             |me, _model, _event: &ApiKeyManagerEvent, ctx| {
                 let permissions = BlocklistAIPermissions::as_ref(ctx);
                 let current_permissions =
-                    permissions.permissions_profile_for_id(ctx, me.profile_id);
+                    permissions.permissions_profile_for_id(ctx, &me.profile_id);
                 Self::refresh_filterable_model_dropdown(
                     &me.base_model_dropdown,
                     current_permissions.base_model.clone(),
@@ -837,7 +837,7 @@ impl ExecutionProfileEditorView {
         ctx.subscribe_to_model(
             &AIExecutionProfilesModel::handle(ctx),
             |me, _, event, ctx| {
-                if matches!(event, AIExecutionProfilesModelEvent::ProfileUpdated(profile_id) if *profile_id == me.profile_id) {
+                if matches!(event, AIExecutionProfilesModelEvent::ProfileUpdated(profile_id) if profile_id == &me.profile_id) {
                     me.refresh_profile_state(ctx);
                     me.update_mouse_state_handles(ctx);
                 }
@@ -870,14 +870,14 @@ impl ExecutionProfileEditorView {
         view
     }
 
-    pub fn profile_id(&self) -> ClientProfileId {
-        self.profile_id
+    pub fn profile_id(&self) -> &ExecutionProfileId {
+        &self.profile_id
     }
 
     fn update_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
         let app = ctx;
         let permissions = BlocklistAIPermissions::as_ref(app);
-        let current_permissions = permissions.permissions_profile_for_id(app, self.profile_id);
+        let current_permissions = permissions.permissions_profile_for_id(app, &self.profile_id);
 
         self.command_allowlist_mouse_state_handles = current_permissions
             .command_allowlist
@@ -918,7 +918,7 @@ impl ExecutionProfileEditorView {
 
     fn refresh_profile_state(&mut self, ctx: &mut ViewContext<Self>) {
         let permissions = BlocklistAIPermissions::as_ref(ctx);
-        let current_permissions = permissions.permissions_profile_for_id(ctx, self.profile_id);
+        let current_permissions = permissions.permissions_profile_for_id(ctx, &self.profile_id);
         let ai_settings = AISettings::as_ref(ctx);
 
         let apply_code_diffs_disabled = !ai_settings.is_code_diffs_permissions_editable(ctx);
@@ -1317,12 +1317,12 @@ impl ExecutionProfileEditorView {
         }
 
         let current_name = BlocklistAIPermissions::as_ref(ctx)
-            .permissions_profile_for_id(ctx, self.profile_id)
+            .permissions_profile_for_id(ctx, &self.profile_id)
             .name;
 
         if current_name != new_name {
             AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                profiles_model.set_profile_name(self.profile_id, &new_name, ctx);
+                profiles_model.set_profile_name(&self.profile_id, &new_name, ctx);
             });
         }
     }
@@ -1396,13 +1396,13 @@ impl ExecutionProfileEditorView {
 
     fn configurable_context_window(&self, app: &AppContext) -> Option<LLMContextWindow> {
         let profile =
-            BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(app, self.profile_id);
+            BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(app, &self.profile_id);
         profile.configurable_context_window(app)
     }
 
     fn current_context_window_display_value(&self, app: &AppContext) -> Option<u32> {
         let profile =
-            BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(app, self.profile_id);
+            BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(app, &self.profile_id);
         profile.context_window_display_value(app)
     }
 
@@ -1430,7 +1430,7 @@ impl ExecutionProfileEditorView {
                     if Some(clamped) != self.current_context_window_display_value(ctx) {
                         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
                             profiles_model.set_context_window_limit(
-                                self.profile_id,
+                                &self.profile_id,
                                 Some(clamped),
                                 ctx,
                             );
@@ -1509,7 +1509,7 @@ impl View for ExecutionProfileEditorView {
         use ui_helpers::*;
 
         let permissions = BlocklistAIPermissions::as_ref(app);
-        let profile_data = permissions.permissions_profile_for_id(app, self.profile_id);
+        let profile_data = permissions.permissions_profile_for_id(app, &self.profile_id);
 
         let mut column = Flex::column()
             .with_child(render_header_section(
@@ -1567,8 +1567,8 @@ impl TypedActionView for ExecutionProfileEditorView {
                 // be configurable at all). The user can pick a new value for
                 // the new model if they want one.
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_base_model(self.profile_id, Some(id.clone()), ctx);
-                    profiles_model.set_context_window_limit(self.profile_id, None, ctx);
+                    profiles_model.set_base_model(&self.profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_context_window_limit(&self.profile_id, None, ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
                 ctx.notify();
@@ -1601,152 +1601,156 @@ impl TypedActionView for ExecutionProfileEditorView {
                 };
                 let clamped = (*value).clamp(cw.min, cw.max);
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_context_window_limit(self.profile_id, Some(clamped), ctx);
+                    profiles_model.set_context_window_limit(&self.profile_id, Some(clamped), ctx);
                 });
                 self.sync_context_window_editor(ctx, true);
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetCodingModel { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_coding_model(self.profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_coding_model(&self.profile_id, Some(id.clone()), ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_cli_agent_model(self.profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_cli_agent_model(&self.profile_id, Some(id.clone()), ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetComputerUseModel { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_computer_use_model(self.profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_computer_use_model(&self.profile_id, Some(id.clone()), ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetApplyCodeDiffs { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_apply_code_diffs(self.profile_id, permission, ctx);
+                    profiles_model.set_apply_code_diffs(&self.profile_id, permission, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetReadFiles { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_read_files(self.profile_id, permission, ctx);
+                    profiles_model.set_read_files(&self.profile_id, permission, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetExecuteCommands { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_execute_commands(self.profile_id, permission, ctx);
+                    profiles_model.set_execute_commands(&self.profile_id, permission, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetWriteToPty { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_write_to_pty(self.profile_id, permission, ctx);
+                    profiles_model.set_write_to_pty(&self.profile_id, permission, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetCallMcpServers { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_mcp_permissions(self.profile_id, permission, ctx);
+                    profiles_model.set_mcp_permissions(&self.profile_id, permission, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetComputerUse { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_computer_use(self.profile_id, permission, ctx);
+                    profiles_model.set_computer_use(&self.profile_id, permission, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetAskUserQuestion { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_ask_user_question(self.profile_id, *permission, ctx);
+                    profiles_model.set_ask_user_question(&self.profile_id, *permission, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetRunAgents { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_run_agents(self.profile_id, *permission, ctx);
+                    profiles_model.set_run_agents(&self.profile_id, *permission, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::AddToCommandAllowlist { predicate } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.add_to_command_allowlist(self.profile_id, predicate, ctx);
+                    profiles_model.add_to_command_allowlist(&self.profile_id, predicate, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::RemoveFromCommandAllowlist { predicate } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.remove_from_command_allowlist(self.profile_id, predicate, ctx);
+                    profiles_model.remove_from_command_allowlist(&self.profile_id, predicate, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::AddToCommandDenylist { predicate } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.add_to_command_denylist(self.profile_id, predicate, ctx);
+                    profiles_model.add_to_command_denylist(&self.profile_id, predicate, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::RemoveFromCommandDenylist { predicate } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.remove_from_command_denylist(self.profile_id, predicate, ctx);
+                    profiles_model.remove_from_command_denylist(&self.profile_id, predicate, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::AddToDirectoryAllowlist { path } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.add_to_directory_allowlist(self.profile_id, path, ctx);
+                    profiles_model.add_to_directory_allowlist(&self.profile_id, path, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::RemoveFromDirectoryAllowlist { path } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.remove_from_directory_allowlist(self.profile_id, path, ctx);
+                    profiles_model.remove_from_directory_allowlist(&self.profile_id, path, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::AddToMCPAllowlist { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.add_to_mcp_allowlist(self.profile_id, id, ctx);
+                    profiles_model.add_to_mcp_allowlist(&self.profile_id, id, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::RemoveFromMCPAllowlist { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.remove_from_mcp_allowlist(self.profile_id, id, ctx);
+                    profiles_model.remove_from_mcp_allowlist(&self.profile_id, id, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::AddToMCPDenylist { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.add_to_mcp_denylist(self.profile_id, id, ctx);
+                    profiles_model.add_to_mcp_denylist(&self.profile_id, id, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::RemoveFromMCPDenylist { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.remove_from_mcp_denylist(self.profile_id, id, ctx);
+                    profiles_model.remove_from_mcp_denylist(&self.profile_id, id, ctx);
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::DeleteProfile => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.delete_profile(self.profile_id, ctx);
+                    profiles_model.delete_profile(&self.profile_id, ctx);
                 });
                 ctx.emit(ExecutionProfileEditorViewEvent::Pane(PaneEvent::Close));
             }
             ExecutionProfileEditorViewAction::SetPlanAutoSync { enabled } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_autosync_plans_to_warp_drive(self.profile_id, *enabled, ctx);
+                    profiles_model.set_autosync_plans_to_warp_drive(
+                        &self.profile_id,
+                        *enabled,
+                        ctx,
+                    );
                 });
                 ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetWebSearchEnabled { enabled } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_web_search_enabled(self.profile_id, *enabled, ctx);
+                    profiles_model.set_web_search_enabled(&self.profile_id, *enabled, ctx);
                 });
                 ctx.notify();
             }

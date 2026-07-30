@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::executor::block_on;
 use http::StatusCode;
 
@@ -108,13 +108,7 @@ fn retry_loop_retries_transient_and_eventually_succeeds() {
     let result: Result<u32> = block_on(with_bounded_retry("test retry", || {
         let n = attempts_clone.get() + 1;
         attempts_clone.set(n);
-        async move {
-            if n < 2 {
-                Err(http_err(503))
-            } else {
-                Ok(n)
-            }
-        }
+        async move { if n < 2 { Err(http_err(503)) } else { Ok(n) } }
     }));
     assert_eq!(result.unwrap(), 2);
     assert_eq!(attempts.get(), 2);
