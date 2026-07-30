@@ -84,6 +84,11 @@ impl TuiUiBuilder {
             .fg(self.foreground_text_color(self.warp_theme.details().sub_text_opacity))
     }
 
+    /// Muted italic status text used by model rows backed by a connected API key.
+    pub(crate) fn key_connected_suffix_style(&self) -> TuiStyle {
+        self.muted_text_style().add_modifier(Modifier::ITALIC)
+    }
+
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
     pub(crate) fn dim_text_style(&self) -> TuiStyle {
         self.muted_text_style().add_modifier(Modifier::DIM)

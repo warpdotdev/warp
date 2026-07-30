@@ -128,7 +128,9 @@ pub use crate::ai::harness_availability::{
     AuthSecretEntry, AuthSecretFetchState, HarnessAvailability, HarnessAvailabilityEvent,
     HarnessAvailabilityModel, HarnessModelInfo,
 };
-pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
+pub use crate::ai::llms::{
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_key_icon_for_model,
+};
 pub use crate::ai::orchestration::{
     AuthSecretSelection, CloudAgentStartupAuthFlow, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, CloudAgentStartupPresentation,

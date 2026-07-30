@@ -359,6 +359,50 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
 }
 
 #[test]
+fn default_row_state_suffix_is_muted_and_italic() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let snapshot = TuiInlineMenuSnapshot {
+                header: None,
+                rows: vec![TuiInlineMenuRow {
+                    title: "GPT 5".to_owned(),
+                    prefix: None,
+                    description: None,
+                    state_suffix: Some("(key connected)".to_owned()),
+                    is_selectable: true,
+                    style: TuiInlineMenuRowStyle::Default,
+                }],
+                selected_index: Some(0),
+                scroll_offset: 0,
+                scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+                max_visible_rows: 8,
+                status: None,
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_inline_menu(&snapshot, &builder),
+                TuiRect::new(0, 0, 50, 1),
+                ctx,
+            );
+            let line = frame.buffer.to_lines().remove(0);
+            let suffix_column = line.find("(key connected)").expect("suffix should render");
+            let suffix_cell = &frame.buffer[(u16::try_from(suffix_column).unwrap(), 0)];
+
+            assert_eq!(
+                suffix_cell.fg,
+                builder
+                    .muted_text_style()
+                    .fg
+                    .expect("muted text should have a foreground")
+            );
+            assert!(suffix_cell.modifier.contains(Modifier::ITALIC));
+        });
+    });
+}
+
+#[test]
 fn conversation_like_snapshot_keeps_selection_visible_within_production_height() {
     let lines = render_at_height(
         TuiInlineMenuSnapshot {

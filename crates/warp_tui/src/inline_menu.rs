@@ -1398,10 +1398,13 @@ fn menu_result_row(
             description_spans.push((description_prefix, description_style));
         }
         if let Some(suffix) = &row.state_suffix {
-            let suffix_style = if is_selected {
-                builder.slash_command_selection_state_suffix_style()
-            } else {
-                builder.success_glyph_style()
+            let suffix_style = match row.style {
+                TuiInlineMenuRowStyle::Default => builder.key_connected_suffix_style(),
+                TuiInlineMenuRowStyle::InlineMenuItem if is_selected => {
+                    builder.slash_command_selection_state_suffix_style()
+                }
+                TuiInlineMenuRowStyle::InlineMenuItem => builder.success_glyph_style(),
+                TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
             };
             description_spans.push((format!(" {suffix}"), suffix_style));
         }

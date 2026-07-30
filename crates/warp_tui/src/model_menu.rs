@@ -1,7 +1,10 @@
 //! Searchable TUI model picker state.
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
-use warp::tui_export::{LLMId, LLMPreferences, LLMPreferencesEvent, query_model_picker_choices};
+use warp::tui_export::{
+    LLMId, LLMPreferences, LLMPreferencesEvent, ModelPickerChoice, query_model_picker_choices,
+    should_show_key_icon_for_model,
+};
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -18,6 +21,7 @@ struct TuiModelMenuRow {
     id: LLMId,
     title: String,
     is_selectable: bool,
+    is_key_connected: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -81,6 +85,7 @@ impl TuiModelMenuModel {
                     title: id.to_string(),
                     id,
                     is_selectable,
+                    is_key_connected: false,
                 })
                 .collect(),
             false,
@@ -199,18 +204,7 @@ impl TuiModelMenuModel {
                 title: Some("Models".to_owned()),
                 tabs: Vec::new(),
             }),
-            rows: list
-                .rows()
-                .iter()
-                .map(|row| TuiInlineMenuRow {
-                    title: row.title.clone(),
-                    prefix: None,
-                    description: (!row.is_selectable).then(|| "disabled".to_owned()),
-                    state_suffix: None,
-                    is_selectable: row.is_selectable,
-                    style: TuiInlineMenuRowStyle::Default,
-                })
-                .collect(),
+            rows: list.rows().iter().map(snapshot_row).collect(),
             selected_index: list.selected_index(),
             scroll_offset: list.scroll_offset(),
             scroll_anchor: list.scroll_anchor(),
@@ -237,14 +231,7 @@ impl TuiModelMenuModel {
         );
         let rows = choices
             .into_iter()
-            .map(|choice| {
-                let is_selectable = choice.is_selectable();
-                TuiModelMenuRow {
-                    id: choice.llm.id,
-                    title: choice.llm.display_name,
-                    is_selectable,
-                }
-            })
+            .map(|choice| model_menu_row(choice, ctx))
             .collect::<Vec<_>>();
         let preferred_index = preferred_selection_index(&rows, &active_id, query.trim().is_empty());
         let TuiModelMenuState::Open { list } = &mut self.state else {
@@ -254,6 +241,26 @@ impl TuiModelMenuModel {
             row.is_selectable
         });
         ctx.emit(TuiModelMenuEvent);
+    }
+}
+
+fn model_menu_row(choice: ModelPickerChoice, app: &AppContext) -> TuiModelMenuRow {
+    TuiModelMenuRow {
+        is_selectable: choice.is_selectable(),
+        is_key_connected: should_show_key_icon_for_model(&choice.llm, app),
+        id: choice.llm.id,
+        title: choice.llm.display_name,
+    }
+}
+
+fn snapshot_row(row: &TuiModelMenuRow) -> TuiInlineMenuRow {
+    TuiInlineMenuRow {
+        title: row.title.clone(),
+        prefix: None,
+        description: (!row.is_selectable).then(|| "disabled".to_owned()),
+        state_suffix: row.is_key_connected.then(|| "(key connected)".to_owned()),
+        is_selectable: row.is_selectable,
+        style: TuiInlineMenuRowStyle::Default,
     }
 }
 
