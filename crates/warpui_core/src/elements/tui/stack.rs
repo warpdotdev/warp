@@ -115,14 +115,24 @@ impl TuiElement for TuiStack {
             let child_area = TuiRect::new(0, 0, child_size.width, child_size.height);
             let mut layer = TuiBuffer::empty(child_area);
             let child_bounds = TuiScreenRect::new(screen_origin, child_size);
-            ctx.with_scene_layer(
+            let mut opaque_regions = ctx.with_scene_layer(
                 TuiClipBounds::BoundedByActiveLayerAnd(child_bounds),
                 |ctx| {
-                    let mut child_surface = TuiPaintSurface::mapped(&mut layer, origin);
-                    child.render(origin, &mut child_surface, ctx);
+                    let (_, opaque_regions) = ctx.capture_opaque_regions(|ctx| {
+                        let mut child_surface = TuiPaintSurface::mapped(&mut layer, origin);
+                        child.render(origin, &mut child_surface, ctx);
+                    });
+                    opaque_regions
                 },
             );
-            composite_buffer(&layer, origin, child_size, size, surface);
+            opaque_regions = opaque_regions
+                .into_iter()
+                .filter_map(|region| region.intersection(child_bounds))
+                .collect();
+            composite_buffer(&layer, &opaque_regions, origin, child_size, size, surface);
+            for region in opaque_regions {
+                ctx.record_opaque_region(region);
+            }
         }
     }
 
@@ -158,6 +168,7 @@ impl TuiElement for TuiStack {
 /// Paints the opaque cells in `source` onto `destination`.
 fn composite_buffer(
     source: &TuiBuffer,
+    opaque_regions: &[TuiScreenRect],
     origin: TuiScreenPosition,
     source_size: TuiSize,
     destination_size: TuiSize,
@@ -167,7 +178,12 @@ fn composite_buffer(
         let mut x = 0;
         while x < source_size.width {
             let cell = &source[(x, y)];
-            if is_transparent(cell) {
+            let screen_x = origin.x.saturating_add(i32::from(x));
+            let screen_y = origin.y.saturating_add(i32::from(y));
+            let explicitly_opaque = opaque_regions
+                .iter()
+                .any(|region| region.contains_xy(screen_x, screen_y));
+            if is_transparent(cell) && !explicitly_opaque {
                 x = x.saturating_add(1);
                 continue;
             }

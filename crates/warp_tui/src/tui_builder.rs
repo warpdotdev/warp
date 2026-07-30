@@ -291,10 +291,6 @@ impl TuiUiBuilder {
         }
     }
 
-    /// Solid form of the transcript's base background for opaque overlays.
-    pub(crate) fn transcript_background(&self) -> Color {
-        cell_color(self.base_background())
-    }
     fn cyan_overlay_2(&self) -> ThemeFill {
         let cyan = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
         self.base_background().blend(&cyan.with_opacity(50))
