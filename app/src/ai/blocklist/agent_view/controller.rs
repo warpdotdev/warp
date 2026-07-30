@@ -378,6 +378,11 @@ enum ExitConfirmationRequirement {
 struct ExitAgentViewOptions {
     should_confirm: ExitConfirmationRequirement,
 }
+#[derive(Debug, Clone, Copy)]
+enum ExitGatePolicy {
+    EnforceAll,
+    AllowLongRunningCommand,
+}
 
 impl AgentViewController {
     pub fn new(
@@ -444,7 +449,19 @@ impl AgentViewController {
     /// This is used to determine both whether the escape key should work
     /// and whether the escape keybinding should be displayed.
     pub fn can_exit_agent_view(&self) -> Result<(), ExitAgentViewError> {
+        self.can_exit_agent_view_with_policy(ExitGatePolicy::EnforceAll)
+    }
+
+    fn can_exit_agent_view_with_policy(
+        &self,
+        exit_gate_policy: ExitGatePolicy,
+    ) -> Result<(), ExitAgentViewError> {
         let model = self.terminal_model.lock();
+        // Conversation viewers have no underlying terminal session to return to,
+        // so exiting agent view is not allowed under any policy.
+        if model.is_conversation_transcript_viewer() {
+            return Err(ExitAgentViewError::ConversationViewer);
+        }
 
         let is_fullscreen_with_long_running = self.agent_view_state.is_fullscreen()
             && model
@@ -455,14 +472,11 @@ impl AgentViewController {
         // Cloud agent panes do not have the same underlying terminal ownership
         // constraint (no local shell process), so long-running third party agent
         // commands should not trap the user in agent view.
-        if is_fullscreen_with_long_running && !model.is_dummy_cloud_mode_session() {
+        if is_fullscreen_with_long_running
+            && !model.is_dummy_cloud_mode_session()
+            && matches!(exit_gate_policy, ExitGatePolicy::EnforceAll)
+        {
             return Err(ExitAgentViewError::LongRunningCommand);
-        }
-
-        // Conversation viewers have no underlying terminal session to return to,
-        // so exiting agent view is not allowed.
-        if model.is_conversation_transcript_viewer() {
-            return Err(ExitAgentViewError::ConversationViewer);
         }
 
         Ok(())
@@ -568,19 +582,21 @@ impl AgentViewController {
             ctx,
         );
     }
-    /// Exits an orchestration child even when a root-agent constraint, such as
-    /// an active long-running command, would normally block leaving Agent View.
-    pub(crate) fn exit_child_agent_view_without_confirmation(
+    /// Exits an orchestration child whose parent cannot be resolved.
+    ///
+    /// A long-running local command must not trap the user in the child, but all
+    /// other exit protections and the in-progress confirmation still apply.
+    pub(crate) fn exit_child_agent_view_with_missing_parent(
         &mut self,
         ctx: &mut ModelContext<Self>,
     ) {
         self.exit_agent_view_internal(
             ExitAgentViewOptions {
-                should_confirm: ExitConfirmationRequirement::None,
+                should_confirm: ExitConfirmationRequirement::IfInProgress,
             },
             ExitConfirmationTrigger::Escape,
             false,
-            true,
+            ExitGatePolicy::AllowLongRunningCommand,
             ctx,
         );
     }
@@ -812,7 +828,7 @@ impl AgentViewController {
                         },
                         ExitConfirmationTrigger::Escape,
                         true,
-                        false,
+                        ExitGatePolicy::EnforceAll,
                         ctx,
                     );
                 }
@@ -883,7 +899,7 @@ impl AgentViewController {
             },
             trigger,
             false,
-            false,
+            ExitGatePolicy::EnforceAll,
             ctx,
         );
     }
@@ -896,7 +912,7 @@ impl AgentViewController {
             },
             ExitConfirmationTrigger::Escape,
             false,
-            false,
+            ExitGatePolicy::EnforceAll,
             ctx,
         );
     }
@@ -912,7 +928,7 @@ impl AgentViewController {
             ExitAgentViewOptions { should_confirm },
             ExitConfirmationTrigger::Escape,
             false,
-            false,
+            ExitGatePolicy::EnforceAll,
             ctx,
         );
     }
@@ -922,12 +938,15 @@ impl AgentViewController {
         options: ExitAgentViewOptions,
         trigger: ExitConfirmationTrigger,
         is_exit_before_new_entrance: bool,
-        bypass_exit_gate: bool,
+        exit_gate_policy: ExitGatePolicy,
         ctx: &mut ModelContext<Self>,
     ) {
         self.clear_new_conversation_keybinding_confirmation(ctx);
         // Check if exiting agent view is allowed.
-        if !bypass_exit_gate && self.can_exit_agent_view().is_err() {
+        if self
+            .can_exit_agent_view_with_policy(exit_gate_policy)
+            .is_err()
+        {
             return;
         }
 

@@ -73,7 +73,7 @@ use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, Pree
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
-use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::model::terminal_model::{ConversationTranscriptViewerStatus, WithinBlock};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
     RemoteUpdateGuard, apply_cli_agent_state_update,
@@ -1543,7 +1543,65 @@ fn escape_navigates_child_when_only_parent_agent_id_is_available() {
 }
 
 #[test]
-fn escape_exits_long_running_child_when_parent_linkage_is_missing() {
+fn escape_confirms_before_exiting_long_running_child_when_parent_linkage_is_missing() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let (child_conversation_id, _, _, _) =
+                append_exchange_and_handle_event(view, agent_jump_user_query("child task"), ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, _| {
+                let child_conversation = history_model
+                    .conversation_mut(&child_conversation_id)
+                    .expect("child conversation should exist");
+                child_conversation.set_agent_name("Agent 1".to_string());
+                child_conversation.set_status_for_test(ConversationStatus::InProgress);
+            });
+
+            view.enter_agent_view(
+                None,
+                Some(child_conversation_id),
+                AgentViewEntryOrigin::ChildAgent,
+                ctx,
+            );
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 10", "running");
+            view.update_agent_view_back_button_state(ctx);
+
+            assert!(
+                !view.agent_view_back_button.as_ref(ctx).is_disabled(),
+                "child escape affordance should stay enabled without parent linkage",
+            );
+
+            view.handle_input_event(&InputEvent::Escape, ctx);
+
+            assert!(
+                view.agent_view_controller().as_ref(ctx).is_active(),
+                "the first escape must preserve the in-progress confirmation",
+            );
+            assert_eq!(
+                view.agent_view_controller()
+                    .as_ref(ctx)
+                    .pending_exit_confirmation_conversation_id(),
+                Some(child_conversation_id),
+            );
+
+            view.handle_input_event(&InputEvent::Escape, ctx);
+
+            assert!(
+                !view.agent_view_controller().as_ref(ctx).is_active(),
+                "the confirmed second escape must still release a child with missing linkage",
+            );
+        });
+    })
+}
+
+#[test]
+fn escape_does_not_exit_child_conversation_viewer_when_parent_linkage_is_missing() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -1573,21 +1631,74 @@ fn escape_exits_long_running_child_when_parent_linkage_is_missing() {
                 AgentViewEntryOrigin::ChildAgent,
                 ctx,
             );
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "running");
+            {
+                let mut model = view.model.lock();
+                model.simulate_long_running_block("sleep 10", "running");
+                model.set_conversation_transcript_viewer_status(Some(
+                    ConversationTranscriptViewerStatus::ViewingLocalConversation,
+                ));
+            }
             view.update_agent_view_back_button_state(ctx);
 
+            assert!(matches!(
+                view.agent_view_controller()
+                    .as_ref(ctx)
+                    .can_exit_agent_view(),
+                Err(ExitAgentViewError::ConversationViewer)
+            ));
             assert!(
-                !view.agent_view_back_button.as_ref(ctx).is_disabled(),
-                "child escape affordance should stay enabled without parent linkage",
+                view.agent_view_back_button.as_ref(ctx).is_disabled(),
+                "the child back button must stay disabled for a conversation viewer",
             );
 
             view.handle_input_event(&InputEvent::Escape, ctx);
 
+            let controller = view.agent_view_controller().as_ref(ctx);
             assert!(
-                !view.agent_view_controller().as_ref(ctx).is_active(),
-                "a child with missing parent linkage must still have a way out",
+                controller.is_active(),
+                "a conversation viewer must not exit even when the child parent is missing",
+            );
+            assert_eq!(
+                controller.pending_exit_confirmation_conversation_id(),
+                None,
+                "a rejected viewer exit must not arm a confirmation",
+            );
+        });
+    })
+}
+
+#[test]
+fn escape_does_not_exit_root_cloud_child_when_parent_linkage_is_missing() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.enter_agent_view_for_new_conversation(None, AgentViewEntryOrigin::CloudAgent, ctx);
+            let child_conversation_id = view
+                .active_conversation_id(ctx)
+                .expect("cloud agent view should select a conversation");
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, _| {
+                history_model
+                    .conversation_mut(&child_conversation_id)
+                    .expect("child conversation should exist")
+                    .set_agent_name("Agent 1".to_string());
+            });
+            view.model
+                .lock()
+                .simulate_long_running_block("claude", "running");
+
+            assert!(view.is_ambient_agent_session(ctx));
+            assert!(!view.is_nested_cloud_mode(ctx));
+
+            view.handle_input_event(&InputEvent::Escape, ctx);
+
+            assert!(
+                view.agent_view_controller().as_ref(ctx).is_active(),
+                "a root cloud pane must stay active when it has nowhere to return",
             );
         });
     })

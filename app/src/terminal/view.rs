@@ -228,9 +228,9 @@ use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryBlockParams, AgentViewEntryOrigin,
     AgentViewHeaderDisabledTheme, AgentViewHeaderTheme, AgentViewZeroStateBlock,
     AgentViewZeroStateEvent, ENTER_OR_EXIT_CONFIRMATION_WINDOW, EphemeralMessageModel,
-    ExitConfirmationTrigger, GuiInputModePolicy, InlineAgentViewHeader, OrchestrationPillBar,
-    fork_from_last_known_good_state_exchange_id, get_agent_view_entry_block_position_id,
-    is_in_cloud_context,
+    ExitAgentViewError, ExitConfirmationTrigger, GuiInputModePolicy, InlineAgentViewHeader,
+    OrchestrationPillBar, fork_from_last_known_good_state_exchange_id,
+    get_agent_view_entry_block_position_id, is_in_cloud_context,
 };
 use crate::ai::blocklist::block::cli::{CLISubagentView, CLISubagentViewEvent};
 use crate::ai::blocklist::block::cli_controller::{
@@ -4884,9 +4884,21 @@ impl TerminalView {
             log::warn!(
                 "Exiting child agent view without parent linkage; the parent conversation could not be resolved"
             );
-            self.agent_view_controller.update(ctx, |controller, ctx| {
-                controller.exit_child_agent_view_without_confirmation(ctx);
-            });
+            if matches!(
+                self.agent_view_controller.as_ref(ctx).can_exit_agent_view(),
+                Err(ExitAgentViewError::ConversationViewer)
+            ) {
+                return true;
+            }
+            if self.is_ambient_agent_session(ctx) {
+                // Preserve nested/root cloud-pane behavior: nested panes pop
+                // back to their parent, while a root pane remains active.
+                self.exit_agent_view(ctx);
+            } else {
+                self.agent_view_controller.update(ctx, |controller, ctx| {
+                    controller.exit_child_agent_view_with_missing_parent(ctx);
+                });
+            }
             return true;
         };
 
@@ -11359,21 +11371,28 @@ impl TerminalView {
     }
 
     /// Updates the back button's state and label. Linked child agents navigate
-    /// to their orchestrator; children with incomplete linkage still get an
-    /// enabled, explicit exit instead of inheriting root-conversation gating.
+    /// to their orchestrator; children with incomplete linkage get an explicit
+    /// exit that ignores only the long-running-command gate.
     pub(crate) fn update_agent_view_back_button_state(&mut self, ctx: &mut ViewContext<Self>) {
         let child_navigation = self.child_agent_navigation(ctx);
         let is_child_agent = child_navigation.is_some();
+        let exit_error = self
+            .agent_view_controller
+            .as_ref(ctx)
+            .can_exit_agent_view()
+            .err();
 
-        // Never disable for child agents: the swap-back path can't be blocked.
-        let disabled_reason = if is_child_agent {
-            None
-        } else {
-            self.agent_view_controller
-                .as_ref(ctx)
-                .can_exit_agent_view()
-                .err()
-                .map(|e| e.to_string())
+        // Parent navigation and the missing-parent child escape may ignore a
+        // long-running command, but conversation viewers remain protected.
+        let disabled_reason = match exit_error {
+            Some(ExitAgentViewError::ConversationViewer)
+                if matches!(child_navigation, Some(ChildAgentNavigation::Parent(_))) =>
+            {
+                None
+            }
+            Some(ExitAgentViewError::LongRunningCommand) if is_child_agent => None,
+            Some(error) => Some(error.to_string()),
+            None => None,
         };
         let label = match child_navigation {
             Some(ChildAgentNavigation::Parent(_)) => "for Orchestrator",
