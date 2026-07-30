@@ -20,9 +20,10 @@ use super::config::{
     ZeroStateAnimationLoadFailure, ZeroStateShape, resolve_ascii_art_path,
 };
 use super::{
-    BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoSurface, WarpLogoStyles,
-    ZeroStateAnimationElement, fitted_logo_size, logo_frame_at, object_frame_at,
-    object_frame_at_with_background, star_count_for_size, starfield_emitter_x, warp_logo_contains,
+    BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoGlyph, LogoSurface, REPAINT_INTERVAL,
+    WarpLogoStyles, ZeroStateAnimationElement, fitted_logo_size, glyph_for_tangent,
+    is_ghost_stipple_cell, logo_frame_at, object_frame_at, object_frame_at_with_background,
+    rotation_angle, star_count_for_size, starfield_emitter_x, warp_logo_contains,
 };
 
 const PANEL_SIZE: TuiSize = TuiSize::new(52, 20);
@@ -121,6 +122,55 @@ fn logo_mask_preserves_the_offset_warp_faces() {
 }
 
 #[test]
+fn rotation_lingers_on_faces_and_preserves_cardinal_angles() {
+    let period = Duration::from_secs(5);
+    for (elapsed, expected) in [
+        (Duration::ZERO, 0.0),
+        (Duration::from_millis(1_250), std::f64::consts::FRAC_PI_2),
+        (Duration::from_millis(2_500), std::f64::consts::PI),
+        (
+            Duration::from_millis(3_750),
+            3.0 * std::f64::consts::FRAC_PI_2,
+        ),
+    ] {
+        let actual = rotation_angle(elapsed, period);
+        assert!(
+            (actual - expected).abs() < f64::EPSILON * 4.0,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    let face_step =
+        rotation_angle(Duration::from_millis(100), period) - rotation_angle(Duration::ZERO, period);
+    let edge_step = rotation_angle(Duration::from_millis(1_350), period)
+        - rotation_angle(Duration::from_millis(1_250), period);
+    assert!(
+        face_step < edge_step,
+        "the logo should move more slowly near a face ({face_step}) than near an edge ({edge_step})"
+    );
+}
+
+#[test]
+fn tangent_glyphs_use_equal_angular_sectors() {
+    assert_eq!(glyph_for_tangent(0.0, 0.0), None);
+    assert_eq!(glyph_for_tangent(2.5, 1.0), Some(LogoGlyph::Horizontal));
+    assert_eq!(glyph_for_tangent(2.0, 1.0), Some(LogoGlyph::Backslash));
+    assert_eq!(glyph_for_tangent(1.0, 2.0), Some(LogoGlyph::Backslash));
+    assert_eq!(glyph_for_tangent(1.0, 2.5), Some(LogoGlyph::Vertical));
+    assert_eq!(glyph_for_tangent(1.0, -1.0), Some(LogoGlyph::ForwardSlash));
+}
+
+#[test]
+fn screen_space_ghost_stipple_is_sparse_and_deterministic() {
+    let stippled_cells = (0..32)
+        .flat_map(|x| (0..17).map(move |y| (x, y)))
+        .filter(|(x, y)| is_ghost_stipple_cell(*x, *y))
+        .count();
+
+    assert_eq!(stippled_cells, 29);
+}
+
+#[test]
 fn full_face_frame_is_recognizable_and_centered() {
     let frame = logo_frame_at(Duration::ZERO, PANEL_SIZE).unwrap();
     let lines = frame.to_lines();
@@ -169,31 +219,42 @@ fn background_stars_move_between_frames() {
 }
 
 #[test]
-fn adjacent_builtin_frames_have_bounded_cell_churn() {
+fn adjacent_builtin_frames_have_bounded_occupancy_and_content_churn() {
     let config = ZeroStateAnimationConfig::default();
     let size = TuiSize::new(32, 28);
     let frames = (0..=76)
         .map(|frame| {
-            object_frame_at_with_background(Duration::from_millis(frame * 66), size, &config, false)
-                .unwrap()
+            object_frame_at_with_background(REPAINT_INTERVAL * frame, size, &config, false).unwrap()
         })
         .collect::<Vec<_>>();
-    let max_changed_cells = frames
+    let (max_occupancy_changes, max_content_changes) = frames
         .windows(2)
         .map(|frames| {
-            frames[0]
+            let occupancy_changes = frames[0]
                 .cells
                 .iter()
                 .zip(&frames[1].cells)
                 .filter(|(before, after)| before.is_some() != after.is_some())
-                .count()
+                .count();
+            let content_changes = frames[0]
+                .cells
+                .iter()
+                .zip(&frames[1].cells)
+                .filter(|(before, after)| before != after)
+                .count();
+            (occupancy_changes, content_changes)
         })
-        .max()
-        .unwrap();
+        .fold((0, 0), |maximums, changes| {
+            (maximums.0.max(changes.0), maximums.1.max(changes.1))
+        });
 
     assert!(
-        max_changed_cells <= 80,
-        "adjacent built-in frames changed occupancy in {max_changed_cells} cells"
+        max_occupancy_changes <= 80,
+        "adjacent built-in frames changed occupancy in {max_occupancy_changes} cells"
+    );
+    assert!(
+        max_content_changes <= 120,
+        "adjacent built-in frames changed glyph or surface content in {max_content_changes} cells"
     );
 }
 

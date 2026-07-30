@@ -35,8 +35,17 @@ const MIN_OBJECT_ROWS: u16 = 5;
 const BUILT_IN_LOGO_CELL_ASPECT_RATIO: f64 = 2.5;
 const SURFACE_SAMPLES: usize = 3;
 const DEPTH_SAMPLES: usize = 6;
-const GHOST_STIPPLE_MODULUS: usize = 97;
-const SIDE_STITCH_MODULUS: usize = 29;
+/// Slows the rotation at the readable front and back poses while preserving
+/// the configured revolution period and exact cardinal angles.
+const FACE_LINGER_STRENGTH: f64 = 0.2;
+/// `1 + sqrt(2)` divides the four terminal line glyphs into equal 45-degree
+/// sectors instead of favoring horizontal and vertical strokes.
+const CARDINAL_GLYPH_TANGENT_RATIO: f64 = 2.414_213_562_373_095;
+/// Screen-space ghost stippling stays visually anchored while the source
+/// geometry rotates. One cell in nineteen keeps the interior deliberately
+/// quieter than the outline.
+const GHOST_STIPPLE_MODULUS: usize = 19;
+const SIDE_STITCH_MODULUS: usize = 43;
 const STARFIELD_REFERENCE_AREA: usize = 52 * 20;
 const STARFIELD_REFERENCE_COUNT: usize = 36;
 const STARFIELD_MIN_COUNT: usize = 18;
@@ -366,8 +375,7 @@ fn object_frame_at_with_background(
 ) -> Option<LogoFrame> {
     let cell_aspect_ratio = config.shape.cell_aspect_ratio();
     let (logo_cols, logo_rows) = fitted_logo_size(size, cell_aspect_ratio)?;
-    let revolution_secs = config.rotation_period.as_secs_f64();
-    let angle = (elapsed.as_secs_f64() % revolution_secs) / revolution_secs * std::f64::consts::TAU;
+    let angle = rotation_angle(elapsed, config.rotation_period);
     let (sin, cos) = angle.sin_cos();
     let mut frame = LogoFrame::new(size);
     if draw_stars {
@@ -398,11 +406,7 @@ fn object_frame_at_with_background(
                 cos,
                 cell_aspect_ratio,
             );
-            let is_ghost_sample = (source_x * 17 + source_y * 31) % GHOST_STIPPLE_MODULUS == 0;
             let is_side_stitch = (source_x * 13 + source_y * 7) % SIDE_STITCH_MODULUS == 0;
-            if outline_glyph.is_none() && !is_ghost_sample {
-                continue;
-            }
 
             for depth_index in 0..=DEPTH_SAMPLES {
                 let is_face = depth_index == 0 || depth_index == DEPTH_SAMPLES;
@@ -419,6 +423,12 @@ fn object_frame_at_with_background(
                     || projected_y < 0
                     || projected_x >= i32::from(size.width)
                     || projected_y >= i32::from(size.height)
+                {
+                    continue;
+                }
+                if is_face
+                    && outline_glyph.is_none()
+                    && !is_ghost_stipple_cell(projected_x as usize, projected_y as usize)
                 {
                     continue;
                 }
@@ -467,6 +477,16 @@ fn object_frame_at_with_background(
     Some(frame)
 }
 
+fn rotation_angle(elapsed: Duration, rotation_period: Duration) -> f64 {
+    let revolution_secs = rotation_period.as_secs_f64();
+    let linear_angle =
+        (elapsed.as_secs_f64() % revolution_secs) / revolution_secs * std::f64::consts::TAU;
+    linear_angle - FACE_LINGER_STRENGTH * (2.0 * linear_angle).sin() / 2.0
+}
+
+fn is_ghost_stipple_cell(x: usize, y: usize) -> bool {
+    (x * 17 + y * 31).is_multiple_of(GHOST_STIPPLE_MODULUS)
+}
 fn draw_background_stars(frame: &mut LogoFrame, elapsed: Duration) {
     let center_x = (f64::from(frame.size.width) - 1.0) / 2.0;
     draw_background_stars_from(frame, elapsed, center_x);
@@ -583,9 +603,15 @@ fn logo_outline_glyph(
     let normal_y = bool_as_scalar(above) - bool_as_scalar(below);
     let tangent_x = -normal_y * rotation_cos * cell_aspect_ratio;
     let tangent_y = normal_x;
-    if tangent_x.abs() > tangent_y.abs() * 1.8 {
+    glyph_for_tangent(tangent_x, tangent_y)
+}
+
+fn glyph_for_tangent(tangent_x: f64, tangent_y: f64) -> Option<LogoGlyph> {
+    if tangent_x == 0.0 && tangent_y == 0.0 {
+        None
+    } else if tangent_x.abs() > tangent_y.abs() * CARDINAL_GLYPH_TANGENT_RATIO {
         Some(LogoGlyph::Horizontal)
-    } else if tangent_y.abs() > tangent_x.abs() * 1.8 {
+    } else if tangent_y.abs() > tangent_x.abs() * CARDINAL_GLYPH_TANGENT_RATIO {
         Some(LogoGlyph::Vertical)
     } else if tangent_x.signum() == tangent_y.signum() {
         Some(LogoGlyph::Backslash)

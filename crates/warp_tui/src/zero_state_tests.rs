@@ -154,23 +154,31 @@ fn render_element_lines(
 }
 
 #[test]
-fn zero_state_copy_content_rectangle_is_centered_and_opaque_without_covering_margins() {
+fn zero_state_copy_rectangle_is_opaque_without_changing_the_background_color() {
     App::test((), |app| async move {
         app.read(|ctx| {
+            let stars = (0..9)
+                .map(|_| "*".repeat(80))
+                .collect::<Vec<_>>()
+                .join("\n");
             let layout = build_zero_state_layout(
-                TuiText::new("").finish(),
+                TuiText::new(stars).finish(),
                 TuiText::new("").finish(),
                 TuiText::new("copy here\n\nline").finish(),
-                Color::Red,
             );
             let buffer = render_to_buffer(layout, ctx, 80, 9);
             let lines = buffer.to_lines();
-            assert_eq!(lines[3].trim_end(), "copy here");
-            assert_eq!(lines[5].trim_end(), "line");
-            assert_eq!(buffer[(1, 3)].bg, Color::Red);
-            assert_eq!(buffer[(4, 3)].bg, Color::Red);
-            assert_eq!(buffer[(1, 4)].bg, Color::Red);
-            assert_eq!(buffer[(8, 5)].bg, Color::Red);
+            assert_eq!(&lines[3][..9], "copy here");
+            assert_eq!(&lines[5][..4], "line");
+            for y in 3..=5 {
+                for x in 0..9 {
+                    assert_ne!(buffer[(x, y)].symbol(), "*");
+                    assert_eq!(buffer[(x, y)].bg, Color::Reset);
+                }
+            }
+            assert_eq!(buffer[(1, 2)].symbol(), "*");
+            assert_eq!(buffer[(1, 6)].symbol(), "*");
+            assert_eq!(buffer[(9, 3)].symbol(), "*");
             assert_eq!(buffer[(1, 2)].bg, Color::Reset);
             assert_eq!(buffer[(1, 6)].bg, Color::Reset);
             assert_eq!(buffer[(9, 3)].bg, Color::Reset);
@@ -191,7 +199,6 @@ fn zero_state_starfield_spans_the_full_width() {
                 .finish(),
                 TuiText::new("").finish(),
                 TuiText::new("").finish(),
-                Color::Reset,
             );
             let buffer = render_to_buffer(layout, ctx, 120, 20);
             let occupied_columns = buffer
@@ -232,7 +239,6 @@ fn zero_state_animation_is_centered_in_remaining_space_and_hidden_when_space_is_
                 TuiText::new("").finish(),
                 animation(),
                 TuiText::new("").finish(),
-                Color::Reset,
             );
             let wide_width = 120;
             let wide = render_to_buffer(layout, ctx, wide_width, 20);
@@ -260,7 +266,6 @@ fn zero_state_animation_is_centered_in_remaining_space_and_hidden_when_space_is_
                 TuiText::new("").finish(),
                 animation(),
                 TuiText::new("").finish(),
-                Color::Reset,
             );
             assert!(
                 render_to_buffer(layout, ctx, 60, 20)

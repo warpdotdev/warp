@@ -167,12 +167,7 @@ impl TuiView for TuiZeroStateView {
         )
         .finish();
         let overlay = build_zero_state_overlay(cwd.as_deref(), &builder, ctx);
-        build_zero_state_layout(
-            starfield,
-            animation,
-            overlay,
-            builder.transcript_background(),
-        )
+        build_zero_state_layout(starfield, animation, overlay)
     }
 }
 
@@ -184,7 +179,6 @@ fn build_zero_state_layout(
     starfield: Box<dyn TuiElement>,
     animation: Box<dyn TuiElement>,
     overlay: Box<dyn TuiElement>,
-    background: Color,
 ) -> Box<dyn TuiElement> {
     let copy_column_reservation = TuiConstrainedBox::new(TuiText::new("").finish())
         .with_min_cols(LEFT_COLUMN_COLS)
@@ -204,7 +198,7 @@ fn build_zero_state_layout(
         .finish();
 
     let overlay = TuiContainer::new(overlay)
-        .with_background(background)
+        .with_background(Color::Reset)
         .finish();
     let overlay_layer = TuiFlex::column()
         .flex_child(TuiText::new("").finish())
