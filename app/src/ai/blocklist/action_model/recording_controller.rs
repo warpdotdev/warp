@@ -135,6 +135,25 @@ pub(crate) struct ActiveRecording {
     pub(crate) pending_group: Option<PendingActionGroup>,
 }
 
+impl ActiveRecording {
+    /// Commits any in-flight action group using the current elapsed time as its
+    /// finish offset (clamped to the group's start). The in-flight call's
+    /// pointer events live in that call's own buffer and are not reachable
+    /// here, so the entry keeps the labels but no pointer geometry. No-op when
+    /// no group is pending.
+    fn commit_pending_group_now(&mut self) {
+        if let Some(pending) = self.pending_group.take() {
+            let finish_offset = self.started_at.elapsed().max(pending.start_offset);
+            self.actions.push(computer_use::ActionLogEntry {
+                offset: pending.start_offset,
+                finish_offset,
+                labels: pending.labels,
+                pointer_events: Vec::new(),
+            });
+        }
+    }
+}
+
 /// A pending (in-flight) `UseComputer` action group: its start offset and labels
 /// are captured when the call begins, and the entry is committed with its
 /// finish offset only when the call's action sequence returns successfully.
@@ -277,20 +296,7 @@ impl RecordingController {
             // with the current clock as its implicit finish offset. This can
             // happen when a `UseComputer` call completes and `begin_action_group`
             // is called for the next call before `commit_action_group` fires.
-            if let Some(pending) = recording.pending_group.take() {
-                let implicit_finish = recording.started_at.elapsed().max(pending.start_offset);
-                // Defensive fallback: in the normal flow the executor commits or
-                // discards each group in its completion callback before the next
-                // `begin`, so this rarely fires. The prior group's pointer events
-                // live in that call's own buffer and are not reachable here, so
-                // this path keeps the labels but no pointer geometry.
-                recording.actions.push(computer_use::ActionLogEntry {
-                    offset: pending.start_offset,
-                    finish_offset: implicit_finish,
-                    labels: pending.labels,
-                    pointer_events: Vec::new(),
-                });
-            }
+            recording.commit_pending_group_now();
             let start_offset = recording.started_at.elapsed();
             recording.pending_group = Some(PendingActionGroup {
                 start_offset,
@@ -341,17 +347,11 @@ impl RecordingController {
     /// active for this conversation with a pending group.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn commit_action_group_now(&mut self, conversation_id: AIConversationId) {
-        let finish_offset = match &self.state {
-            RecordingState::Active(recording) if recording.conversation_id == conversation_id => {
-                recording.started_at.elapsed()
-            }
-            RecordingState::Idle
-            | RecordingState::Starting { .. }
-            | RecordingState::Active(_)
-            | RecordingState::Finalizing { .. }
-            | RecordingState::Finalized { .. } => return,
-        };
-        self.commit_action_group(conversation_id, finish_offset, Vec::new());
+        if let RecordingState::Active(recording) = &mut self.state
+            && recording.conversation_id == conversation_id
+        {
+            recording.commit_pending_group_now();
+        }
     }
 
     /// Discards the in-flight action group without committing it (a failed or
@@ -415,9 +415,14 @@ impl RecordingController {
         matches: impl Fn(&str, AIConversationId) -> bool,
     ) -> FinalizationClaim {
         match mem::replace(&mut self.state, RecordingState::Idle) {
-            RecordingState::Active(recording)
+            RecordingState::Active(mut recording)
                 if matches(&recording.id, recording.conversation_id) =>
             {
+                // A group can still be pending here (e.g. a long-running
+                // `playwright-cli` command whose finish was never observed);
+                // settle it so its window up to the stop point is kept rather
+                // than dropped by the smart cut.
+                recording.commit_pending_group_now();
                 let (sender, receiver) = oneshot::channel();
                 self.state = RecordingState::Finalizing {
                     id: recording.id.clone(),
