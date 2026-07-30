@@ -987,6 +987,8 @@ impl TuiInputView {
                 });
                 TuiEditorInteractionOutcome::FollowCursor
             }
+            // These menu-policy actions were handled by
+            // `handle_inline_menu_action` before input ownership was resolved.
             TuiInputAction::Submit
             | TuiInputAction::HandleEscape
             | TuiInputAction::LogOutSelectedMcp

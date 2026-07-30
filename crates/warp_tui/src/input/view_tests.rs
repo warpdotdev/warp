@@ -146,40 +146,24 @@ impl TuiInlineMenuHandle for ModelHandle<TestSecretMenu> {
 }
 
 #[test]
-fn masked_inline_menu_input_suppresses_copy_and_composer_modes() {
+fn masked_inline_menu_input_keeps_copy_and_paste_inside_masked_editor() {
     App::test((), |mut app| async move {
-        let (view, copied) = app.update(|ctx| {
-            ctx.add_singleton_model(|_| Appearance::mock());
-            add_test_semantic_selection(ctx);
-            let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            let input_mode = add_test_input_mode(ctx);
-            let suggestions_mode =
-                add_suggestions_mode(ctx, TuiInputSuggestionsMode::ModelSelector);
-            let menu = ctx.add_model(|_| TestSecretMenu);
-            let (_, view) = ctx.add_tui_window(
-                AddWindowOptions {
-                    window_style: WindowStyle::NotStealFocus,
-                    ..Default::default()
-                },
-                move |ctx| {
-                    TuiInputView::new_for_test(
-                        input_model,
-                        input_mode,
-                        suggestions_mode,
-                        vec![TuiInlineMenu::new(menu)],
-                        |_| false,
-                        ctx,
-                    )
-                },
-            );
-            let copied = Rc::new(Cell::new(false));
-            let copied_for_subscription = copied.clone();
+        let (view, leaked_event_count) = app.update(|ctx| {
+            let view = build_view_with_masked_inline_menu(ctx);
+            let leaked_event_count = Rc::new(Cell::new(0));
+            let leaked_event_count_for_subscription = leaked_event_count.clone();
             ctx.subscribe_to_view(&view, move |_, event, _| {
-                if matches!(event, TuiInputViewEvent::ClipboardCopySucceeded) {
-                    copied_for_subscription.set(true);
+                if matches!(
+                    event,
+                    TuiInputViewEvent::Pasted(_)
+                        | TuiInputViewEvent::ClipboardCopySucceeded
+                        | TuiInputViewEvent::ClipboardCopyFailed
+                ) {
+                    leaked_event_count_for_subscription
+                        .set(leaked_event_count_for_subscription.get() + 1);
                 }
             });
-            (view, copied)
+            (view, leaked_event_count)
         });
 
         app.update(|ctx| {
@@ -190,22 +174,77 @@ fn masked_inline_menu_input_suppresses_copy_and_composer_modes() {
                 &[
                     TuiInputAction::EditorCommand(TuiEditorCommand::SelectAll),
                     TuiInputAction::EditorCommand(TuiEditorCommand::Copy),
+                    TuiInputAction::Editor(TuiEditorAction::PasteText(
+                        "replacement-secret".to_owned(),
+                    )),
                 ],
             );
         });
         app.read(|ctx| {
             let rendered = render_input_buffer(&view, ctx).to_lines().join("\n");
-            assert!(rendered.contains("••••••••••"), "{rendered}");
+            assert_eq!(text(&view, ctx), "replacement-secret");
+            assert!(rendered.contains("••••••••••••••••••"), "{rendered}");
             assert!(!rendered.contains("top-secret"), "{rendered}");
-            assert!(!view.as_ref(ctx).is_shell_mode(ctx));
+            assert!(!rendered.contains("replacement-secret"), "{rendered}");
         });
-        assert!(!copied.get());
+        assert_eq!(
+            leaked_event_count.get(),
+            0,
+            "masked copy and paste must not emit composer or clipboard events"
+        );
+    });
+}
+
+#[test]
+fn masked_inline_menu_input_keeps_undo_and_redo_inside_masked_editor() {
+    App::test((), |mut app| async move {
+        let view = app.update(build_view_with_masked_inline_menu);
 
         app.update(|ctx| {
-            view.update(ctx, |view, ctx| view.set_text("", ctx));
-            type_str(&view, ctx, "!?");
+            type_str(&view, ctx, "top-secret");
+            dispatch(
+                &view,
+                ctx,
+                &[
+                    TuiInputAction::EditorCommand(TuiEditorCommand::SelectAll),
+                    TuiInputAction::Editor(TuiEditorAction::PasteText(
+                        "replacement-secret".to_owned(),
+                    )),
+                    TuiInputAction::EditorCommand(TuiEditorCommand::Undo),
+                ],
+            );
         });
         app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "top-secret");
+            let rendered = render_input_buffer(&view, ctx).to_lines().join("\n");
+            assert!(rendered.contains("••••••••••"), "{rendered}");
+            assert!(!rendered.contains("top-secret"), "{rendered}");
+            assert!(!rendered.contains("replacement-secret"), "{rendered}");
+        });
+
+        app.update(|ctx| {
+            dispatch(
+                &view,
+                ctx,
+                &[TuiInputAction::EditorCommand(TuiEditorCommand::Redo)],
+            );
+        });
+        app.read(|ctx| {
+            assert_eq!(text(&view, ctx), "replacement-secret");
+            let rendered = render_input_buffer(&view, ctx).to_lines().join("\n");
+            assert!(rendered.contains("••••••••••••••••••"), "{rendered}");
+            assert!(!rendered.contains("top-secret"), "{rendered}");
+            assert!(!rendered.contains("replacement-secret"), "{rendered}");
+        });
+    });
+}
+
+#[test]
+fn masked_inline_menu_input_suppresses_composer_modes() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view_with_masked_inline_menu(ctx);
+            type_str(&view, ctx, "!?");
             assert_eq!(text(&view, ctx), "!?");
             assert!(!view.as_ref(ctx).is_shell_mode(ctx));
             assert_eq!(
@@ -216,6 +255,31 @@ fn masked_inline_menu_input_suppresses_copy_and_composer_modes() {
     });
 }
 
+fn build_view_with_masked_inline_menu(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
+    ctx.add_singleton_model(|_| Appearance::mock());
+    add_test_semantic_selection(ctx);
+    let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
+    let input_mode = add_test_input_mode(ctx);
+    let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::ModelSelector);
+    let menu = ctx.add_model(|_| TestSecretMenu);
+    let (_, view) = ctx.add_tui_window(
+        AddWindowOptions {
+            window_style: WindowStyle::NotStealFocus,
+            ..Default::default()
+        },
+        move |ctx| {
+            TuiInputView::new_for_test(
+                input_model,
+                input_mode,
+                suggestions_mode,
+                vec![TuiInlineMenu::new(menu)],
+                |_| false,
+                ctx,
+            )
+        },
+    );
+    view
+}
 fn add_test_input_mode(ctx: &mut AppContext) -> ModelHandle<BlocklistAIInputModel> {
     register_tui_input_mode_test_settings(ctx);
     BlocklistAIInputModel::mock(Rc::new(TestInputModePolicy), ctx)
