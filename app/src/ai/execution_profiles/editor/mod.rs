@@ -26,7 +26,7 @@ use crate::ai::execution_profiles::profiles::{
 };
 use crate::ai::execution_profiles::{
     AIExecutionProfile, AIExecutionProfileAppExt as _, ActionPermission, ExecutionProfileId,
-    RunAgentsPermission, WriteToPtyPermission,
+    WriteToPtyPermission,
 };
 use crate::ai::llms::{
     DisableReason, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent,
@@ -126,7 +126,6 @@ struct TooltipMouseStateHandles {
     write_to_pty_tooltip_mouse_state: MouseStateHandle,
     computer_use_tooltip_mouse_state: MouseStateHandle,
     ask_user_question_tooltip_mouse_state: MouseStateHandle,
-    run_agents_tooltip_mouse_state: MouseStateHandle,
     call_mcp_servers_tooltip_mouse_state: MouseStateHandle,
     // Separate mouse state handles for text input editors (for workspace override tooltips)
     command_allowlist_editor_tooltip_mouse_state: MouseStateHandle,
@@ -193,9 +192,6 @@ pub enum ExecutionProfileEditorViewAction {
     SetAskUserQuestion {
         permission: super::AskUserQuestionPermission,
     },
-    SetRunAgents {
-        permission: RunAgentsPermission,
-    },
     AddToCommandAllowlist {
         predicate: AgentModeCommandExecutionPredicate,
     },
@@ -256,7 +252,6 @@ pub struct ExecutionProfileEditorView {
     call_mcp_servers_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     computer_use_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     ask_user_question_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
-    run_agents_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     command_allowlist_editor: ViewHandle<SubmittableTextInput>,
     command_denylist_editor: ViewHandle<SubmittableTextInput>,
     directory_allowlist_editor: ViewHandle<SubmittableTextInput>,
@@ -476,34 +471,6 @@ impl ExecutionProfileEditorView {
             dropdown
         });
 
-        let run_agents_dropdown = ctx.add_typed_action_view(|ctx| {
-            let mut dropdown = Dropdown::new(ctx);
-            dropdown.set_items(
-                vec![
-                    DropdownItem::new(
-                        "Never",
-                        ExecutionProfileEditorViewAction::SetRunAgents {
-                            permission: RunAgentsPermission::NeverAllow,
-                        },
-                    ),
-                    DropdownItem::new(
-                        "Always allow",
-                        ExecutionProfileEditorViewAction::SetRunAgents {
-                            permission: RunAgentsPermission::AlwaysAllow,
-                        },
-                    ),
-                    DropdownItem::new(
-                        "Always ask",
-                        ExecutionProfileEditorViewAction::SetRunAgents {
-                            permission: RunAgentsPermission::AlwaysAsk,
-                        },
-                    ),
-                ],
-                ctx,
-            );
-            dropdown
-        });
-
         let mcp_allowlist_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = FilterableDropdown::new(ctx);
             dropdown.set_menu_header_to_static("Select MCP servers");
@@ -662,7 +629,6 @@ impl ExecutionProfileEditorView {
             call_mcp_servers_dropdown,
             computer_use_dropdown,
             ask_user_question_dropdown,
-            run_agents_dropdown,
             command_allowlist_editor,
             command_denylist_editor,
             directory_allowlist_editor,
@@ -928,7 +894,6 @@ impl ExecutionProfileEditorView {
         let computer_use_disabled = !ai_settings.is_computer_use_permissions_editable(ctx);
         let ask_user_question_disabled =
             !ai_settings.is_ask_user_question_permissions_editable(ctx);
-        let run_agents_disabled = !ai_settings.is_run_agents_permissions_editable(ctx);
         let mcp_disabled = !ai_settings.is_mcp_permission_editable(ctx);
 
         Self::refresh_filterable_model_dropdown(
@@ -1004,12 +969,6 @@ impl ExecutionProfileEditorView {
             &self.ask_user_question_dropdown,
             current_permissions.ask_user_question,
             ask_user_question_disabled,
-            ctx,
-        );
-        Self::refresh_run_agents_dropdown_menu(
-            &self.run_agents_dropdown,
-            current_permissions.run_agents,
-            run_agents_disabled,
             ctx,
         );
         Self::refresh_mcp_dropdown(
@@ -1124,31 +1083,6 @@ impl ExecutionProfileEditorView {
                 super::AskUserQuestionPermission::AskExceptInAutoApprove
                 | super::AskUserQuestionPermission::Unknown => 1,
                 super::AskUserQuestionPermission::AlwaysAsk => 2,
-            };
-
-            menu.set_selected_by_index(active, ctx);
-            ctx.notify();
-        });
-        ctx.notify();
-    }
-
-    fn refresh_run_agents_dropdown_menu(
-        menu: &ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
-        current_permission: RunAgentsPermission,
-        disabled: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        menu.update(ctx, |menu, ctx| {
-            if !disabled {
-                menu.set_enabled(ctx);
-            } else {
-                menu.set_disabled(ctx);
-            }
-
-            let active = match current_permission {
-                RunAgentsPermission::NeverAllow | RunAgentsPermission::Unknown => 0,
-                RunAgentsPermission::AlwaysAllow => 1,
-                RunAgentsPermission::AlwaysAsk => 2,
             };
 
             menu.set_selected_by_index(active, ctx);
@@ -1663,12 +1597,6 @@ impl TypedActionView for ExecutionProfileEditorView {
             ExecutionProfileEditorViewAction::SetAskUserQuestion { permission } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
                     profiles_model.set_ask_user_question(&self.profile_id, *permission, ctx);
-                });
-                ctx.notify();
-            }
-            ExecutionProfileEditorViewAction::SetRunAgents { permission } => {
-                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_run_agents(&self.profile_id, *permission, ctx);
                 });
                 ctx.notify();
             }

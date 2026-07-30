@@ -17,8 +17,7 @@ use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
 use crate::ai::execution_profiles::{
-    ActionPermission, AskUserQuestionPermission, ExecutionProfileId, RunAgentsPermission,
-    WriteToPtyPermission,
+    ActionPermission, AskUserQuestionPermission, ExecutionProfileId, WriteToPtyPermission,
 };
 use crate::ai::llms::LLMPreferences;
 use crate::appearance::Appearance;
@@ -315,16 +314,6 @@ impl View for ExecutionProfileView {
                                 is_any_ai_enabled,
                             ),
                         ));
-                        permissions_column.add_child(with_standard_vertical_margin(
-                            render_run_agents_permission_line_with_icon(
-                                Icon::Workflow,
-                                "Run agents:",
-                                &profile.run_agents,
-                                appearance,
-                                is_any_ai_enabled,
-                            ),
-                        ));
-
                         permissions_column.add_child(with_standard_vertical_margin(
                             render_action_permission_line_with_icon(
                                 Icon::Dataflow,
@@ -759,21 +748,6 @@ fn render_ask_user_question_permission_line_with_icon(
             "Ask unless auto-approve"
         }
         AskUserQuestionPermission::AlwaysAsk => "Always ask",
-    };
-    render_permission_line_with_icon(icon, label, permission_text, appearance, is_ai_enabled)
-}
-
-fn render_run_agents_permission_line_with_icon(
-    icon: Icon,
-    label: impl Into<String>,
-    permission: &RunAgentsPermission,
-    appearance: &Appearance,
-    is_ai_enabled: bool,
-) -> Box<dyn Element> {
-    let permission_text = match permission {
-        RunAgentsPermission::NeverAllow | RunAgentsPermission::Unknown => "Never",
-        RunAgentsPermission::AlwaysAllow => "Always allow",
-        RunAgentsPermission::AlwaysAsk => "Always ask",
     };
     render_permission_line_with_icon(icon, label, permission_text, appearance, is_ai_enabled)
 }
