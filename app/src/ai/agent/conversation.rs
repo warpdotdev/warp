@@ -201,11 +201,12 @@ pub struct ConversationUsageTotals {
 /// metadata blob, and a restored conversation that never ran a request must
 /// keep the footer's usage entry hidden.
 fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool {
+    // A present provider cost counts even at 0.0: the server only records a
+    // cost once a turn has completed accounting, so `Some(0.0)` is a known
+    // zero baseline (rendered as $0.00), unlike `None` (unknown).
     metadata.credits_spent != 0.0
         || metadata.platform_credits_spent != 0.0
-        || metadata
-            .total_provider_cost_in_cents
-            .is_some_and(|cost| cost != 0.0)
+        || metadata.total_provider_cost_in_cents.is_some()
         || !metadata.token_usage.is_empty()
         || metadata.context_window_usage != 0.0
         || metadata.was_summarized

@@ -698,12 +698,16 @@ fn restored_zero_usage_metadata_keeps_footer_usage_hidden() {
     assert_eq!(totals.cost_in_cents, None);
 }
 
+/// A present provider cost is affirmative evidence even at 0.0: the server
+/// only records a cost once a turn completed accounting, so a restored
+/// known-zero baseline must surface the footer as a truthful $0.00 rather
+/// than staying hidden or reading as unknown.
 #[test]
-fn restored_known_zero_cost_without_other_usage_keeps_footer_usage_hidden() {
+fn restored_known_zero_cost_marks_usage_with_known_zero_baseline() {
     let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
 
     let totals = conversation.usage_totals();
-    assert!(!totals.has_usage);
+    assert!(totals.has_usage);
     assert_eq!(totals.cost_in_cents, Some(0.0));
 }
 
