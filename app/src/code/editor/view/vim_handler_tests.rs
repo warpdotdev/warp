@@ -663,6 +663,115 @@ fn test_vim_number_repeat_yank_paste_linewise() {
 }
 
 #[test]
+fn test_vim_uppercase_r_extends_at_eol_and_dot_replays_the_session() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("abc\nabcdef", &mut app);
+        set_cursor_position(&editor, 1, 2, &mut app);
+        vim_user_insert(&editor, "Rxy", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+        });
+
+        assert_eq!(buffer_text(&editor, &app), "abxy\nabcdef");
+        assert_eq!(cursor_position(&editor, &app), (1, 3));
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, ".", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "abxy\nxycdef");
+        assert_eq!(cursor_position(&editor, &app), (2, 1));
+
+        let counted_editor = add_code_editor("abcdefgh", &mut app);
+        set_cursor_position(&counted_editor, 1, 0, &mut app);
+        vim_user_insert(&counted_editor, "2Rxy", &mut app);
+        counted_editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+        });
+        assert_eq!(buffer_text(&counted_editor, &app), "xyxyefgh");
+        assert_eq!(cursor_position(&counted_editor, &app), (1, 3));
+    });
+}
+
+#[test]
+fn test_vim_linewise_operations_at_eof() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let last_line_delete = add_code_editor("one\ntwo", &mut app);
+        set_cursor_position(&last_line_delete, 2, 0, &mut app);
+        vim_user_insert(&last_line_delete, "dd", &mut app);
+        assert_eq!(buffer_text(&last_line_delete, &app), "one");
+
+        let delete_to_eof = add_code_editor("one\ntwo\nthree", &mut app);
+        set_cursor_position(&delete_to_eof, 2, 0, &mut app);
+        vim_user_insert(&delete_to_eof, "dG", &mut app);
+        assert_eq!(buffer_text(&delete_to_eof, &app), "one");
+
+        let yank_to_eof = add_code_editor("one\ntwo\nthree", &mut app);
+        set_cursor_position(&yank_to_eof, 2, 0, &mut app);
+        vim_user_insert(&yank_to_eof, "yGggP", &mut app);
+        assert_eq!(
+            buffer_text(&yank_to_eof, &app),
+            "two\nthree\none\ntwo\nthree"
+        );
+        let blank_final_line_delete = add_code_editor("", &mut app);
+        blank_final_line_delete.update(&mut app, |view, ctx| {
+            view.reset(InitialBufferState::plain_text("one\n"), ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        vim_user_insert(&blank_final_line_delete, "G", &mut app);
+        vim_user_insert(&blank_final_line_delete, "dd", &mut app);
+        assert_eq!(buffer_text(&blank_final_line_delete, &app), "one");
+        let blank_final_line = add_code_editor("", &mut app);
+        blank_final_line.update(&mut app, |view, ctx| {
+            view.reset(InitialBufferState::plain_text("one\n"), ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        vim_user_insert(&blank_final_line, "Gyy", &mut app);
+        let blank_line_register = app
+            .update(|ctx| {
+                VimRegisters::handle(ctx)
+                    .update(ctx, |registers, ctx| registers.read_from_register('"', ctx))
+            })
+            .expect("blank line yank should populate the unnamed register");
+        assert_eq!(blank_line_register.text, "\n");
+        assert_eq!(blank_line_register.motion_type, MotionType::Linewise);
+        vim_user_insert(&blank_final_line, "P", &mut app);
+        assert_eq!(buffer_text(&blank_final_line, &app), "one\n\n");
+
+        let one_line_delete = add_code_editor("one", &mut app);
+        vim_user_insert(&one_line_delete, "dd", &mut app);
+        assert_eq!(buffer_text(&one_line_delete, &app), "");
+        let default_line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
+
+        let one_line_yank = add_code_editor("one", &mut app);
+        vim_user_insert(&one_line_yank, "yyP", &mut app);
+        assert_eq!(
+            buffer_text(&one_line_yank, &app),
+            format!("one{default_line_ending}one")
+        );
+
+        let empty_line_yank = add_code_editor("", &mut app);
+        assert_eq!(buffer_text(&empty_line_yank, &app), "");
+        vim_user_insert(&empty_line_yank, "yy", &mut app);
+        let empty_line_register = app
+            .update(|ctx| {
+                VimRegisters::handle(ctx)
+                    .update(ctx, |registers, ctx| registers.read_from_register('"', ctx))
+            })
+            .expect("empty line yank should populate the unnamed register");
+        assert_eq!(empty_line_register.text, "\n");
+        assert_eq!(empty_line_register.motion_type, MotionType::Linewise);
+        vim_user_insert(&empty_line_yank, "P", &mut app);
+        assert_eq!(buffer_text(&empty_line_yank, &app), default_line_ending);
+    });
+}
+#[test]
 fn test_vim_number_repeat_yank_paste_charwise() {
     let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
 

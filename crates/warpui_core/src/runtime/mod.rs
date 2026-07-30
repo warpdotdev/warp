@@ -24,15 +24,17 @@
 use std::cell::{Cell, RefCell};
 use std::io::{self, Stdout, Write, stdout};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event as CrosstermEvent, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event as CrosstermEvent, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
@@ -48,11 +50,12 @@ mod event_conversion;
 mod renderer;
 mod terminal_probe;
 
-use event_conversion::ClickTracker;
 pub use event_conversion::crossterm_event_to_tui_event;
+use event_conversion::{ClickTracker, ShiftKeyTracker, ShiftRestoration};
 pub use renderer::TuiFrameRenderer;
 pub use terminal_probe::{
-    BackgroundLuminance, ProbedRgb, ProbedTerminalColors, probe_terminal_colors,
+    BackgroundLuminance, ProbedRgb, TuiProbe, background_luminance, probe_terminal_background,
+    read_terminal_background_reply, write_terminal_background_query,
 };
 use warp_errors::report_error;
 
@@ -80,9 +83,15 @@ struct TuiScreen<T, R: TuiTerminal> {
     presenter: TuiPresenter,
     renderer: TuiFrameRenderer,
     terminal: R,
+    /// Keeps each rendered frame and OSC query contiguous on stdout; otherwise
+    /// the reader thread could insert a query inside a frame's escape sequence.
+    stdout_write_lock: Arc<Mutex<()>>,
     /// Synthesizes multi-click counts for left mouse presses, which crossterm
     /// does not report.
     click_tracker: ClickTracker,
+    /// Restores Shift after crossterm substitutes a layout-produced alternate
+    /// character and removes the modifier bit.
+    shift_key_tracker: ShiftKeyTracker,
     /// The pointer position from the most recent positional event, replayed as
     /// a synthetic `MouseMoved` after each draw so hover state tracks elements
     /// that move under a stationary pointer.
@@ -90,14 +99,21 @@ struct TuiScreen<T, R: TuiTerminal> {
 }
 
 impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
-    fn new(window_id: WindowId, root_view: ViewHandle<T>, terminal: R) -> Self {
+    fn new(
+        window_id: WindowId,
+        root_view: ViewHandle<T>,
+        terminal: R,
+        stdout_write_lock: Arc<Mutex<()>>,
+    ) -> Self {
         Self {
             window_id,
             root_view,
             presenter: TuiPresenter::new(),
             renderer: TuiFrameRenderer::new(),
             terminal,
+            stdout_write_lock,
             click_tracker: ClickTracker::default(),
+            shift_key_tracker: ShiftKeyTracker::default(),
             last_mouse_position: None,
         }
     }
@@ -139,6 +155,13 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         }
         let frame = frame.expect("loop always presents at least once");
 
+        // Hold the lock through the complete frame write so a reader-thread
+        // OSC query cannot split the renderer's escape sequence.
+        let _frame_write_guard = self
+            .stdout_write_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let mut writer = self.terminal.writer();
         self.renderer
             .draw(&mut writer, &frame.buffer, frame.cursor)?;
@@ -163,11 +186,25 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         self.dispatch_event(ctx, &event);
     }
 
-    /// Converts a raw crossterm event into the TUI vocabulary, annotating left
-    /// mouse-down events with a synthesized multi-click count (crossterm only
-    /// reports raw presses). Returns `None` for events with no TUI equivalent.
-    fn convert_event(&mut self, event: CrosstermEvent) -> Option<TuiEvent> {
+    /// Converts a raw crossterm event into the TUI vocabulary, restoring Shift
+    /// from modifier lifecycle events and synthesizing mouse multi-click counts.
+    /// Returns `None` for events with no TUI equivalent.
+    fn convert_event(&mut self, mut event: CrosstermEvent) -> Option<TuiEvent> {
+        let restoration = self.shift_key_tracker.update(&mut event);
         let mut tui_event = crossterm_event_to_tui_event(event)?;
+        if restoration == ShiftRestoration::Symbol
+            && let TuiEvent::KeyDown {
+                keystroke, details, ..
+            } = &mut tui_event
+        {
+            // Crossterm replaced the symbol's base key with the character the
+            // layout produced, which already encodes Shift. Keeping the bit
+            // would make one chord need two spellings: `ctrl-shift-!` where the
+            // layout shifts the symbol and `ctrl-!` where it does not. The base
+            // key is also unrecoverable from the produced character.
+            keystroke.shift = false;
+            details.key_without_modifiers = None;
+        }
         self.click_tracker.annotate(&mut tui_event, Instant::now());
         Some(tui_event)
     }
@@ -183,6 +220,8 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
 
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
         // responder chain first, exactly like the GUI window event path.
+        // `ModifierKeyChanged` bypasses this pass and continues to element
+        // dispatch because keymaps represent press-driven keystrokes.
         if let Some((keystroke, is_composing)) = event.key_down() {
             let responder_chain = ctx.get_responder_chain(self.window_id);
             match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, is_composing)
@@ -254,7 +293,7 @@ where
     /// Enters the alternate screen + raw mode and prepares to drive `root_view`.
     /// The terminal is restored when the returned runtime is dropped.
     pub fn enter(app: &App, window_id: WindowId, root_view: ViewHandle<T>) -> io::Result<Self> {
-        let guard = TuiTerminalGuard::enter()?;
+        let guard = TuiTerminalGuard::enter(false)?;
         let mut runtime = Self::with_terminal(app, window_id, root_view, CrosstermTerminal::new());
         runtime._terminal_guard = Some(guard);
         Ok(runtime)
@@ -279,7 +318,7 @@ where
         let dirty_for_callback = dirty.clone();
         app.on_window_invalidated(window_id, move |_, _| dirty_for_callback.set(true));
         Self {
-            screen: TuiScreen::new(window_id, root_view, terminal),
+            screen: TuiScreen::new(window_id, root_view, terminal, Arc::new(Mutex::new(()))),
             dirty,
             last_size: None,
             pending_repaint: None,
@@ -417,19 +456,23 @@ impl TuiTerminal for CrosstermTerminal {
 pub struct TuiTerminalGuard {
     _guard: RawModeGuard<CrosstermModeControl>,
     keyboard_enhancement_supported: bool,
+    modifier_key_lifecycle_enabled: bool,
 }
 
 impl TuiTerminalGuard {
     /// Enables raw mode and switches to the alternate screen, restoring both
     /// when the guard is dropped.
-    pub fn enter() -> io::Result<Self> {
+    pub fn enter(report_modifier_key_lifecycle: bool) -> io::Result<Self> {
         let keyboard_enhancement_supported =
             matches!(terminal::supports_keyboard_enhancement(), Ok(true));
         Ok(Self {
             _guard: RawModeGuard::enter(CrosstermModeControl {
                 keyboard_enhancement_supported,
+                report_modifier_key_lifecycle,
             })?,
             keyboard_enhancement_supported,
+            modifier_key_lifecycle_enabled: keyboard_enhancement_supported
+                && report_modifier_key_lifecycle,
         })
     }
 
@@ -437,34 +480,85 @@ impl TuiTerminalGuard {
     pub fn keyboard_enhancement_supported(&self) -> bool {
         self.keyboard_enhancement_supported
     }
+
+    /// Whether standalone modifier press/release reporting is active.
+    pub fn modifier_key_lifecycle_enabled(&self) -> bool {
+        self.modifier_key_lifecycle_enabled
+    }
+    /// Reconfigures standalone modifier reporting on the live terminal.
+    pub fn set_modifier_key_lifecycle_enabled(
+        &mut self,
+        report_modifier_key_lifecycle: bool,
+    ) -> io::Result<()> {
+        let modifier_key_lifecycle_enabled =
+            self.keyboard_enhancement_supported && report_modifier_key_lifecycle;
+        if self.modifier_key_lifecycle_enabled == modifier_key_lifecycle_enabled {
+            // Without enhancement support the effective state is always
+            // disabled, so this absorbs every call and nothing is written.
+            return Ok(());
+        }
+        // The process shares one buffered stdout, so writing through a fresh
+        // handle stays ordered with the frames the renderer writes.
+        set_terminal_keyboard_enhancement_flags(&mut stdout(), report_modifier_key_lifecycle)?;
+        self.modifier_key_lifecycle_enabled = modifier_key_lifecycle_enabled;
+        Ok(())
+    }
 }
 
 /// Keeps a headless TUI session alive. Store it for the lifetime of the app
 /// (e.g. in a singleton model) so the session lives as long as the app does;
-/// dropping it tears the session down. Fields drop in declaration order, which
-/// is also the teardown order:
+/// dropping it tears the session down. Its `Drop` implementation first disables
+/// new probes and waits for any in-flight probe I/O, then fields drop in
+/// declaration order:
 /// - `_task`: the input-dispatch loop. It is an [`async_task::Task`], so
 ///   dropping it *cancels* the future (we intentionally don't `detach()`),
 ///   which in turn drops the channel receiver feeding it.
 /// - `_reader`: the blocking input-reader thread. Dropping a `JoinHandle`
 ///   detaches rather than joins, so this doesn't stop the thread directly; the
-///   thread exits on its own once the receiver above is gone (its next `send`
-///   fails) or when the process exits. The handle is held so the session owns
-///   the thread it spawned.
-/// - `_guard`: restores raw mode + the alternate screen on drop.
+///   thread exits at its next loop boundary or send when either downstream
+///   receiver is gone, or when the process exits. The handle is held so the
+///   session owns the thread it spawned.
+/// - `guard`: owns the terminal's raw mode + alternate screen and reconfigures
+///   keyboard reporting while the session runs; restores both on drop.
 pub struct TuiDriverHandle {
     _task: ForegroundTask,
     /// The pending element-requested repaint timer, if any (see
     /// [`draw_and_schedule_repaint`]). Dropping it cancels the timer.
     _repaint_timer: Rc<RefCell<Option<ForegroundTask>>>,
     _reader: thread::JoinHandle<()>,
-    _guard: TuiTerminalGuard,
+    reader_shutdown: Arc<AtomicBool>,
+    probe_lifecycle_lock: Arc<Mutex<()>>,
+    guard: TuiTerminalGuard,
 }
 
 impl TuiDriverHandle {
     /// Whether the host terminal supports the Kitty keyboard-enhancement protocol.
     pub fn keyboard_enhancement_supported(&self) -> bool {
-        self._guard.keyboard_enhancement_supported()
+        self.guard.keyboard_enhancement_supported()
+    }
+
+    /// Whether standalone modifier press/release reporting is active.
+    pub fn modifier_key_lifecycle_enabled(&self) -> bool {
+        self.guard.modifier_key_lifecycle_enabled()
+    }
+
+    /// Reconfigures standalone modifier reporting for the active TUI.
+    pub fn set_modifier_key_lifecycle_enabled(
+        &mut self,
+        report_modifier_key_lifecycle: bool,
+    ) -> io::Result<()> {
+        self.guard
+            .set_modifier_key_lifecycle_enabled(report_modifier_key_lifecycle)
+    }
+}
+
+impl Drop for TuiDriverHandle {
+    fn drop(&mut self) {
+        self.reader_shutdown.store(true, Ordering::Release);
+        let _probe_lifecycle_guard = self
+            .probe_lifecycle_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
 }
 
@@ -489,8 +583,11 @@ pub fn spawn_tui_driver<T: TuiView>(
     ctx: &mut AppContext,
     window_id: WindowId,
     root_view: ViewHandle<T>,
+    report_modifier_key_lifecycle: bool,
+    probe: Option<TuiProbe>,
 ) -> io::Result<TuiDriverHandle> {
-    let guard = TuiTerminalGuard::enter()?;
+    let guard = TuiTerminalGuard::enter(report_modifier_key_lifecycle)?;
+    let stdout_write_lock = Arc::new(Mutex::new(()));
 
     // The presenter + renderer + terminal live behind an `Rc<RefCell<_>>` owned
     // by the invalidation callback. The input path never borrows it, so painting
@@ -499,6 +596,7 @@ pub fn spawn_tui_driver<T: TuiView>(
         window_id,
         root_view,
         CrosstermTerminal::new(),
+        stdout_write_lock.clone(),
     )));
 
     // Repaint scheduling: at most one pending timer, held in this slot. Every
@@ -532,26 +630,25 @@ pub fn spawn_tui_driver<T: TuiView>(
 
     let weak_app = ctx.weak_app();
     let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
+    let reader_shutdown = Arc::new(AtomicBool::new(false));
+    let probe_lifecycle_lock = Arc::new(Mutex::new(()));
 
     // Blocking terminal reads run off the main thread and are forwarded to the
-    // foreground executor through the channel, so the main thread's event loop is
-    // never blocked waiting for input.
+    // foreground executor through the channel. The reader also performs a probe
+    // when the terminal gains focus because it is the sole owner of stdin and
+    // can keep replies out of the normal crossterm event stream.
+    let reader_shutdown_for_thread = reader_shutdown.clone();
+    let probe_lifecycle_lock_for_thread = probe_lifecycle_lock.clone();
     let reader = thread::Builder::new()
         .name("warp-tui-input".to_owned())
-        .spawn(move || loop {
-            match event::read() {
-                Ok(event) => {
-                    // The reader runs on a dedicated thread, so blocking on the
-                    // send is fine; an error means the receiver was dropped.
-                    if block_on(sender.send(event)).is_err() {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    report_error!("failed to read a terminal event", extra: { "error" => %error });
-                    break;
-                }
-            }
+        .spawn(move || {
+            run_tui_input_reader(
+                sender,
+                probe,
+                stdout_write_lock,
+                reader_shutdown_for_thread,
+                probe_lifecycle_lock_for_thread,
+            )
         })?;
 
     let dispatch_screen = screen.clone();
@@ -581,8 +678,96 @@ pub fn spawn_tui_driver<T: TuiView>(
         _task: task,
         _repaint_timer: repaint_timer,
         _reader: reader,
-        _guard: guard,
+        reader_shutdown,
+        probe_lifecycle_lock,
+        guard,
     })
+}
+
+/// Owns blocking stdin access for a TUI session and runs an optional background
+/// probe when the terminal gains focus.
+///
+/// Probe policy remains with the probe provider; this loop owns terminal I/O
+/// because queries and replies must be coordinated with the sole stdin reader.
+fn run_tui_input_reader(
+    sender: async_channel::Sender<CrosstermEvent>,
+    probe: Option<TuiProbe>,
+    stdout_write_lock: Arc<Mutex<()>>,
+    reader_shutdown: Arc<AtomicBool>,
+    probe_lifecycle_lock: Arc<Mutex<()>>,
+) {
+    let mut stdout = stdout();
+    loop {
+        // Stop before another read or query once either foreground consumer has
+        // been dropped during session teardown.
+        if reader_shutdown.load(Ordering::Acquire)
+            || sender.is_closed()
+            || probe
+                .as_ref()
+                .is_some_and(|probe| probe.results.is_closed())
+        {
+            break;
+        }
+
+        match event::read() {
+            Ok(event) => {
+                let probe_enabled = probe.as_ref().is_some_and(|probe| (probe.is_enabled)());
+                let should_probe = if matches!(event, CrosstermEvent::FocusGained) && probe_enabled
+                {
+                    should_probe_after_event(
+                        &event,
+                        probe_enabled,
+                        event::poll(Duration::ZERO).unwrap_or(true),
+                    )
+                } else {
+                    false
+                };
+                if should_probe && let Some(probe) = probe.as_ref() {
+                    let background = {
+                        // Teardown waits on this lock before restoring terminal
+                        // modes, while the stdout lock is still released before
+                        // the potentially blocking reply read.
+                        let _probe_lifecycle_guard = probe_lifecycle_lock
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if reader_shutdown.load(Ordering::Acquire)
+                            || sender.is_closed()
+                            || probe.results.is_closed()
+                        {
+                            break;
+                        }
+                        let query_result = {
+                            let _query_write_guard = stdout_write_lock
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            (probe.write_query)(&mut stdout)
+                        };
+                        query_result.ok().and_then(|()| (probe.read_reply)())
+                    };
+                    if block_on(probe.results.send(background)).is_err() {
+                        break;
+                    }
+                }
+                // Blocking here is safe on the dedicated thread; a send error
+                // means the foreground receiver was dropped.
+                if block_on(sender.send(event)).is_err() {
+                    break;
+                }
+            }
+            Err(error) => {
+                report_error!("failed to read a terminal event", extra: { "error" => %error });
+                break;
+            }
+        }
+    }
+}
+
+fn should_probe_after_event(
+    event: &CrosstermEvent,
+    probe_enabled: bool,
+    input_pending: bool,
+) -> bool {
+    matches!(event, CrosstermEvent::FocusGained) && probe_enabled && !input_pending
 }
 
 /// Draws a frame and schedules a timer for its element-requested repaint
@@ -638,16 +823,19 @@ trait TerminalModeControl {
 
 struct CrosstermModeControl {
     keyboard_enhancement_supported: bool,
+    report_modifier_key_lifecycle: bool,
 }
 
 fn enter_terminal_screen(
     out: &mut impl Write,
     keyboard_enhancement_supported: bool,
+    report_modifier_key_lifecycle: bool,
 ) -> io::Result<()> {
     execute!(
         out,
         EnterAlternateScreen,
         EnableMouseCapture,
+        EnableFocusChange,
         EnableBracketedPaste,
         Hide
     )?;
@@ -659,12 +847,35 @@ fn enter_terminal_screen(
     // reader starts because crossterm's query cannot run concurrently with
     // event polling.
     if keyboard_enhancement_supported {
-        let _ = execute!(
-            out,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        );
+        let flags = keyboard_enhancement_flags(report_modifier_key_lifecycle);
+        let _ = execute!(out, PushKeyboardEnhancementFlags(flags));
     }
     Ok(())
+}
+
+fn keyboard_enhancement_flags(report_modifier_key_lifecycle: bool) -> KeyboardEnhancementFlags {
+    let mut flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
+    if report_modifier_key_lifecycle {
+        flags |= KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+    }
+    flags
+}
+
+/// Replaces the terminal's active Kitty keyboard flags in place.
+///
+/// Crossterm has no command for the protocol's set form, so this writes it
+/// directly: `CSI = flags ; 1 u` makes exactly `flags` active. Unlike push/pop
+/// it leaves the mode stack alone, so the entry pushed on entry is still what
+/// [`leave_terminal_screen`] pops to restore the host terminal's own mode.
+fn set_terminal_keyboard_enhancement_flags(
+    out: &mut impl Write,
+    report_modifier_key_lifecycle: bool,
+) -> io::Result<()> {
+    let flags = keyboard_enhancement_flags(report_modifier_key_lifecycle);
+    write!(out, "\x1b[={};1u", flags.bits())?;
+    out.flush()
 }
 
 fn leave_terminal_screen(
@@ -678,6 +889,7 @@ fn leave_terminal_screen(
         out,
         Show,
         DisableBracketedPaste,
+        DisableFocusChange,
         DisableMouseCapture,
         LeaveAlternateScreen
     )
@@ -687,7 +899,11 @@ impl TerminalModeControl for CrosstermModeControl {
     fn enter(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
-        if let Err(error) = enter_terminal_screen(&mut out, self.keyboard_enhancement_supported) {
+        if let Err(error) = enter_terminal_screen(
+            &mut out,
+            self.keyboard_enhancement_supported,
+            self.report_modifier_key_lifecycle,
+        ) {
             let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
             let _ = terminal::disable_raw_mode();
             return Err(error);

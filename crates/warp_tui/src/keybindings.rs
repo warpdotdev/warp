@@ -29,10 +29,9 @@ use crate::attachment_bar::TuiAttachmentBar;
 use crate::cloud_run_view::TuiCloudRunView;
 use crate::editor_interaction::{TuiEditorBindingTarget, TuiEditorCommand, editor_binding_specs};
 use crate::editor_view::{TuiEditorView, TuiEditorViewAction};
-use crate::grok_oauth::TuiGrokOAuthBlock;
 use crate::handoff::TuiHandoffBlock;
 use crate::input::TuiInputView;
-use crate::input::view::TuiInputAction;
+use crate::input::view::{INLINE_MENU_CAN_CLEAR_SELECTED_FLAG, TuiInputAction};
 use crate::option_selector::TuiOptionSelector;
 use crate::orchestration_block::TuiOrchestrationBlock;
 use crate::root_view::RootTuiView;
@@ -92,7 +91,6 @@ pub(crate) fn init(app: &mut AppContext) {
         TuiEditorViewAction::Command,
     );
     crate::orchestration_block::init(app);
-    crate::grok_oauth::init(app);
     crate::handoff::init(app);
     crate::tui_ask_question_view::init(app);
     crate::statusline_config_view::init(app);
@@ -141,6 +139,9 @@ fn context_for_editor_binding(
             default_context.clone()
                 & (!id!(PLAN_TOGGLE_AVAILABLE_FLAG) | id!(KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)),
         ),
+        (TuiEditorBindingTarget::Input, TuiEditorCommand::Cut, "ctrl-x") => {
+            Some(default_context.clone() & !id!(INLINE_MENU_CAN_CLEAR_SELECTED_FLAG))
+        }
         _ => Some(default_context.clone()),
     }
 }
@@ -156,7 +157,6 @@ fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<TuiEditorView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiOrchestrationBlock>(is_tui_owned_binding);
-    app.register_tui_binding_validator::<TuiGrokOAuthBlock>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiHandoffBlock>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiOptionSelector>(is_tui_owned_binding);
 }

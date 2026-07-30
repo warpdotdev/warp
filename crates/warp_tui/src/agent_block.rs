@@ -45,6 +45,7 @@ use crate::agent_block_sections::{
 };
 use crate::agent_message::render_agent_message;
 use crate::orchestration_block::{TuiOrchestrationBlock, TuiOrchestrationBlockEvent};
+use crate::orchestration_model::{TuiOrchestrationEvent, TuiOrchestrationModel};
 use crate::terminal_session_view::BlockingInputSource;
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 use crate::tui_builder::TuiUiBuilder;
@@ -453,6 +454,17 @@ impl TuiAIBlock {
                 }
             },
         );
+
+        if block.renders_agent_messages(ctx) && ctx.has_singleton_model::<TuiOrchestrationModel>() {
+            ctx.subscribe_to_model(&TuiOrchestrationModel::handle(ctx), |me, _, event, ctx| {
+                if let TuiOrchestrationEvent::RestoredRemoteChildStatusUpdated { conversation_id } =
+                    event
+                    && me.renders_agent_message_from(*conversation_id, ctx)
+                {
+                    ctx.notify();
+                }
+            });
+        }
 
         ctx.subscribe_to_model(model_events, |me, _, event, ctx| {
             let (block_id, should_schedule_auto_expand) = match event {
@@ -958,6 +970,47 @@ impl TuiAIBlock {
     pub(super) fn renders_todos(&self) -> bool {
         self.renders_todos
     }
+
+    /// Returns whether this block renders any received-agent message.
+    fn renders_agent_messages(&self, app: &AppContext) -> bool {
+        let status = self.block_model.status(app);
+        let Some(output) = status.output_to_render() else {
+            return false;
+        };
+        output.get().messages.iter().any(|message| {
+            matches!(
+                &message.message,
+                AIAgentOutputMessageType::MessagesReceivedFromAgents { messages }
+                    if !messages.is_empty()
+            )
+        })
+    }
+
+    /// Returns whether this block renders a received message whose sender
+    /// resolves to `conversation_id`.
+    fn renders_agent_message_from(
+        &self,
+        conversation_id: AIConversationId,
+        app: &AppContext,
+    ) -> bool {
+        let history = BlocklistAIHistoryModel::as_ref(app);
+        let status = self.block_model.status(app);
+        let Some(output) = status.output_to_render() else {
+            return false;
+        };
+        output.get().messages.iter().any(|message| {
+            let AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } =
+                &message.message
+            else {
+                return false;
+            };
+            messages.iter().any(|message| {
+                history.conversation_id_for_agent_id(&message.sender_agent_id)
+                    == Some(conversation_id)
+            })
+        })
+    }
+
     pub(super) fn set_cli_subagent_view(
         &mut self,
         action_id: &AIAgentActionId,

@@ -97,64 +97,25 @@ fn view_logs_command_is_registered_only_for_tui_mode() {
 }
 
 #[test]
-fn add_api_key_command_is_tui_only_and_requires_a_provider() {
+fn api_keys_command_is_tui_only_and_has_no_arguments() {
     let command = all_commands(settings::SettingsMode::Tui)
         .into_iter()
-        .find(|command| command.kind == SlashCommandKind::AddApiKey)
-        .expect("expected /add-api-key to be registered in TUI mode");
-    assert_eq!(command, ADD_API_KEY);
+        .find(|command| command.kind == SlashCommandKind::ApiKeys)
+        .expect("expected /api-keys to be registered in TUI mode");
+    assert_eq!(command, API_KEYS);
     assert!(!command.auto_enter_ai_mode);
     assert_eq!(command.availability, Availability::AI_ENABLED);
-    let argument = command
-        .argument
-        .as_ref()
-        .expect("expected /add-api-key to require a provider");
-    assert!(!argument.is_optional);
-    assert!(!argument.should_execute_on_selection);
-    assert_eq!(
-        argument.hint_text,
-        Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME)
-    );
-    assert!(
-        argument
-            .hint_text
-            .is_some_and(|hint| hint.split('|').any(|provider| provider == "grok"))
-    );
+    assert!(command.argument.is_none());
+    assert_eq!(command.description, "View and manage API keys");
     assert!(
         all_commands(settings::SettingsMode::Gui)
             .iter()
-            .all(|command| command.kind != SlashCommandKind::AddApiKey)
-    );
-}
-
-#[test]
-fn clear_api_key_command_is_tui_only_and_requires_a_provider() {
-    let command = all_commands(settings::SettingsMode::Tui)
-        .into_iter()
-        .find(|command| command.kind == SlashCommandKind::ClearApiKey)
-        .expect("expected /clear-provider-api-key to be registered in TUI mode");
-    assert_eq!(command, CLEAR_API_KEY);
-    assert!(!command.auto_enter_ai_mode);
-    assert_eq!(command.availability, Availability::AI_ENABLED);
-    let argument = command
-        .argument
-        .as_ref()
-        .expect("expected /clear-provider-api-key to require a provider");
-    assert!(!argument.is_optional);
-    assert!(!argument.should_execute_on_selection);
-    assert_eq!(
-        argument.hint_text,
-        Some(LLMProvider::API_KEY_PROVIDER_VALUE_NAME)
+            .all(|command| command.kind != SlashCommandKind::ApiKeys)
     );
     assert!(
-        argument
-            .hint_text
-            .is_some_and(|hint| hint.split('|').any(|provider| provider == "grok"))
-    );
-    assert!(
-        all_commands(settings::SettingsMode::Gui)
+        all_commands(settings::SettingsMode::Tui)
             .iter()
-            .all(|command| command.kind != SlashCommandKind::ClearApiKey)
+            .all(|command| !matches!(command.name, "/add-api-key" | "/clear-provider-api-key"))
     );
 }
 #[test]
@@ -210,6 +171,24 @@ fn statusline_command_is_always_available_only_in_tui_mode() {
         all_commands(settings::SettingsMode::Gui)
             .iter()
             .all(|command| command.kind != SlashCommandKind::Statusline)
+    );
+}
+
+#[test]
+fn reset_statusline_command_is_always_available_only_in_tui_mode() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::ResetStatusline)
+        .expect("expected /reset-statusline to be registered in TUI mode");
+    assert_eq!(command, RESET_STATUSLINE);
+    assert_eq!(command.availability, Availability::ALWAYS);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::ResetStatusline)
     );
 }
 #[test]
@@ -370,6 +349,42 @@ fn strip_command_prefix_substring_not_matched() {
     // "/planning" should not match "/plan"
     let result = strip_command_prefix("/planning something", "/plan");
     assert_eq!(result, None);
+}
+
+#[test]
+fn copy_debugging_id_command_is_registered_for_gui_and_tui() {
+    for settings_mode in [settings::SettingsMode::Gui, settings::SettingsMode::Tui] {
+        assert!(
+            all_commands(settings_mode)
+                .iter()
+                .any(|command| command.kind == SlashCommandKind::CopyDebuggingId),
+            "/copy-debugging-id should be registered in {settings_mode:?} mode"
+        );
+    }
+}
+
+#[test]
+fn copy_debugging_id_command_has_correct_registry_metadata() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::CopyDebuggingId)
+        .expect("expected /copy-debugging-id to be registered");
+
+    assert_eq!(command.name, "/copy-debugging-id");
+    assert_eq!(command.kind, SlashCommandKind::CopyDebuggingId);
+    assert_eq!(
+        command.supported_surfaces,
+        SlashCommandSurfaces::GuiAndTui {
+            icon_path: "bundled/svg/copy.svg"
+        }
+    );
+    assert!(!command.auto_enter_ai_mode);
+    assert_eq!(command.availability, Availability::ACTIVE_CONVERSATION);
+    assert!(command.argument.is_none());
+    // Available when there is an active conversation.
+    assert!(command.is_active(Availability::ACTIVE_CONVERSATION));
+    // Hidden when there is no active conversation.
+    assert!(!command.is_active(Availability::ALWAYS));
 }
 
 #[test]

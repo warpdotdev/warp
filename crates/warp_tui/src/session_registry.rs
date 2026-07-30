@@ -9,9 +9,10 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    AIConversationId, BannerState, BlocklistAIHistoryModel, IsSharedSessionCreator,
-    LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken, TerminalManagerTrait,
-    TerminalSurfaceResult,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, AmbientAgentTaskId,
+    BannerState, BlocklistAIHistoryModel, IsSharedSessionCreator, LocalTtyTerminalManager,
+    PersistenceWriter, ServerConversationToken, TerminalManagerTrait, TerminalSurfaceResult,
+    oz_run_url,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -129,12 +130,13 @@ pub(crate) enum TuiSessionsEvent {
 pub(crate) struct TuiSessions {
     /// TUI-specific process driver. Its handle restores terminal mode on
     /// drop, so the app-lifetime session singleton must retain it.
-    _driver: Option<TuiDriverHandle>,
+    driver: Option<TuiDriverHandle>,
     keyboard_enhancement_supported: bool,
     exit_summary: TuiExitSummaryHandle,
     sessions: Vec<TuiSession>,
     focused_session_id: Option<TuiSessionId>,
     resume_token: Option<ServerConversationToken>,
+    default_autoexecute_mode: AIConversationAutoexecuteMode,
 }
 
 impl Entity for TuiSessions {
@@ -152,12 +154,14 @@ impl TuiSessions {
         startup_directory: Option<PathBuf>,
         ctx: &mut AppContext,
     ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
-        let (exit_summary, keyboard_enhancement_supported) = sessions.read(ctx, |sessions, _| {
-            (
-                sessions.exit_summary.clone(),
-                sessions.keyboard_enhancement_supported,
-            )
-        });
+        let (exit_summary, keyboard_enhancement_supported, default_autoexecute_mode) = sessions
+            .read(ctx, |sessions, _| {
+                (
+                    sessions.exit_summary.clone(),
+                    sessions.keyboard_enhancement_supported,
+                    sessions.default_autoexecute_mode,
+                )
+            });
         // The manager uses this internal model for unsupported-shell state; the
         // TUI does not render a separate banner surface.
         let banner = ctx.add_model(|_| BannerState::default());
@@ -179,6 +183,7 @@ impl TuiSessions {
                         surface_init,
                         exit_summary,
                         keyboard_enhancement_supported,
+                        default_autoexecute_mode,
                         ctx,
                     )
                 });
@@ -237,6 +242,51 @@ impl TuiSessions {
             session_id,
             cloud_run_state,
         }
+    }
+
+    /// Creates an unfocused local terminal session for a restored child and
+    /// restores its persisted transcript onto it, without relaunching the child
+    /// or resending its prompt.
+    pub(crate) fn create_restored_local_child_session(
+        sessions: &ModelHandle<Self>,
+        window_id: WindowId,
+        startup_directory: Option<PathBuf>,
+        conversation: AIConversation,
+        ctx: &mut AppContext,
+    ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
+        let (session_id, surface) =
+            Self::create_local_terminal_session(sessions, window_id, false, startup_directory, ctx);
+        surface.update(ctx, |view, ctx| {
+            view.restore_orchestrated_child_conversation(conversation, ctx);
+        });
+        (session_id, surface)
+    }
+
+    /// Creates an unfocused lightweight cloud session for a restored remote
+    /// child and associates its conversation with that cloud surface so it is
+    /// discoverable in the orchestration snapshot. The session starts in the
+    /// spawned state from the persisted task/run identity; no new task is
+    /// created.
+    pub(crate) fn create_restored_remote_child_session(
+        sessions: &ModelHandle<Self>,
+        window_id: WindowId,
+        conversation: AIConversation,
+        task_id: AmbientAgentTaskId,
+        run_id: String,
+        ctx: &mut AppContext,
+    ) -> TuiSessionId {
+        let conversation_id = conversation.id();
+        let run_url = oz_run_url(&run_id);
+        let cloud_run_state = ctx.add_model(|_| {
+            TuiCloudRunState::new_restored(conversation_id, task_id, run_id, run_url)
+        });
+        let (session_id, _surface) =
+            Self::create_cloud_run_session(sessions, window_id, cloud_run_state, false, ctx);
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.restore_conversations(session_id.surface_id(), vec![conversation], ctx);
+            history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
+        });
+        session_id
     }
 
     /// Wires a session view to orchestration before registering it.
@@ -425,11 +475,74 @@ impl TuiSessions {
                     orchestration.cleanup_child(conversation_id, ctx);
                 });
             }
+            TuiOrchestrationEvent::RestoreLocalChildSession {
+                root_session_id,
+                conversation,
+            } => {
+                let Some(window_id) = sessions
+                    .as_ref(ctx)
+                    .session(*root_session_id)
+                    .map(|session| session.view().window_id(ctx))
+                else {
+                    return;
+                };
+                let conversation_id = conversation.id();
+                let startup_directory = conversation
+                    .current_working_directory()
+                    .or_else(|| conversation.initial_working_directory())
+                    .map(PathBuf::from);
+                let (session_id, _session_view) = Self::create_restored_local_child_session(
+                    &sessions,
+                    window_id,
+                    startup_directory,
+                    (**conversation).clone(),
+                    ctx,
+                );
+                orchestration_for_events.update(ctx, |orchestration, ctx| {
+                    orchestration.register_restored_local_oz_child_session(
+                        session_id,
+                        conversation_id,
+                        ctx,
+                    );
+                });
+            }
+            TuiOrchestrationEvent::RestoreRemoteChildSession {
+                root_session_id,
+                conversation,
+                task_id,
+                run_id,
+            } => {
+                let Some(window_id) = sessions
+                    .as_ref(ctx)
+                    .session(*root_session_id)
+                    .map(|session| session.view().window_id(ctx))
+                else {
+                    return;
+                };
+                let conversation_id = conversation.id();
+                let session_id = Self::create_restored_remote_child_session(
+                    &sessions,
+                    window_id,
+                    (**conversation).clone(),
+                    *task_id,
+                    run_id.clone(),
+                    ctx,
+                );
+                orchestration_for_events.update(ctx, |orchestration, ctx| {
+                    orchestration.register_restored_remote_child_session(
+                        session_id,
+                        conversation_id,
+                        *task_id,
+                        ctx,
+                    );
+                });
+            }
             TuiOrchestrationEvent::RemoveChildSession(session_id) => {
                 sessions.update(ctx, |sessions, ctx| {
                     sessions.remove_session(*session_id, ctx);
                 });
             }
+            TuiOrchestrationEvent::RestoredRemoteChildStatusUpdated { .. } => {}
         });
     }
 
@@ -438,15 +551,17 @@ impl TuiSessions {
         driver: TuiDriverHandle,
         exit_summary: TuiExitSummaryHandle,
         resume_token: Option<ServerConversationToken>,
+        default_autoexecute_mode: AIConversationAutoexecuteMode,
     ) -> Self {
         let keyboard_enhancement_supported = driver.keyboard_enhancement_supported();
         Self {
-            _driver: Some(driver),
+            driver: Some(driver),
             keyboard_enhancement_supported,
             exit_summary,
             sessions: Vec::new(),
             focused_session_id: None,
             resume_token,
+            default_autoexecute_mode,
         }
     }
 
@@ -454,13 +569,40 @@ impl TuiSessions {
     #[cfg(test)]
     pub(crate) fn new_for_test() -> Self {
         Self {
-            _driver: None,
+            driver: None,
             keyboard_enhancement_supported: false,
             exit_summary: TuiExitSummaryHandle::default(),
             sessions: Vec::new(),
             focused_session_id: None,
             resume_token: None,
+            default_autoexecute_mode: AIConversationAutoexecuteMode::RespectUserSettings,
         }
+    }
+
+    pub(crate) fn set_modifier_key_lifecycle_enabled(
+        &mut self,
+        enabled: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> std::io::Result<()> {
+        let terminal_views = self
+            .sessions
+            .iter()
+            .filter_map(|session| match &session.view {
+                TuiSessionView::Terminal(view) => Some(view.clone()),
+                TuiSessionView::Cloud(_) => None,
+            })
+            .collect::<Vec<_>>();
+        // Reconfigure the terminal before the sessions react, so a failed write
+        // leaves them consistent with the reporting that is still in effect.
+        if let Some(driver) = self.driver.as_mut() {
+            driver.set_modifier_key_lifecycle_enabled(enabled)?;
+        }
+        for view in terminal_views {
+            view.update(ctx, |view, ctx| {
+                view.handle_voice_hold_key_setting_changed(enabled, ctx);
+            });
+        }
+        Ok(())
     }
 
     /// Removes a session. When the focused session is removed, focus falls

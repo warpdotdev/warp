@@ -545,6 +545,13 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::InvalidRequest,
             )),
         ),
+        RenderableAIError::CloudStartupFailed(msg) => (
+            AgentTaskState::Error,
+            Some(TaskStatusUpdate::with_error_code(
+                msg,
+                PlatformErrorCode::InternalError,
+            )),
+        ),
     }
 }
 

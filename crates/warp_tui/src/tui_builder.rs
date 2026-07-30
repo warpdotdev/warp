@@ -19,10 +19,11 @@ use warpui_core::elements::tui::{
     Color, Modifier, TuiElement, TuiEventContext, TuiStyle, tui_collapsible,
 };
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
+use warpui_core::runtime::ProbedRgb;
 
 use crate::orchestrated_agent_identity_styling::{AgentIdentity, agent_identity_palette};
 use crate::tab_bar::TuiTabBarStyles;
-use crate::terminal_background::probed_colors;
+use crate::terminal_background::TuiHostTerminalBackground;
 
 #[derive(Clone, Copy)]
 pub(crate) struct CloudRunMarkStyles {
@@ -40,13 +41,19 @@ pub(crate) struct CloudRunMarkStyles {
 #[derive(Clone, Debug)]
 pub(crate) struct TuiUiBuilder {
     warp_theme: WarpTheme,
+    terminal_background: Option<ProbedRgb>,
 }
 
 impl TuiUiBuilder {
     /// Creates a builder from the current [`Appearance`] theme.
     pub(crate) fn from_app(app: &AppContext) -> Self {
+        let terminal_background = app
+            .has_singleton_model::<TuiHostTerminalBackground>()
+            .then(|| TuiHostTerminalBackground::as_ref(app).terminal_background())
+            .flatten();
         Self {
             warp_theme: Appearance::as_ref(app).theme().clone(),
+            terminal_background,
         }
     }
 
@@ -239,29 +246,6 @@ impl TuiUiBuilder {
         )))
     }
 
-    /// Themed light-blue accent for the Grok OAuth card and code field.
-    pub(crate) fn grok_oauth_accent_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().bright.blue,
-        )))
-    }
-
-    /// Light-blue overlay behind the Grok OAuth card body.
-    pub(crate) fn grok_oauth_surface_background(&self) -> Color {
-        let blue = ThemeFill::from(self.warp_theme.terminal_colors().bright.blue);
-        cell_color(self.base_background().blend(&blue.with_opacity(10)))
-    }
-
-    /// Stronger light-blue overlay behind the Grok OAuth title row.
-    pub(crate) fn grok_oauth_header_background(&self) -> Color {
-        let blue = ThemeFill::from(self.warp_theme.terminal_colors().bright.blue);
-        cell_color(
-            self.base_background()
-                .blend(&blue.with_opacity(10))
-                .blend(&blue.with_opacity(10)),
-        )
-    }
-
     /// Background-independent bold pale-green `!` marker shared by shell-command surfaces.
     pub(crate) fn shell_command_prefix_style(&self) -> TuiStyle {
         self.shell_command_accent_style()
@@ -282,14 +266,15 @@ impl TuiUiBuilder {
 
     /// The background the transcript actually renders over: default cells
     /// stay bg-unset, so it is the terminal's *own* background when the
-    /// startup probe captured it, else the theme background as the closest
+    /// terminal probe captured it, else the theme background as the closest
     /// approximation.
     fn base_background(&self) -> ThemeFill {
-        match probed_colors().bg {
+        match self.terminal_background {
             Some(bg) => ThemeFill::Solid(ColorU::new(bg.r, bg.g, bg.b, u8::MAX)),
             None => self.warp_theme.background(),
         }
     }
+
     fn cyan_overlay_2(&self) -> ThemeFill {
         let cyan = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
         self.base_background().blend(&cyan.with_opacity(50))
@@ -300,6 +285,13 @@ impl TuiUiBuilder {
     /// preserve alpha.
     pub(crate) fn accent_border_style(&self) -> TuiStyle {
         TuiStyle::default().fg(cell_color(self.cyan_overlay_2()))
+    }
+
+    /// Lilac credential-entry accent used by the API-key input states.
+    pub(crate) fn credential_entry_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.magenta,
+        )))
     }
 
     /// Fixed themed cyan for voice-input status text. Terminal foreground

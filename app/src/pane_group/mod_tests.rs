@@ -764,6 +764,7 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
 
             assert_eq!(panes.pane_count(), initial_tree_pane_count);
             assert_eq!(panes.pane_ids().count(), initial_content_pane_count + 1);
+            assert_eq!(panes.terminal_pane_ids().count(), 2);
             assert_eq!(panes.visible_pane_count(), initial_visible_count);
             assert!(panes.has_pane_id(child_pane_id.into()));
             assert!(!panes.panes.is_pane_in_tree(child_pane_id.into()));
@@ -771,6 +772,15 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
             // The new child pane should remain off-tree and not affect visible ordering.
             assert_eq!(panes.pane_id_by_index(0), Some(parent_pane_id));
             assert_eq!(panes.pane_id_by_index(1), None);
+            let visible_terminal_views = panes.visible_terminal_views(ctx);
+            assert_eq!(visible_terminal_views.len(), 1);
+            assert_eq!(
+                visible_terminal_views[0].id(),
+                panes
+                    .terminal_view_from_pane_id(parent_pane_id, ctx)
+                    .unwrap()
+                    .id()
+            );
 
             // Creating a hidden child pane should not steal focus or active session.
             assert_eq!(panes.focused_pane_id(ctx), parent_pane_id);

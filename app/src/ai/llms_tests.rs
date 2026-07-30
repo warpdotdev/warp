@@ -839,6 +839,73 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
     });
 }
 
+#[test]
+fn reconcile_preserves_custom_router_models_not_configured_locally() {
+    // Regression test for QUALITY-1308: a profile whose model was set to a local
+    // custom router on device A should NOT be reset when device B syncs that profile
+    // but does not have the corresponding router configured locally.
+    //
+    // Before the fix, `reconcile_stale_custom_router_selection` called
+    // `set_base_model(None)` / `set_coding_model(None)` for any
+    // `custom-router:local:…` id absent from the loaded registry, causing the
+    // preference to be cleared and synced back — wiping device A's setting.
+    //
+    // The fix: profile (persisted/synced) preferences are never cleared for
+    // unrecognized local router ids. The display fallback already handles
+    // rendering the default model when the router cannot be resolved locally.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        // Simulate a local custom-router id from another device.
+        // This device (device B) has NO local routers configured in its registry.
+        let remote_router_id = LLMId::from("custom-router:local:my-special-router");
+
+        let default_profile_id =
+            profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&default_profile_id, Some(remote_router_id.clone()), ctx);
+            profiles.set_coding_model(&default_profile_id, Some(remote_router_id.clone()), ctx);
+        });
+
+        // Call reconcile_stale_custom_router_selection directly.
+        // self.custom_model_routers is empty (device B has no local routers),
+        // so valid_local = {} and the old code would have cleared both fields.
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.reconcile_stale_custom_router_selection(ctx);
+        });
+
+        // The model IDs must be PRESERVED — no profile clear should be synced back.
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(
+                profile.data().base_model.as_ref(),
+                Some(&remote_router_id),
+                "base_model must be preserved for unknown custom-router:local:* IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().coding_model.as_ref(),
+                Some(&remote_router_id),
+                "coding_model must be preserved for unknown custom-router:local:* IDs (cross-device sync)"
+            );
+        });
+    });
+}
+
 // -- execution-profile model selection tests --
 
 fn agent_llm(id: &str, display_name: &str) -> LLMInfo {

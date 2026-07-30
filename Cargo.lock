@@ -16039,6 +16039,7 @@ dependencies = [
  "unicode-width 0.1.14",
  "uuid",
  "vec1",
+ "vim",
  "warp",
  "warp_channel_config",
  "warp_completer",

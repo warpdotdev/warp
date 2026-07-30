@@ -1,5 +1,8 @@
 use instant::Instant;
-use warp::tui_export::{BlocklistAIHistoryModel, ConversationStatus};
+use warp::tui_export::{
+    BlocklistAIHistoryModel, CloudAgentStartupAuthFlow, CloudAgentStartupPresentation,
+    ConversationStatus,
+};
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
 use warpui_core::r#async::Timer;
@@ -228,25 +231,31 @@ impl TuiCloudRunView {
                 link_instruction: None,
                 link_url: None,
             },
-            TuiCloudRunStartup::Blocked(blocker) => CloudRunDisplayState {
-                status: ConversationStatus::Blocked {
-                    blocked_action: blocker.message().to_owned(),
-                },
-                status_label: "GitHub authentication required".to_string(),
-                detail: Some(format!(
-                    "{} Authenticate, then run the orchestration request again.",
-                    blocker.message()
-                )),
-                link_instruction: Some("to authenticate or click the link below"),
-                link_url: Some(blocker.primary_url().to_string()),
-            },
-            TuiCloudRunStartup::Failed(failure) => CloudRunDisplayState {
-                status: ConversationStatus::Error,
-                status_label: "Cloud run failed to start".to_string(),
-                detail: Some(failure.message().to_string()),
-                link_instruction: None,
-                link_url: None,
-            },
+            TuiCloudRunStartup::Blocked(blocker) => {
+                let presentation = CloudAgentStartupPresentation::github_auth(
+                    blocker.primary_url(),
+                    CloudAgentStartupAuthFlow::RerunOrchestrationRequest,
+                );
+                CloudRunDisplayState {
+                    status: ConversationStatus::Blocked {
+                        blocked_action: presentation.detail.clone(),
+                    },
+                    status_label: presentation.title.to_string(),
+                    detail: Some(presentation.detail),
+                    link_instruction: Some("to authenticate or click the link below"),
+                    link_url: presentation.primary_url,
+                }
+            }
+            TuiCloudRunStartup::Failed(failure) => {
+                let presentation = CloudAgentStartupPresentation::failure(failure.message());
+                CloudRunDisplayState {
+                    status: ConversationStatus::Error,
+                    status_label: presentation.title.to_string(),
+                    detail: Some(presentation.detail),
+                    link_instruction: None,
+                    link_url: None,
+                }
+            }
             TuiCloudRunStartup::Spawned => {
                 let status = state
                     .conversation_id()

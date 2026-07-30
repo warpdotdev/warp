@@ -1581,6 +1581,10 @@ pub enum NewWorkspaceSource {
     },
     /// Starts the workspace with the Cloud Agent setup tab.
     AmbientAgent,
+    /// Opens a new window pre-scoped to a specific team, chosen via the title-bar team switcher.
+    TeamSwitched {
+        team_uid: ServerId,
+    },
     /// A tab is being transferred from another window via the transferable views framework.
     /// The workspace will create a placeholder tab, which will be replaced by the transferred
     /// PaneGroup after window creation.
@@ -1642,8 +1646,13 @@ impl NewWorkspaceSource {
             | Self::WorkflowById { .. }
             | Self::AgentSession { .. }
             | Self::AmbientAgent => None,
-            Self::Restored { .. } => {
-                // TODO: Store the team UID in WindowSnapshot and restore it here.
+            Self::TeamSwitched { team_uid } => return Some(*team_uid),
+            Self::Restored {
+                window_snapshot, ..
+            } => {
+                if let Some(team_uid) = window_snapshot.team_uid {
+                    return Some(team_uid);
+                }
                 None
             }
         };

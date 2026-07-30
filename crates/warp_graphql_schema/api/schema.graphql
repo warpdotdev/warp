@@ -3708,6 +3708,8 @@ type Team {
   creatorId in v1 Team type is deprecated and should not be used. Use adminUid instead.
   """
   adminUid: String! @deprecated(reason: "Use members.role to determine admin status")
+  """The team's brand color as a hex string (e.g. "#7c3aed"), if set."""
+  color: String
 
   """
   The email domain associated with the team, if one has been set by Warp staff.

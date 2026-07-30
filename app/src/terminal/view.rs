@@ -24634,13 +24634,9 @@ impl TerminalView {
                 conversation_token,
                 request_id,
             } => {
-                let url = match request_id {
-                    Some(request_id) => {
-                        format!("{}?request={}", conversation_token.debug_link(), request_id)
-                    }
-                    None => conversation_token.debug_link(),
-                };
-                ctx.clipboard().write(ClipboardContent::plain_text(url));
+                ctx.clipboard().write(ClipboardContent::plain_text(
+                    conversation_token.debugging_payload(request_id.as_ref()),
+                ));
             }
             CopyAIBlockQuery { ai_block_view_id } => {
                 for rich_content in self.rich_content_views.iter() {
@@ -24694,17 +24690,9 @@ impl TerminalView {
                 request_id,
                 conversation_id,
             } => {
-                let debug_info = if let Some(request_id) = request_id {
-                    format!(
-                        "{{\"request_id\":\"{}\",\"conversation_id\":\"{}\"}}",
-                        request_id,
-                        conversation_id.as_str()
-                    )
-                } else {
-                    format!("{{\"conversation_id\":\"{}\"}}", conversation_id.as_str())
-                };
-                ctx.clipboard()
-                    .write(ClipboardContent::plain_text(debug_info));
+                ctx.clipboard().write(ClipboardContent::plain_text(
+                    conversation_id.debugging_payload(request_id.as_ref()),
+                ));
             }
             CopyConversationId { conversation_id } => {
                 ctx.clipboard().write(ClipboardContent::plain_text(
