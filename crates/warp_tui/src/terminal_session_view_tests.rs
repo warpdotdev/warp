@@ -4059,18 +4059,15 @@ fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
             );
             let row = render_status_footer_row(
                 FooterSegments {
-                    shell_mode: false,
-                    model_label: Some(
-                        TuiText::new("TestModel")
-                            .with_style(builder.primary_text_style())
-                            .truncate()
-                            .finish(),
-                    ),
-                    cwd: None,
-                    branch: None,
-                    usage: Some(usage),
-                    diff_additions: 0,
-                    diff_deletions: 0,
+                    ordered: vec![
+                        FooterSegment::Model(
+                            TuiText::new("TestModel")
+                                .with_style(builder.primary_text_style())
+                                .truncate()
+                                .finish(),
+                        ),
+                        FooterSegment::CreditUsage(usage),
+                    ],
                 },
                 &builder,
             )
