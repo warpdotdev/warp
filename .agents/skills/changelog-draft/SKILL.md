@@ -55,6 +55,8 @@ The script outputs JSON to stdout with this structure:
       "url": "https://github.com/warpdotdev/warp/pull/1234",
       "title": "...",
       "author": "username",
+      "author_association": "CONTRIBUTOR",
+      "author_is_bot": false,
       "body": "...",
       "labels": ["..."],
       "merged_at": "2026-05-01T...",
@@ -76,7 +78,7 @@ The script outputs JSON to stdout with this structure:
 }
 ```
 
-Use the top-level `number`, `url`, `author`, `body`, `labels`, `changed_files`, and `source_repo` fields as the source of truth. `internal_pr` is audit-only and must never be used for contributor attribution or user-facing changelog links. If `url` is empty, omit the PR link from user-facing markdown rather than synthesizing one.
+Use the top-level `number`, `url`, `author`, `author_association`, `author_is_bot`, `body`, `labels`, `changed_files`, and `source_repo` fields as the source of truth. `internal_pr` is audit-only and must never be used for contributor attribution or user-facing changelog links. If `url` is empty, omit the PR link from user-facing markdown rather than synthesizing one.
 
 ### Step 3 — Classify contributors
 
@@ -175,6 +177,7 @@ For each unmarked PR, produce a classification:
 **Feature-flag detection:** Use the `changed_files` list from Step 2 to check if any PR touches `crates/warp_features/src/lib.rs` or references a `FeatureFlag` variant in its title/body. Cross-reference with the flag lists from Step 4 to determine channel visibility.
 
 **Unknown contributors:** Authors in the `unknown` bucket (org membership check failed due to auth) should be treated conservatively — do not attribute them as external. Note them in the output for manual verification.
+**Repo members and bots:** Treat `author_association` values `MEMBER`, `OWNER`, and `COLLABORATOR` as internal, regardless of the classifier output. Treat `author_is_bot: true`, `app/...` authors, and `...[bot]` authors as bots. Internal and bot authors' changelog fixes should remain in the main sections with their PR links, but they must not receive linked profile attribution or Community credit.
 
 ### Step 7 — Assemble the draft
 
@@ -187,7 +190,7 @@ Combine explicit entries (Step 2) and inferred entries (Step 6) into the final r
 
 PRs marked with `CHANGELOG-NONE` are explicitly opted out and must never appear in the changelog markdown.
 
-When creating entries, copy `pr_number`, `url`, `author`, `source_repo`, and `internal_pr` from the normalized PR record. The release JSON converter uses `url` directly; do not invent public PR URLs from PR numbers.
+When creating entries, copy `pr_number`, `url`, `author`, `author_association`, `author_is_bot`, `source_repo`, and `internal_pr` from the normalized PR record. The release JSON converter uses `url` directly; do not invent public PR URLs from PR numbers.
 
 ### Step 8 — Write output files
 
@@ -239,6 +242,8 @@ The markdown draft must **not** include "Needs Review" or "Skipped PRs" sections
       "text": "Added dark mode",
       "source": "explicit",
       "author": "external-contributor",
+      "author_association": "CONTRIBUTOR",
+      "author_is_bot": false,
       "is_external": true,
       "confidence": "high",
       "rationale": null,
