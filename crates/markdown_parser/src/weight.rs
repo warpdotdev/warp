@@ -19,9 +19,13 @@ impl CustomWeight {
     /// Maps a numeric CSS `font-weight` value to the closest named weight.
     ///
     /// CSS numeric weights run 1–1000, with the common named steps landing on the hundreds
-    /// (100 Thin … 900 Black). We round to the nearest hundred and map that bucket to a variant.
-    /// `400` (Normal) has no `CustomWeight` and returns `None`, as do values that round to it.
+    /// (100 Thin … 900 Black). Out-of-range input (including values far outside 1..=1000, e.g.
+    /// from malformed pasted HTML) is clamped to that range before rounding. We then round to
+    /// the nearest hundred and map that bucket to a variant. `400` (Normal) has no `CustomWeight`
+    /// and returns `None`, as do values that round to it.
     pub fn from_css_numeric(value: i32) -> Option<CustomWeight> {
+        // Clamp into the valid CSS range first so the rounding arithmetic below can never overflow.
+        let value = value.clamp(1, 1000);
         // Round to the nearest hundred, then clamp into the 100..=900 named range.
         let bucket = (((value + 50) / 100) * 100).clamp(100, 900);
         match bucket {
@@ -121,6 +125,30 @@ mod tests {
         assert_eq!(CustomWeight::from_css_numeric(50), Some(CustomWeight::Thin));
         assert_eq!(
             CustomWeight::from_css_numeric(1000),
+            Some(CustomWeight::Black)
+        );
+    }
+
+    #[test]
+    fn from_css_numeric_does_not_overflow_on_extreme_input() {
+        // Values far outside the CSS 1..=1000 range must not panic (debug) or
+        // wrap around (release) when added to before clamping.
+        assert_eq!(
+            CustomWeight::from_css_numeric(i32::MAX),
+            Some(CustomWeight::Black)
+        );
+        assert_eq!(
+            CustomWeight::from_css_numeric(i32::MIN),
+            Some(CustomWeight::Thin)
+        );
+        assert_eq!(CustomWeight::from_css_numeric(0), Some(CustomWeight::Thin));
+        assert_eq!(CustomWeight::from_css_numeric(-5), Some(CustomWeight::Thin));
+        assert_eq!(
+            CustomWeight::from_css_numeric(1000),
+            Some(CustomWeight::Black)
+        );
+        assert_eq!(
+            CustomWeight::from_css_numeric(1_000_000),
             Some(CustomWeight::Black)
         );
     }
