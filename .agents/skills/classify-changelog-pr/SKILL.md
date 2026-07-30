@@ -1,11 +1,17 @@
 ---
 name: classify-changelog-pr
-description: Reference guidance for classifying whether an unmarked PR should appear in the changelog and under which category. Used inline by the changelog-draft skill — not dispatched as a separate agent.
+description: Subjective-candidate guidance for classifying whether an unmarked PR should appear in the changelog and under which category. Used inline by the changelog-draft skill for PRs that passed the deterministic script filters — not dispatched as a separate agent.
 ---
 
-# Classify Changelog PR
+# Classify Changelog PR (Subjective Candidates)
 
-This document provides classification rules for PRs that lack explicit `CHANGELOG-*` markers. The changelog-draft agent follows these rules inline when deciding whether to include an unmarked PR.
+This document provides guidance for classifying **candidate PRs** that the `classify_pr.py` script (Step 6 of `changelog-draft`) has already passed through its deterministic filters. By the time you reach this guidance, the script has already deterministically excluded:
+
+- Known bot authors (dependabot, renovate, github-actions, and authors ending in `[bot]`)
+- PRs that exclusively touch CI, test, docs, or internal tooling files
+- PRs gated behind channel-excluded feature flags (dogfood flags on stable, dogfood flags on preview)
+
+**You are only classifying the remaining candidates.** Do not re-apply mechanical rules the script already enforced — trust its output.
 
 ## Categories
 
@@ -13,33 +19,22 @@ This document provides classification rules for PRs that lack explicit `CHANGELO
 - **IMPROVEMENT** — Enhances an existing feature in a way users would notice (performance, UX, new options).
 - **BUG-FIX** — Fixes a user-visible bug or regression.
 - **OZ** — Changes to Oz / AI agent capabilities. At most 4 per release in the stable changelog.
-- **NONE** — Explicitly opt out of changelog inclusion. Handled upstream by `fetch_prs.py` marker extraction.
 
-## Decision rules
+## Subjective classification guidance
 
-### Always exclude
-- PRs with an explicit `CHANGELOG-NONE` marker (contributor opted out)
-- PRs authored by known bots (dependabot, renovate, github-actions, codecov)
-- PRs that exclusively modify CI workflows (`.github/workflows/`), test files, or dev tooling
-- PRs that only update internal docs, comments, or README files
-- Dependency bumps with no user-facing behavior change
-- Refactors with no observable behavior change (code moves, renames, formatting)
+### Is this change user-visible?
+- **Yes — include:** Changes to the visible UI, behavior the user controls, or outcomes the user can observe.
+- **No — exclude:** Pure internal refactors, code moves, renames, or formatting with no observable behavior change.
+- **Unclear — low confidence:** Set `confidence: "low"` and `needs_review: true`. The script will preserve this as a manual review item.
 
-### Always include
-- PRs with explicit `CHANGELOG-*` markers (handled before this guidance applies)
-- PRs that fix a crash, data loss, or security issue — even without a marker
+### Crashes, data loss, and security fixes
+Always include PRs that fix a crash, data loss, or security issue — even if the diff appears small or purely internal.
 
-### Conditional on channel
-- **Stable channel:** Only include changes that are live for all users. Exclude PRs gated behind `DOGFOOD_FLAGS` or `PREVIEW_FLAGS`.
-- **Preview channel:** Include PRs gated behind `PREVIEW_FLAGS`. Still exclude `DOGFOOD_FLAGS`-only changes.
-- **Dev channel:** Include everything that's user-visible, regardless of flag gates.
+### Refactors
+Exclude refactors with no observable behavior change (code moves, renames, formatting). If the refactor enables a new capability, classify it by that capability.
 
 ### Feature-flagged PRs
-If a PR mentions a `FeatureFlag` variant in its diff or title:
-1. Check which flag list it belongs to (`RELEASE_FLAGS`, `PREVIEW_FLAGS`, `DOGFOOD_FLAGS`).
-2. Apply the channel rules above.
-3. If the flag is in `RELEASE_FLAGS` or enabled by default in `app/Cargo.toml`, treat it as live.
-4. Set `feature_flag` in the classification output to the flag name.
+The script has already excluded hidden flags. For candidate PRs that reference a visible flag (e.g. `RELEASE_FLAGS` or `unknown` flag registry changes), apply your judgment on user-visibility and category as normal.
 
 ### Confidence levels
 - **high** — Clear user-visible change with obvious category.

@@ -30,6 +30,7 @@ CATEGORY_MAP = {
     "OZ": "oz_updates",
     "IMAGE": "images",
 }
+MAX_OZ_UPDATES = 4
 
 
 def github_profile_link(username: str) -> str:
@@ -77,6 +78,8 @@ def convert(draft: dict) -> dict:
             release["images"].append(entry["text"])
         else:
             release[release_key].append(format_entry(entry))
+    # Preserve curated source order while enforcing the in-app display limit.
+    release["oz_updates"] = release["oz_updates"][:MAX_OZ_UPDATES]
 
     return release
 
