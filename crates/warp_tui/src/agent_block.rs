@@ -223,7 +223,7 @@ fn render_failure_section(
                         .finish(),
                 )
                 .finish();
-            let content = TuiFlex::column()
+            TuiFlex::column()
                 .child(
                     TuiText::from_spans([
                         (FAILURE_WARNING_PREFIX.to_owned(), error_style),
@@ -248,8 +248,7 @@ fn render_failure_section(
                         .with_style(primary_style)
                         .finish(),
                 )
-                .finish();
-            content
+                .finish()
         }
         FailedOutputPresentation::ContextWindowExceeded { message } => TuiText::from_spans([
             ("× ".to_owned(), error_style),
