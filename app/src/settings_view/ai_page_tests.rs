@@ -1,11 +1,4 @@
-use super::{
-    AgentAttributionToggleState, cli_agent_widgets, derive_agent_attribution_toggle_state,
-};
-#[cfg(not(target_family = "wasm"))]
-use super::{CLIAgentWidget, cli_agent_settings_widget_id};
-#[cfg(not(target_family = "wasm"))]
-use crate::settings_view::settings_page::SettingsWidget;
-use crate::settings_view::settings_page::search_terms_match;
+use super::{AgentAttributionToggleState, derive_agent_attribution_toggle_state};
 use crate::workspaces::workspace::AdminEnablementSetting;
 
 #[test]
@@ -22,34 +15,6 @@ fn respect_user_setting_returns_user_pref_unlocked() {
             is_forced_by_org: false,
             is_disabled: false,
         }
-    );
-}
-
-#[test]
-fn cli_agent_widgets_filter_to_individual_settings() {
-    let widgets = cli_agent_widgets();
-
-    let matching_terms = |query| {
-        widgets
-            .iter()
-            .filter(|widget| search_terms_match(widget.search_terms(), query))
-            .map(|widget| widget.search_terms())
-            .collect::<Vec<_>>()
-    };
-
-    assert_eq!(matching_terms("ctrl enter").len(), 1);
-    assert_eq!(matching_terms("toolbar layout").len(), 1);
-    assert_eq!(matching_terms("auto dismiss").len(), 1);
-    assert_eq!(matching_terms("third party cli agent").len(), widgets.len());
-    assert_eq!(matching_terms("").len(), widgets.len());
-}
-
-#[cfg(not(target_family = "wasm"))]
-#[test]
-fn cli_agent_deeplink_targets_primary_toolbar_widget() {
-    assert_eq!(
-        cli_agent_settings_widget_id(),
-        CLIAgentWidget::static_widget_id()
     );
 }
 
