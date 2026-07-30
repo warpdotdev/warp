@@ -268,6 +268,59 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+#[test]
+fn test_open_new_window_for_team_reuses_existing_team_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let existing_team_workspace = mock_workspace(&mut app);
+        let existing_team_window_id =
+            existing_team_workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let team_uid: ServerId = 123.into();
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                user_workspaces.register_window(existing_team_window_id, Some(team_uid), ctx);
+            });
+        });
+        let initial_window_count = app.window_ids().len();
+
+        source_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count);
+    });
+}
+
+#[test]
+fn test_open_new_window_for_team_creates_window_when_team_has_none() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let team_uid: ServerId = 123.into();
+        let initial_window_count = app.window_ids().len();
+
+        source_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count + 1);
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.window_ids()
+                    .filter(|window_id| {
+                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                            == Some(team_uid)
+                    })
+                    .count(),
+                1
+            );
+        });
+    });
+}
+
 fn restored_workspace(
     app: &mut App,
     window_snapshot: crate::app_state::WindowSnapshot,

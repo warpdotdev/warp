@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use uuid::Uuid;
 use warp::tui_export::{
@@ -6,14 +8,21 @@ use warp::tui_export::{
     TuiMcpTransport, register_tui_session_view_test_singletons,
 };
 use warpui::{EntityIdMap, SingletonEntity};
+use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, text_width,
+    Color, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, TuiStyle, TuiText, text_width,
 };
 use warpui_core::{App, AppContext};
 
-use super::{LEFT_COLUMN_COLS, build_zero_state_overlay, mcp_status_label};
+use super::{
+    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
+    mcp_status_label,
+};
 use crate::tui_builder::TuiUiBuilder;
+use crate::zero_state_animation::{
+    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement, ZeroStateStarfieldElement,
+};
 
 fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     TuiMcpServerSnapshot {
@@ -24,7 +33,7 @@ fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
         status,
         tool_count: 2,
         resource_count: 0,
-        has_credentials: false,
+        can_log_out: false,
         authorization_url: None,
     }
 }
@@ -142,6 +151,130 @@ fn render_element_lines(
     height: u16,
 ) -> Vec<String> {
     render_to_buffer(element, ctx, width, height).to_lines()
+}
+
+#[test]
+fn zero_state_copy_rectangle_is_opaque_without_changing_the_background_color() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let stars = (0..9)
+                .map(|_| "*".repeat(80))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let layout = build_zero_state_layout(
+                TuiText::new(stars).finish(),
+                TuiText::new("").finish(),
+                TuiText::new("copy here\n\nline").finish(),
+            );
+            let buffer = render_to_buffer(layout, ctx, 80, 9);
+            let lines = buffer.to_lines();
+            assert_eq!(&lines[3][..9], "copy here");
+            assert_eq!(&lines[5][..4], "line");
+            for y in 3..=5 {
+                for x in 0..9 {
+                    assert_ne!(buffer[(x, y)].symbol(), "*");
+                    assert_eq!(buffer[(x, y)].bg, Color::Reset);
+                }
+            }
+            assert_eq!(buffer[(1, 2)].symbol(), "*");
+            assert_eq!(buffer[(1, 6)].symbol(), "*");
+            assert_eq!(buffer[(9, 3)].symbol(), "*");
+            assert_eq!(buffer[(1, 2)].bg, Color::Reset);
+            assert_eq!(buffer[(1, 6)].bg, Color::Reset);
+            assert_eq!(buffer[(9, 3)].bg, Color::Reset);
+        });
+    });
+}
+#[test]
+fn zero_state_starfield_spans_the_full_width() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout = build_zero_state_layout(
+                ZeroStateStarfieldElement::new(
+                    AnimationClock::starting_at(Duration::ZERO),
+                    TuiStyle::default(),
+                    LEFT_COLUMN_COLS,
+                    ANIMATION_PANEL_COLS,
+                )
+                .finish(),
+                TuiText::new("").finish(),
+                TuiText::new("").finish(),
+            );
+            let buffer = render_to_buffer(layout, ctx, 120, 20);
+            let occupied_columns = buffer
+                .content
+                .iter()
+                .enumerate()
+                .filter_map(|(index, cell)| {
+                    (cell.symbol() != " ").then_some(index % usize::from(buffer.area.width))
+                })
+                .collect::<Vec<_>>();
+
+            assert!(occupied_columns.iter().any(|column| *column < 30));
+            assert!(occupied_columns.iter().any(|column| *column >= 90));
+        });
+    });
+}
+
+#[test]
+fn zero_state_animation_is_centered_in_remaining_space_and_hidden_when_space_is_tight() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let animation = || {
+                let style = TuiStyle::default();
+                ZeroStateAnimationElement::new(
+                    AnimationClock::starting_at(Duration::ZERO),
+                    Arc::new(ZeroStateAnimationConfig::default()),
+                    WarpLogoStyles {
+                        front: style,
+                        back: style,
+                        side: style,
+                        background: style,
+                    },
+                )
+                .without_background_stars()
+                .finish()
+            };
+            let layout = build_zero_state_layout(
+                TuiText::new("").finish(),
+                animation(),
+                TuiText::new("").finish(),
+            );
+            let wide_width = 120;
+            let wide = render_to_buffer(layout, ctx, wide_width, 20);
+            let occupied = wide
+                .content
+                .iter()
+                .enumerate()
+                .filter_map(|(index, cell)| {
+                    (cell.symbol() != " ").then_some(index % usize::from(wide.area.width))
+                })
+                .collect::<Vec<_>>();
+            let remaining_cols = wide_width - LEFT_COLUMN_COLS;
+            let animation_start = LEFT_COLUMN_COLS + (remaining_cols - ANIMATION_PANEL_COLS) / 2;
+            let animation_end = animation_start + ANIMATION_PANEL_COLS;
+
+            assert!(!occupied.is_empty());
+            assert!(
+                occupied
+                    .iter()
+                    .all(|column| *column >= usize::from(animation_start)
+                        && *column < usize::from(animation_end))
+            );
+
+            let layout = build_zero_state_layout(
+                TuiText::new("").finish(),
+                animation(),
+                TuiText::new("").finish(),
+            );
+            assert!(
+                render_to_buffer(layout, ctx, 60, 20)
+                    .content
+                    .iter()
+                    .all(|cell| cell.symbol() == " ")
+            );
+        });
+    });
 }
 /// When the terminal is wide enough, the path header must stay on one row and
 /// must not be capped at LEFT_COLUMN_COLS.

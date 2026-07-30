@@ -98,7 +98,8 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
 
     let command = &*commands::ORCHESTRATE;
     assert_eq!(command.kind, SlashCommandKind::Orchestrate);
-    assert!(!command.supports_surface(settings::SettingsMode::Tui));
+    assert!(command.supports_surface(settings::SettingsMode::Tui));
+    assert!(command.supports_surface(settings::SettingsMode::Gui));
 }
 
 #[test]

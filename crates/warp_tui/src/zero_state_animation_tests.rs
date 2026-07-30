@@ -20,9 +20,10 @@ use super::config::{
     ZeroStateAnimationLoadFailure, ZeroStateShape, resolve_ascii_art_path,
 };
 use super::{
-    BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoSurface, WarpLogoStyles,
-    ZeroStateAnimationElement, fitted_logo_size, logo_frame_at, object_frame_at,
-    star_count_for_size, warp_logo_contains,
+    BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoGlyph, LogoSurface, REPAINT_INTERVAL,
+    WarpLogoStyles, ZeroStateAnimationElement, fitted_logo_size, glyph_for_tangent,
+    is_ghost_stipple_cell, logo_frame_at, object_frame_at, object_frame_at_with_background,
+    rotation_angle, star_count_for_size, starfield_emitter_x, warp_logo_contains,
 };
 
 const PANEL_SIZE: TuiSize = TuiSize::new(52, 20);
@@ -51,6 +52,18 @@ fn starfield_density_scales_with_the_full_panel_area() {
     assert_eq!(star_count_for_size(TuiSize::new(1_000, 200)), 6_923);
     assert_eq!(star_count_for_size(TuiSize::new(2_000, 200)), 8_192);
     assert_eq!(star_count_for_size(TuiSize::new(u16::MAX, u16::MAX)), 8_192);
+}
+
+#[test]
+fn starfield_emitter_tracks_the_centered_logo_panel() {
+    assert_eq!(starfield_emitter_x(TuiSize::new(80, 20), 48, 32), 63.5);
+    assert_eq!(starfield_emitter_x(TuiSize::new(120, 20), 48, 32), 83.5);
+    assert_eq!(starfield_emitter_x(TuiSize::new(160, 20), 48, 32), 103.5);
+    assert_eq!(
+        starfield_emitter_x(TuiSize::new(60, 20), 48, 32),
+        29.5,
+        "when the logo is hidden, stars should fall back to the screen center"
+    );
 }
 
 fn logo_cells(frame: &super::LogoFrame) -> Vec<(usize, usize, LogoCell)> {
@@ -109,6 +122,55 @@ fn logo_mask_preserves_the_offset_warp_faces() {
 }
 
 #[test]
+fn rotation_lingers_on_faces_and_preserves_cardinal_angles() {
+    let period = Duration::from_secs(5);
+    for (elapsed, expected) in [
+        (Duration::ZERO, 0.0),
+        (Duration::from_millis(1_250), std::f64::consts::FRAC_PI_2),
+        (Duration::from_millis(2_500), std::f64::consts::PI),
+        (
+            Duration::from_millis(3_750),
+            3.0 * std::f64::consts::FRAC_PI_2,
+        ),
+    ] {
+        let actual = rotation_angle(elapsed, period);
+        assert!(
+            (actual - expected).abs() < f64::EPSILON * 4.0,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    let face_step =
+        rotation_angle(Duration::from_millis(100), period) - rotation_angle(Duration::ZERO, period);
+    let edge_step = rotation_angle(Duration::from_millis(1_350), period)
+        - rotation_angle(Duration::from_millis(1_250), period);
+    assert!(
+        face_step < edge_step,
+        "the logo should move more slowly near a face ({face_step}) than near an edge ({edge_step})"
+    );
+}
+
+#[test]
+fn tangent_glyphs_use_equal_angular_sectors() {
+    assert_eq!(glyph_for_tangent(0.0, 0.0), None);
+    assert_eq!(glyph_for_tangent(2.5, 1.0), Some(LogoGlyph::Horizontal));
+    assert_eq!(glyph_for_tangent(2.0, 1.0), Some(LogoGlyph::Backslash));
+    assert_eq!(glyph_for_tangent(1.0, 2.0), Some(LogoGlyph::Backslash));
+    assert_eq!(glyph_for_tangent(1.0, 2.5), Some(LogoGlyph::Vertical));
+    assert_eq!(glyph_for_tangent(1.0, -1.0), Some(LogoGlyph::ForwardSlash));
+}
+
+#[test]
+fn screen_space_ghost_stipple_is_sparse_and_deterministic() {
+    let stippled_cells = (0..32)
+        .flat_map(|x| (0..17).map(move |y| (x, y)))
+        .filter(|(x, y)| is_ghost_stipple_cell(*x, *y))
+        .count();
+
+    assert_eq!(stippled_cells, 29);
+}
+
+#[test]
 fn full_face_frame_is_recognizable_and_centered() {
     let frame = logo_frame_at(Duration::ZERO, PANEL_SIZE).unwrap();
     let lines = frame.to_lines();
@@ -154,6 +216,46 @@ fn background_stars_move_between_frames() {
     };
 
     assert_ne!(star_positions(&initial), star_positions(&advanced));
+}
+
+#[test]
+fn adjacent_builtin_frames_have_bounded_occupancy_and_content_churn() {
+    let config = ZeroStateAnimationConfig::default();
+    let size = TuiSize::new(32, 28);
+    let frames = (0..=76)
+        .map(|frame| {
+            object_frame_at_with_background(REPAINT_INTERVAL * frame, size, &config, false).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let (max_occupancy_changes, max_content_changes) = frames
+        .windows(2)
+        .map(|frames| {
+            let occupancy_changes = frames[0]
+                .cells
+                .iter()
+                .zip(&frames[1].cells)
+                .filter(|(before, after)| before.is_some() != after.is_some())
+                .count();
+            let content_changes = frames[0]
+                .cells
+                .iter()
+                .zip(&frames[1].cells)
+                .filter(|(before, after)| before != after)
+                .count();
+            (occupancy_changes, content_changes)
+        })
+        .fold((0, 0), |maximums, changes| {
+            (maximums.0.max(changes.0), maximums.1.max(changes.1))
+        });
+
+    assert!(
+        max_occupancy_changes <= 80,
+        "adjacent built-in frames changed occupancy in {max_occupancy_changes} cells"
+    );
+    assert!(
+        max_content_changes <= 120,
+        "adjacent built-in frames changed glyph or surface content in {max_content_changes} cells"
+    );
 }
 
 #[test]
@@ -210,6 +312,11 @@ fn logo_scales_down_while_preserving_cell_aspect() {
         Some((25, 10))
     );
     assert_eq!(fitted_logo_size(TuiSize::new(100, 40), 4.0), Some((68, 17)));
+    assert_eq!(
+        fitted_logo_size(TuiSize::new(32, 28), BUILT_IN_LOGO_CELL_ASPECT_RATIO),
+        Some((30, 12)),
+        "the layout panel should keep the restored dev animation compact"
+    );
 }
 
 #[test]
@@ -455,7 +562,11 @@ fn settings_model_reloads_only_object_changes() {
 
 #[test]
 fn representative_ascii_shapes_rotate_through_front_side_and_back() {
-    for art in [DIAMOND_ART, ROCKET_ART, WARP_W_ART] {
+    for (name, art) in [
+        ("diamond", DIAMOND_ART),
+        ("rocket", ROCKET_ART),
+        ("Warp W", WARP_W_ART),
+    ] {
         let config = custom_config(art, 4.0, 0.18);
         let face = object_frame_at(Duration::ZERO, PANEL_SIZE, &config).unwrap();
         let edge = object_frame_at(Duration::from_secs(1), PANEL_SIZE, &config).unwrap();
@@ -464,7 +575,8 @@ fn representative_ascii_shapes_rotate_through_front_side_and_back() {
         assert!(logo_cells(&face).len() > 20);
         assert!(
             edge.iter_cells()
-                .any(|(_, _, cell)| cell.surface == LogoSurface::Side)
+                .any(|(_, _, cell)| cell.surface == LogoSurface::Side),
+            "{name} should retain visible side stitches at a quarter turn"
         );
         assert!(
             back.iter_cells()

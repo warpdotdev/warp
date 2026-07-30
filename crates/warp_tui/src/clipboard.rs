@@ -90,6 +90,20 @@ fn set_native_text(text: &str) -> anyhow::Result<()> {
     anyhow::bail!("native OS clipboard is not supported on this platform")
 }
 
+/// Reads the OS clipboard's plain text for a local paste (`cmd-v`).
+///
+/// This reuses the shared native clipboard backend (`arboard` via
+/// `warpui::platform::create_system_clipboard`). Unlike [`copy_to_clipboard`],
+/// there is no OSC 52 fallback: terminals do not reliably answer OSC 52 read
+/// requests, so a remote/SSH `cmd-v` still relies on the terminal's own
+/// bracketed-paste path (`TuiEditorAction::PasteText`). Returns an error only
+/// when the native backend is unavailable.
+pub(crate) fn read_from_clipboard() -> anyhow::Result<String> {
+    let mut clipboard = warpui::platform::create_system_clipboard()
+        .map_err(|error| error.context("native OS clipboard is unavailable"))?;
+    Ok(clipboard.read().plain_text)
+}
+
 fn write_osc52_sequences(text: &str, in_tmux: bool, writer: &mut impl Write) -> io::Result<()> {
     let sequence = osc52_sequences(text, in_tmux);
     writer.write_all(sequence.as_bytes())?;

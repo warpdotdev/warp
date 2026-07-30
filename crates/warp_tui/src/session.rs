@@ -12,8 +12,8 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use clap::error::ErrorKind;
 use inquire::{InquireError, Password, PasswordDisplayMode};
-use warp::settings::TuiThemeSettings;
-use warp::tui_export::{Appearance, ServerConversationToken};
+use warp::settings::{TuiThemeSettings, TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
+use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
 use warp_core::telemetry::TelemetryEvent as _;
@@ -28,10 +28,11 @@ use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
-use crate::terminal_background::probe_and_select_theme;
+use crate::terminal_background::TuiHostTerminalBackground;
 use crate::terminal_session_view::{
     TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
 };
+use crate::voice_input::requires_modifier_key_reporting;
 
 /// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
 /// local cargo builds fall back to a numeric placeholder.
@@ -46,6 +47,10 @@ struct TuiArgs {
     /// Resume an Oz/Warp conversation by server token.
     #[arg(long)]
     resume: Option<String>,
+
+    /// Enable auto-approve by default for new conversations.
+    #[arg(long)]
+    auto_approve: bool,
 
     /// API key for non-interactive authentication.
     #[arg(long, env = "WARP_API_KEY")]
@@ -136,7 +141,7 @@ pub fn run() -> Result<()> {
     let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
         if !provider.supports_pasted_api_key() {
             return Err(anyhow!(
-                "Grok credentials must be connected with /add-api-key grok in an active TUI"
+                "Grok credentials must be connected with /api-keys in an active TUI"
             ));
         }
         let Some(api_key) = read_provider_api_key()? else {
@@ -147,7 +152,7 @@ pub fn run() -> Result<()> {
         match args.clear_provider_api_key {
             Some(LLMProvider::Xai) => {
                 return Err(anyhow!(
-                    "Grok credentials must be cleared with /clear-provider-api-key grok in an active TUI"
+                    "Grok credentials must be cleared with /api-keys in an active TUI"
                 ));
             }
             Some(provider) => Some(ProviderApiKeyCommand::Clear { provider }),
@@ -179,11 +184,23 @@ pub fn run() -> Result<()> {
         }));
     }
     let resume_token = args.resume.map(parse_resume_token).transpose()?;
+    let default_autoexecute_mode = if args.auto_approve {
+        AIConversationAutoexecuteMode::RunToCompletion
+    } else {
+        AIConversationAutoexecuteMode::RespectUserSettings
+    };
     let exit_summary = TuiExitSummaryHandle::default();
     let exit_summary_for_app = exit_summary.clone();
     let result = warp::run_tui(
         args.api_key,
-        Box::new(move |ctx| init(resume_token, exit_summary_for_app, ctx)),
+        Box::new(move |ctx| {
+            init(
+                resume_token,
+                default_autoexecute_mode,
+                exit_summary_for_app,
+                ctx,
+            )
+        }),
     );
     if result.is_ok()
         && let Some(token) = exit_summary.token()
@@ -199,6 +216,7 @@ pub fn run() -> Result<()> {
 /// Creates the login-gated root and starts the headless draw and input driver.
 fn init(
     resume_token: Option<ServerConversationToken>,
+    default_autoexecute_mode: AIConversationAutoexecuteMode,
     exit_summary: TuiExitSummaryHandle,
     ctx: &mut AppContext,
 ) {
@@ -218,7 +236,7 @@ fn init(
     // Appearance theme at mount time, without changing normal GUI theme
     // selection or font settings.
     let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
-    let theme = probe_and_select_theme(selected_theme);
+    let (theme, probe) = TuiHostTerminalBackground::register(selected_theme, ctx);
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
         appearance.set_theme(theme, ctx);
     });
@@ -230,10 +248,31 @@ fn init(
         },
         |_| RootTuiView::new(),
     );
-    match spawn_tui_driver(ctx, window_id, root.clone()) {
+    match spawn_tui_driver(
+        ctx,
+        window_id,
+        root.clone(),
+        requires_modifier_key_reporting(ctx),
+        Some(probe),
+    ) {
         Ok(driver) => {
-            let sessions =
-                ctx.add_singleton_model(|_| TuiSessions::new(driver, exit_summary, resume_token));
+            let sessions = ctx.add_singleton_model(|_| {
+                TuiSessions::new(driver, exit_summary, resume_token, default_autoexecute_mode)
+            });
+            let sessions_for_voice_settings = sessions.clone();
+            ctx.subscribe_to_model(&TuiVoiceSettings::handle(ctx), move |_, event, ctx| {
+                let TuiVoiceSettingsChangedEvent::TuiVoiceInputHoldKeySetting { .. } = event;
+                let enabled = requires_modifier_key_reporting(ctx);
+                let result = sessions_for_voice_settings.update(ctx, |sessions, ctx| {
+                    sessions.set_modifier_key_lifecycle_enabled(enabled, ctx)
+                });
+                if let Err(error) = result {
+                    report_error!(
+                        anyhow::Error::new(error)
+                            .context("failed to update TUI modifier key reporting")
+                    );
+                }
+            });
             root.update(ctx, |_, ctx| {
                 ctx.subscribe_to_model(&sessions, |_, _, event, ctx| match event {
                     TuiSessionsEvent::SessionRemoved(_) => ctx.notify(),

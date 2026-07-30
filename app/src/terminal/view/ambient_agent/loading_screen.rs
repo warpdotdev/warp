@@ -19,6 +19,7 @@ use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, WeakViewHandle};
 
 use crate::ai::agent_tips::{AITip, AITipModel};
 use crate::ai::loading::shimmering_warp_loading_text;
+use crate::ai::orchestration::{CloudAgentStartupAuthFlow, CloudAgentStartupPresentation};
 use crate::terminal::view::ambient_agent::CloudModeTip;
 use crate::ui_components::blended_colors;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -217,6 +218,7 @@ pub fn render_cloud_mode_error_screen(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let error_color = AnsiColorIdentifier::Red.to_ansi_color(&theme.terminal_colors().normal);
+    let presentation = CloudAgentStartupPresentation::failure(error_message);
 
     // Error icon with fixed size constraints - using AlertTriangle icon
     let error_icon = ConstrainedBox::new(
@@ -230,7 +232,7 @@ pub fn render_cloud_mode_error_screen(
 
     // Error title text
     let title_text = Text::new(
-        "Failed to start environment",
+        presentation.title,
         appearance.ui_font_family(),
         appearance.monospace_font_size() + 2.,
     )
@@ -240,7 +242,7 @@ pub fn render_cloud_mode_error_screen(
 
     // Error message wrapped in SelectableArea to make it selectable for easy copying
     let error_text = Text::new(
-        error_message.to_string(),
+        presentation.detail,
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -302,6 +304,10 @@ pub fn render_cloud_mode_github_auth_required_screen(
     _app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
+    let presentation = CloudAgentStartupPresentation::github_auth(
+        auth_url,
+        CloudAgentStartupAuthFlow::RetryRetainedRequest,
+    );
 
     // Use main text color for the icon and title
     let title_color = blended_colors::text_main(theme, theme.surface_1());
@@ -320,7 +326,7 @@ pub fn render_cloud_mode_github_auth_required_screen(
 
     // Title text - "GitHub Authentication Required"
     let title_text = Text::new(
-        "GitHub Authentication Required",
+        presentation.title,
         appearance.ui_font_family(),
         appearance.monospace_font_size() + 2.,
     )
@@ -330,7 +336,7 @@ pub fn render_cloud_mode_github_auth_required_screen(
 
     // Message text - "Please authenticate with GitHub to continue"
     let message_text = Text::new(
-        "Please authenticate with GitHub to continue",
+        presentation.detail,
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -338,14 +344,19 @@ pub fn render_cloud_mode_github_auth_required_screen(
     .finish();
 
     // Create the authenticate button
-    let auth_url_clone = auth_url.to_string();
+    let auth_url = presentation
+        .primary_url
+        .expect("GitHub authentication presentation has a URL");
+    let action_label = presentation
+        .action_label
+        .expect("GitHub authentication presentation has an action label");
     let auth_button = appearance
         .ui_builder()
         .button(ButtonVariant::Accent, auth_button_mouse_state.clone())
-        .with_centered_text_label("Authenticate with GitHub".to_string())
+        .with_centered_text_label(action_label.to_string())
         .build()
         .on_click(move |_, app, _| {
-            app.open_url(&auth_url_clone);
+            app.open_url(&auth_url);
         })
         .finish();
 

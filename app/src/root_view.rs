@@ -1581,6 +1581,10 @@ pub enum NewWorkspaceSource {
     },
     /// Starts the workspace with the Cloud Agent setup tab.
     AmbientAgent,
+    /// Opens a new window pre-scoped to a specific team, chosen via the title-bar team switcher.
+    TeamSwitched {
+        team_uid: ServerId,
+    },
     /// A tab is being transferred from another window via the transferable views framework.
     /// The workspace will create a placeholder tab, which will be replaced by the transferred
     /// PaneGroup after window creation.
@@ -1642,8 +1646,13 @@ impl NewWorkspaceSource {
             | Self::WorkflowById { .. }
             | Self::AgentSession { .. }
             | Self::AmbientAgent => None,
-            Self::Restored { .. } => {
-                // TODO: Store the team UID in WindowSnapshot and restore it here.
+            Self::TeamSwitched { team_uid } => return Some(*team_uid),
+            Self::Restored {
+                window_snapshot, ..
+            } => {
+                if let Some(team_uid) = window_snapshot.team_uid {
+                    return Some(team_uid);
+                }
                 None
             }
         };
@@ -4069,11 +4078,10 @@ impl AuthOnboardingState {
                 report_error!("SSO link required after web user import");
             }
             AuthOnboardingState::NeedsSsoLink { .. } => (),
-            AuthOnboardingState::Onboarding { .. }
-            | AuthOnboardingState::LoginSlide { .. }
-            | AuthOnboardingState::PostAuthOnboarding { .. } => {
-                // For onboarding/login slide, we don't have a workspace yet, so we can't convert to SSO link
-                // This case shouldn't normally occur
+            AuthOnboardingState::Onboarding { target, .. }
+            | AuthOnboardingState::LoginSlide { target, .. }
+            | AuthOnboardingState::PostAuthOnboarding { target, .. } => {
+                *self = AuthOnboardingState::NeedsSsoLink(target.clone())
             }
             AuthOnboardingState::Terminal(terminal_view_handle) => {
                 *self = AuthOnboardingState::NeedsSsoLink(AuthOnboardingTarget::Terminal(

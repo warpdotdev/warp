@@ -39,7 +39,7 @@ pub struct TuiMcpServerSnapshot {
     pub status: TuiMcpServerStatus,
     pub tool_count: usize,
     pub resource_count: usize,
-    pub has_credentials: bool,
+    pub can_log_out: bool,
     pub authorization_url: Option<String>,
 }
 
@@ -223,7 +223,7 @@ impl TuiMcpManager {
                     status,
                     tool_count: runtime_manager.tools_for_server(uuid).len(),
                     resource_count: runtime_manager.resources_for_server(uuid).len(),
-                    has_credentials: runtime_manager.has_credentials(uuid, ctx),
+                    can_log_out: runtime_manager.can_log_out(uuid, ctx),
                     authorization_url: runtime_manager
                         .authorization_url(uuid)
                         .map(ToString::to_string),

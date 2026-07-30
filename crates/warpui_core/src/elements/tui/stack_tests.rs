@@ -10,7 +10,7 @@ use crate::elements::tui::test_support::{
     render_to_frame, render_to_lines, with_event_context, with_paint_surface,
 };
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiElement, TuiEvent,
+    TuiBuffer, TuiBufferExt, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiEvent,
     TuiEventHandler, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPoint,
     TuiScreenPosition, TuiSize, TuiText,
 };
@@ -81,6 +81,45 @@ fn blank_cells_with_a_background_are_opaque() {
 
     assert_eq!(frame.buffer.to_lines(), vec!["A    "]);
     assert_eq!(frame.buffer[(4, 0)].bg, Color::Red);
+}
+
+#[test]
+fn blank_reset_background_fill_is_opaque_without_changing_color() {
+    let background = TuiText::new("stars").finish();
+    let foreground = TuiContainer::new(
+        TuiConstrainedBox::new(TuiText::new("A").finish())
+            .with_min_cols(5)
+            .with_max_cols(5)
+            .finish(),
+    )
+    .with_background(Color::Reset)
+    .finish();
+    let stack = TuiStack::new().child(background).child(foreground);
+
+    let frame = render_to_frame(stack, TuiSize::new(5, 1));
+
+    assert_eq!(frame.buffer.to_lines(), vec!["A    "]);
+    assert_eq!(frame.buffer[(4, 0)].bg, Color::Reset);
+}
+#[test]
+fn reset_background_opacity_propagates_through_nested_stacks() {
+    let background = TuiText::new("stars").finish();
+    let foreground = TuiStack::new().child(
+        TuiContainer::new(
+            TuiConstrainedBox::new(TuiText::new("A").finish())
+                .with_min_cols(5)
+                .with_max_cols(5)
+                .finish(),
+        )
+        .with_background(Color::Reset)
+        .finish(),
+    );
+    let stack = TuiStack::new().child(background).child(foreground.finish());
+
+    let frame = render_to_frame(stack, TuiSize::new(5, 1));
+
+    assert_eq!(frame.buffer.to_lines(), vec!["A    "]);
+    assert_eq!(frame.buffer[(4, 0)].bg, Color::Reset);
 }
 
 #[test]

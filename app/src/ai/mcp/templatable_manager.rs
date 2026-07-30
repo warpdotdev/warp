@@ -17,6 +17,8 @@ use mcp::oauth;
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 use parking_lot::Mutex;
+#[cfg(not(target_family = "wasm"))]
+use simple_logger::SimpleLogger;
 use uuid::Uuid;
 #[cfg(not(target_family = "wasm"))]
 use warpui::ModelSpawner;
@@ -99,6 +101,15 @@ pub struct TemplatableMCPServerManager {
     /// spawned, so the field would be dead code there.
     #[cfg(not(target_family = "wasm"))]
     builtin_server_token: Option<String>,
+    /// Log-file handles for spawned server instances, keyed by installation
+    /// UUID. `LogManager` reserves one log path per template UUID and rejects
+    /// re-registration while an unclosed logger holds it, so shutdown paths
+    /// close the outgoing instance's logger eagerly instead of waiting for
+    /// async teardown to drop the remaining clones. Without this, an
+    /// immediate respawn (e.g. the built-in Factory MCP picking up a rotated
+    /// token) loses the race and fails to spawn.
+    #[cfg(not(target_family = "wasm"))]
+    server_loggers: HashMap<Uuid, SimpleLogger>,
 }
 
 /// Information about a spawned server task.
@@ -242,6 +253,14 @@ impl TemplatableMCPServerManager {
         }
         self.get_template_uuid(installation_uuid)
             .is_some_and(|uuid| self.server_credentials.contains_key(&uuid))
+    }
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+    pub fn can_log_out(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
+        self.has_credentials(installation_uuid, app)
+            || self
+                .active_servers
+                .get(&installation_uuid)
+                .is_some_and(TemplatableMCPServerInfo::is_authenticated_transport)
     }
 
     /// Returns the JSON Schema `input_schema` for a named tool across active MCP servers.

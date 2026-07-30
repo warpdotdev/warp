@@ -130,12 +130,13 @@ pub use crate::ai::harness_availability::{
 };
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::ai::orchestration::{
-    AuthSecretSelection, CloudAgentStartupBlocker, CloudAgentStartupFailure,
-    CloudAgentStartupIssue, ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
-    OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus,
-    OrchestrationConfigState, OrchestrationEditState, PrepareRemoteChildLaunchError,
-    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, accept_disabled_reason_with_auth,
-    api_key_snapshot, auth_secret_selection_required, classify_cloud_agent_startup_error,
+    AuthSecretSelection, CloudAgentStartupAuthFlow, CloudAgentStartupBlocker,
+    CloudAgentStartupFailure, CloudAgentStartupIssue, CloudAgentStartupPresentation,
+    ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST, OptionBadge, OptionFooter,
+    OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
+    OrchestrationEditState, PrepareRemoteChildLaunchError, PreparedRemoteChildLaunch,
+    RemoteChildLaunchConfig, accept_disabled_reason_with_auth, api_key_snapshot,
+    auth_secret_selection_required, classify_cloud_agent_startup_error,
     empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
     harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_model_snapshot,
     oz_run_url, persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
@@ -156,7 +157,9 @@ pub use crate::code::DiffResult;
 pub use crate::code_review::git_repo_model::{
     GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
 };
+pub use crate::code_review::github_repo_model::GitHubRepoModel;
 pub use crate::completer::SessionContext;
+pub use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub use crate::persistence::PersistenceWriter;
 pub use crate::prefix::longest_common_prefix;
 pub use crate::search::slash_command_menu::static_commands::commands::{
@@ -241,6 +244,7 @@ pub use crate::tui_test_support::{
     blocklist_ai_history_model_with_queries, queue_tui_permission_action,
     register_tui_input_mode_test_settings, register_tui_session_view_test_singletons,
 };
+pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{
     MAX_IMAGE_COUNT_FOR_QUERY, MAX_IMAGE_SIZE_BYTES, MIME_SNIFF_BYTES, ProcessImageResult,
     infer_mime_type, is_supported_image_mime_type, process_image_for_agent,

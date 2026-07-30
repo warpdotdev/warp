@@ -231,12 +231,7 @@ impl TerminalView {
         // Prefer loaded conversation data when available.
         history_model
             .conversation(&conversation_id)
-            .and_then(|conversation| {
-                conversation
-                    .server_conversation_token()
-                    .or_else(|| conversation.forked_from_server_conversation_token())
-                    .cloned()
-            })
+            .and_then(|conversation| conversation.debugging_server_conversation_token().cloned())
             .or_else(|| {
                 // Restored entries may only have server metadata loaded.
                 history_model
@@ -296,11 +291,7 @@ impl TerminalView {
     ) -> Vec<(String, ContextMenuAction)> {
         let conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&ai_conversation_id)
-            .and_then(|convo| {
-                convo
-                    .server_conversation_token()
-                    .or_else(|| convo.forked_from_server_conversation_token())
-            });
+            .and_then(|conversation| conversation.debugging_server_conversation_token());
 
         let Some(conversation_token) = conversation_token else {
             return Vec::new();
