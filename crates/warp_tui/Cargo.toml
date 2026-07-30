@@ -70,7 +70,13 @@ unicode-segmentation.workspace = true
 unicode-width.workspace = true
 vec1.workspace = true
 vim.workspace = true
-warp = { workspace = true, features = ["image_as_context", "tui", "voice_input"] }
+warp = { workspace = true, features = [
+  "image_as_context",
+  "nld_classifier_v3",
+  "nld_heuristic_v2",
+  "tui",
+  "voice_input",
+] }
 warp_channel_config.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
