@@ -51,8 +51,12 @@ pub const SUPPORTED_EDITORS: &[Editor] = &[
     Editor::DataSpell,
     Editor::DataGrip,
     Editor::AndroidStudio,
-    #[cfg(any(target_os = "macos", windows))]
-    // Cursor *can* run on linux, but does not have a .desktop file
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd",
+        windows
+    ))]
     Editor::Cursor,
     Editor::Windsurf,
 ];

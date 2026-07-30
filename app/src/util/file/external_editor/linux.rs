@@ -473,6 +473,7 @@ impl Editor {
             VSCode => Some(&["code"]),
             VSCodeInsiders => Some(&["code-insiders"]),
             WebStorm => Some(&["webstorm", "jetbrains-webstorm"]),
+            Cursor => Some(&["cursor", "cursor-url-handler"]),
             Windsurf => Some(&["windsurf"]),
             Zed => Some(&["dev.zed.Zed"]),
             ZedPreview => Some(&["dev.zed.Zed-Preview"]), // both Zed stable and preview use the same binary on Linux
@@ -504,6 +505,15 @@ impl Editor {
                 };
 
                 std::path::Path::new(&binary_path).exists()
+            }
+            // Cursor on Linux is often installed without a .desktop file; fall back to
+            // checking for the CLI binary on PATH.
+            Cursor => {
+                self.installed_editors().contains_key(self)
+                    || std::process::Command::new("sh")
+                        .args(["-c", "command -v cursor >/dev/null 2>&1"])
+                        .status()
+                        .is_ok_and(|status| status.success())
             }
             // For all other editors, just check the desktop file
             _ => self.installed_editors().contains_key(self),
@@ -540,6 +550,15 @@ impl Editor {
                     "vscode-insiders://file{}{suffix}",
                     file_path.display()
                 ));
+                Some(command)
+            }
+            Cursor => {
+                let mut file_arg = file_path.display().to_string();
+                if let Some(line_column_number) = line_column_number {
+                    file_arg.push_str(&line_column_number.to_string_suffix());
+                }
+                let mut command = Command::new("cursor");
+                command.arg(file_arg);
                 Some(command)
             }
             Windsurf => {
