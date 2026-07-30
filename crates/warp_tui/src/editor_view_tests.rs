@@ -6,10 +6,10 @@ use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityIdMap};
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
-    TuiRect, TuiScreenPosition, TuiSize,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, TuiText,
 };
-use warpui_core::keymap::Trigger;
+use warpui_core::keymap::{Keystroke, Trigger};
 use warpui_core::{App, TuiView as _, TypedActionView as _};
 
 use super::{TuiEditorView, TuiEditorViewAction};
@@ -619,6 +619,88 @@ fn shared_editor_registers_additive_cmd_bindings() {
             assert!(
                 triggers_for(&format!("tui:{target}:undo")).contains("ctrl-z"),
                 "the existing undo binding must remain registered"
+            );
+        }
+    });
+}
+
+#[test]
+fn cmd_bindings_dispatch_expected_editor_commands() {
+    struct CommandRecorder {
+        commands: Vec<TuiEditorCommand>,
+    }
+
+    impl warpui_core::Entity for CommandRecorder {
+        type Event = ();
+    }
+
+    impl warpui_core::TuiView for CommandRecorder {
+        fn ui_name() -> &'static str {
+            TuiEditorView::ui_name()
+        }
+
+        fn render(&self, _app: &warpui_core::AppContext) -> Box<dyn TuiElement> {
+            Box::new(TuiText::new(""))
+        }
+    }
+
+    impl warpui_core::TypedActionView for CommandRecorder {
+        type Action = TuiEditorViewAction;
+
+        fn handle_action(
+            &mut self,
+            action: &Self::Action,
+            _ctx: &mut warpui_core::ViewContext<Self>,
+        ) {
+            if let TuiEditorViewAction::Command(command) = action {
+                self.commands.push(*command);
+            }
+        }
+    }
+
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let (window_id, recorder) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| CommandRecorder {
+                    commands: Vec::new(),
+                },
+            )
+        });
+
+        for (key, expected) in [
+            ("cmd-a", TuiEditorCommand::SelectAll),
+            ("cmd-c", TuiEditorCommand::Copy),
+            ("cmd-v", TuiEditorCommand::Paste),
+            ("cmd-x", TuiEditorCommand::Cut),
+            ("cmd-z", TuiEditorCommand::Undo),
+            ("cmd-shift-Z", TuiEditorCommand::Redo),
+        ] {
+            let handled = app
+                .dispatch_keystroke(
+                    window_id,
+                    &[recorder.id()],
+                    &Keystroke::parse(key).expect("valid cmd editor binding"),
+                    false,
+                )
+                .expect("keystroke dispatch succeeds");
+            assert!(handled, "{key} must dispatch an editor command");
+
+            let actual = recorder.read(&app, |recorder, _| {
+                recorder
+                    .commands
+                    .last()
+                    .copied()
+                    .expect("the binding dispatches a command")
+            });
+            assert_eq!(
+                std::mem::discriminant(&actual),
+                std::mem::discriminant(&expected),
+                "{key} dispatched {actual:?}, expected {expected:?}"
             );
         }
     });
