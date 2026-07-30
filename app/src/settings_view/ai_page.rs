@@ -2904,7 +2904,6 @@ impl AISettingsPageView {
                     widgets.push(Box::new(MCPServersWidget::default()));
                 }
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.push(Box::new(KnowledgeHeaderWidget));
                     widgets.extend(Self::knowledge_widgets());
                 }
                 if cfg!(feature = "voice_input")
@@ -7092,38 +7091,6 @@ impl SettingsWidget for MCPServersWidget {
             column = column.with_child(toggle);
         }
         column.finish()
-    }
-}
-
-struct KnowledgeHeaderWidget;
-
-impl SettingsWidget for KnowledgeHeaderWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "fact memory memories rules conventions"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled()
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        build_sub_header(
-            appearance,
-            "Knowledge",
-            Some(styles::header_font_color(
-                AISettings::as_ref(app).is_any_ai_enabled(app),
-                app,
-            )),
-        )
-        .with_margin_bottom(HEADER_PADDING)
-        .finish()
     }
 }
 
