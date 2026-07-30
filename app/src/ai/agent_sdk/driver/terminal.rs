@@ -20,6 +20,7 @@ use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
 
 use super::AgentDriverError;
+use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::pane_group::NewTerminalOptions;
@@ -163,11 +164,14 @@ pub(crate) struct TerminalDriver {
     /// [`AgentDriverError::SetupCommandExitedShell`].
     shell_exited: bool,
 
-    /// The most recently submitted command, used to attribute a shell exit
-    /// to the command that caused it. When the shell dies mid-command, the
-    /// exit path force-finishes the command's block (with exit code 0)
-    /// before `Event::Exited` is delivered, so at exit time this — not any
-    /// still-pending command — names the culprit.
+    /// The most recently submitted command (secret-redacted), used to
+    /// attribute a shell exit to the command that caused it. When the shell
+    /// dies mid-command, the exit path force-finishes the command's block
+    /// (with exit code 0) before `Event::Exited` is delivered, so at exit
+    /// time this — not any still-pending command — names the culprit.
+    ///
+    /// Stored redacted because it flows into error reports (server task
+    /// status, Sentry) via [`AgentDriverError::SetupCommandExitedShell`].
     last_command: Option<String>,
 }
 
@@ -523,7 +527,12 @@ impl TerminalDriver {
         }
 
         let command_string = command.to_string();
-        self.last_command = Some(command_string.clone());
+        // Store a secret-redacted copy for shell-exit attribution: the text
+        // flows into error reports (server task status, Sentry) if the shell
+        // dies, so never retain the raw command here.
+        let mut redacted_command = command_string.clone();
+        redact_secrets(&mut redacted_command);
+        self.last_command = Some(redacted_command);
         self.terminal_view.update(ctx, |terminal, ctx| {
             self.waiting_command = Some(exit_tx);
             self.pending_command_start = Some((command_string, start_tx));

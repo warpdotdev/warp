@@ -528,8 +528,8 @@ pub enum AgentDriverError {
     ConversationBlocked { blocked_action: String },
     /// The shell process exited while an environment setup command was
     /// running (e.g. the command ran `exit`), so the run cannot continue.
-    /// `command` is the command that was in flight (or most recently
-    /// submitted) when the shell died.
+    /// `command` is the (secret-redacted) command that was in flight (or
+    /// most recently submitted) when the shell died.
     #[error(
         "The shell exited during setup command `{command}`, so the run could not continue. \
          Check the setup commands for this environment."
