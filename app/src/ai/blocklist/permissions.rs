@@ -895,8 +895,25 @@ impl BlocklistAIPermissions {
             .map(|command| command_for_execution_predicates(command, escape_char))
             .collect::<Vec<_>>();
 
-        // The denylist takes precedence over all other conditions.
-        let denylist = self.get_execute_commands_denylist(ctx, terminal_view_id);
+        // Local auto-approve may bypass the user-configured denylist, but workspace policy must
+        // always be evaluated. Sandboxed processes use a separate organization-managed denylist
+        // that cannot be bypassed.
+        let auto_approve_enabled = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(conversation_id)
+            .is_some_and(|convo| convo.autoexecute_any_action());
+        let bypass_user_denylist = auto_approve_enabled
+            && !AppExecutionMode::as_ref(ctx).is_sandboxed()
+            && *AISettings::as_ref(ctx).auto_approve_bypasses_command_denylist;
+
+        // The denylist takes precedence over the remaining conditions.
+        let denylist = if bypass_user_denylist {
+            // Auto-approve may bypass the user denylist, but the organization denylist
+            // must always be enforced.
+            Self::get_org_execute_commands_denylist(ctx)
+        } else {
+            // Without the bypass, enforce both the organization and user denylists.
+            self.get_execute_commands_denylist(ctx, terminal_view_id)
+        };
         if commands_for_denylist
             .iter()
             .any(|c| denylist.iter().any(|d| d.matches(c)))
@@ -906,10 +923,7 @@ impl BlocklistAIPermissions {
             );
         }
 
-        if BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(conversation_id)
-            .is_some_and(|convo| convo.autoexecute_any_action())
-        {
+        if auto_approve_enabled {
             return CommandExecutionPermission::Allowed(
                 CommandExecutionPermissionAllowedReason::RunToCompletion,
             );

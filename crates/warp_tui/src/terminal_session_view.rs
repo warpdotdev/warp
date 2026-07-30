@@ -8,26 +8,25 @@ use std::time::Duration;
 
 use ai::LLMProvider;
 use async_channel::Sender;
-use chrono::{Local, NaiveDateTime};
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{
-    AISettings, AISettingsChangedEvent, AppEditorSettings, TuiStatuslineConfig, TuiStatuslineItem,
-    TuiTheme, TuiThemeSettings, TuiVoiceSettings,
+    AISettings, AISettingsChangedEvent, AppEditorSettings, TuiStatuslineConfig, TuiTheme,
+    TuiThemeSettings, TuiVoiceSettings,
 };
 use warp::tui_export::{
     AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentExchangeId,
-    AIAgentPtyWriteMode, AIConversation, AIConversationId, AcceptSlashCommandOrSavedPrompt,
-    ActiveSession, ActiveSessionEvent, AgentConversationEntryId, AgentConversationListEntryState,
-    AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin, Appearance, BlockId,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
-    CLISubagentEvent, CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel,
-    ChangelogRequestType, CloudConversationData, CommandExecutionSource, ConversationFileExport,
-    ConversationSelection, ConversationSelectionHandle, ConversationUsageTotals,
-    ExecuteCommandEvent, GetRelevantFilesController, GitRepoModels, GitRepoStatusModel,
-    GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent,
+    AIAgentPtyWriteMode, AIConversation, AIConversationAutoexecuteMode, AIConversationId,
+    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AgentConversationEntryId,
+    AgentConversationListEntryState, AgentConversationsModel, AgentInteractionMetadata,
+    AgentViewEntryOrigin, Appearance, BlockId, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController, CLISubagentEvent,
+    CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
+    CloudConversationData, CommandExecutionSource, ConversationFileExport, ConversationSelection,
+    ConversationSelectionHandle, ExecuteCommandEvent, GetRelevantFilesController, GitHubRepoModel,
+    GitRepoStatusModel, LLMId, LLMPreferences, LLMPreferencesEvent,
     LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData, ModelEvent,
     ParsedSlashCommandInput, PersistenceWriter, PtyIntent, PtyIntentEvent, QueuedQueryEvent,
     QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
@@ -54,9 +53,9 @@ use warpui::event::KeyState;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiDispatchEventResult, TuiElement,
-    TuiEventHandler, TuiFlex, TuiHoverable, TuiSelectionHandle, TuiSize, TuiStyle, TuiText,
-    TuiViewportedListState,
+    Modifier, TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiDispatchEventResult,
+    TuiElement, TuiEventHandler, TuiFlex, TuiHoverable, TuiSelectionHandle, TuiSize, TuiStyle,
+    TuiText, TuiViewportedListState,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
@@ -93,6 +92,7 @@ use crate::keybindings::{
     KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG, PLAN_TOGGLE_AVAILABLE_FLAG, PLAN_TOGGLE_BINDING_NAME,
     TUI_BINDING_GROUP, binding_hint,
 };
+use crate::link::TuiLink;
 use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::model_menu::{TuiModelMenuEvent, TuiModelMenuModel};
 use crate::orchestration_block::TuiOrchestrationBlock;
@@ -120,15 +120,12 @@ use crate::terminal_use::{
     terminal_use_conversation_to_resume, terminal_use_interrupt_action, tui_input_target,
 };
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
-use crate::transient_hint::{TransientHint, TransientHintTone};
+use crate::transient_hint::TransientHint;
 use crate::tui_ask_question_view::TuiAskQuestionView;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::tui_permission_prompt::TuiPermissionPrompt;
-use crate::ui::{
-    abbreviate_home_prefix, compact_footer_path, conversation_restore_failed,
-    conversation_restoring,
-};
+use crate::ui::{abbreviate_home_prefix, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
 use crate::voice_input::{
     TuiVoiceInputEvent, TuiVoiceInputState, VoiceInputStartSource, configured_hold_key,
@@ -149,6 +146,7 @@ mod input_detection;
 mod shortcuts;
 pub(crate) mod state;
 mod status_menu;
+mod statusline;
 mod todo_menu;
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
@@ -162,7 +160,6 @@ const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_READ_ONLY_MENU_ROWS: u16 = 10;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const AUTO_APPROVE_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
-const STATUSLINE_DATETIME_REPAINT_INTERVAL: Duration = Duration::from_secs(60);
 const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
@@ -326,55 +323,13 @@ const VOICE_USAGE_HINT: &str = "Usage: /voice (no arguments)";
 const AUTO_APPROVE_ENABLED_HINT: &str = "Auto approve on";
 const AUTO_APPROVE_DISABLED_HINT: &str = "Auto approve off";
 const STATUSLINE_SAVED_HINT: &str = "Statusline configuration saved.";
+const STATUSLINE_RESET_HINT: &str = "Statusline reset to defaults.";
 const STATUSLINE_PERSISTENCE_FAILED_HINT: &str = "Could not save the statusline configuration.";
 const COST_NO_ACTIVE_CONVERSATION_HINT: &str =
     "Cannot show conversation cost: no active conversation";
 const COST_EMPTY_CONVERSATION_HINT: &str = "Cannot show conversation cost: conversation is empty";
 const COST_CONVERSATION_IN_PROGRESS_HINT: &str =
     "Cannot show conversation cost: conversation is in progress";
-
-struct FooterHint<'a> {
-    text: &'a str,
-    style: FooterHintStyle,
-}
-
-enum FooterHintStyle {
-    Muted,
-    Success,
-    Error,
-    VoiceInput,
-}
-
-impl<'a> FooterHint<'a> {
-    fn muted(text: &'a str) -> Self {
-        Self {
-            text,
-            style: FooterHintStyle::Muted,
-        }
-    }
-
-    fn voice_input(text: &'a str) -> Self {
-        Self {
-            text,
-            style: FooterHintStyle::VoiceInput,
-        }
-    }
-
-    fn render(self, builder: &TuiUiBuilder) -> TuiFlex {
-        let style = match self.style {
-            FooterHintStyle::Muted => builder.muted_text_style(),
-            FooterHintStyle::Success => builder.success_glyph_style(),
-            FooterHintStyle::Error => builder.error_text_style(),
-            FooterHintStyle::VoiceInput => builder.voice_input_status_style(),
-        };
-        TuiFlex::row().child(
-            TuiText::new(self.text)
-                .with_style(style)
-                .truncate()
-                .finish(),
-        )
-    }
-}
 
 fn log_bundle_success_message(path: &Path) -> String {
     format!("Log bundle saved to {}", path.display())
@@ -429,34 +384,6 @@ fn provider_api_key_shell_command(
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
     (!input.trim().is_empty()).then_some(input)
 }
-fn format_context_window_usage(usage: f32) -> String {
-    format!("{:.0}% context used", usage * 100.0)
-}
-fn format_statusline_date(now: NaiveDateTime) -> String {
-    now.format("%B %-d, %Y").to_string()
-}
-fn format_statusline_time_12_hour(now: NaiveDateTime) -> String {
-    now.format("%-I:%M%P").to_string()
-}
-fn format_statusline_time_24_hour(now: NaiveDateTime) -> String {
-    now.format("%H:%M").to_string()
-}
-fn render_statusline_datetime(
-    formatter: fn(NaiveDateTime) -> String,
-    style: TuiStyle,
-) -> Box<dyn TuiElement> {
-    TuiAnimated::new(STATUSLINE_DATETIME_REPAINT_INTERVAL, move || {
-        TuiText::new(formatter(Local::now().naive_local()))
-            .with_style(style)
-            .truncate()
-            .finish()
-    })
-    .finish()
-}
-fn format_todo_progress(completed: usize, total: usize, finished: bool) -> String {
-    let marker = if finished { "✓" } else { "❒" };
-    format!("{marker} {completed}/{total}")
-}
 fn cost_command_unavailable_hint(
     selected_conversation: Option<(bool, bool)>,
 ) -> Option<&'static str> {
@@ -495,167 +422,42 @@ fn bordered_input(
         .finish()
 }
 
-/// One resolved item in the footer's configured presentation order.
-enum FooterSegment {
-    ShellMode,
-    ActiveIndicator(&'static str),
-    /// Vim mode indicator (NOR/INS/VIS/V-L/REP), driven by the VimModeIndicator statusline item.
-    VimIndicator(&'static str),
-    Model(Box<dyn TuiElement>),
-    WorkingDirectory(String),
-    GitBranch(String),
-    CreditUsage(Box<dyn TuiElement>),
-    ContextWindowUsage(String),
-    GitDiff {
-        additions: usize,
-        deletions: usize,
-    },
-    GitBranchStatus(String),
-    DateTime(Box<dyn TuiElement>),
-    AgentTodoList(Box<dyn TuiElement>),
-    VoiceInput(Box<dyn TuiElement>),
-}
-
-impl FooterSegment {
-    fn separator_to(&self, next: &Self) -> &'static str {
-        match (self, next) {
-            // VimIndicator takes the same position as Model; WorkingDirectory follows with a space.
-            (
-                Self::ShellMode | Self::Model(_) | Self::VimIndicator(_),
-                Self::WorkingDirectory(_),
-            ) => " ",
-            (Self::WorkingDirectory(_), Self::GitBranch(_)) => " ⊢ ",
-            (Self::ActiveIndicator(_), Self::ActiveIndicator(_)) => " • ",
-            (
-                Self::WorkingDirectory(_) | Self::GitBranch(_),
-                Self::WorkingDirectory(_) | Self::GitBranch(_),
-            )
-            | (Self::DateTime(_), Self::DateTime(_))
-            | (Self::ShellMode, _)
-            | (_, Self::ShellMode) => " • ",
-            (
-                Self::ActiveIndicator(_)
-                | Self::VimIndicator(_)
-                | Self::Model(_)
-                | Self::WorkingDirectory(_)
-                | Self::GitBranch(_)
-                | Self::CreditUsage(_)
-                | Self::ContextWindowUsage(_)
-                | Self::GitDiff { .. }
-                | Self::GitBranchStatus(_)
-                | Self::DateTime(_)
-                | Self::AgentTodoList(_)
-                | Self::VoiceInput(_),
-                Self::ActiveIndicator(_)
-                | Self::VimIndicator(_)
-                | Self::Model(_)
-                | Self::WorkingDirectory(_)
-                | Self::GitBranch(_)
-                | Self::CreditUsage(_)
-                | Self::ContextWindowUsage(_)
-                | Self::GitDiff { .. }
-                | Self::GitBranchStatus(_)
-                | Self::DateTime(_)
-                | Self::AgentTodoList(_)
-                | Self::VoiceInput(_),
-            ) => " | ",
-        }
+fn mcp_primary_action_hint(action: TuiMcpAction) -> Option<&'static str> {
+    match action {
+        TuiMcpAction::Start(_) => Some("to start"),
+        TuiMcpAction::Stop(_) => Some("to stop"),
+        TuiMcpAction::Retry(_) => Some("to retry"),
+        TuiMcpAction::ReopenAuthorization(_) => Some("to authenticate"),
+        TuiMcpAction::LogOut(_) | TuiMcpAction::ReloadConfig => None,
     }
 }
 
-/// Resolved segments for the footer's left-aligned status row.
-struct FooterSegments {
-    ordered: Vec<FooterSegment>,
-}
-/// Builds the status row from resolved segments. Working directory follows a
-/// leading shell-mode or model label with a plain space; an immediately
-/// following branch uses ` ⊢ ` as the relationship marker. Items in
-/// different Figma groups use ` | `; other adjacent pairs use ` • `. The first
-/// item never receives a separator.
-fn render_status_footer_row(segments: FooterSegments, builder: &TuiUiBuilder) -> TuiFlex {
-    let muted = builder.muted_text_style();
-    let mut row = TuiFlex::row();
-    let mut segments = segments.ordered.into_iter().peekable();
-    while let Some(segment) = segments.next() {
-        let separator = segments.peek().map(|next| segment.separator_to(next));
-        match segment {
-            FooterSegment::ShellMode => {
-                row = row.child(
-                    TuiText::new(SHELL_MODE_HINT)
-                        .with_style(builder.shell_command_accent_style())
-                        .truncate()
-                        .finish(),
-                );
-            }
-            FooterSegment::VimIndicator(label) => {
-                // Vim mode indicator rendered with the accent border style.
-                row = row.child(
-                    TuiText::new(label)
-                        .with_style(builder.accent_border_style())
-                        .truncate()
-                        .finish(),
-                );
-            }
-            FooterSegment::ActiveIndicator(label) => {
-                row = row.child(
-                    TuiText::new(label)
-                        .with_style(builder.success_glyph_style())
-                        .truncate()
-                        .finish(),
-                );
-            }
-            FooterSegment::Model(element)
-            | FooterSegment::CreditUsage(element)
-            | FooterSegment::DateTime(element)
-            | FooterSegment::AgentTodoList(element)
-            | FooterSegment::VoiceInput(element) => {
-                row = row.child(element);
-            }
-            FooterSegment::WorkingDirectory(cwd) | FooterSegment::GitBranch(cwd) => {
-                row = row.child(TuiText::new(cwd).with_style(muted).truncate().finish());
-            }
-            FooterSegment::ContextWindowUsage(usage) => {
-                row = row.child(TuiText::new(usage).with_style(muted).truncate().finish());
-            }
-            FooterSegment::GitBranchStatus(value) => {
-                row = row.child(TuiText::new(value).with_style(muted).truncate().finish());
-            }
-            FooterSegment::GitDiff {
-                additions,
-                deletions,
-            } => {
-                if additions > 0 {
-                    row = row.child(
-                        TuiText::new(format!("+{additions}"))
-                            .with_style(builder.diff_added_style())
-                            .truncate()
-                            .finish(),
-                    );
-                }
-                if deletions > 0 {
-                    if additions > 0 {
-                        row = row.child(TuiText::new(" ").truncate().finish());
-                    }
-                    row = row.child(
-                        TuiText::new(format!("-{deletions}"))
-                            .with_style(builder.diff_removed_style())
-                            .truncate()
-                            .finish(),
-                    );
-                }
-            }
-        }
-        if let Some(separator) = separator {
-            row = row.child(
-                TuiText::new(separator)
-                    .with_style(muted)
-                    .truncate()
-                    .finish(),
-            );
-        }
+fn render_mcp_menu_footer(
+    builder: &TuiUiBuilder,
+    primary_action: Option<TuiMcpAction>,
+    can_log_out: bool,
+) -> TuiFlex {
+    let mut spans = Vec::new();
+    if let Some(hint) = primary_action.and_then(mcp_primary_action_hint) {
+        spans.extend([
+            ("Enter".to_owned(), builder.primary_text_style()),
+            (format!(" {hint}  "), builder.muted_text_style()),
+        ]);
     }
-
-    row
+    if can_log_out {
+        spans.extend([
+            ("Ctrl+R".to_owned(), builder.primary_text_style()),
+            (
+                " to log out & remove credentials  ".to_owned(),
+                builder.muted_text_style(),
+            ),
+        ]);
+    }
+    spans.extend([
+        ("Esc".to_owned(), builder.primary_text_style()),
+        (" to close".to_owned(), builder.muted_text_style()),
+    ]);
+    TuiFlex::row().child(TuiText::from_spans(spans).truncate().finish())
 }
 /// Entry point that requested conversation restoration.
 #[derive(Clone, Copy, Debug)]
@@ -761,6 +563,8 @@ pub(crate) enum TuiTerminalSessionAction {
     ToggleModelMenu,
     /// Toggle per-conversation auto approve.
     ToggleAutoApprove { show_feedback: bool },
+    /// Open a URL from an interactive statusline item.
+    OpenUrl(String),
     /// Raw user bytes to forward to the foreground PTY process.
     ForwardUserPtyBytes(Vec<u8>),
     /// Ctrl-d while the prompt is focused: exit the TUI immediately when the
@@ -833,6 +637,8 @@ pub(crate) struct TuiTerminalSessionView {
     current_repo_path: Option<LocalOrRemotePath>,
     /// Watcher-backed branch and uncommitted diff metadata for the footer.
     git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
+    /// GitHub metadata for the current repository, including current-branch PR info.
+    github_repo: Option<ModelHandle<GitHubRepoModel>>,
     /// This view's surface id, used to resolve the active model for the footer
     /// the same way the request path does.
     terminal_surface_id: EntityId,
@@ -853,6 +659,7 @@ pub(crate) struct TuiTerminalSessionView {
     todo_list_mouse: MouseStateHandle,
     /// Hover and click state for the configured Voice statusline control.
     voice_input_mouse: MouseStateHandle,
+    github_pr_link: TuiLink,
     keyboard_enhancement_supported: bool,
     ai_context_model: ModelHandle<BlocklistAIContextModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
@@ -873,7 +680,8 @@ pub(crate) struct TuiTerminalSessionView {
     transient_hint: TransientHint,
     auto_approve_feedback_conversation_id: Option<AIConversationId>,
     auto_approve_feedback_timer: Option<SpawnedFutureHandle>,
-    auto_approve_mouse: MouseStateHandle,
+    footer_auto_approve_mouse: MouseStateHandle,
+    warping_auto_approve_mouse: MouseStateHandle,
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
@@ -1474,6 +1282,7 @@ impl TuiTerminalSessionView {
         surface_init: TerminalSurfaceInit,
         exit_summary: TuiExitSummaryHandle,
         keyboard_enhancement_supported: bool,
+        default_autoexecute_mode: AIConversationAutoexecuteMode,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let TerminalSurfaceInit {
@@ -1510,6 +1319,7 @@ impl TuiTerminalSessionView {
             Box::new(TuiConversationSelection::new(
                 terminal_surface_id,
                 model_for_conversation_selection,
+                default_autoexecute_mode,
                 ctx,
             )) as Box<dyn ConversationSelection>
         });
@@ -1698,7 +1508,9 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_model(&skills_menu, |_, _, _: &TuiSkillMenuEvent, ctx| {
             ctx.notify();
         });
-        let mcp_menu = ctx.add_model(|ctx| TuiMcpMenuModel::new(suggestions_mode.clone(), ctx));
+        let mcp_menu = ctx.add_model(|ctx| {
+            TuiMcpMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
+        });
         ctx.subscribe_to_model(&mcp_menu, |_, _, event, ctx| {
             let TuiMcpMenuEvent::Updated = event;
             ctx.notify();
@@ -2033,6 +1845,9 @@ impl TuiTerminalSessionView {
             if matches!(event, AISettingsChangedEvent::AIAutoDetectionEnabled { .. }) {
                 view.schedule_input_detection(ctx);
             }
+            if matches!(event, AISettingsChangedEvent::TuiStatusline { .. }) {
+                view.update_github_status_subscription(ctx);
+            }
         });
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, event, ctx| {
             if matches!(
@@ -2156,6 +1971,7 @@ impl TuiTerminalSessionView {
             sessions,
             current_repo_path: None,
             git_repo_status: None,
+            github_repo: None,
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
             usage_toggle: UsageToggle::default(),
@@ -2163,6 +1979,7 @@ impl TuiTerminalSessionView {
             model_label_hover: MouseStateHandle::default(),
             todo_list_mouse: MouseStateHandle::default(),
             voice_input_mouse: MouseStateHandle::default(),
+            github_pr_link: TuiLink::default(),
             keyboard_enhancement_supported,
             ai_context_model: context_model,
             ai_input_model,
@@ -2174,7 +1991,8 @@ impl TuiTerminalSessionView {
             transient_hint: TransientHint::default(),
             auto_approve_feedback_conversation_id: None,
             auto_approve_feedback_timer: None,
-            auto_approve_mouse: MouseStateHandle::default(),
+            footer_auto_approve_mouse: MouseStateHandle::default(),
+            warping_auto_approve_mouse: MouseStateHandle::default(),
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
             exit_summary,
@@ -2240,6 +2058,54 @@ impl TuiTerminalSessionView {
         self.conversation_selection.update(ctx, |selection, ctx| {
             selection.select_existing_conversation(conversation_id, AgentViewEntryOrigin::Tui, ctx);
         });
+    }
+
+    /// Restores a child conversation's persisted transcript onto this fresh
+    /// background child surface.
+    ///
+    /// This mirrors the surface-restoration half of
+    /// [`Self::replace_conversation_surface`] but for a newly created child
+    /// session that has no previous conversation to clear. It reuses the shared
+    /// block-restoration plan, action-result restoration, history association,
+    /// and transcript restoration. It deliberately does **not** relaunch the
+    /// child, resend its prompt, or create a server task — the child keeps its
+    /// persisted status.
+    pub(crate) fn restore_orchestrated_child_conversation(
+        &mut self,
+        conversation: AIConversation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let conversation_id = conversation.id();
+        let restoration_plan = {
+            let mut terminal_model = self.terminal_model.lock();
+            prepare_conversation_block_restoration(&conversation, &mut terminal_model)
+        };
+
+        self.ai_action_model.update(ctx, |actions, _| {
+            actions.restore_action_results_from_exchanges(restoration_plan.exchanges().collect());
+        });
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.restore_conversations(self.terminal_surface_id, vec![conversation], ctx);
+        });
+
+        self.transcript.update(ctx, |transcript, ctx| {
+            transcript.restore_conversation(conversation_id, restoration_plan, ctx);
+        });
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.set_active_conversation_id(conversation_id, self.terminal_surface_id, ctx);
+        });
+
+        self.conversation_selection.update(ctx, |selection, ctx| {
+            selection.select_existing_conversation(
+                conversation_id,
+                AgentViewEntryOrigin::RestoreExistingConversation,
+                ctx,
+            );
+        });
+
+        ctx.notify();
     }
 
     /// Resolves live semantic orchestration state for this session.
@@ -2713,6 +2579,58 @@ impl TuiTerminalSessionView {
         self.replace_conversation_surface(*conversation, origin, ctx);
     }
 
+    /// Discards the retained child-agent sessions of a previously restored
+    /// parent tree before a different parent replaces it, without cancelling or
+    /// deleting the underlying local processes or cloud tasks.
+    fn discard_replaced_child_agent_sessions(
+        &self,
+        previous_parent_conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !ctx.has_singleton_model::<TuiOrchestrationModel>()
+            || !ctx.has_singleton_model::<TuiSessions>()
+        {
+            return;
+        }
+        let Some(root_session_id) =
+            TuiSessions::as_ref(ctx).session_id_for_surface(self.terminal_surface_id)
+        else {
+            return;
+        };
+        TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.discard_restored_descendant_sessions(
+                previous_parent_conversation_id,
+                root_session_id,
+                ctx,
+            );
+        });
+    }
+
+    /// Eagerly materializes retained TUI sessions for every supported,
+    /// locally-known descendant of the just-restored parent conversation, so
+    /// restored child agents appear in the orchestration tab bar. Both restore
+    /// entry points (startup `--resume` and the conversations menu) converge
+    /// here, so both restore the same descendant tree.
+    fn restore_child_agent_sessions(
+        &self,
+        parent_conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !ctx.has_singleton_model::<TuiOrchestrationModel>()
+            || !ctx.has_singleton_model::<TuiSessions>()
+        {
+            return;
+        }
+        let Some(root_session_id) =
+            TuiSessions::as_ref(ctx).session_id_for_surface(self.terminal_surface_id)
+        else {
+            return;
+        };
+        TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.restore_descendant_sessions(parent_conversation_id, root_session_id, ctx);
+        });
+    }
+
     /// Replaces the visible conversation and completes the restore state transition.
     fn replace_conversation_surface(
         &mut self,
@@ -2725,6 +2643,14 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .selected_conversation_id(ctx);
         if let Some(previous_conversation_id) = previous_conversation_id {
+            // When a different parent replaces the current tree, drop the prior
+            // tree's retained child-session projections first (idempotent for a
+            // re-restore of the same parent, which is left untouched here and
+            // deduplicated by `restore_descendant_sessions`).
+            if previous_conversation_id != conversation.id() {
+                self.discard_replaced_child_agent_sessions(previous_conversation_id, ctx);
+            }
+
             self.transcript.update(ctx, |transcript, ctx| {
                 transcript.clear_for_replacement(ctx);
             });
@@ -2772,6 +2698,11 @@ impl TuiTerminalSessionView {
                 ctx,
             );
         });
+
+        // Restore the parent's child-agent tree so restored children appear in
+        // the orchestration tab bar. The parent stays focused; children are
+        // materialized as background sessions.
+        self.restore_child_agent_sessions(conversation_id, ctx);
 
         self.conversation_restore_state = ConversationRestoreState::Idle;
         self.refresh_exit_summary(ctx);
@@ -3235,28 +3166,28 @@ impl TuiTerminalSessionView {
         &self,
         label: &'static str,
         elapsed: Duration,
-        conversation_id: AIConversationId,
         ctx: &AppContext,
     ) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(ctx);
         let is_hovered = self
-            .auto_approve_mouse
+            .warping_auto_approve_mouse
             .lock()
             .is_ok_and(|state| state.is_hovered());
-        let style = if is_hovered {
-            builder.primary_text_style()
-        } else if self.auto_approve_feedback_conversation_id == Some(conversation_id) {
-            builder.success_glyph_style()
-        } else {
-            builder.muted_text_style()
-        };
         let enabled = self
             .conversation_selection
             .as_ref(ctx)
             .pending_query_autoexecute_override(ctx)
             .is_autoexecute_any_action();
+        let mut style = if enabled {
+            builder.success_glyph_style()
+        } else {
+            builder.muted_text_style()
+        };
+        if is_hovered {
+            style = style.add_modifier(Modifier::BOLD);
+        }
         let auto_approve = TuiHoverable::new(
-            self.auto_approve_mouse.clone(),
+            self.warping_auto_approve_mouse.clone(),
             TuiText::new(format!(
                 "▶▶ Auto approve {}",
                 if enabled { "on" } else { "off" }
@@ -3272,362 +3203,6 @@ impl TuiTerminalSessionView {
         })
         .finish();
         render_warping_indicator_row(label, elapsed, auto_approve, ctx)
-    }
-
-    /// Selects the single message that replaces the normal footer, preserving
-    /// the priority order between competing session states.
-    fn footer_hint(
-        &self,
-        voice_statusline_visible: bool,
-        ctx: &AppContext,
-    ) -> Option<FooterHint<'_>> {
-        if self.exit_confirmation.is_armed() {
-            // When the kill-child window is armed, show the child-specific hint
-            // so the user knows the next ctrl-c will kill the child agent rather
-            // than exiting the whole TUI.
-            if self.child_kill_armed_conversation.is_some() {
-                return Some(FooterHint::muted(CTRL_C_KILL_CHILD_HINT));
-            }
-            return Some(FooterHint::muted(CTRL_C_EXIT_HINT));
-        }
-        if matches!(
-            &self.conversation_restore_state,
-            ConversationRestoreState::Loading {
-                origin: TuiConversationRestoreOrigin::ConversationList,
-                ..
-            }
-        ) {
-            return Some(FooterHint::muted(LOADING_CONVERSATION_HINT));
-        }
-        if let Some((text, tone)) = self.transient_hint.current() {
-            let style = match tone {
-                TransientHintTone::Muted => FooterHintStyle::Muted,
-                TransientHintTone::Success => FooterHintStyle::Success,
-                TransientHintTone::Error => FooterHintStyle::Error,
-            };
-            return Some(FooterHint { text, style });
-        }
-        if self
-            .session_state(ctx)
-            .is_ok_and(|state| state.agent_is_tagged_in())
-        {
-            return Some(FooterHint::muted(RUNNING_COMMAND_DETACH_HINT));
-        }
-        if voice_statusline_visible {
-            return None;
-        }
-        match self.input_view.as_ref(ctx).voice_state(ctx) {
-            TuiVoiceInputState::Listening => {
-                let hint = if self.input_view.as_ref(ctx).voice_hold_key(ctx).is_some() {
-                    "listening to voice input... · release key to stop"
-                } else {
-                    "listening to voice input... · esc or enter to stop"
-                };
-                return Some(FooterHint::voice_input(hint));
-            }
-            TuiVoiceInputState::Transcribing => {
-                return Some(FooterHint::voice_input("Transcribing... · esc to cancel"));
-            }
-            TuiVoiceInputState::Idle => {}
-        }
-        None
-    }
-
-    /// Builds the configured statusline under the input box. Normal mode uses
-    /// the persisted item order and visibility; shell mode always leads with
-    /// its mode label and resolves configured shell-relevant metadata. A
-    /// replacing hint — the ctrl-c exit confirmation while armed, the
-    /// conversation-list loading hint, an active transient notice, or the
-    /// interrupt hint for a manually attached running command — occupies the
-    /// whole row instead. An empty resolved configuration consumes no row.
-    fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
-        let builder = TuiUiBuilder::from_app(ctx);
-        let shell_mode = self.is_shell_mode(ctx);
-        let config = AISettings::as_ref(ctx).tui_statusline.normalized();
-        let voice_statusline_visible = config.is_enabled(TuiStatuslineItem::VoiceInput)
-            && self.voice_statusline_is_available(shell_mode, ctx);
-        if let Some(hint) = self.footer_hint(voice_statusline_visible, ctx) {
-            return hint.render(&builder);
-        }
-        let git_metadata = self.git_status_metadata(ctx);
-        let mut ordered = Vec::new();
-        if shell_mode {
-            ordered.push(FooterSegment::ShellMode);
-        }
-        for item in config.order.iter().copied() {
-            if !config.is_enabled(item) {
-                continue;
-            }
-            let segment = match item {
-                TuiStatuslineItem::AutoApprove => (!shell_mode
-                    && self
-                        .conversation_selection
-                        .as_ref(ctx)
-                        .pending_query_autoexecute_override(ctx)
-                        .is_autoexecute_any_action())
-                .then_some(FooterSegment::ActiveIndicator("Auto-approve")),
-                TuiStatuslineItem::AutoQueue => (!shell_mode && self.is_auto_queue_enabled(ctx))
-                    .then_some(FooterSegment::ActiveIndicator("Auto-queue")),
-                TuiStatuslineItem::VimModeIndicator => {
-                    // Show the vim mode label (NOR/INS/VIS/V-L/REP) when vim is enabled;
-                    // hidden when vim mode is disabled (vim_mode_indicator returns None).
-                    self.vim_mode_indicator(ctx)
-                        .map(FooterSegment::VimIndicator)
-                }
-                TuiStatuslineItem::Model => {
-                    // The model label is suppressed in shell mode (the
-                    // shell-mode badge is already shown at the start of the
-                    // footer row).
-                    (!shell_mode).then(|| {
-                        let model_name = LLMPreferences::as_ref(ctx)
-                            .get_active_base_model(ctx, Some(self.terminal_surface_id))
-                            .display_name
-                            .clone();
-                        let model_label_hovered = self
-                            .model_label_hover
-                            .lock()
-                            .is_ok_and(|state| state.is_hovered());
-                        let model_label_style = if model_label_hovered {
-                            builder.primary_text_style()
-                        } else {
-                            builder.muted_text_style()
-                        };
-                        FooterSegment::Model(
-                            TuiHoverable::new(
-                                self.model_label_hover.clone(),
-                                TuiText::new(model_name)
-                                    .with_style(model_label_style)
-                                    .truncate()
-                                    .finish(),
-                            )
-                            .on_click(|event_ctx, _| {
-                                event_ctx.dispatch_typed_action(
-                                    TuiTerminalSessionAction::ToggleModelMenu,
-                                );
-                            })
-                            .finish(),
-                        )
-                    })
-                }
-                TuiStatuslineItem::WorkingDirectory => self
-                    .current_working_directory(ctx)
-                    .map(|cwd| FooterSegment::WorkingDirectory(compact_footer_path(&cwd))),
-                TuiStatuslineItem::GitBranch => git_metadata
-                    .map(|metadata| FooterSegment::GitBranch(metadata.current_branch_name.clone())),
-                TuiStatuslineItem::GitBranchStatus => git_metadata.and_then(|metadata| {
-                    metadata
-                        .branch_tracking_status
-                        .status_text()
-                        .map(FooterSegment::GitBranchStatus)
-                }),
-                TuiStatuslineItem::GitDiffStatus => git_metadata.and_then(|metadata| {
-                    let stats = metadata.stats_against_head;
-                    (stats.total_additions > 0 || stats.total_deletions > 0).then_some(
-                        FooterSegment::GitDiff {
-                            additions: stats.total_additions,
-                            deletions: stats.total_deletions,
-                        },
-                    )
-                }),
-                TuiStatuslineItem::CreditUsage => (!shell_mode)
-                    .then(|| self.selected_conversation_usage_totals(ctx))
-                    .flatten()
-                    .map(|totals| {
-                        let mode = AISettings::as_ref(ctx).usage_display_mode;
-                        FooterSegment::CreditUsage(self.usage_toggle.render_entry(
-                            mode,
-                            totals,
-                            ctx,
-                            |event_ctx, _| {
-                                event_ctx.dispatch_typed_action(
-                                    TuiTerminalSessionAction::ToggleUsageDisplay,
-                                );
-                            },
-                        ))
-                    }),
-                TuiStatuslineItem::ContextWindowUsage => (!shell_mode)
-                    .then(|| {
-                        self.conversation_selection
-                            .as_ref(ctx)
-                            .selected_conversation(ctx)
-                    })
-                    .flatten()
-                    .map(|conversation| {
-                        FooterSegment::ContextWindowUsage(format_context_window_usage(
-                            conversation.context_window_usage(),
-                        ))
-                    }),
-                TuiStatuslineItem::Date => Some(FooterSegment::DateTime(
-                    render_statusline_datetime(format_statusline_date, builder.muted_text_style()),
-                )),
-                TuiStatuslineItem::Time12Hour => {
-                    Some(FooterSegment::DateTime(render_statusline_datetime(
-                        format_statusline_time_12_hour,
-                        builder.muted_text_style(),
-                    )))
-                }
-                TuiStatuslineItem::Time24Hour => {
-                    Some(FooterSegment::DateTime(render_statusline_datetime(
-                        format_statusline_time_24_hour,
-                        builder.muted_text_style(),
-                    )))
-                }
-                TuiStatuslineItem::AgentTodoList => (!shell_mode)
-                    .then(|| {
-                        self.conversation_selection
-                            .as_ref(ctx)
-                            .selected_conversation(ctx)
-                    })
-                    .flatten()
-                    .and_then(|conversation| conversation.active_todo_list())
-                    .filter(|todo_list| !todo_list.is_empty())
-                    .map(|todo_list| {
-                        let hovered = self
-                            .todo_list_mouse
-                            .lock()
-                            .is_ok_and(|state| state.is_hovered());
-                        let style = if hovered {
-                            builder.primary_text_style()
-                        } else {
-                            builder.muted_text_style()
-                        };
-                        let progress = format_todo_progress(
-                            todo_list.completed_items().len(),
-                            todo_list.len(),
-                            todo_list.is_finished(),
-                        );
-                        FooterSegment::AgentTodoList(
-                            TuiHoverable::new(
-                                self.todo_list_mouse.clone(),
-                                TuiText::new(progress).with_style(style).truncate().finish(),
-                            )
-                            .on_click(|event_ctx, _| {
-                                event_ctx.dispatch_typed_action(
-                                    TuiTerminalSessionAction::ToggleTodoMenu,
-                                );
-                            })
-                            .finish(),
-                        )
-                    }),
-                TuiStatuslineItem::VoiceInput => voice_statusline_visible.then(|| {
-                    FooterSegment::VoiceInput(self.render_voice_statusline(&builder, ctx))
-                }),
-            };
-            if let Some(segment) = segment {
-                ordered.push(segment);
-            }
-        }
-        render_status_footer_row(FooterSegments { ordered }, &builder)
-    }
-
-    /// Returns a brief vim mode label for the footer when vim mode is enabled,
-    /// or `None` when vim mode is disabled.
-    fn vim_mode_indicator(&self, ctx: &AppContext) -> Option<&'static str> {
-        use vim::vim::{MotionType, VimMode};
-        let mode = self.input_view.as_ref(ctx).vim_mode(ctx)?;
-        match mode {
-            VimMode::Normal => Some("NOR"),
-            VimMode::Visual(MotionType::Charwise) => Some("VIS"),
-            VimMode::Visual(MotionType::Linewise) => Some("V-L"),
-            VimMode::Replace => Some("REP"),
-            // Insert mode is shown with a label, matching the GUI vim status indicator.
-            VimMode::Insert => Some("INS"),
-        }
-    }
-
-    fn voice_statusline_is_available(&self, shell_mode: bool, ctx: &AppContext) -> bool {
-        !shell_mode && AISettings::as_ref(ctx).is_voice_input_enabled(ctx)
-    }
-
-    fn render_voice_statusline(
-        &self,
-        builder: &TuiUiBuilder,
-        ctx: &AppContext,
-    ) -> Box<dyn TuiElement> {
-        let state = self.input_view.as_ref(ctx).voice_state(ctx);
-        let hovered = self
-            .voice_input_mouse
-            .lock()
-            .is_ok_and(|state| state.is_hovered());
-        let (label, style) = match state {
-            TuiVoiceInputState::Idle => (
-                "Voice",
-                if hovered {
-                    builder.primary_text_style()
-                } else {
-                    builder.muted_text_style()
-                },
-            ),
-            TuiVoiceInputState::Listening => ("■ Listening", builder.error_text_style()),
-            TuiVoiceInputState::Transcribing => {
-                return TuiText::new("… Transcribing")
-                    .with_style(builder.voice_input_status_style())
-                    .truncate()
-                    .finish();
-            }
-        };
-        TuiHoverable::new(
-            self.voice_input_mouse.clone(),
-            TuiText::new(label).with_style(style).truncate().finish(),
-        )
-        .on_click(|event_ctx, _| {
-            event_ctx
-                .dispatch_typed_action(TuiTerminalSessionAction::ToggleVoiceInputFromStatusline);
-        })
-        .finish()
-    }
-
-    fn is_auto_queue_enabled(&self, ctx: &AppContext) -> bool {
-        if !FeatureFlag::QueueSlashCommand.is_enabled() {
-            return false;
-        }
-        let Some(conversation_id) = self
-            .conversation_selection
-            .as_ref(ctx)
-            .selected_conversation_id(ctx)
-        else {
-            return false;
-        };
-        let terminal_model = self.terminal_model.lock();
-        QueuedQueryModel::as_ref(ctx).is_queue_next_prompt_enabled(
-            conversation_id,
-            terminal_model.block_list().active_block(),
-            ctx,
-        )
-    }
-    /// Updates the watcher-backed git-status subscription after repository
-    /// detection completes for the active working directory.
-    fn update_git_status_subscription(
-        &mut self,
-        repo_path: Option<LocalOrRemotePath>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if self.current_repo_path == repo_path && self.git_repo_status.is_some() {
-            return;
-        }
-        self.current_repo_path = repo_path.clone();
-        self.git_repo_status = None;
-
-        let Some(repo_path) = repo_path else {
-            ctx.notify();
-            return;
-        };
-        match GitRepoModels::handle(ctx)
-            .update(ctx, |models, ctx| models.subscribe(&repo_path, ctx))
-        {
-            Ok(handle) => {
-                ctx.subscribe_to_model(&handle, |_, _, _, ctx| ctx.notify());
-                self.git_repo_status = Some(handle);
-            }
-            Err(error) => {
-                log::warn!("Unable to subscribe TUI footer to git status: {error}");
-            }
-        }
-        ctx.notify();
-    }
-
-    fn git_status_metadata<'a>(&self, ctx: &'a AppContext) -> Option<&'a GitStatusMetadata> {
-        self.git_repo_status.as_ref()?.as_ref(ctx).metadata(ctx)
     }
 
     /// Flips the footer usage entry's persisted credits⇄cost display mode.
@@ -3780,20 +3355,6 @@ impl TuiTerminalSessionView {
                 menu.open(ctx);
             }
         });
-    }
-
-    /// The selected conversation's accumulated usage totals, or `None` (entry
-    /// hidden) until any usage has been reported.
-    fn selected_conversation_usage_totals(
-        &self,
-        ctx: &AppContext,
-    ) -> Option<ConversationUsageTotals> {
-        let totals = self
-            .conversation_selection
-            .as_ref(ctx)
-            .selected_conversation(ctx)?
-            .usage_totals();
-        (totals != ConversationUsageTotals::default()).then_some(totals)
     }
 
     /// The session's working directory. The cwd only arrives once shell
@@ -4439,6 +4000,9 @@ impl TuiTerminalSessionView {
             SlashCommandKind::Statusline => {
                 self.open_statusline_config(command.name, ctx);
             }
+            SlashCommandKind::ResetStatusline => {
+                self.reset_statusline(command.name, ctx);
+            }
             SlashCommandKind::AddApiKey => {
                 self.execute_provider_api_key_command(
                     command,
@@ -4474,7 +4038,6 @@ impl TuiTerminalSessionView {
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::Mcp => {
-                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.mcp_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
@@ -4641,7 +4204,7 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
-            SlashCommandKind::Compact | SlashCommandKind::Plan => {
+            SlashCommandKind::Compact | SlashCommandKind::Plan | SlashCommandKind::Orchestrate => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 let command_name = command.name;
                 let prompt = argument
@@ -4691,7 +4254,6 @@ impl TuiTerminalSessionView {
             | SlashCommandKind::Harness
             | SlashCommandKind::Environment
             | SlashCommandKind::Profile
-            | SlashCommandKind::Orchestrate
             | SlashCommandKind::CompactAnd
             | SlashCommandKind::Queue
             | SlashCommandKind::ForkAndCompact
@@ -4738,7 +4300,7 @@ impl TuiTerminalSessionView {
     ) {
         match event {
             TuiStatuslineConfigEvent::Saved(config) => {
-                self.persist_statusline_config(config.clone(), ctx);
+                self.persist_statusline_config(config.clone(), STATUSLINE_SAVED_HINT, ctx);
             }
             TuiStatuslineConfigEvent::Cancelled => {
                 self.statusline_config_view = None;
@@ -4752,6 +4314,7 @@ impl TuiTerminalSessionView {
     fn persist_statusline_config(
         &mut self,
         config: TuiStatuslineConfig,
+        success_hint: &'static str,
         ctx: &mut ViewContext<Self>,
     ) {
         let result = AISettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -4760,12 +4323,18 @@ impl TuiTerminalSessionView {
         self.statusline_config_view = None;
         self.focus_current_owner_if_active(ctx);
         match result {
-            Ok(()) => self.show_success_hint(STATUSLINE_SAVED_HINT.to_owned(), ctx),
+            Ok(()) => self.show_success_hint(success_hint.to_owned(), ctx),
             Err(error) => {
                 report_error!("failed to persist the TUI statusline config: {error:#}");
                 self.show_transient_hint(STATUSLINE_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
             }
         }
+    }
+
+    fn reset_statusline(&mut self, command_name: &'static str, ctx: &mut ViewContext<Self>) {
+        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        self.persist_statusline_config(TuiStatuslineConfig::default(), STATUSLINE_RESET_HINT, ctx);
+        record_static_slash_command_accepted(command_name, true, ctx);
     }
     /// Toggles and persists natural-language detection (NLD), reports the change
     /// via telemetry, and surfaces a confirmation hint.
@@ -5242,14 +4811,9 @@ impl TuiTerminalSessionView {
                         "Warping"
                     };
                     content = content.child(
-                        TuiContainer::new(self.render_warping_indicator(
-                            label,
-                            elapsed,
-                            conversation.id(),
-                            ctx,
-                        ))
-                        .with_padding_top(1)
-                        .finish(),
+                        TuiContainer::new(self.render_warping_indicator(label, elapsed, ctx))
+                            .with_padding_top(1)
+                            .finish(),
                     );
                 }
             } else {
@@ -5418,6 +4982,7 @@ impl TypedActionView for TuiTerminalSessionView {
             TuiTerminalSessionAction::ToggleAutoApprove { show_feedback } => {
                 self.toggle_auto_approve(*show_feedback, ctx)
             }
+            TuiTerminalSessionAction::OpenUrl(url) => ctx.open_url(url),
             TuiTerminalSessionAction::FocusDefaultInteractionTarget => {
                 self.set_orchestration_tab_focus(false, ctx)
             }

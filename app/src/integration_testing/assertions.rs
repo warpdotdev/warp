@@ -50,6 +50,7 @@ pub fn join_a_workspace() -> TestStep {
                 let teams: Vec<Team> = vec![Team {
                     uid: "team_uid12345678912345".try_into().expect("ID is valid"),
                     name: "My Team".to_string(),
+                    color: None,
                     invite_code: Default::default(),
                     members: Default::default(),
                     pending_email_invites: Default::default(),

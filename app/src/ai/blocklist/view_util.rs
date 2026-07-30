@@ -164,6 +164,11 @@ pub fn failed_output_presentation(
         RenderableAIError::AgentExitedShell => {
             FailedOutputPresentation::Message(format!("{ERROR_APOLOGY_TEXT}\n\n{error}"))
         }
+        // Cloud startup failures surface the raw server message directly, matching the
+        // dedicated GUI error card which shows the message without an apology prefix.
+        RenderableAIError::CloudStartupFailed(msg) => {
+            FailedOutputPresentation::Message(msg.clone())
+        }
     })
 }
 

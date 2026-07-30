@@ -1244,10 +1244,20 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
-    /// Resets any persisted *local* custom-router selection that no longer resolves
-    /// to a loaded definition, so a deleted/invalid local config falls back to the
-    /// default model and the visible selection updates. Scoped to local
-    /// ids so a cloud selection isn't reset by a local reload.
+    /// Clears the in-memory per-pane Agent Mode override for any local custom-router
+    /// selection that no longer resolves to a loaded definition, so the visible
+    /// model chip updates to the fallback when a config file is removed or renamed.
+    ///
+    /// **Execution-profile (persisted/synced) preferences are intentionally NOT
+    /// cleared here**, even when a `custom-router:local:…` id is absent from the
+    /// current registry.  An id missing from the local registry may have been
+    /// configured on another device and synced to this one; clearing it would
+    /// propagate the removal back to cloud and erase the user's setting on the
+    /// device that still has the router configured.  This mirrors the QUALITY-866
+    /// guard in `reconcile_disabled_model_preferences`: only recognised (locally
+    /// known) ids are cleared.  The display fallback (`model_info_for_id` returning
+    /// `None` → `fallback_llm_info`) already shows the default when a router
+    /// cannot be resolved locally — no explicit profile clear is required.
     fn reconcile_stale_custom_router_selection(&mut self, ctx: &mut ModelContext<Self>) {
         let valid_local: HashSet<LLMId> = self
             .custom_model_routers
@@ -1256,7 +1266,6 @@ impl LLMPreferences {
             .collect();
 
         let mut updated_agent_mode = false;
-        let mut updated_coding = false;
 
         self.base_llm_for_terminal_view.retain(|_, id| {
             let stale = custom_model_routers::is_local_custom_router_id(id.as_str())
@@ -1265,38 +1274,9 @@ impl LLMPreferences {
             !stale
         });
 
-        AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-            for profile_id in profiles.get_all_profile_ids() {
-                let Some(profile) = profiles.get_profile_by_id(&profile_id, ctx) else {
-                    continue;
-                };
-                let profile_data = profile.data();
-                let base_stale = profile_data.base_model.as_ref().is_some_and(|id| {
-                    custom_model_routers::is_local_custom_router_id(id.as_str())
-                        && !valid_local.contains(id)
-                });
-                if base_stale {
-                    profiles.set_base_model(&profile_id, None, ctx);
-                    profiles.set_context_window_limit(&profile_id, None, ctx);
-                    updated_agent_mode = true;
-                }
-                let coding_stale = profile_data.coding_model.as_ref().is_some_and(|id| {
-                    custom_model_routers::is_local_custom_router_id(id.as_str())
-                        && !valid_local.contains(id)
-                });
-                if coding_stale {
-                    profiles.set_coding_model(&profile_id, None, ctx);
-                    updated_coding = true;
-                }
-            }
-        });
-
         if updated_agent_mode {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
-        }
-        if updated_coding {
-            ctx.emit(LLMPreferencesEvent::UpdatedActiveCodingLLM);
         }
     }
 

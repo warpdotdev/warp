@@ -51,6 +51,7 @@ fn provider_api_key_help_lists_supported_providers() {
         let expected = format!("{flag} <{}>", LLMProvider::API_KEY_PROVIDER_VALUE_NAME);
         assert!(help.contains(&expected));
     }
+    assert!(help.contains("--auto-approve"));
 }
 
 #[test]
@@ -60,12 +61,14 @@ fn parses_resume_server_token() {
         "warp",
         "--resume",
         token.as_str(),
+        "--auto-approve",
         "--api-key",
         "test-api-key",
     ])
     .expect("TUI launch arguments should parse together");
 
     assert_eq!(args.resume.as_deref(), Some(token.as_str()));
+    assert!(args.auto_approve);
     assert_eq!(args.api_key.as_deref(), Some("test-api-key"));
     assert_eq!(
         parse_resume_token(token.clone())
@@ -92,6 +95,7 @@ fn accepts_startup_without_resume() {
     let args = TuiArgs::try_parse_from(["warp"]).expect("empty arguments should parse");
 
     assert_eq!(args.resume, None);
+    assert!(!args.auto_approve);
     assert_eq!(args.api_key, None);
     assert_eq!(args.set_provider_api_key, None);
     assert_eq!(args.clear_provider_api_key, None);

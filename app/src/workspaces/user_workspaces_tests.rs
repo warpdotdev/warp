@@ -117,6 +117,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
     let team = Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],
@@ -248,6 +249,7 @@ fn team_for_test() -> Team {
     Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],
@@ -1073,6 +1075,7 @@ fn test_joining_team_moves_objects() {
     let team = Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],
@@ -1253,12 +1256,65 @@ fn test_agent_attribution_respects_user_setting() {
 }
 
 #[test]
+fn test_team_switcher_hidden_with_zero_teams() {
+    // When the user is in no workspace / no teams, `can_switch_teams` must return
+    // false so the pill does not render.
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).can_switch_teams(),
+                "0 teams: switcher should be hidden"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_switcher_hidden_with_single_team() {
+    // With exactly 1 team, `can_switch_teams` must return false.
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).can_switch_teams(),
+                "1 team: switcher should be hidden"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_switcher_visible_with_multiple_teams() {
+    // With 2+ teams, `can_switch_teams` must return true so the pill is shown.
+    let team1 = team_for_test();
+    let mut team2 = team_for_test();
+    team2.uid = 456.into();
+    team2.name = "Second Team".to_string();
+    let mut workspace = workspace_for_test(&team1);
+    workspace.teams.push(team2);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).can_switch_teams(),
+                "2 teams: switcher should be visible"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_leaving_team_moves_objects() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
 
     let team = Team {
         uid: 123.into(),
         name: "test".to_string(),
+        color: None,
         invite_code: None,
         members: vec![],
         pending_email_invites: vec![],

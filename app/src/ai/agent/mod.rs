@@ -729,6 +729,11 @@ pub enum RenderableAIError {
     /// cannot continue. Surfaced as a terminal failure (FAILED) rather than a
     /// user cancellation.
     AgentExitedShell,
+    /// A cloud-mode startup failure. Carries the raw server error message and
+    /// surfaces it without the generic apology prefix, matching the dedicated
+    /// GUI error card (`render_cloud_mode_error_screen`) which shows the
+    /// message directly.
+    CloudStartupFailed(String),
 }
 
 impl RenderableAIError {
@@ -914,6 +919,7 @@ impl Display for RenderableAIError {
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
             Self::AgentExitedShell => write!(f, "{}", Self::AGENT_EXITED_SHELL_MESSAGE),
+            Self::CloudStartupFailed(msg) => write!(f, "{msg}"),
         }
     }
 }

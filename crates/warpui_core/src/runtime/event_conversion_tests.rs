@@ -137,6 +137,13 @@ fn ctrl_modifier_is_carried_into_keystroke() {
     assert!(keystroke.ctrl, "ctrl modifier should be set");
     assert_eq!(keystroke.key, "c");
 }
+#[test]
+fn legacy_safe_ctrl_r_chord_is_preserved_for_keybindings() {
+    let keystroke = keystroke(KeyCode::Char('r'), KeyModifiers::CONTROL);
+    assert!(keystroke.ctrl);
+    assert_eq!(keystroke.key, "r");
+    assert_eq!(keystroke.normalized(), "ctrl-r");
+}
 
 #[test]
 fn non_shift_modifiers_are_preserved_from_the_key_event() {

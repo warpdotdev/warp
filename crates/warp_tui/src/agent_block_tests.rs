@@ -95,6 +95,43 @@ fn agent_block_renders_generic_failure_after_partial_output() {
 }
 
 #[test]
+fn agent_block_renders_cloud_startup_failure_without_apology_prefix() {
+    // CloudStartupFailed should render the raw error message directly (matching the
+    // GUI error card) without the generic "I'm sorry, I couldn't complete that request."
+    // apology prefix that the Other variant adds.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: vec![query_input("start cloud agent")],
+                status: failed_output(
+                    Vec::new(),
+                    RenderableAIError::CloudStartupFailed(
+                        "Environment failed to start: disk quota exceeded".to_owned(),
+                    ),
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            let lines = render_block_lines(block.as_ref(ctx), 80, ctx);
+            // The message should appear without any apology prefix.
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Environment failed to start: disk quota exceeded")),
+                "expected the startup error message in rendered output, got: {lines:?}"
+            );
+            assert!(
+                lines.iter().all(|line| !line.contains("I'm sorry")),
+                "expected no apology prefix for CloudStartupFailed, got: {lines:?}"
+            );
+        });
+    });
+}
+
+#[test]
 fn agent_block_renders_invalid_api_key_detail_without_usage_notice() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
