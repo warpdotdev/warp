@@ -170,18 +170,18 @@ fn active_card_matches_question_panel_structure() {
         assert_eq!(
             lines,
             [
-                "┌──────────────────────────────────────────────────────────────────────────────┐",
-                "│                                                                              │",
-                "│ ■ Agent questions                                                 ← 1 of 2 → │",
-                "│                                                                              │",
-                "│ Which targets should be tested? (select all that apply)                      │",
-                "│ (1) [ ] Stable                                                               │",
-                "│ (2) [ ] Nightly                                                              │",
-                "│ (3) [ ] Other…                                                               │",
-                "│                                                                              │",
-                "│ Shift + Enter to advance Enter or number to select Ctrl + C to cancel questi │",
-                "│                                                                              │",
-                "└──────────────────────────────────────────────────────────────────────────────┘",
+                "▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁",
+                "▏                                                                              ▕",
+                "▏ ■ Agent questions                                                 ← 1 of 2 → ▕",
+                "▏                                                                              ▕",
+                "▏ Which targets should be tested? (select all that apply)                      ▕",
+                "▏ (1) [ ] Stable                                                               ▕",
+                "▏ (2) [ ] Nightly                                                              ▕",
+                "▏ (3) [ ] Other…                                                               ▕",
+                "▏                                                                              ▕",
+                "▏ Shift + Enter to advance Enter or number to select Ctrl + C to cancel questi ▕",
+                "▏                                                                              ▕",
+                "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔",
             ]
         );
     });

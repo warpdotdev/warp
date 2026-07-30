@@ -353,7 +353,7 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
     let rendered = lines.join("\n");
     assert!(rendered.contains("Conversations"));
     assert!(rendered.contains("[All]  Pinned"));
-    assert!(!rendered.chars().any(|glyph| "┌┐└┘─│".contains(glyph)));
+    assert!(!rendered.chars().any(|glyph| "┌┐└┘─│▏▕▁▔".contains(glyph)));
     assert!(rendered.contains("Current project  2 minutes ago"));
     assert!(rendered.contains("Archived"));
 }
@@ -451,7 +451,7 @@ fn slash_command_rows_match_figma_layout_and_colors() {
             assert!(
                 !lines
                     .iter()
-                    .any(|line| line.chars().any(|glyph| "┌┐└┘─│".contains(glyph)))
+                    .any(|line| line.chars().any(|glyph| "┌┐└┘─│▏▕▁▔".contains(glyph)))
             );
             assert_eq!(
                 frame.buffer[(0, 0)].bg,

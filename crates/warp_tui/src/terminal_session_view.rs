@@ -417,6 +417,7 @@ fn bordered_input(
 ) -> Box<dyn TuiElement> {
     TuiContainer::new(TuiChildView::new(input_view).finish())
         .with_padding_x(1)
+        .with_padding_y(1)
         .with_border_style(border_style)
         .finish()
 }
