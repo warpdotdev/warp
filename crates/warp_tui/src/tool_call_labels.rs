@@ -112,6 +112,7 @@ pub(crate) fn styled_tool_call_label_spans(
         None => vec![(label.to_owned(), action_style)],
     }
 }
+
 /// Collapses an optional action status into the coarse display state.
 /// `output_streaming` is whether the exchange output is still streaming;
 /// a status-less action in a streaming output is still being constructed

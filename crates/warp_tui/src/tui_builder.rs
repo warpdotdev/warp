@@ -66,6 +66,7 @@ impl TuiUiBuilder {
         TuiStyle::default()
             .fg(self.foreground_text_color(self.warp_theme.details().main_text_opacity))
     }
+
     /// Regular-weight `neutral_7` text used for trailing tool-call details.
     pub(crate) fn neutral_7_text_style(&self) -> TuiStyle {
         TuiStyle::default().fg(cell_color(ThemeFill::Solid(internal_colors::neutral_7(

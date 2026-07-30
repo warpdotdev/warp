@@ -533,10 +533,10 @@ impl TuiFileEditsView {
     }
 
     /// Builds a section header's styled spans: a state glyph (colored like
-    /// `render_tool_call_section`'s rows), `label` in bold, and colored
-    /// `+a −r` counts. [`tui_collapsible`] appends the shared chevron for
-    /// sections with bodies; the counts are omitted while `line_stats` is
-    /// `None` (diff(s) not yet computed).
+    /// `render_tool_call_section`'s rows), a bold action with neutral details,
+    /// and colored `+a −r` counts. [`tui_collapsible`] appends the shared
+    /// chevron for sections with bodies; the counts are omitted while
+    /// `line_stats` is `None` (diff(s) not yet computed).
     fn header_spans(
         &self,
         label: &str,
@@ -639,13 +639,20 @@ fn file_edit_header_label(
     };
     format!("{verb} {subject}")
 }
+
+fn file_edit_stat_labels(added: usize, removed: usize) -> [Option<String>; 2] {
+    [
+        (added > 0).then(|| format!("+{added}")),
+        (removed > 0).then(|| format!("−{removed}")),
+    ]
+}
+
 fn file_edit_stats_label(added: usize, removed: usize) -> Option<String> {
-    match (added, removed) {
-        (0, 0) => None,
-        (added, 0) => Some(format!("+{added}")),
-        (0, removed) => Some(format!("−{removed}")),
-        (added, removed) => Some(format!("+{added} −{removed}")),
-    }
+    let label = file_edit_stat_labels(added, removed)
+        .into_iter()
+        .flatten()
+        .join(" ");
+    (!label.is_empty()).then_some(label)
 }
 
 fn file_edit_header_spans(
@@ -658,11 +665,12 @@ fn file_edit_header_spans(
     let mut spans = vec![(format!("{} ", state.glyph()), state.glyph_style(builder))];
     spans.extend(styled_tool_call_label_spans(label, builder));
     if let Some((added, removed)) = line_stats {
-        if added > 0 {
-            spans.push((format!(" +{added}"), builder.diff_added_style()));
+        let [added_label, removed_label] = file_edit_stat_labels(added, removed);
+        if let Some(added_label) = added_label {
+            spans.push((format!(" {added_label}"), builder.diff_added_style()));
         }
-        if removed > 0 {
-            spans.push((format!(" −{removed}"), builder.diff_removed_style()));
+        if let Some(removed_label) = removed_label {
+            spans.push((format!(" {removed_label}"), builder.diff_removed_style()));
         }
     }
     let chevron_style = if hovered {
