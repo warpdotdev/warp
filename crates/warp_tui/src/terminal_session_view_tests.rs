@@ -3266,12 +3266,10 @@ fn user_controlled_alt_screen_keeps_full_session_input_on_the_pty() {
             lines.join("\n")
         );
         assert!(
-            !lines
-                .iter()
-                .any(|line| {
-                    line.chars().any(|glyph| "┌┐└┘─│▁▏▕▔".contains(glyph))
-                        || line.contains("auto (cost-efficient)")
-                }),
+            !lines.iter().any(|line| {
+                line.chars().any(|glyph| "┌┐└┘─│▁▏▕▔".contains(glyph))
+                    || line.contains("auto (cost-efficient)")
+            }),
             "user-controlled alternate screen should not render the agent composer:\n{}",
             lines.join("\n")
         );
