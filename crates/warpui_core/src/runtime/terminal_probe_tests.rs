@@ -1,4 +1,6 @@
 use super::*;
+
+#[cfg(unix)]
 #[test]
 fn writes_background_query_and_da1_sentinel() {
     let mut output = Vec::new();
