@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ use crate::ai::agent::{
     TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
 use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::ai::blocklist::permissions::CommandExecutionPermission;
 use crate::ai::execution_profiles::WriteToPtyPermission;
 use crate::terminal::TerminalModel;
@@ -258,6 +260,16 @@ impl ShellCommandExecutor {
                     } else {
                         command.clone()
                     };
+                // Keep `playwright-cli` browser automation visible in an active
+                // computer-use recording: open an action group before the command
+                // starts so the smart cut does not trim its on-screen work.
+                let conversation_id = input.conversation_id;
+                let is_playwright_cli = is_playwright_cli_command(command);
+                if is_playwright_cli {
+                    RecordingController::handle(ctx).update(ctx, |controller, _| {
+                        controller.begin_action_group(conversation_id, Vec::new());
+                    });
+                }
                 ctx.emit(ShellCommandExecutorEvent::ExecuteCommand {
                     action_id: action_id.clone(),
                     command: decorated_command,
@@ -275,6 +287,24 @@ impl ShellCommandExecutor {
                             handle.update(ctx, |me, _| {
                                 me.block_finished_senders.remove(&block_selector);
                                 me.force_refresh_senders.remove(&block_selector);
+                            });
+                        }
+
+                        if is_playwright_cli {
+                            RecordingController::handle(ctx).update(ctx, |controller, _| {
+                                match &result {
+                                    // Commit regardless of exit code: failed browser
+                                    // automation is still on-screen work worth keeping.
+                                    ActionResult::CommandFinished { .. } => {
+                                        controller.commit_action_group_now(conversation_id);
+                                    }
+                                    ActionResult::Cancelled | ActionResult::BlockNotFound => {
+                                        controller.discard_action_group(conversation_id);
+                                    }
+                                    // Still running; the group stays open until a later
+                                    // poll observes the finished block.
+                                    ActionResult::LongRunningCommandSnapshot { .. } => {}
+                                }
                             });
                         }
 
@@ -358,6 +388,13 @@ impl ShellCommandExecutor {
                     let exit_code = block.exit_code();
                     let start_ts = block.start_ts().cloned();
                     let completed_ts = block.completed_ts().cloned();
+                    // A finished poll settles any action group left open by a
+                    // long-running `playwright-cli` command; no-op when no
+                    // group is pending.
+                    let conversation_id = input.conversation_id;
+                    RecordingController::handle(ctx).update(ctx, |controller, _| {
+                        controller.commit_action_group_now(conversation_id);
+                    });
                     return ActionExecution::Sync(AIAgentActionResultType::ReadShellCommandOutput(
                         ReadShellCommandOutputResult::CommandFinished {
                             command,
@@ -372,6 +409,7 @@ impl ShellCommandExecutor {
                 drop(model);
 
                 let block_selector = BlockSelector::Id(block_id.clone());
+                let conversation_id = input.conversation_id;
                 ActionExecution::new_async(
                     self.action_result_future(block_selector.clone(), delay.clone()),
                     move |result, ctx| {
@@ -381,6 +419,17 @@ impl ShellCommandExecutor {
                                 me.block_finished_senders.remove(&block_selector);
                                 me.force_refresh_senders.remove(&block_selector);
                             });
+                        }
+
+                        match &result {
+                            ActionResult::CommandFinished { .. } => {
+                                RecordingController::handle(ctx).update(ctx, |controller, _| {
+                                    controller.commit_action_group_now(conversation_id);
+                                });
+                            }
+                            ActionResult::LongRunningCommandSnapshot { .. }
+                            | ActionResult::Cancelled
+                            | ActionResult::BlockNotFound => {}
                         }
 
                         action_result_for_read_shell_command_output(command.clone(), result)
@@ -683,6 +732,27 @@ impl ShellCommandExecutor {
     ) -> BoxFuture<'static, ()> {
         futures::future::ready(()).boxed()
     }
+}
+
+/// Whether a requested command invokes the `playwright-cli` binary, whose
+/// on-screen browser automation should be kept in an active computer-use
+/// recording rather than trimmed away with other shell work.
+fn is_playwright_cli_command(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .find(|token| {
+            let is_env_assignment = token
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                && token.contains('=');
+            !is_env_assignment
+        })
+        .is_some_and(|program| {
+            Path::new(program)
+                .file_name()
+                .is_some_and(|name| name == "playwright-cli")
+        })
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

@@ -335,6 +335,25 @@ impl RecordingController {
         }
     }
 
+    /// Commits the in-flight action group using the active recording's current
+    /// elapsed time as the finish offset, for callers that cannot thread the
+    /// capture start instant through to completion. No-op unless a recording is
+    /// active for this conversation with a pending group.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn commit_action_group_now(&mut self, conversation_id: AIConversationId) {
+        let finish_offset = match &self.state {
+            RecordingState::Active(recording) if recording.conversation_id == conversation_id => {
+                recording.started_at.elapsed()
+            }
+            RecordingState::Idle
+            | RecordingState::Starting { .. }
+            | RecordingState::Active(_)
+            | RecordingState::Finalizing { .. }
+            | RecordingState::Finalized { .. } => return,
+        };
+        self.commit_action_group(conversation_id, finish_offset, Vec::new());
+    }
+
     /// Discards the in-flight action group without committing it (a failed or
     /// cancelled `UseComputer` call). No-op if the recording is no longer active
     /// for this conversation.
