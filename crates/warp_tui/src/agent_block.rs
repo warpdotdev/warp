@@ -20,8 +20,9 @@ use warp::tui_export::{
     AIBlockModelHelper, AIBlockOutputStatus, AIConversationId, BlockId, BlocklistAIActionEvent,
     BlocklistAIActionModel, BlocklistAIHistoryModel, CancellationReason,
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, MessageId, ModelEvent,
-    ModelEventDispatcher, ReceivedMessageDisplay, SummarizationType, TerminalModel, TodoOperation,
-    TodoStatus, failed_output_presentation, should_show_failed_output_usage_notice,
+    ModelEventDispatcher, ReceivedMessageDisplay, RenderableAIError, SummarizationType,
+    TerminalModel, TodoOperation, TodoStatus, failed_output_presentation,
+    should_show_failed_output_usage_notice,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::MouseStateHandle;
@@ -1084,17 +1085,30 @@ impl TuiAIBlock {
         self.last_measured_width.set(Some(width));
     }
 
-    pub(super) fn has_out_of_credits_failure(&self, app: &AppContext) -> bool {
+    /// Returns the failure that is visible in this block.
+    ///
+    /// This is the single source of truth for both failure rendering and
+    /// contextual failure actions. Restored active failures remain visible;
+    /// restoration only suppresses the separate usage notice.
+    fn visible_failure<'a>(
+        &self,
+        status: &'a AIBlockOutputStatus,
+        app: &AppContext,
+    ) -> Option<(&'a RenderableAIError, FailedOutputPresentation)> {
         if !self.block_model.request_type(app).is_active() {
-            return false;
+            return None;
         }
-        let status = self.block_model.status(app);
-        let AIBlockOutputStatus::Failed { error, .. } = &status else {
-            return false;
+        let AIBlockOutputStatus::Failed { error, .. } = status else {
+            return None;
         };
+        failed_output_presentation(error, app).map(|presentation| (error, presentation))
+    }
+
+    pub(super) fn has_out_of_credits_failure(&self, app: &AppContext) -> bool {
+        let status = self.block_model.status(app);
         matches!(
-            failed_output_presentation(error, app),
-            Some(FailedOutputPresentation::OutOfCredits { .. })
+            self.visible_failure(&status, app),
+            Some((_, FailedOutputPresentation::OutOfCredits { .. }))
         )
     }
 
@@ -1441,10 +1455,7 @@ impl TuiAIBlock {
             }
         }
 
-        if self.block_model.request_type(app).is_active()
-            && let AIBlockOutputStatus::Failed { error, .. } = &status
-            && let Some(presentation) = failed_output_presentation(error, app)
-        {
+        if let Some((error, presentation)) = self.visible_failure(&status, app) {
             sections.push(TuiAIBlockSection::Failure(presentation));
             if should_show_failed_output_usage_notice(
                 error,
