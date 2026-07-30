@@ -30,7 +30,8 @@ use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
     ByoKeySource, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
-    byo_key_source_for_model, should_show_bedrock_icon_for_model,
+    ModelIconFlags, byo_key_source_for_model, model_leading_icon,
+    should_show_bedrock_icon_for_model,
     should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 use crate::auth::AuthStateProvider;
@@ -51,6 +52,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
 const AUTO_GEMINI_ENTERPRISE_AGENT_PLATFORM_TOOLTIP: &str = "Warp uses Gemini Enterprise Agent Platform when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
+const AUTO_HOSTED_INFERENCE_LABEL: &str = "Inference may use your hosted inference";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -381,15 +383,15 @@ impl ModelSearchItem {
         let is_using_gemini_enterprise_agent_platform =
             should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
         let byo_key_source = byo_key_source_for_model(llm, app);
-        let leading_icon = if is_using_bedrock {
-            Icon::Aws
-        } else if is_using_gemini_enterprise_agent_platform {
-            Icon::GeminiEnterpriseAgentPlatform
-        } else if is_custom_router {
-            Icon::Dataflow
-        } else {
-            llm.provider.icon().unwrap_or(Icon::Agent)
-        };
+        let leading_icon = model_leading_icon(
+            llm,
+            ModelIconFlags {
+                is_custom_router,
+                is_auto,
+                is_using_bedrock,
+                is_using_gemini_enterprise: is_using_gemini_enterprise_agent_platform,
+            },
+        );
         let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
         let credential_icon =
             (!is_using_cloud_host && byo_key_source.is_some()).then_some(Icon::Key);
@@ -649,12 +651,12 @@ impl SearchItem for ModelSearchItem {
                 })
                 .finish();
             CostRow::BilledToProvider {
-                label: if self.is_using_bedrock && self.is_auto {
-                    "Inference may use Bedrock"
+                label: if self.is_auto
+                    && (self.is_using_bedrock || self.is_using_gemini_enterprise_agent_platform)
+                {
+                    AUTO_HOSTED_INFERENCE_LABEL
                 } else if self.is_using_bedrock {
                     "Inference via Bedrock"
-                } else if self.is_using_gemini_enterprise_agent_platform && self.is_auto {
-                    "Inference may use Gemini Enterprise Agent Platform"
                 } else if self.is_using_gemini_enterprise_agent_platform {
                     "Inference via Gemini Enterprise Agent Platform"
                 } else if let Some(source) = self.byo_key_source {

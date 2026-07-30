@@ -180,6 +180,112 @@ fn host_icon_visibility_requires_enabled_credentials_and_model_host() {
     ));
 }
 
+#[test]
+fn auto_models_show_the_agent_glyph_instead_of_a_host_logo() {
+    // The server reports host availability for auto models from host-level org
+    // settings, without checking whether the auto variant's routing table can
+    // actually reach that host. Badging the row with a host logo would promise a
+    // destination the classifier may never pick, so auto models stay generic.
+    let llm = server_llm("auto-open", None);
+
+    for flags in [
+        ModelIconFlags {
+            is_auto: true,
+            is_using_bedrock: true,
+            ..Default::default()
+        },
+        ModelIconFlags {
+            is_auto: true,
+            is_using_gemini_enterprise: true,
+            ..Default::default()
+        },
+        ModelIconFlags {
+            is_auto: true,
+            is_using_bedrock: true,
+            is_using_gemini_enterprise: true,
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(model_leading_icon(&llm, flags), Icon::Agent);
+    }
+}
+
+#[test]
+fn non_auto_models_keep_their_host_logo() {
+    let llm = server_llm("claude-test", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_gemini_enterprise: true,
+                ..Default::default()
+            }
+        ),
+        Icon::GeminiEnterpriseAgentPlatform
+    );
+    // Bedrock wins when both hosts are available, matching the server's
+    // AWS_BEDROCK -> GEMINI_ENTERPRISE fallback priority.
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                is_using_gemini_enterprise: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+}
+
+#[test]
+fn custom_routers_keep_the_dataflow_icon() {
+    // `is_auto` is a name/id substring match, so a router called "Auto Router"
+    // trips it. The custom-router branch is checked first so those rows keep
+    // their own icon.
+    let llm = server_llm("Auto Router", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_router: true,
+                is_auto: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Dataflow
+    );
+}
+
+#[test]
+fn models_without_a_host_fall_back_to_the_provider_icon() {
+    let mut llm = server_llm("gpt-test", None);
+    llm.provider = LLMProvider::OpenAI;
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::OpenAILogo
+    );
+
+    // Providers with no logo of their own land on the agent glyph.
+    llm.provider = LLMProvider::Unknown;
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::Agent
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(
