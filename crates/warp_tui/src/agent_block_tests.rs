@@ -260,7 +260,7 @@ fn out_of_credits_failure_matches_tui_design_and_opens_pricing() {
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
                 vec![
-                    "! I’m sorry, I couldn’t complete that request.",
+                    "⚠ I’m sorry, I couldn’t complete that request.",
                     "  In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits.",
                     "",
                     "  Get started with AI (ctrl+o)",
@@ -292,6 +292,20 @@ fn out_of_credits_failure_matches_tui_design_and_opens_pricing() {
                 frame.buffer[(2, 3)]
                     .modifier
                     .contains(Modifier::UNDERLINED)
+            );
+            let narrow_frame = presenter.present_element(
+                render_failure_section(
+                    &presentation,
+                    &out_of_credits_hover_state,
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 64, 7),
+                ctx,
+            );
+            let narrow_lines = narrow_frame.buffer.to_lines();
+            assert!(
+                narrow_lines[2].starts_with("  "),
+                "wrapped detail should preserve its two-column indent: {narrow_lines:?}"
             );
 
             dispatch_click_on_text(

@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::agent_block::OUT_OF_CREDITS_URL;
 use async_channel::Sender;
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -67,6 +66,7 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::agent_block::OUT_OF_CREDITS_URL;
 use crate::alt_screen_view::AltScreenElement;
 use crate::api_keys_menu::{TuiApiKeysMenuEvent, TuiApiKeysMenuModel, render_api_keys_footer};
 use crate::attachment_bar::{

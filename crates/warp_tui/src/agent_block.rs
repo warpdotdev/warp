@@ -62,7 +62,6 @@ const OUT_OF_CREDITS_DETAIL: &str =
     "In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits.";
 const OUT_OF_CREDITS_ACTION_LABEL: &str = "Get started with AI";
 const OUT_OF_CREDITS_ACTION_HINT: &str = "(ctrl+o)";
-const OUT_OF_CREDITS_WARNING_PREFIX: &str = "! ";
 const FAILURE_WARNING_PREFIX: &str = "⚠ ";
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -226,15 +225,19 @@ fn render_failure_section(
             let content = TuiFlex::column()
                 .child(
                     TuiText::from_spans([
-                        (OUT_OF_CREDITS_WARNING_PREFIX.to_owned(), error_style),
+                        (FAILURE_WARNING_PREFIX.to_owned(), error_style),
                         (OUT_OF_CREDITS_TITLE.to_owned(), primary_style),
                     ])
                     .finish(),
                 )
                 .child(
-                    TuiText::new(format!("  {OUT_OF_CREDITS_DETAIL}"))
-                        .with_style(primary_style)
-                        .finish(),
+                    TuiContainer::new(
+                        TuiText::new(OUT_OF_CREDITS_DETAIL)
+                            .with_style(primary_style)
+                            .finish(),
+                    )
+                    .with_padding_left(2)
+                    .finish(),
                 )
                 .child(TuiText::new(" ").finish())
                 .child(actions)
@@ -1082,6 +1085,9 @@ impl TuiAIBlock {
     }
 
     pub(super) fn has_out_of_credits_failure(&self, app: &AppContext) -> bool {
+        if !self.block_model.request_type(app).is_active() {
+            return false;
+        }
         let status = self.block_model.status(app);
         let AIBlockOutputStatus::Failed { error, .. } = &status else {
             return false;
