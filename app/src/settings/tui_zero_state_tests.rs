@@ -10,7 +10,9 @@ use super::{
     MIN_TUI_ZERO_STATE_EXTRUSION_DEPTH, MIN_TUI_ZERO_STATE_ROTATION_PERIOD_SECONDS,
     TuiZeroStateExtrusionDepth, TuiZeroStateExtrusionDepthSetting, TuiZeroStateObject,
     TuiZeroStateObjectSetting, TuiZeroStateRotationPeriodSeconds,
-    TuiZeroStateRotationPeriodSecondsSetting,
+    TuiZeroStateRotationPeriodSecondsSetting, TuiZeroStateShowAnimationSetting,
+    TuiZeroStateShowChangelogSetting, TuiZeroStateShowMcpSetting,
+    TuiZeroStateShowProjectInfoSetting, TuiZeroStateShowSignedInUserSetting,
 };
 
 #[test]
@@ -114,7 +116,7 @@ fn zero_state_schema_entries_are_tui_only() {
         .filter(|entry| entry.hierarchy == Some("appearance.zero_state"))
         .collect::<Vec<_>>();
 
-    assert_eq!(zero_state_entries.len(), 3);
+    assert_eq!(zero_state_entries.len(), 8);
     for entry in zero_state_entries {
         assert!(entry.description.contains("Warp Agent CLI"));
         assert!(!entry.description.contains("TUI"));
@@ -122,4 +124,50 @@ fn zero_state_schema_entries_are_tui_only() {
         assert!(surfaces.includes(SettingsMode::Tui));
         assert!(!surfaces.includes(SettingsMode::Gui));
     }
+}
+
+#[test]
+fn section_visibility_settings_default_to_visible() {
+    assert!(TuiZeroStateShowSignedInUserSetting::default_value());
+    assert!(TuiZeroStateShowChangelogSetting::default_value());
+    assert!(TuiZeroStateShowProjectInfoSetting::default_value());
+    assert!(TuiZeroStateShowMcpSetting::default_value());
+    assert!(TuiZeroStateShowAnimationSetting::default_value());
+}
+
+#[test]
+fn section_visibility_settings_are_tui_local_file_settings() {
+    for (toml_path, sync_to_cloud) in [
+        (
+            TuiZeroStateShowSignedInUserSetting::toml_path(),
+            TuiZeroStateShowSignedInUserSetting::sync_to_cloud(),
+        ),
+        (
+            TuiZeroStateShowChangelogSetting::toml_path(),
+            TuiZeroStateShowChangelogSetting::sync_to_cloud(),
+        ),
+        (
+            TuiZeroStateShowProjectInfoSetting::toml_path(),
+            TuiZeroStateShowProjectInfoSetting::sync_to_cloud(),
+        ),
+        (
+            TuiZeroStateShowMcpSetting::toml_path(),
+            TuiZeroStateShowMcpSetting::sync_to_cloud(),
+        ),
+        (
+            TuiZeroStateShowAnimationSetting::toml_path(),
+            TuiZeroStateShowAnimationSetting::sync_to_cloud(),
+        ),
+    ] {
+        let toml_path = toml_path.expect("visibility settings are file settings");
+        assert!(toml_path.starts_with("appearance.zero_state.show_"));
+        assert_eq!(sync_to_cloud, SyncToCloud::Never);
+    }
+}
+
+#[test]
+fn unset_section_visibility_settings_fall_back_to_visible() {
+    assert!(*TuiZeroStateShowSignedInUserSetting::new(None).value());
+    assert!(*TuiZeroStateShowMcpSetting::new(None).value());
+    assert!(!*TuiZeroStateShowMcpSetting::new(Some(false)).value());
 }
