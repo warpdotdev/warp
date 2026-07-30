@@ -1,16 +1,28 @@
 use std::time::Duration;
 
 use ai::agent::action_result::StopRecordingResult;
-use computer_use::RecordingHandle;
+use computer_use::{MouseButton, PointerEvent, PointerEventKind, RecordingHandle, Vector2I};
 use futures::executor::block_on;
 
 use super::*;
+
+/// Convenience for the tests below — pick a distinctive reason so a stale
+/// caller-claimed reason would never coincidentally match.
+const TEST_REASON: FinalizeReason = FinalizeReason::LimitReached;
 
 fn active_controller(recording_id: &str, conversation_id: AIConversationId) -> RecordingController {
     let mut controller = RecordingController::new();
     controller.try_begin_start(conversation_id).unwrap();
     let (handle, _) = RecordingHandle::new_test(1, 1);
-    controller.finish_start(recording_id.to_string(), conversation_id, handle, 15);
+    controller.finish_start(
+        recording_id.to_string(),
+        conversation_id,
+        handle,
+        15,
+        None,
+        None,
+        computer_use::Target::Screen,
+    );
     controller
 }
 
@@ -39,13 +51,14 @@ fn finalization_is_shared_and_retained_until_consumed() {
     ));
     let result = StopRecordingResult::Error("finished".to_string());
 
-    controller.complete_finalization("recording", result.clone());
+    controller.complete_finalization("recording", result.clone(), TEST_REASON);
 
-    assert_eq!(block_on(first).unwrap(), result);
-    assert_eq!(block_on(second).unwrap(), result);
+    assert_eq!(block_on(first).unwrap(), (result.clone(), TEST_REASON));
+    assert_eq!(block_on(second).unwrap(), (result.clone(), TEST_REASON));
     assert!(matches!(
         controller.claim_finalization_by_id("recording"),
-        FinalizationClaim::Finished(ref ready) if ready == &result
+        FinalizationClaim::Finished((ref ready, ref ready_reason))
+            if ready == &result && ready_reason == &TEST_REASON
     ));
     assert!(matches!(
         controller.try_begin_start(conversation_id),
@@ -69,12 +82,63 @@ fn dropped_waiter_does_not_discard_finalized_result() {
     drop(receiver);
 
     let result = StopRecordingResult::Error("finished".to_string());
-    controller.complete_finalization("recording", result.clone());
+    controller.complete_finalization("recording", result.clone(), TEST_REASON);
 
     assert!(matches!(
         controller.claim_finalization_by_id("recording"),
-        FinalizationClaim::Finished(ref ready) if ready == &result
+        FinalizationClaim::Finished((ref ready, ref ready_reason))
+            if ready == &result && ready_reason == &TEST_REASON
     ));
+}
+
+/// Regression test for a `StopRecording` that joins a finalization started by
+/// a different path (e.g. the exit watcher's `FfmpegExited` / `LimitReached`,
+/// or a conversation `RunCancelled`): the joining caller must observe the actual
+/// [`FinalizeReason`] that drove finalization, not any reason it might have
+/// claimed when joining. Otherwise `Recording.Stopped.termination_reason`
+/// would misattribute the trigger — e.g. an ffmpeg crash would be reported
+/// as `agent_stopped`.
+#[test]
+fn joining_caller_observes_actual_finalize_reason_not_claimed_one() {
+    let conversation_id = AIConversationId::new();
+    let mut controller = active_controller("recording", conversation_id);
+
+    // First caller starts the work — imagine this is the exit watcher, which
+    // claimed `FfmpegExited`.
+    let starter = match controller.claim_finalization_by_id("recording") {
+        FinalizationClaim::Claimed {
+            result_receiver, ..
+        } => result_receiver,
+        _ => panic!("active recording should be claimed"),
+    };
+    // A later `StopRecording` action joins the in-progress work. It has no way
+    // to influence the reason — the controller ignores anything but the
+    // caller that actually started finalization.
+    let joiner = match controller.claim_finalization_by_id("recording") {
+        FinalizationClaim::InProgress(receiver) => receiver,
+        _ => panic!("joining caller should subscribe to in-progress work"),
+    };
+
+    let result = StopRecordingResult::Error("ffmpeg crashed".to_string());
+    let actual_reason = FinalizeReason::FfmpegExited;
+    controller.complete_finalization("recording", result.clone(), actual_reason);
+
+    // Both the starter and the joining caller must see the actual reason.
+    let (starter_result, starter_reason) = block_on(starter).unwrap();
+    let (joiner_result, joiner_reason) = block_on(joiner).unwrap();
+    assert_eq!(starter_result, result);
+    assert_eq!(joiner_result, result);
+    assert_eq!(starter_reason, actual_reason);
+    assert_eq!(joiner_reason, actual_reason);
+
+    // A late caller that only reads the retained result must also see it.
+    let FinalizationClaim::Finished((ready_result, ready_reason)) =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("retained result should be available after completion");
+    };
+    assert_eq!(ready_result, result);
+    assert_eq!(ready_reason, actual_reason);
 }
 
 #[test]
@@ -144,7 +208,7 @@ fn begin_and_commit_record_finish_offset_and_labels() {
             .begin_action_group(owner, vec!["ctrl+a".to_string()])
             .is_some()
     );
-    controller.commit_action_group(owner, Duration::from_millis(500));
+    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -167,7 +231,7 @@ fn commit_clamps_finish_to_start() {
     controller.begin_action_group(owner, vec!["a".to_string()]);
     // A finish before the start is clamped up to the start so the segment
     // builder's one-frame minimum can apply downstream.
-    controller.commit_action_group(owner, Duration::ZERO);
+    controller.commit_action_group(owner, Duration::ZERO, Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -179,12 +243,18 @@ fn commit_clamps_finish_to_start() {
 }
 
 #[test]
-fn pointer_only_group_commits_with_empty_labels() {
+fn pointer_only_group_commits_with_empty_labels_and_geometry() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
     controller.begin_action_group(owner, vec![]);
-    controller.commit_action_group(owner, Duration::from_millis(200));
+    let pointer_events = vec![PointerEvent {
+        offset: Duration::from_millis(50),
+        kind: PointerEventKind::Down,
+        button: Some(MouseButton::Left),
+        point: Vector2I::new(10, 20),
+    }];
+    controller.commit_action_group(owner, Duration::from_millis(200), pointer_events);
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -192,7 +262,9 @@ fn pointer_only_group_commits_with_empty_labels() {
         panic!("active recording should be claimed");
     };
     assert_eq!(recording.actions.len(), 1);
+    // A pointer-only group keeps its geometry even though it has no text labels.
     assert!(recording.actions[0].labels.is_empty());
+    assert_eq!(recording.actions[0].pointer_events.len(), 1);
 }
 
 #[test]
@@ -218,7 +290,7 @@ fn commit_without_begin_is_noop() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);
 
-    controller.commit_action_group(owner, Duration::from_millis(500));
+    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -246,8 +318,8 @@ fn begin_and_commit_are_scoped_to_the_owning_conversation() {
             .begin_action_group(other, vec!["other".to_string()])
             .is_none()
     );
-    controller.commit_action_group(other, Duration::from_millis(999));
-    controller.commit_action_group(owner, Duration::from_millis(300));
+    controller.commit_action_group(other, Duration::from_millis(999), Vec::new());
+    controller.commit_action_group(owner, Duration::from_millis(300), Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -273,7 +345,7 @@ fn begin_while_pending_auto_commits_prior_group() {
     // rather than silently discarding it.
     controller.begin_action_group(owner, vec!["type".to_string()]);
     // Commit the second group explicitly.
-    controller.commit_action_group(owner, Duration::from_millis(700));
+    controller.commit_action_group(owner, Duration::from_millis(700), Vec::new());
 
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
@@ -312,6 +384,6 @@ fn commit_after_finalization_is_noop() {
     };
     // A late commit lands on a controller that is now Finalizing, so it commits
     // nothing rather than recording on the wrong (finalized) recording.
-    controller.commit_action_group(owner, Duration::from_millis(500));
+    controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
     assert!(recording.actions.is_empty());
 }

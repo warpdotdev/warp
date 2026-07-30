@@ -116,6 +116,9 @@ pub struct CreateFileArtifactUploadTargetInput {
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<cynic::Id>,
     pub filepath: String,
+    /// Short badge-visible title for the artifact (e.g. a recording title).
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[cynic(skip_serializing_if = "Option::is_none")]

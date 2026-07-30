@@ -1,9 +1,12 @@
-use warpui_core::keymap::Context;
+use std::collections::HashSet;
+
+use warpui_core::keymap::{Context, Trigger};
 use warpui_core::{App, TuiView};
 
 use super::{ATTACHMENTS_AVAILABLE_FLAG, TUI_BINDING_GROUP, is_tui_owned};
 use crate::attachment_bar::{FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar};
 use crate::input::TuiInputView;
+use crate::input::view::{MCP_LOGOUT_BINDING_NAME, MCP_MENU_ACTIVE_FLAG};
 use crate::terminal_session_view::{
     PASTE_IMAGE_BINDING_NAME, SESSION_COMPOSER_OWNS_INPUT_FLAG, TuiTerminalSessionView,
 };
@@ -32,6 +35,49 @@ fn tui_binding_registration_passes_the_cross_surface_validators() {
         app.update(super::init);
     });
 }
+
+#[test]
+fn mcp_logout_binding_uses_ctrl_r_only() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            crate::input::init(ctx);
+            let bindings = ctx
+                .editable_bindings()
+                .filter(|binding| binding.name == MCP_LOGOUT_BINDING_NAME)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                bindings
+                    .iter()
+                    .filter_map(|binding| match binding.trigger {
+                        Trigger::Keystrokes(keys) => keys.first().map(|key| key.normalized()),
+                        Trigger::Empty | Trigger::Standard(_) | Trigger::Custom(_) => None,
+                    })
+                    .collect::<HashSet<_>>(),
+                HashSet::from(["ctrl-r".to_owned()])
+            );
+
+            let mut mcp_context = Context::default();
+            mcp_context.set.insert(TuiInputView::ui_name());
+            mcp_context.set.insert(MCP_MENU_ACTIVE_FLAG);
+            let mut plain_input_context = Context::default();
+            plain_input_context.set.insert(TuiInputView::ui_name());
+            assert_eq!(bindings.len(), 1);
+            assert!(bindings[0].in_context(&mcp_context));
+            assert!(!bindings[0].in_context(&plain_input_context));
+        });
+    });
+}
+
+#[test]
+fn tui_binding_registration_passes_the_app_cross_platform_validator() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.set_default_binding_validator(warp::util::bindings::is_binding_cross_platform);
+            super::init(ctx);
+        });
+    });
+}
+
 #[test]
 fn attachment_bindings_are_scoped_to_available_and_focused_contexts() {
     App::test((), |mut app| async move {
@@ -84,17 +130,39 @@ fn attachment_bindings_are_scoped_to_available_and_focused_contexts() {
                     .all(|binding| !binding.in_context(&plain_input))
             );
 
-            let paste_image = ctx
+            let paste_bindings = ctx
                 .editable_bindings()
-                .find(|binding| binding.name == PASTE_IMAGE_BINDING_NAME)
-                .expect("clipboard image binding");
+                .filter(|binding| binding.name == PASTE_IMAGE_BINDING_NAME)
+                .collect::<Vec<_>>();
+            assert!(!paste_bindings.is_empty());
             let mut composer_context = plain_input.clone();
             composer_context
                 .set
                 .insert(SESSION_COMPOSER_OWNS_INPUT_FLAG);
-            assert!(paste_image.in_context(&composer_context));
-            assert!(!paste_image.in_context(&plain_input));
-            assert!(!paste_image.in_context(&bar_context));
+            assert!(
+                paste_bindings
+                    .iter()
+                    .all(|binding| binding.in_context(&composer_context))
+            );
+            assert!(
+                paste_bindings
+                    .iter()
+                    .all(|binding| !binding.in_context(&plain_input))
+            );
+            assert!(
+                paste_bindings
+                    .iter()
+                    .all(|binding| !binding.in_context(&bar_context))
+            );
+            let paste_triggers = paste_bindings
+                .iter()
+                .filter_map(|binding| match binding.trigger {
+                    Trigger::Keystrokes(keys) => keys.first().map(|key| key.normalized()),
+                    Trigger::Empty | Trigger::Standard(_) | Trigger::Custom(_) => None,
+                })
+                .collect::<HashSet<_>>();
+            assert!(paste_triggers.contains("ctrl-v"));
+            assert!(paste_triggers.contains("ctrl-shift-V"));
         });
     });
 }

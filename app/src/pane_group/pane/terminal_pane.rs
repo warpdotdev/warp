@@ -1919,7 +1919,7 @@ fn launch_remote_child(
         Err(error) => {
             let error_message = error.user_message();
             report_error!(
-                "Failed to prepare StartAgentV2 remote child launch",
+                "Failed to prepare remote child launch",
                 extra: {
                     "conversation_id" => ?conversation_id,
                     "error" => %error_message

@@ -1,8 +1,10 @@
+use std::future::Future;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use futures::future::Either;
 use settings::Setting as _;
 #[cfg(target_family = "wasm")]
 use url::Url;
@@ -14,6 +16,7 @@ use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
 use warp_server_auth::user::persistence::PersistedUser;
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::{Entity, ModelContext, SingletonEntity, UpdateModel};
 
@@ -86,6 +89,46 @@ pub enum AuthManagerEvent {
 pub type LoginGatedFeature = &'static str;
 
 type URLConstructorCallback = Box<dyn FnOnce(Option<&str>) -> String>;
+const DEVICE_CODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const DEVICE_CODE_REQUEST_ATTEMPTS: usize = 2;
+
+async fn request_device_code_with_timeout<F, Fut>(
+    mut request: F,
+    timeout: Duration,
+    attempts: usize,
+) -> StdResult<oauth2::StandardDeviceAuthorizationResponse, UserAuthenticationError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<
+        Output = StdResult<oauth2::StandardDeviceAuthorizationResponse, UserAuthenticationError>,
+    >,
+{
+    assert!(
+        attempts > 0,
+        "device code request requires at least one attempt"
+    );
+
+    for attempt in 1..=attempts {
+        let request = request();
+        let timeout = Timer::after(timeout);
+        futures::pin_mut!(request);
+        futures::pin_mut!(timeout);
+
+        match futures::future::select(request, timeout).await {
+            Either::Left((result, _)) => return result,
+            Either::Right(_) if attempt < attempts => {
+                log::info!(
+                    "Device authorization code request timed out; retrying ({attempt}/{attempts})"
+                );
+            }
+            Either::Right(_) => {
+                return Err(UserAuthenticationError::DeviceCodeRequestTimedOut { attempts });
+            }
+        }
+    }
+
+    unreachable!("attempt count is asserted to be nonzero")
+}
 
 /// AuthManager is a singleton model which manages the currently logged-in user's state.
 /// If you need to access the state, use `AuthStateProvider`.
@@ -274,7 +317,14 @@ impl AuthManager {
         let auth_client = self.auth_client.clone();
         // Request a device code the user can enter in their browser.
         ctx.spawn(
-            async move { auth_client.request_device_code().await },
+            async move {
+                request_device_code_with_timeout(
+                    || auth_client.request_device_code(),
+                    DEVICE_CODE_REQUEST_TIMEOUT,
+                    DEVICE_CODE_REQUEST_ATTEMPTS,
+                )
+                .await
+            },
             Self::on_device_code_received,
         );
     }
@@ -504,6 +554,7 @@ impl AuthManager {
                         self.set_needs_reauth(true, ctx);
                     }
                     UserAuthenticationError::UserAccountDisabled(_) => {}
+                    UserAuthenticationError::DeviceCodeRequestTimedOut { .. } => {}
                     UserAuthenticationError::Unexpected(_) => {}
                     UserAuthenticationError::InvalidStateParameter => {}
                     UserAuthenticationError::MissingStateParameter => {}

@@ -29,13 +29,16 @@ pub(crate) use providers::{
 pub(crate) use remote_child::should_disable_snapshot;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use remote_child::{
-    CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
-    PrepareRemoteChildLaunchError, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,
-    classify_cloud_agent_startup_error, oz_run_url, prepare_remote_child_launch,
+    CloudAgentStartupAuthFlow, CloudAgentStartupBlocker, CloudAgentStartupFailure,
+    CloudAgentStartupIssue, CloudAgentStartupPresentation, PrepareRemoteChildLaunchError,
+    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, classify_cloud_agent_startup_error,
+    oz_run_url, prepare_remote_child_launch,
 };
 pub(crate) use snapshots::auth_secret_inherit_label;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use snapshots::location_snapshot;
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use snapshots::oz_model_snapshot;
 pub use snapshots::{
     OptionBadge, OptionFooter, OptionRow, OptionSnapshot, OptionSourceStatus, api_key_snapshot,
     build_runner_snapshot, environment_snapshot, harness_snapshot, host_snapshot, model_snapshot,

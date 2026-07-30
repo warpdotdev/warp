@@ -2245,7 +2245,7 @@ ru:
     agent_block:
       thinking_finished: "Думал {duration}"
       thinking_running: "Думаю..."
-      summarized: "Разговор сведён"
+      summarized: "Сводка разговора"
     inline_menu:
       loading: "Загрузка slash-команд…"
       empty: "Slash-команды не найдены"
@@ -2263,15 +2263,15 @@ ru:
       user_in_control: "Управление у вас"
       waiting_instructions: "Агент ждёт инструкций"
     warping:
-      label: "Обработка..."
-      summarizing: "Формирование сводки разговора..."
+      label: "Обработка"
+      summarizing: "Формирование сводки разговора"
     terminal:
       starting: "Запуск терминала…"
       cannot_run_command: "не удалось выполнить — команда уже запущена"
       new_conversation_blocked: "нельзя начать новый разговор, пока в терминале выполняется команда"
       copied_to_clipboard: "Разговор скопирован в буфер обмена"
       restore_token_mismatch: "Восстановленный разговор не совпадает с запрошенным разговором."
-      restore_only_oz_supported: "Warp TUI поддерживает только разговоры Oz/Warp."
+      restore_only_oz_supported: "Warp Agent CLI поддерживает только разговоры Oz/Warp."
       restore_load_failed: "Не удалось загрузить разговор."
       no_active_conversation_to_export: "Нет активного разговора для экспорта"
       export_overwrote: "Разговор экспортирован в {path} (файл перезаписан)"
@@ -2292,7 +2292,7 @@ ru:
       copy_failed: "не удалось скопировать в буфер обмена"
       sub_agents_callout: "Субагенты: Shift + ↑"
     zero_state:
-      title: "Warp Agent"
+      title: "Warp Agent CLI"
       whats_new: "Что нового"
       version:
         dev_build: "dev-сборка"
@@ -2310,7 +2310,7 @@ ru:
       title: "Войдите, чтобы продолжить"
       open_in_browser: "Откройте {uri} в браузере"
       enter_code: "и введите код: {code}"
-      opening_browser: "Открываем ваш браузер…"
+      opening_browser: "Запрашиваем ссылку для входа…"
       failed_prefix: "Ошибка входа: {message}"
       failed_hint: "Нажмите Ctrl-C для выхода."
     read_documents:

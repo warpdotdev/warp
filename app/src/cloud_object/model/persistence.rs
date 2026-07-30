@@ -96,6 +96,8 @@ pub enum CloudModelEvent {
     },
     /// The initial bulk load of cloud objects from the server has completed.
     InitialLoadCompleted,
+    /// Environment last-task timestamps fetched outside the generic cloud-object sync were merged.
+    EnvironmentLastTaskRunTimestampsUpdated,
 }
 
 enum FolderOpenState {
@@ -771,6 +773,7 @@ impl CloudModel {
                 object.metadata_mut().last_task_run_ts = Some(timestamp.into());
             }
         }
+        ctx.emit(CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated);
         ctx.notify();
     }
 

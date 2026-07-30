@@ -704,6 +704,7 @@ pub enum RenderableAIError {
     AwsBedrockCredentialsExpiredOrInvalid {
         model_name: String,
     },
+    GeminiEnterpriseCredentialsExpiredOrInvalid,
     /// A transient network failure (lost connection or truncated response stream). Carries its
     /// own complete user-facing copy; `kind` preserves the structured cause (including the raw
     /// API error) so user reports can disambiguate the different causes behind the shared message.
@@ -728,6 +729,11 @@ pub enum RenderableAIError {
     /// cannot continue. Surfaced as a terminal failure (FAILED) rather than a
     /// user cancellation.
     AgentExitedShell,
+    /// A cloud-mode startup failure. Carries the raw server error message and
+    /// surfaces it without the generic apology prefix, matching the dedicated
+    /// GUI error card (`render_cloud_mode_error_screen`) which shows the
+    /// message directly.
+    CloudStartupFailed(String),
 }
 
 impl RenderableAIError {
@@ -901,6 +907,9 @@ impl Display for RenderableAIError {
                     "AWS Bedrock credentials expired or invalid for {model_name}"
                 )
             }
+            Self::GeminiEnterpriseCredentialsExpiredOrInvalid => {
+                write!(f, "Gemini Enterprise credentials expired or invalid")
+            }
             Self::TransientNetworkError { kind, .. } => {
                 write!(
                     f,
@@ -910,6 +919,7 @@ impl Display for RenderableAIError {
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
             Self::AgentExitedShell => write!(f, "{}", Self::AGENT_EXITED_SHELL_MESSAGE),
+            Self::CloudStartupFailed(msg) => write!(f, "{msg}"),
         }
     }
 }

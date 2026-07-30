@@ -26,8 +26,8 @@ use ratatui::style::Color;
 
 use super::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiPresentationContext, TuiRect, TuiScreenPoint, TuiScreenPosition, TuiSize,
-    TuiStyle,
+    TuiPaintSurface, TuiPresentationContext, TuiRect, TuiScreenPoint, TuiScreenPosition,
+    TuiScreenRect, TuiSize, TuiStyle,
 };
 use crate::AppContext;
 
@@ -235,6 +235,7 @@ impl TuiElement for TuiContainer {
 
         if let Some(background) = self.background {
             surface.set_style(origin, size, TuiStyle::default().bg(background));
+            ctx.record_opaque_region(TuiScreenRect::new(ctx.scene_point(origin), size));
         }
 
         if self.border {

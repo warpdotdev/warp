@@ -507,7 +507,7 @@ impl GitBranchTrackingStatus {
         })
     }
 
-    pub fn display_text(&self) -> String {
+    pub fn status_text(&self) -> Option<String> {
         let mut parts = Vec::new();
         if self.is_rebased() {
             parts.push("⇅".to_string());
@@ -519,11 +519,13 @@ impl GitBranchTrackingStatus {
                 parts.push(format!("↓{behind}"));
             }
         }
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
 
-        if parts.is_empty() {
-            self.branch.clone()
-        } else {
-            format!("{} • {}", self.branch, parts.join(" "))
+    pub fn display_text(&self) -> String {
+        match self.status_text() {
+            Some(status) => format!("{} • {status}", self.branch),
+            None => self.branch.clone(),
         }
     }
 

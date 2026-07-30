@@ -14,6 +14,7 @@ use warpui::fonts::{Properties, Weight};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    WeakViewHandle,
 };
 
 use crate::ai::auth_secret_types::{
@@ -118,6 +119,7 @@ struct ValidatedForm {
 }
 
 pub struct AuthSecretFtuxView {
+    view_handle: WeakViewHandle<Self>,
     harness: Harness,
     ftux_dropdown: ViewHandle<AuthSecretFtuxDropdown>,
     name_editor: ViewHandle<EditorView>,
@@ -248,6 +250,7 @@ impl AuthSecretFtuxView {
         );
 
         Self {
+            view_handle: ctx.handle(),
             harness,
             ftux_dropdown,
             name_editor,
@@ -691,7 +694,7 @@ impl AuthSecretFtuxView {
 
     fn resolve_secret_owner(&self, ctx: &ViewContext<Self>) -> SecretOwner {
         if self.share_with_team
-            && let Some(team) = UserWorkspaces::as_ref(ctx).current_team()
+            && let Some(team) = UserWorkspaces::as_ref(ctx).team_for_view(ctx)
         {
             return SecretOwner::Team {
                 team_uid: team.uid.uid(),
@@ -864,7 +867,9 @@ impl AuthSecretFtuxView {
     }
 
     fn render_scope_checkbox(&self, app: &AppContext) -> Box<dyn Element> {
-        let has_team = UserWorkspaces::as_ref(app).current_team().is_some();
+        let has_team = UserWorkspaces::as_ref(app)
+            .team_for_view_handle(&self.view_handle, app)
+            .is_some();
         if !has_team {
             return Empty::new().finish();
         }

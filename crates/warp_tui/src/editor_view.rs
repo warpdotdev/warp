@@ -18,7 +18,7 @@ use warpui_core::{
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
 use crate::editor_interaction::{
     TuiEditorBehavior, TuiEditorCommand, TuiEditorInteractionOutcome, TuiEditorState,
-    apply_editor_action, follow_editor_cursor,
+    apply_editor_action, apply_editor_clipboard_action, follow_editor_cursor,
 };
 
 #[derive(Clone, Copy)]
@@ -230,6 +230,15 @@ impl TypedActionView for TuiEditorView {
             }
             TuiEditorViewAction::Editor(action) => self.handle_editor_action(action, ctx),
             TuiEditorViewAction::Command(command) => self.handle_command(*command, ctx),
+        };
+        let outcome = match outcome {
+            TuiEditorInteractionOutcome::Clipboard(action) => {
+                if let Err(error) = apply_editor_clipboard_action(&self.model, action, ctx) {
+                    log::error!("Failed to copy TUI editor selection: {error}");
+                }
+                TuiEditorInteractionOutcome::FollowCursor
+            }
+            outcome => outcome,
         };
         if outcome == TuiEditorInteractionOutcome::FollowCursor {
             follow_editor_cursor(&self.model, self.editor_behavior, ctx);

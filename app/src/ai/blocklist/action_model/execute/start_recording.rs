@@ -9,9 +9,11 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
+use crate::ai::blocklist::action_model::RecordingTelemetryEvent;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::action_model::recording_finalize::spawn_recording_exit_watcher;
+use crate::send_telemetry_from_ctx;
 
 pub struct StartRecordingExecutor;
 
@@ -45,17 +47,14 @@ impl StartRecordingExecutor {
             frame_rate,
             max_duration,
             max_size_bytes,
+            summary,
+            description,
             playback_speed_multiplier,
             window,
-            ..
-        } = &action.action
+        } = action.action.clone()
         else {
             return ActionExecution::InvalidAction;
         };
-        let frame_rate = *frame_rate;
-        let max_duration = *max_duration;
-        let max_size_bytes = *max_size_bytes;
-        let playback_speed_multiplier = *playback_speed_multiplier;
         // Only honor a window target when background computer use is enabled; otherwise fall back
         // to whole-screen capture, keeping behavior byte-identical to the pre-existing path.
         let target = if FeatureFlag::BackgroundComputerUse.is_enabled() {
@@ -111,6 +110,17 @@ impl StartRecordingExecutor {
                     let started_at = SystemTime::now();
                     let width_px = handle.width() as i32;
                     let height_px = handle.height() as i32;
+                    send_telemetry_from_ctx!(
+                        RecordingTelemetryEvent::Started {
+                            recording_id: recording_id.clone(),
+                            capture_target: match target {
+                                computer_use::Target::Screen => "screen",
+                                computer_use::Target::Window { .. } => "window",
+                            }
+                            .to_string(),
+                        },
+                        ctx
+                    );
                     let controller = RecordingController::handle(ctx);
                     controller.update(ctx, |controller, _| {
                         controller.finish_start(
@@ -118,6 +128,9 @@ impl StartRecordingExecutor {
                             conversation_id,
                             handle,
                             frame_rate,
+                            summary,
+                            description,
+                            target,
                         );
                     });
                     #[cfg(not(target_family = "wasm"))]

@@ -11,6 +11,78 @@ use warpui::{Entity, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 
+/// Why a recording finalization ran. Distinct from the caller's claimed reason
+/// (see [`FinalizationClaim::InProgress`]): the reason lives here so the
+/// controller can carry the *actual* reason that drove finalization to
+/// completion back to every waiter, including callers that only joined work
+/// started by a different path.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+// Every variant is constructed only in non-wasm finalization paths.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(crate) enum FinalizeReason {
+    StoppedByAgent,
+    RunEnded,
+    LimitReached,
+    FfmpegExited,
+    RunCancelled,
+    FinalizationDropped,
+}
+
+impl FinalizeReason {
+    /// Stable, machine-readable key identifying why finalization ran, used by
+    /// the `Recording.Stopped` telemetry event. Distinct from
+    /// [`FinalizeReason::termination_reason`], which is human-readable prose.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn telemetry_key(self) -> &'static str {
+        match self {
+            FinalizeReason::StoppedByAgent => "agent_stopped",
+            FinalizeReason::RunEnded => "run_ended",
+            FinalizeReason::LimitReached => "limit_reached",
+            FinalizeReason::FfmpegExited => "encoding_failed",
+            FinalizeReason::RunCancelled => "run_cancelled",
+            FinalizeReason::FinalizationDropped => "finalization_dropped",
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn termination_reason(
+        self,
+        completion_status: computer_use::RecordingCompletionStatus,
+    ) -> String {
+        match self {
+            FinalizeReason::StoppedByAgent => match completion_status {
+                computer_use::RecordingCompletionStatus::Completed => {
+                    "Stopped by agent".to_string()
+                }
+                computer_use::RecordingCompletionStatus::StoppedEarly => {
+                    "Recording stopped before the agent requested it".to_string()
+                }
+            },
+            FinalizeReason::RunEnded => {
+                "Finalized because the agent run ended without stopping the recording".to_string()
+            }
+            FinalizeReason::LimitReached => {
+                "Stopped at the configured duration or size limit".to_string()
+            }
+            FinalizeReason::FfmpegExited => {
+                "Capture process exited before the recording was stopped".to_string()
+            }
+            FinalizeReason::RunCancelled => {
+                "Recording was interrupted when the conversation was cancelled".to_string()
+            }
+            FinalizeReason::FinalizationDropped => {
+                "Recording finalization ended without producing a result".to_string()
+            }
+        }
+    }
+}
+
+/// The finalized outcome of a recording, paired with the actual
+/// [`FinalizeReason`] that drove finalization to completion. Callers that only
+/// joined an in-progress finalization see the reason that started the work,
+/// not the reason they claimed when joining.
+pub(crate) type FinalizedRecording = (StopRecordingResult, FinalizeReason);
+
 #[derive(Debug, Error)]
 pub enum StartRecordingControllerError {
     #[error("A recording is already in progress in this runtime.")]
@@ -44,8 +116,20 @@ pub(crate) struct ActiveRecording {
     /// The capture frame rate, used by the post-stop smart cut to enforce the
     /// one-source-frame minimum for instantaneous action groups.
     pub(crate) frame_rate: u32,
+    /// The surface being recorded, used to resolve pointer-event coordinates
+    /// into capture space for the post-stop burn-in.
+    pub(crate) target: computer_use::Target,
+    /// Recording-scoped pointer session shared with each `UseComputer` call's
+    /// `PointerSink`, persisting the last resolved point and active button across
+    /// calls so a drag split into separate `Down`/`Move`/`Up` calls records its
+    /// release. Reset when a call fails or is cancelled.
+    pub(crate) pointer_session: computer_use::PointerSession,
     /// Action groups committed to the video, in completion order.
     pub(crate) actions: Vec<computer_use::ActionLogEntry>,
+    /// Short agent-authored title shown in badges (from StartRecording.summary).
+    pub(crate) summary: Option<String>,
+    /// Optional longer description shown in detail views (from StartRecording.description).
+    pub(crate) description: Option<String>,
     /// The currently in-flight `UseComputer` group, if any. It is committed with
     /// its finish offset on success or discarded on failure/cancellation.
     pub(crate) pending_group: Option<PendingActionGroup>,
@@ -72,12 +156,16 @@ enum RecordingState {
     Finalizing {
         id: String,
         conversation_id: AIConversationId,
-        waiters: Vec<oneshot::Sender<StopRecordingResult>>,
+        waiters: Vec<oneshot::Sender<FinalizedRecording>>,
     },
     Finalized {
         id: String,
         conversation_id: AIConversationId,
         result: StopRecordingResult,
+        /// The actual reason that drove finalization to completion, captured
+        /// so a caller that only joined the in-progress work still learns why
+        /// it ran (rather than the reason the caller itself claimed).
+        reason: FinalizeReason,
     },
 }
 
@@ -85,10 +173,10 @@ enum RecordingState {
 pub(crate) enum FinalizationClaim {
     Claimed {
         recording: Box<ActiveRecording>,
-        result_receiver: oneshot::Receiver<StopRecordingResult>,
+        result_receiver: oneshot::Receiver<FinalizedRecording>,
     },
-    InProgress(oneshot::Receiver<StopRecordingResult>),
-    Finished(StopRecordingResult),
+    InProgress(oneshot::Receiver<FinalizedRecording>),
+    Finished(FinalizedRecording),
     NotFound,
 }
 
@@ -130,12 +218,16 @@ impl RecordingController {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_start(
         &mut self,
         recording_id: String,
         conversation_id: AIConversationId,
         handle: computer_use::RecordingHandle,
         frame_rate: u32,
+        summary: Option<String>,
+        description: Option<String>,
+        target: computer_use::Target,
     ) {
         if matches!(
             self.state,
@@ -149,7 +241,11 @@ impl RecordingController {
                 handle,
                 started_at: Instant::now(),
                 frame_rate,
+                target,
+                pointer_session: computer_use::PointerSession::new(),
                 actions: Vec::new(),
+                summary,
+                description,
                 pending_group: None,
             }));
         }
@@ -157,13 +253,14 @@ impl RecordingController {
 
     /// Begins an in-flight `UseComputer` action group for the owning
     /// conversation, recording the group's start offset and labels. Returns the
-    /// recording's capture start instant so the caller can measure the finish
-    /// offset from the same clock when the action sequence returns. A
-    /// pointer-only group is begun with empty labels; wait-only/no-op calls
-    /// should not call this. The pending group is committed with its finish
-    /// offset on success ([`commit_action_group`]) or discarded on failure
-    /// ([`discard_action_group`]). Returns `None` (and begins nothing) if no
-    /// recording is active for this conversation.
+    /// recording's capture start instant, its capture target, and a clone of the
+    /// recording-scoped pointer session so the caller can share it with this
+    /// call's `PointerSink` and a later split-call release can reuse the last
+    /// resolved point. A pointer-only group is begun with empty labels;
+    /// wait-only/no-op calls should not call this. The pending group is
+    /// committed with its finish offset on success ([`commit_action_group`]) or
+    /// discarded on failure ([`discard_action_group`]). Returns `None` (and
+    /// begins nothing) if no recording is active for this conversation.
     ///
     /// [`commit_action_group`]: Self::commit_action_group
     /// [`discard_action_group`]: Self::discard_action_group
@@ -172,7 +269,7 @@ impl RecordingController {
         &mut self,
         conversation_id: AIConversationId,
         labels: Vec<String>,
-    ) -> Option<Instant> {
+    ) -> Option<(Instant, computer_use::Target, computer_use::PointerSession)> {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
         {
@@ -182,10 +279,16 @@ impl RecordingController {
             // is called for the next call before `commit_action_group` fires.
             if let Some(pending) = recording.pending_group.take() {
                 let implicit_finish = recording.started_at.elapsed().max(pending.start_offset);
+                // Defensive fallback: in the normal flow the executor commits or
+                // discards each group in its completion callback before the next
+                // `begin`, so this rarely fires. The prior group's pointer events
+                // live in that call's own buffer and are not reachable here, so
+                // this path keeps the labels but no pointer geometry.
                 recording.actions.push(computer_use::ActionLogEntry {
                     offset: pending.start_offset,
                     finish_offset: implicit_finish,
                     labels: pending.labels,
+                    pointer_events: Vec::new(),
                 });
             }
             let start_offset = recording.started_at.elapsed();
@@ -193,7 +296,11 @@ impl RecordingController {
                 start_offset,
                 labels,
             });
-            return Some(recording.started_at);
+            return Some((
+                recording.started_at,
+                recording.target,
+                recording.pointer_session.clone(),
+            ));
         }
         None
     }
@@ -212,6 +319,7 @@ impl RecordingController {
         &mut self,
         conversation_id: AIConversationId,
         finish_offset: Duration,
+        pointer_events: Vec<computer_use::PointerEvent>,
     ) {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
@@ -222,6 +330,7 @@ impl RecordingController {
                 offset: pending.start_offset,
                 finish_offset,
                 labels: pending.labels,
+                pointer_events,
             });
         }
     }
@@ -234,6 +343,9 @@ impl RecordingController {
         if let RecordingState::Active(recording) = &mut self.state
             && recording.conversation_id == conversation_id
         {
+            // Reset the pointer session so a later `UseComputer` call cannot
+            // inherit an abandoned press from this failed/cancelled call.
+            recording.pointer_session.clear();
             recording.pending_group = None;
         }
     }
@@ -316,12 +428,14 @@ impl RecordingController {
                 id,
                 conversation_id,
                 result,
+                reason,
             } if matches(&id, conversation_id) => {
-                let ready = result.clone();
+                let ready = (result.clone(), reason);
                 self.state = RecordingState::Finalized {
                     id,
                     conversation_id,
                     result,
+                    reason,
                 };
                 FinalizationClaim::Finished(ready)
             }
@@ -332,11 +446,17 @@ impl RecordingController {
         }
     }
 
+    /// Completes an in-flight finalization with its resolved result and the
+    /// *actual* reason that drove the work (not the reason any caller merely
+    /// claimed when joining). Every waiter receives the same reason, and the
+    /// reason is retained with the result until it is consumed, so telemetry
+    /// downstream always reflects why finalization actually ran.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn complete_finalization(
         &mut self,
         recording_id: &str,
         result: StopRecordingResult,
+        reason: FinalizeReason,
     ) {
         match mem::replace(&mut self.state, RecordingState::Idle) {
             RecordingState::Finalizing {
@@ -348,9 +468,10 @@ impl RecordingController {
                     id,
                     conversation_id,
                     result: result.clone(),
+                    reason,
                 };
                 for waiter in waiters {
-                    let _ = waiter.send(result.clone());
+                    let _ = waiter.send((result.clone(), reason));
                 }
             }
             state => self.state = state,

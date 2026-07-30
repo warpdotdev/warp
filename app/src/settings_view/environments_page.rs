@@ -20,7 +20,7 @@ use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::{self, WindowManager};
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::agent_assisted_environment_modal::{
@@ -83,46 +83,79 @@ fn page_title_text() -> &'static str {
     crate::menu_label("settings.environments_page.page_title", "Environments")
 }
 fn page_description_text() -> &'static str {
-    crate::menu_label("settings.environments_page.page_description", "Environments define where your ambient agents run. Set one up in minutes via GitHub (recommended), Warp-assisted setup, or manual configuration.")
+    crate::menu_label(
+        "settings.environments_page.page_description",
+        "Environments define where your ambient agents run. Set one up in minutes via GitHub (recommended), Warp-assisted setup, or manual configuration.",
+    )
 }
 fn search_placeholder() -> &'static str {
-    crate::menu_label("settings.environments_page.search_placeholder", "Search environments...")
+    crate::menu_label(
+        "settings.environments_page.search_placeholder",
+        "Search environments...",
+    )
 }
 fn toast_updated_success() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_updated_success", "Successfully updated environment")
+    crate::menu_label(
+        "settings.environments_page.toast_updated_success",
+        "Successfully updated environment",
+    )
 }
 fn toast_created_success() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_created_success", "Successfully created environment")
+    crate::menu_label(
+        "settings.environments_page.toast_created_success",
+        "Successfully created environment",
+    )
 }
 fn toast_deleted_success() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_deleted_success", "Environment deleted successfully")
+    crate::menu_label(
+        "settings.environments_page.toast_deleted_success",
+        "Environment deleted successfully",
+    )
 }
 fn toast_shared_success() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_shared_success", "Successfully shared environment")
+    crate::menu_label(
+        "settings.environments_page.toast_shared_success",
+        "Successfully shared environment",
+    )
 }
 fn toast_share_failed() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_share_failed", "Failed to share environment with team")
+    crate::menu_label(
+        "settings.environments_page.toast_share_failed",
+        "Failed to share environment with team",
+    )
 }
 fn toast_create_not_logged_in() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_create_not_logged_in", "Unable to create environment: not logged in.")
+    crate::menu_label(
+        "settings.environments_page.toast_create_not_logged_in",
+        "Unable to create environment: not logged in.",
+    )
 }
 fn toast_save_missing() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_save_missing", "Unable to save: environment no longer exists.")
+    crate::menu_label(
+        "settings.environments_page.toast_save_missing",
+        "Unable to save: environment no longer exists.",
+    )
 }
 fn toast_share_no_team() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_share_no_team", "Unable to share environment: you are not currently on a team.")
+    crate::menu_label(
+        "settings.environments_page.toast_share_no_team",
+        "Unable to share environment: you are not currently on a team.",
+    )
 }
 fn toast_share_not_synced() -> &'static str {
-    crate::menu_label("settings.environments_page.toast_share_not_synced", "Unable to share environment: environment is not yet synced.")
+    crate::menu_label(
+        "settings.environments_page.toast_share_not_synced",
+        "Unable to share environment: environment is not yet synced.",
+    )
 }
 fn no_matches() -> &'static str {
-    crate::menu_label("settings.environments_page.no_matches", "No environments match your search.")
+    crate::menu_label(
+        "settings.environments_page.no_matches",
+        "No environments match your search.",
+    )
 }
 fn section_personal() -> &'static str {
     crate::menu_label("settings.environments_page.section_personal", "Personal")
-}
-fn section_shared_by_team_fallback() -> &'static str {
-    crate::menu_label("settings.environments_page.section_shared_by_team_fallback", "Shared by Warp and your team")
 }
 fn button_loading() -> &'static str {
     crate::menu_label("settings.environments_page.button_loading", "Loading...")
@@ -134,37 +167,67 @@ fn button_authorize() -> &'static str {
     crate::menu_label("settings.environments_page.button_authorize", "Authorize")
 }
 fn button_get_started() -> &'static str {
-    crate::menu_label("settings.environments_page.button_get_started", "Get started")
+    crate::menu_label(
+        "settings.environments_page.button_get_started",
+        "Get started",
+    )
 }
 fn button_launch_agent() -> &'static str {
-    crate::menu_label("settings.environments_page.button_launch_agent", "Launch agent")
+    crate::menu_label(
+        "settings.environments_page.button_launch_agent",
+        "Launch agent",
+    )
 }
 fn quick_setup_title() -> &'static str {
-    crate::menu_label("settings.environments_page.quick_setup_title", "Quick setup")
+    crate::menu_label(
+        "settings.environments_page.quick_setup_title",
+        "Quick setup",
+    )
 }
 fn quick_setup_badge() -> &'static str {
     crate::menu_label("settings.environments_page.quick_setup_badge", "Suggested")
 }
 fn quick_setup_subtitle() -> &'static str {
-    crate::menu_label("settings.environments_page.quick_setup_subtitle", "Select the GitHub repositories you'd like to work with and we'll suggest a base image and config")
+    crate::menu_label(
+        "settings.environments_page.quick_setup_subtitle",
+        "Select the GitHub repositories you'd like to work with and we'll suggest a base image and config",
+    )
 }
 fn use_agent_title() -> &'static str {
-    crate::menu_label("settings.environments_page.use_agent_title", "Use the agent")
+    crate::menu_label(
+        "settings.environments_page.use_agent_title",
+        "Use the agent",
+    )
 }
 fn use_agent_subtitle() -> &'static str {
-    crate::menu_label("settings.environments_page.use_agent_subtitle", "Choose a locally set up project and we'll help you set up an environment based on it")
+    crate::menu_label(
+        "settings.environments_page.use_agent_subtitle",
+        "Choose a locally set up project and we'll help you set up an environment based on it",
+    )
 }
 fn empty_state_header() -> &'static str {
-    crate::menu_label("settings.environments_page.empty_state_header", "You haven't set up any environments yet.")
+    crate::menu_label(
+        "settings.environments_page.empty_state_header",
+        "You haven't set up any environments yet.",
+    )
 }
 fn empty_state_subheader() -> &'static str {
-    crate::menu_label("settings.environments_page.empty_state_subheader", "Choose how you'd like to set up your environment:")
+    crate::menu_label(
+        "settings.environments_page.empty_state_subheader",
+        "Choose how you'd like to set up your environment:",
+    )
 }
 fn card_last_used_never() -> &'static str {
-    crate::menu_label("settings.environments_page.card_last_used_never", "Last used: never")
+    crate::menu_label(
+        "settings.environments_page.card_last_used_never",
+        "Last used: never",
+    )
 }
 fn card_view_runs_link() -> &'static str {
-    crate::menu_label("settings.environments_page.card_view_runs_link", "View my runs")
+    crate::menu_label(
+        "settings.environments_page.card_view_runs_link",
+        "View my runs",
+    )
 }
 fn tooltip_share() -> &'static str {
     crate::menu_label("settings.environments_page.tooltip_share", "Share")
@@ -173,13 +236,13 @@ fn tooltip_edit() -> &'static str {
     crate::menu_label("settings.environments_page.tooltip_edit", "Edit")
 }
 fn card_last_edited_template() -> &'static str {
-    crate::menu_label("settings.environments_page.card_last_edited", "Last edited: {}")
+    crate::menu_label(
+        "settings.environments_page.card_last_edited",
+        "Last edited: {}",
+    )
 }
 fn card_last_used_template() -> &'static str {
     crate::menu_label("settings.environments_page.card_last_used", "Last used: {}")
-}
-fn section_shared_by_team_template() -> &'static str {
-    crate::menu_label("settings.environments_page.section_shared_by_team", "Shared by Warp and {}")
 }
 fn card_env_id_template() -> &'static str {
     crate::menu_label("settings.environments_page.card_env_id", "Env ID: {}")
@@ -191,7 +254,10 @@ fn card_repos_template() -> &'static str {
     crate::menu_label("settings.environments_page.card_repos", "Repos: {}")
 }
 fn card_setup_commands_template() -> &'static str {
-    crate::menu_label("settings.environments_page.card_setup_commands", "Setup commands: {}")
+    crate::menu_label(
+        "settings.environments_page.card_setup_commands",
+        "Setup commands: {}",
+    )
 }
 const CARD_BORDER_WIDTH: f32 = 1.;
 const CARD_PADDING: f32 = 16.;
@@ -315,6 +381,7 @@ impl EnvironmentDisplayData {
 }
 
 pub struct EnvironmentsPageView {
+    self_handle: WeakViewHandle<Self>,
     page: PageType<Self>,
     current_page: EnvironmentsPage,
     copy_button_mouse_states: HashMap<SyncId, MouseStateHandle>,
@@ -463,7 +530,8 @@ impl EnvironmentsPageView {
                 CloudModelEvent::ObjectUpdated { .. }
                 | CloudModelEvent::ObjectMoved { .. }
                 | CloudModelEvent::ObjectPermissionsUpdated { .. }
-                | CloudModelEvent::ObjectSynced { .. } => {}
+                | CloudModelEvent::ObjectSynced { .. }
+                | CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated => {}
                 // Events that never affect environments — skip entirely.
                 CloudModelEvent::NotebookEditorChangedFromServer { .. }
                 | CloudModelEvent::ObjectForceExpanded { .. } => return,
@@ -617,6 +685,7 @@ impl EnvironmentsPageView {
             ctx.add_model(|_| crate::pane_group::pane::PaneConfiguration::new("Environments"));
 
         let mut view = Self {
+            self_handle: ctx.handle(),
             page: PageType::new_monolith(
                 EnvironmentsPageWidget,
                 None, // Title rendered conditionally in widget
@@ -861,10 +930,7 @@ impl EnvironmentsPageView {
                 };
 
                 let Some(owner) = owner else {
-                    self.show_error_toast(
-                        toast_create_not_logged_in().to_string(),
-                        ctx,
-                    );
+                    self.show_error_toast(toast_create_not_logged_in().to_string(), ctx);
                     return;
                 };
 
@@ -888,10 +954,7 @@ impl EnvironmentsPageView {
                 // Verify the environment still exists
                 let Some(existing_env) = CloudAmbientAgentEnvironment::get_by_id(env_id, ctx)
                 else {
-                    self.show_error_toast(
-                        toast_save_missing().to_string(),
-                        ctx,
-                    );
+                    self.show_error_toast(toast_save_missing().to_string(), ctx);
                     return;
                 };
 
@@ -1056,19 +1119,16 @@ impl TypedActionView for EnvironmentsPageView {
                 self.open_environment_setup_mode_selector(ctx);
             }
             EnvironmentsPageAction::ShareToTeam(env_id) => {
-                let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() else {
-                    self.show_error_toast(
-                        toast_share_no_team().to_string(),
-                        ctx,
-                    );
+                let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+                    .team_for_view(ctx)
+                    .map(|team| team.uid)
+                else {
+                    self.show_error_toast(toast_share_no_team().to_string(), ctx);
                     return;
                 };
 
                 let SyncId::ServerId(server_id) = *env_id else {
-                    self.show_error_toast(
-                        toast_share_not_synced().to_string(),
-                        ctx,
-                    );
+                    self.show_error_toast(toast_share_not_synced().to_string(), ctx);
                     return;
                 };
 
@@ -1250,7 +1310,10 @@ impl EnvironmentsPageWidget {
                 sort_by_last_edited_desc(&mut personal_environments);
                 sort_by_last_edited_desc(&mut team_environments);
 
-                let is_user_on_team = UserWorkspaces::as_ref(app).current_team_uid().is_some();
+                let window_team =
+                    UserWorkspaces::as_ref(app).team_for_view_handle(&view.self_handle, app);
+                let is_user_on_team = window_team.is_some();
+                let team_name = window_team.map(|team| team.name.as_str());
 
                 let card_render_state = EnvironmentCardRenderState {
                     copy_button_mouse_states: &view.copy_button_mouse_states,
@@ -1272,6 +1335,7 @@ impl EnvironmentsPageWidget {
                             app,
                             EnvironmentListScope::Personal,
                             is_user_on_team,
+                            team_name,
                         ))
                         .with_child(Self::render_section_divider(appearance))
                         .with_child(Self::render_scoped_section(
@@ -1281,6 +1345,7 @@ impl EnvironmentsPageWidget {
                             app,
                             EnvironmentListScope::Team,
                             is_user_on_team,
+                            team_name,
                         ))
                         .finish();
                     page.add_child(sections);
@@ -1292,6 +1357,7 @@ impl EnvironmentsPageWidget {
                         app,
                         EnvironmentListScope::Personal,
                         is_user_on_team,
+                        team_name,
                     ));
                 } else {
                     page.add_child(Self::render_scoped_section(
@@ -1301,6 +1367,7 @@ impl EnvironmentsPageWidget {
                         app,
                         EnvironmentListScope::Team,
                         is_user_on_team,
+                        team_name,
                     ));
                 }
             }
@@ -1404,17 +1471,19 @@ impl EnvironmentsPageWidget {
         app: &AppContext,
         list_scope: EnvironmentListScope,
         is_user_on_team: bool,
+        team_name: Option<&str>,
     ) -> Box<dyn Element> {
         // Keep header-to-card spacing smaller than the overall page/section spacing.
         const HEADER_TO_LIST_SPACING: f32 = 8.;
 
         let header = match list_scope {
-            EnvironmentListScope::Personal => Self::render_overline_header(section_personal(), appearance),
+            EnvironmentListScope::Personal => {
+                Self::render_overline_header(section_personal(), appearance)
+            }
             EnvironmentListScope::Team => {
-                let shared_by_text = UserWorkspaces::as_ref(app)
-                    .current_team()
-                    .map(|team| section_shared_by_team_template().replace("{}", &team.name))
-                    .unwrap_or_else(|| section_shared_by_team_fallback().to_string());
+                let shared_by_text = team_name
+                    .map(|team_name| format!("Shared by Warp and {team_name}"))
+                    .unwrap_or_else(|| "Shared by Warp and your team".to_string());
                 Self::render_overline_header(&shared_by_text, appearance)
             }
         };
@@ -1853,13 +1922,15 @@ impl EnvironmentsPageWidget {
             // since it returns a Box<dyn Element> that can only be consumed once
             let env_id_str_copy = env_id_str.clone();
             let env_id_with_copy = render_copyable_text_field(
-                CopyableTextFieldConfig::new(card_env_id_template().replace("{}", &env_id_str.clone()))
-                    .with_font_size(appearance.ui_font_size() * 0.9)
-                    .with_text_color(blended_colors::text_sub(theme, theme.surface_1()))
-                    .with_icon_size(12.)
-                    .with_mouse_state(copy_button_mouse_state.clone())
-                    .with_last_copied_at(last_copied_at.as_ref())
-                    .with_copy_button_placement(CopyButtonPlacement::NextToText),
+                CopyableTextFieldConfig::new(
+                    card_env_id_template().replace("{}", &env_id_str.clone()),
+                )
+                .with_font_size(appearance.ui_font_size() * 0.9)
+                .with_text_color(blended_colors::text_sub(theme, theme.surface_1()))
+                .with_icon_size(12.)
+                .with_mouse_state(copy_button_mouse_state.clone())
+                .with_last_copied_at(last_copied_at.as_ref())
+                .with_copy_button_placement(CopyButtonPlacement::NextToText),
                 move |ctx| {
                     ctx.dispatch_typed_action(EnvironmentsPageAction::CopyEnvId(
                         env_id,

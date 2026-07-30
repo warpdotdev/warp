@@ -6,17 +6,20 @@
 //! — when the user isn't logged in yet — drives the device-authorization login
 //! flow, flipping the model to [`TuiLoginPhase::LoggedIn`] when it completes.
 mod mcp;
+mod user_info;
 
 pub use mcp::{
     TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
     TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
 };
+use url::Url;
+pub use user_info::{TuiUserInfoManager, TuiUserInfoManagerEvent, TuiUserInfoSnapshot};
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use crate::TuiMountFn;
 use crate::ai::mcp::FileBasedMCPManager;
-use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::{self, AuthStateProvider};
 
 /// Login state of the headless TUI, observed by the `warp_tui` root view to
 /// decide whether to show the login placeholder or the input UI.
@@ -36,8 +39,12 @@ pub enum TuiLoginPhase {
 
 /// Events emitted by [`TuiLoginModel`].
 pub enum TuiLoginEvent {
+    /// The login phase changed and the root view must repaint.
+    PhaseChanged,
     /// Authentication completed and the TUI can create its terminal session.
     LoggedIn,
+    /// The current user logged out and the TUI should return to authentication.
+    LoggedOut,
 }
 
 /// Singleton holding the TUI's [`TuiLoginPhase`]. Updated by [`init`]'s auth
@@ -78,20 +85,26 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
         phase: initial_phase,
     });
     ctx.add_singleton_model(TuiMcpManager::new);
+    ctx.add_singleton_model(TuiUserInfoManager::new);
 
+    // Keep the auth subscription alive for the full process lifetime so a
+    // logged-in TUI can complete device authorization again after logout.
+    ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
+        handle_auth_manager_event(event, ctx);
+    });
     // Mount the TUI now so it renders immediately; the root view shows the
     // login placeholder until the model flips to `LoggedIn`.
     mount(ctx);
 
     if logged_in {
         activate_global_mcp_servers(ctx);
-        return;
+    } else {
+        authorize_device(ctx);
     }
+}
 
-    // Reuses the same device-authorization flow as `oz login` (see
-    // `app/src/ai/agent_sdk/admin.rs`). The browser handles login; control
-    // returns here once the device code is approved.
-    ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| match event {
+fn handle_auth_manager_event(event: &AuthManagerEvent, ctx: &mut AppContext) {
+    match event {
         AuthManagerEvent::ReceivedDeviceAuthorizationCode {
             verification_url,
             verification_url_complete,
@@ -101,14 +114,17 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
             let url_to_open = verification_url_complete
                 .as_deref()
                 .unwrap_or(verification_url.as_str());
-            ctx.open_url(url_to_open);
+            let url_to_open = tui_verification_url(url_to_open);
             set_login_phase(
                 ctx,
                 TuiLoginPhase::AwaitingLogin {
-                    verification_uri: Some(url_to_open.to_owned()),
+                    verification_uri: Some(url_to_open.clone()),
                     user_code: Some(user_code.clone()),
                 },
             );
+            if !ctx.try_open_url(&url_to_open) {
+                log::warn!("Unable to open the device authorization URL in the default browser");
+            }
         }
         AuthManagerEvent::AuthComplete => {
             set_login_phase(ctx, TuiLoginPhase::LoggedIn);
@@ -121,16 +137,45 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
             },
         ),
         _ => {}
-    });
+    }
+}
 
+fn authorize_device(ctx: &mut AppContext) {
     AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
         auth_manager.authorize_device(ctx);
     });
+}
+fn tui_verification_url(verification_url: &str) -> String {
+    let Ok(mut verification_url) = Url::parse(verification_url) else {
+        return verification_url.to_owned();
+    };
+    verification_url
+        .query_pairs_mut()
+        .append_pair("source", "warp-agent-cli");
+    verification_url.into()
 }
 
 fn activate_global_mcp_servers(ctx: &mut AppContext) {
     FileBasedMCPManager::handle(ctx).update(ctx, |manager, ctx| {
         manager.activate_global_warp_servers(ctx);
+    });
+}
+
+/// Logs out the current TUI user and sends them to Warp web's logged-out flow.
+pub fn log_out_tui(ctx: &mut AppContext) {
+    auth::log_out_and_open_web(ctx);
+    set_logged_out_phase(ctx);
+}
+
+fn set_logged_out_phase(ctx: &mut AppContext) {
+    TuiLoginModel::handle(ctx).update(ctx, |model, ctx| {
+        model.phase = TuiLoginPhase::AwaitingLogin {
+            verification_uri: None,
+            user_code: None,
+        };
+        ctx.notify();
+        ctx.emit(TuiLoginEvent::PhaseChanged);
+        ctx.emit(TuiLoginEvent::LoggedOut);
     });
 }
 
@@ -142,6 +187,7 @@ fn set_login_phase(ctx: &mut AppContext, phase: TuiLoginPhase) {
         let logged_in = matches!(phase, TuiLoginPhase::LoggedIn);
         model.phase = phase;
         ctx.notify();
+        ctx.emit(TuiLoginEvent::PhaseChanged);
         if logged_in {
             ctx.emit(TuiLoginEvent::LoggedIn);
         }

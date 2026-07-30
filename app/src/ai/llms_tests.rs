@@ -4,7 +4,6 @@ use std::rc::Rc;
 use warpui::App;
 
 use super::*;
-use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
@@ -18,6 +17,7 @@ use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{LaunchMode, TuiEntryPoint};
 
 // -- DisableReason::should_clear_preference tests --
 
@@ -192,6 +192,7 @@ fn endpoint(
         name: name.into(),
         url: url.into(),
         api_key: api_key.into(),
+        schema: Default::default(),
         models,
     }
 }
@@ -284,6 +285,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
     };
     let preferences = LLMPreferences {
         models_by_feature: ModelsByFeature::default(),
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
@@ -426,6 +428,7 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
     };
     let preferences = LLMPreferences {
         models_by_feature: ModelsByFeature::default(),
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
@@ -526,14 +529,17 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
         let custom_model_id = LLMId::from("custom-config-key");
         ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
             api_key_manager.add_custom_endpoint(
-                "local".to_string(),
-                "https://example.com/v1".to_string(),
-                "test-key".to_string(),
-                vec![(
-                    "custom-model".to_string(),
-                    None,
-                    Some(custom_model_id.to_string()),
-                )],
+                ai::api_keys::CustomEndpointParams {
+                    name: "local".to_string(),
+                    url: "https://example.com/v1".to_string(),
+                    api_key: "test-key".to_string(),
+                    models: vec![(
+                        "custom-model".to_string(),
+                        None,
+                        Some(custom_model_id.to_string()),
+                    )],
+                    schema: ai::api_keys::CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -609,6 +615,7 @@ fn with_model_picker_query_test_context(f: impl FnOnce(&LLMPreferences, &AppCont
                     agent_mode,
                     ..Default::default()
                 },
+                agent_mode_models_unavailable: false,
                 last_update: None,
                 base_llm_for_terminal_view: HashMap::new(),
                 custom_llms: Vec::new(),
@@ -694,14 +701,17 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
         let custom_model_id = LLMId::from("custom-model-config-key");
         ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
             api_key_manager.add_custom_endpoint(
-                "local".to_string(),
-                "https://example.com/v1".to_string(),
-                "test-key".to_string(),
-                vec![(
-                    "custom-model".to_string(),
-                    Some("Custom Model".to_string()),
-                    Some(custom_model_id.to_string()),
-                )],
+                ai::api_keys::CustomEndpointParams {
+                    name: "local".to_string(),
+                    url: "https://example.com/v1".to_string(),
+                    api_key: "test-key".to_string(),
+                    models: vec![(
+                        "custom-model".to_string(),
+                        Some("Custom Model".to_string()),
+                        Some(custom_model_id.to_string()),
+                    )],
+                    schema: ai::api_keys::CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -829,6 +839,73 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
     });
 }
 
+#[test]
+fn reconcile_preserves_custom_router_models_not_configured_locally() {
+    // Regression test for QUALITY-1308: a profile whose model was set to a local
+    // custom router on device A should NOT be reset when device B syncs that profile
+    // but does not have the corresponding router configured locally.
+    //
+    // Before the fix, `reconcile_stale_custom_router_selection` called
+    // `set_base_model(None)` / `set_coding_model(None)` for any
+    // `custom-router:local:…` id absent from the loaded registry, causing the
+    // preference to be cleared and synced back — wiping device A's setting.
+    //
+    // The fix: profile (persisted/synced) preferences are never cleared for
+    // unrecognized local router ids. The display fallback already handles
+    // rendering the default model when the router cannot be resolved locally.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        // Simulate a local custom-router id from another device.
+        // This device (device B) has NO local routers configured in its registry.
+        let remote_router_id = LLMId::from("custom-router:local:my-special-router");
+
+        let default_profile_id =
+            profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&default_profile_id, Some(remote_router_id.clone()), ctx);
+            profiles.set_coding_model(&default_profile_id, Some(remote_router_id.clone()), ctx);
+        });
+
+        // Call reconcile_stale_custom_router_selection directly.
+        // self.custom_model_routers is empty (device B has no local routers),
+        // so valid_local = {} and the old code would have cleared both fields.
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.reconcile_stale_custom_router_selection(ctx);
+        });
+
+        // The model IDs must be PRESERVED — no profile clear should be synced back.
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(
+                profile.data().base_model.as_ref(),
+                Some(&remote_router_id),
+                "base_model must be preserved for unknown custom-router:local:* IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().coding_model.as_ref(),
+                Some(&remote_router_id),
+                "coding_model must be preserved for unknown custom-router:local:* IDs (cross-device sync)"
+            );
+        });
+    });
+}
+
 // -- execution-profile model selection tests --
 
 fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
@@ -869,6 +946,7 @@ fn preferences_for_profile_model_tests() -> LLMPreferences {
             agent_mode,
             ..Default::default()
         },
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: Vec::new(),
@@ -925,8 +1003,10 @@ fn updating_active_profile_base_model_persists_and_updates_resolution() {
         let profiles = app.add_singleton_model(|ctx| {
             AIExecutionProfilesModel::new(
                 &LaunchMode::Tui {
-                    mount: Box::new(|_| {}),
-                    api_key: None,
+                    entrypoint: TuiEntryPoint::Interactive {
+                        mount: Box::new(|_| {}),
+                        api_key: None,
+                    },
                 },
                 ctx,
             )

@@ -565,9 +565,6 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::FetchConversation { .. } => self
                 .fetch_conversation_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::StartAgent { .. } => self
-                .start_agent_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::SendMessageToAgent { .. } => self
                 .send_message_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
@@ -757,10 +754,6 @@ impl BlocklistAIActionExecutor {
                 .into(),
             AIAgentActionType::FetchConversation { .. } => self
                 .fetch_conversation_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::StartAgent { .. } => self
-                .start_agent_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
             AIAgentActionType::SendMessageToAgent { .. } => self
@@ -1021,9 +1014,6 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::FetchConversation { .. } => self
                 .fetch_conversation_executor
-                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
-            AIAgentActionType::StartAgent { .. } => self
-                .start_agent_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::SendMessageToAgent { .. } => self
                 .send_message_executor

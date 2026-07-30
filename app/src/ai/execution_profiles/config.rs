@@ -474,7 +474,9 @@ struct ExecutionProfileFile {
     cli_agent_model: Option<String>,
     #[schemars(description = "Optional computer-use model override.")]
     computer_use_model: Option<String>,
-    #[schemars(description = "Optional maximum context window in tokens.")]
+    #[schemars(
+        description = "Optional context window limit in tokens. The valid range is model-dependent and determined server-side; the value is automatically clamped to the selected model's supported context window. Consult the selected model's documentation for its actual supported range."
+    )]
     context_window_limit: Option<u32>,
     #[schemars(description = "Whether plans are automatically synced to Warp Drive.")]
     autosync_plans_to_warp_drive: bool,

@@ -4725,8 +4725,13 @@ impl AppContext {
 
     /// Opens the given URL in the default application configured to handle the URL.
     pub fn open_url(&self, url: &str) {
+        self.try_open_url(url);
+    }
+
+    /// Opens the given URL and returns whether the platform accepted the launch request.
+    pub fn try_open_url(&self, url: &str) -> bool {
         let effective_url = (self.before_open_url_callback)(url, self);
-        self.platform_delegate.open_url(&effective_url);
+        self.platform_delegate.open_url(&effective_url)
     }
 
     pub fn system_theme(&self) -> SystemTheme {

@@ -30,6 +30,7 @@ pub(crate) struct TransientHint {
 pub(crate) enum TransientHintTone {
     Muted,
     Success,
+    Error,
 }
 
 #[derive(Debug)]
@@ -61,6 +62,15 @@ impl TransientHint {
         transient_hint: impl Fn(&mut V) -> &mut TransientHint + 'static,
     ) {
         self.show_with_tone(text, TransientHintTone::Success, ctx, transient_hint);
+    }
+    /// Displays error feedback in the shared transient footer slot.
+    pub(crate) fn show_error<V: Entity>(
+        &mut self,
+        text: String,
+        ctx: &mut ViewContext<V>,
+        transient_hint: impl Fn(&mut V) -> &mut TransientHint + 'static,
+    ) {
+        self.show_with_tone(text, TransientHintTone::Error, ctx, transient_hint);
     }
 
     fn show_with_tone<V: Entity>(

@@ -69,6 +69,7 @@ use crate::ai::blocklist::code_block::{
 };
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
+use crate::ai::blocklist::inline_action::gemini_enterprise_credentials_error::GeminiEnterpriseCredentialsErrorView;
 use crate::ai::blocklist::inline_action::inline_action_header::{
     INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
 };
@@ -77,10 +78,12 @@ use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
 use crate::ai::blocklist::view_util::{
-    FailedOutputPresentation, error_color, failed_output_presentation,
+    FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL, error_color,
+    failed_output_presentation,
 };
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
+use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::code::editor::view::CodeEditorView;
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
@@ -335,8 +338,16 @@ pub fn render_warping_indicator<V: View>(
                 LOAD_OUTPUT_MESSAGE_FOR_SEARCH_CODEBASE.to_owned()
             }
             Some(AIAgentActionType::Grep { .. }) => LOAD_OUTPUT_MESSAGE_FOR_GREP.to_owned(),
-            Some(AIAgentActionType::CallMCPTool { name, .. }) => {
-                format!("Calling \"{name}\" MCP tool...")
+            Some(AIAgentActionType::CallMCPTool {
+                server_id, name, ..
+            }) => {
+                match server_id
+                    .as_ref()
+                    .and_then(|id| TemplatableMCPServerManager::get_mcp_name(id, app))
+                {
+                    Some(server) => format!("Calling \"{name}\" MCP tool on {server}..."),
+                    None => format!("Calling \"{name}\" MCP tool..."),
+                }
             }
             Some(AIAgentActionType::ReadMCPResource { name, .. }) => {
                 format!("Reading \"{name}\" MCP resource...")
@@ -3035,6 +3046,8 @@ pub struct FailedOutputProps<'a> {
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
     pub subscribe_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
+    pub gemini_enterprise_credentials_error_view:
+        Option<&'a ViewHandle<GeminiEnterpriseCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
 }
@@ -3047,10 +3060,9 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
 
     let error_text = match presentation {
         FailedOutputPresentation::Message(message) => message,
-        FailedOutputPresentation::OutOfCredits { title, detail, .. } => {
+        FailedOutputPresentation::OutOfCredits { message, .. } => {
             return render_out_of_credits_error(
-                title,
-                detail,
+                &message,
                 props.subscribe_button_handle,
                 props.is_ai_input_enabled,
                 props.icon_right_margin,
@@ -3078,6 +3090,14 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 return ChildView::new(view).finish();
             }
             // Fallback for contexts that don't have the stateful view (e.g. CLI subagent)
+            fallback_message
+        }
+        FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
+            fallback_message,
+        } => {
+            if let Some(view) = props.gemini_enterprise_credentials_error_view {
+                return ChildView::new(view).finish();
+            }
             fallback_message
         }
     };
@@ -3159,8 +3179,7 @@ fn out_of_credits_cta_button(
 
 /// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
 fn render_out_of_credits_error(
-    title: &str,
-    detail: &str,
+    message: &str,
     subscribe_button_handle: &MouseStateHandle,
     is_ai_input_enabled: bool,
     icon_right_margin: f32,
@@ -3184,7 +3203,7 @@ fn render_out_of_credits_error(
     .finish();
 
     let text = Text::new(
-        format!("{title}\n\n{detail}"),
+        message.to_owned(),
         appearance.monospace_font_family(),
         appearance.monospace_font_size(),
     )
@@ -3202,12 +3221,13 @@ fn render_out_of_credits_error(
     })
     .finish();
 
-    let subscribe_button = out_of_credits_cta_button("Subscribe", subscribe_button_handle, app)
-        .build()
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
-        })
-        .finish();
+    let subscribe_button =
+        out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+            })
+            .finish();
 
     Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -3374,9 +3394,12 @@ pub(crate) fn render_debug_footer<V: View>(
 
     // Check if we should show the submit button (hide for dogfood and enterprise users)
     let is_dogfood = ChannelState::channel().is_dogfood();
-    let is_enterprise_user = UserWorkspaces::as_ref(app)
-        .current_team()
-        .is_some_and(|team| team.billing_metadata.customer_type == CustomerType::Enterprise);
+    let is_enterprise_user =
+        UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| {
+                workspace.billing_metadata.customer_type == CustomerType::Enterprise
+            });
     let submit_button = if !is_dogfood && !is_enterprise_user {
         let submit_button_style = UiComponentStyles {
             font_color: Some(

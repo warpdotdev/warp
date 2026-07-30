@@ -119,6 +119,15 @@ fn aws_bedrock_credentials_is_failed_with_auth_required() {
 }
 
 #[test]
+fn gemini_enterprise_credentials_is_failed_with_auth_required() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::AuthenticationRequired),
+        Some("Gemini Enterprise"),
+    );
+}
+#[test]
 fn other_error_is_error_with_internal() {
     assert_update(
         classify_renderable_error(&RenderableAIError::Other {

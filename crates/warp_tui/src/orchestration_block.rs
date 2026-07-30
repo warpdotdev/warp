@@ -28,7 +28,8 @@ use warpui_core::elements::tui::TuiElement;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, FixedBinding};
 use warpui_core::{
-    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelHandle, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 mod configuration;
 mod render;
@@ -42,6 +43,7 @@ use crate::option_selector::{
     OptionSelectorHeader, OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent,
 };
 use crate::orchestrated_agent_identity_styling::AgentIdentity;
+use crate::tui_ask_question_view::PageNavigationDirection;
 use crate::tui_builder::TuiUiBuilder;
 
 const ORCHESTRATION_BLOCK_TITLE: &str = "Can I start additional agents for this task?";
@@ -102,14 +104,6 @@ enum CardMode {
     Configuring { page: ConfigPage },
 }
 
-/// Direction to navigate after the selector confirms the current page.
-/// Arrow actions retain this until the selector emits its confirmation event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PageConfirmationNavigation {
-    Previous,
-    Next,
-}
-
 /// Events emitted to the owning agent block.
 #[derive(Clone, Debug)]
 pub(crate) enum TuiOrchestrationBlockEvent {
@@ -156,7 +150,7 @@ pub(crate) struct TuiOrchestrationBlock {
     mode: CardMode,
     selector: ViewHandle<TuiOptionSelector>,
     /// Arrow direction awaiting the selector's confirmation event.
-    pending_page_navigation: Option<PageConfirmationNavigation>,
+    pending_page_navigation: Option<PageNavigationDirection>,
     /// Validation reason shown inline after a blocked Accept.
     accept_error: Option<String>,
 
@@ -417,7 +411,7 @@ impl TuiOrchestrationBlock {
         self.orchestration_edit_state = OrchestrationEditState::new(new_state);
         self.resolve_interactive_defaults(ctx);
         self.refresh_active_page(ctx);
-        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
     }
 
@@ -482,7 +476,7 @@ impl TuiOrchestrationBlock {
             selector.set_page(selector_page, ctx);
         });
         ctx.focus(&self.selector);
-        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
     }
 
@@ -491,7 +485,7 @@ impl TuiOrchestrationBlock {
         self.mode = CardMode::Acceptance;
         self.pending_page_navigation = None;
         ctx.focus_self();
-        ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
     }
 
@@ -543,11 +537,11 @@ impl TuiOrchestrationBlock {
         };
         let navigation = self.pending_page_navigation.take();
         let target = match navigation {
-            Some(PageConfirmationNavigation::Previous) => index
+            Some(PageNavigationDirection::Previous) => index
                 .checked_sub(1)
                 .and_then(|index| sequence.get(index))
                 .copied(),
-            Some(PageConfirmationNavigation::Next) | None => sequence.get(index + 1).copied(),
+            Some(PageNavigationDirection::Next) | None => sequence.get(index + 1).copied(),
         };
         match target {
             Some(target) => self.open_page(target, ctx),
@@ -608,7 +602,9 @@ impl TuiOrchestrationBlock {
                     self.finish_page_confirmation(ConfigPage::Host, ctx);
                 }
             }
-            TuiOptionSelectorEvent::CustomTextOpened => {}
+            TuiOptionSelectorEvent::CustomTextCleared
+            | TuiOptionSelectorEvent::CustomTextOpened
+            | TuiOptionSelectorEvent::CustomTextClosed => {}
             TuiOptionSelectorEvent::RetryRequested => {
                 self.pending_page_navigation = None;
                 self.ensure_auth_secrets_fetched(ctx);
@@ -621,6 +617,7 @@ impl TuiOrchestrationBlock {
             TuiOptionSelectorEvent::LayoutInvalidated => {
                 ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
             }
+            TuiOptionSelectorEvent::RowsReordered { .. } => {}
         }
     }
 
@@ -649,7 +646,7 @@ impl TuiOrchestrationBlock {
             ctx,
         ) {
             self.accept_error = Some(reason);
-            ctx.emit(TuiOrchestrationBlockEvent::BlockingStateChanged);
+            ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
             ctx.notify();
             return;
         }
@@ -705,7 +702,7 @@ impl TuiOrchestrationBlock {
     /// Confirms the selection, then applies the requested arrow navigation.
     fn handle_arrow_navigation(
         &mut self,
-        navigation: PageConfirmationNavigation,
+        navigation: PageNavigationDirection,
         ctx: &mut ViewContext<Self>,
     ) {
         self.pending_page_navigation = Some(navigation);
@@ -731,6 +728,12 @@ impl TuiView for TuiOrchestrationBlock {
         vec![self.selector.id()]
     }
 
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() && matches!(self.mode, CardMode::Configuring { .. }) {
+            ctx.focus(&self.selector);
+        }
+    }
+
     fn keymap_context(&self, _ctx: &AppContext) -> keymap::Context {
         let mut context = keymap::Context::default();
         context.set.insert(Self::ui_name());
@@ -754,10 +757,10 @@ impl TypedActionView for TuiOrchestrationBlock {
             TuiOrchestrationBlockAction::Accept => self.handle_accept(ctx),
             TuiOrchestrationBlockAction::Configure => self.handle_configure(ctx),
             TuiOrchestrationBlockAction::CommitAndPreviousPage => {
-                self.handle_arrow_navigation(PageConfirmationNavigation::Previous, ctx)
+                self.handle_arrow_navigation(PageNavigationDirection::Previous, ctx)
             }
             TuiOrchestrationBlockAction::CommitAndNextPage => {
-                self.handle_arrow_navigation(PageConfirmationNavigation::Next, ctx)
+                self.handle_arrow_navigation(PageNavigationDirection::Next, ctx)
             }
             TuiOrchestrationBlockAction::NextPage => self.navigate_page(true, ctx),
             TuiOrchestrationBlockAction::Back => self.handle_back(ctx),

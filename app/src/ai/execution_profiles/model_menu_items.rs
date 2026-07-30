@@ -95,7 +95,7 @@ fn make_item_fields<A: Action + Clone>(
     } else if is_custom_router {
         Icon::Dataflow
     } else {
-        llm.provider.icon().unwrap_or(Icon::Oz)
+        llm.provider.icon().unwrap_or(Icon::Agent)
     };
     let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
     let trailing_credential_icon = (!is_using_cloud_host && is_using_api_key).then_some(Icon::Key);

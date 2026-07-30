@@ -42,7 +42,7 @@ impl WarpifyFooterView {
 
         let use_agent_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("Use agent", AgentFooterButtonTheme::new(None))
-                .with_icon(Icon::Oz)
+                .with_icon(Icon::Agent)
                 .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
                 .with_size(button_size)
                 .with_tooltip("Ask the Warp agent to assist")

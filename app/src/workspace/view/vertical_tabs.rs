@@ -269,10 +269,6 @@ enum TerminalPrimaryLineFont {
     Monospace,
 }
 
-fn oz_icon_fill(theme: &WarpTheme) -> WarpThemeFill {
-    theme.main_text_color(theme.background())
-}
-
 fn render_pane_icon_with_status(
     variant: IconWithStatusVariant,
     theme: &WarpTheme,
@@ -1459,17 +1455,23 @@ fn render_detail_kind_badge_icon(
             }
 
             let icon = if terminal_view.is_ambient_agent_session(app) {
-                WarpIcon::OzCloud
+                WarpIcon::CloudFilled
             } else if terminal_view
                 .selected_conversation_display_title(app)
                 .is_some()
             {
-                WarpIcon::Oz
+                // Local agent conversation: use the Warp agent logo glyph to
+                // match the icon-with-status rendering for the tab row.
+                WarpIcon::Agent
             } else {
                 WarpIcon::Terminal
             };
             let color = match icon {
-                WarpIcon::Oz | WarpIcon::OzCloud => oz_icon_fill(theme),
+                WarpIcon::CloudFilled => theme.main_text_color(theme.background()),
+                // Theme-adaptive fill: no black chip behind this glyph in the
+                // sidecar context, so use the main text color to stay visible
+                // on both dark and light themes.
+                WarpIcon::Agent => theme.main_text_color(theme.background()),
                 WarpIcon::Terminal => disabled_text,
                 _ => sub_text,
             };
@@ -4935,20 +4937,16 @@ pub(super) fn render_summary_pane_kind_icon_circle(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    // For ambient Oz / CLI agent kinds, delegate to `render_icon_with_status` so the
-    // brand-color circle is overlaid with the white cloud badge (status-less in summary
-    // mode). Non-ambient agent kinds and all other pane kinds fall through to the inline
-    // circle rendering below.
+    // Route all Warp agent kinds, plus ambient CLI agents, through
+    // `render_icon_with_status` so their circle and cloud treatment stays consistent
+    // with the pane row.
     if let Some(variant) = ambient_agent_variant(&kind) {
         return render_icon_with_status(variant, total_size, 0., theme, theme.background());
     }
     let icon_size = total_size * SUMMARY_INLINE_ICON_RATIO;
     let padding = total_size * SUMMARY_INLINE_PADDING_RATIO;
     let (icon_element, background): (Box<dyn Element>, ElementFill) = match kind {
-        SummaryPaneKind::OzAgent { .. } => (
-            WarpIcon::Oz.to_warpui_icon(oz_icon_fill(theme)).finish(),
-            theme.background().into(),
-        ),
+        SummaryPaneKind::OzAgent { .. } => unreachable!("handled by ambient_agent_variant"),
         SummaryPaneKind::CLIAgent { agent, .. } => {
             let icon_color = agent.brand_icon_color();
             let icon_element = agent
@@ -5013,14 +5011,13 @@ pub(super) fn render_summary_pane_kind_icon_circle(
     .finish()
 }
 
-/// Maps an ambient Oz / CLI agent summary-pane kind to the `IconWithStatusVariant` used to
-/// render the brand-color circle with the white cloud badge. Non-ambient kinds (and all
-/// other pane kinds) return `None` so the caller falls back to its inline rendering.
+/// Maps Warp agents and ambient CLI agents to the shared icon-with-status renderer.
+/// Non-ambient CLI agents and non-agent kinds fall back to inline summary rendering.
 fn ambient_agent_variant(kind: &SummaryPaneKind) -> Option<IconWithStatusVariant> {
     match kind {
-        SummaryPaneKind::OzAgent { is_ambient: true } => Some(IconWithStatusVariant::OzAgent {
+        SummaryPaneKind::OzAgent { is_ambient } => Some(IconWithStatusVariant::OzAgent {
             status: None,
-            is_ambient: true,
+            is_ambient: *is_ambient,
         }),
         SummaryPaneKind::CLIAgent {
             agent,
@@ -5047,7 +5044,12 @@ fn summary_pane_kind_icon(
 
     match kind {
         SummaryPaneKind::Terminal => (WarpIcon::Terminal, main_text),
-        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Oz, main_text),
+        // Local agent: Agent-brand glyph with theme main-text color, consistent
+        // with the tab row and summary circle.
+        // Note: this arm is currently unreachable — OzAgent is matched by the dedicated arm in
+        // render_summary_pane_kind_icon_circle before summary_pane_kind_icon is called.
+        // Kept for completeness in case callers change.
+        SummaryPaneKind::OzAgent { .. } => (WarpIcon::Agent, main_text),
         SummaryPaneKind::CLIAgent { agent, .. } => (
             agent.icon().unwrap_or(WarpIcon::Terminal),
             WarpThemeFill::Solid(agent.brand_icon_color()),

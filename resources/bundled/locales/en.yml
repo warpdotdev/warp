@@ -2244,7 +2244,7 @@ en:
     agent_block:
       thinking_finished: "Thought for {duration}"
       thinking_running: "Thinking..."
-      summarized: "Conversation summarized"
+      summarized: "Conversation summary"
     inline_menu:
       loading: "Loading slash commands…"
       empty: "No slash commands found"
@@ -2262,15 +2262,15 @@ en:
       user_in_control: "User is in control"
       waiting_instructions: "Agent waiting for instructions"
     warping:
-      label: "Warping..."
-      summarizing: "Summarizing conversation..."
+      label: "Warping"
+      summarizing: "Summarizing conversation"
     terminal:
       starting: "Starting terminal…"
       cannot_run_command: "cannot run — command already running"
       new_conversation_blocked: "cannot start new conversation while terminal command is running"
       copied_to_clipboard: "Conversation copied to clipboard"
       restore_token_mismatch: "The restored conversation did not match the requested conversation."
-      restore_only_oz_supported: "The Warp TUI only supports Oz/Warp conversations."
+      restore_only_oz_supported: "Warp Agent CLI only supports Oz/Warp conversations."
       restore_load_failed: "The conversation could not be loaded."
       no_active_conversation_to_export: "No active conversation to export"
       export_overwrote: "Conversation exported to {path} (overwrote existing file)"
@@ -2291,7 +2291,7 @@ en:
       copy_failed: "failed to copy to clipboard"
       sub_agents_callout: "Shift + ↑ sub-agents"
     zero_state:
-      title: "Warp Agent"
+      title: "Warp Agent CLI"
       whats_new: "What's new"
       version:
         dev_build: "dev build"
@@ -2309,7 +2309,7 @@ en:
       title: "Sign in to continue"
       open_in_browser: "Open {uri} in your browser"
       enter_code: "and enter code: {code}"
-      opening_browser: "Opening your browser…"
+      opening_browser: "Requesting a sign-in link…"
       failed_prefix: "Login failed: {message}"
       failed_hint: "Press Ctrl-C to exit."
     read_documents:

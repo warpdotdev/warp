@@ -915,6 +915,7 @@ impl TerminalView {
                 appearance,
                 &ui_state.loading_shimmer_handle,
                 &ui_state.tip_model,
+                &self.view_handle,
                 app,
             )
         };

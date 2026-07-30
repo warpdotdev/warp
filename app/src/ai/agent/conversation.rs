@@ -1022,6 +1022,10 @@ impl AIConversation {
     pub fn server_conversation_token(&self) -> Option<&ServerConversationToken> {
         self.server_conversation_token.as_ref()
     }
+    pub fn debugging_server_conversation_token(&self) -> Option<&ServerConversationToken> {
+        self.server_conversation_token()
+            .or_else(|| self.forked_from_server_conversation_token())
+    }
 
     /// Returns the server-assigned run identifier as a string.
     pub fn run_id(&self) -> Option<String> {
@@ -1829,7 +1833,7 @@ impl AIConversation {
                             buffered_action_ids.push(action.id.clone());
                         }
                     }
-                    AIAgentActionType::StopRecording { recording_id } => {
+                    AIAgentActionType::StopRecording { recording_id, .. } => {
                         let Some(span) = active_span.as_ref() else {
                             continue;
                         };
@@ -1852,7 +1856,9 @@ impl AIConversation {
                                 active_span = None;
                             }
                             Some(AIAgentActionResultType::StopRecording(
-                                StopRecordingResult::Error(_) | StopRecordingResult::Cancelled,
+                                StopRecordingResult::Error(_)
+                                | StopRecordingResult::Cancelled
+                                | StopRecordingResult::Discarded,
                             )) => {
                                 // The stop saved no recording, so the buffered
                                 // rows must not be labeled as captured.
@@ -3410,8 +3416,8 @@ impl AIConversation {
 
     /// Replaces the conversation's todo lists directly, bypassing the normal
     /// todo-operation replay, for projection tests.
-    #[cfg(test)]
-    pub(crate) fn set_todo_lists_for_test(&mut self, todo_lists: Vec<AIAgentTodoList>) {
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_todo_lists_for_test(&mut self, todo_lists: Vec<AIAgentTodoList>) {
         self.todo_lists = todo_lists;
     }
 

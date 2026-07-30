@@ -165,7 +165,9 @@ impl ThemePickerSlide {
 
         let mut content = vec![self.render_header_text(appearance), theme_options_section];
 
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        if FeatureFlag::AccountFirstOnboarding.is_enabled()
+            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        {
             content.push(self.render_sync_with_os_section(appearance));
         }
 
@@ -178,7 +180,10 @@ impl ThemePickerSlide {
         let state = self.onboarding_state.as_ref(app);
         let is_terminal = matches!(state.intention(), OnboardingIntention::Terminal);
         let warp_drive_enabled = state.ui_customization().show_warp_drive;
-        if is_terminal && !warp_drive_enabled && FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        if !FeatureFlag::AccountFirstOnboarding.is_enabled()
+            && is_terminal
+            && !warp_drive_enabled
+            && FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
         {
             content.push(self.render_disclaimer_section(appearance));
         }
@@ -194,7 +199,10 @@ impl ThemePickerSlide {
     fn render_header_text(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph(crate::menu_label("onboarding.theme_picker.title", "Choose a theme"))
+            .paragraph(crate::menu_label(
+                "onboarding.theme_picker.title",
+                "Choose a theme",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -264,9 +272,7 @@ impl ThemePickerSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(
-                    crate::menu_label("common.back", "Back").into(),
-                ),
+                content: button::Content::Label(crate::menu_label("common.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -277,8 +283,11 @@ impl ThemePickerSlide {
             },
         );
 
+        let account_first = FeatureFlag::AccountFirstOnboarding.is_enabled();
         let theme_picker_last = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
-        let next_label = if theme_picker_last {
+        let next_label = if account_first {
+            "Next"
+        } else if theme_picker_last {
             crate::menu_label("common.get_warping", "Get Warping")
         } else {
             crate::menu_label("common.next", "Next")
@@ -300,7 +309,9 @@ impl ThemePickerSlide {
             },
         );
 
-        let (step_index, step_count) = if theme_picker_last {
+        let (step_index, step_count) = if account_first {
+            self.onboarding_state.as_ref(app).progress()
+        } else if theme_picker_last {
             let is_terminal = matches!(
                 self.onboarding_state.as_ref(app).intention(),
                 OnboardingIntention::Terminal
@@ -488,7 +499,9 @@ impl ThemePickerSlide {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        if FeatureFlag::AccountFirstOnboarding.is_enabled()
+            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        {
             let path = self.theme_visual_path(app);
             layout::onboarding_right_panel_with_bg(path, layout::FOREGROUND_LAYOUT_DEFAULT)
         } else {
@@ -670,7 +683,9 @@ impl ThemePickerSlide {
 
     fn next(&mut self, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |model, ctx| {
-            if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+            if FeatureFlag::AccountFirstOnboarding.is_enabled()
+                || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+            {
                 model.complete(ctx);
             } else {
                 model.next(ctx);

@@ -1,4 +1,4 @@
-use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys, CustomEndpointParams};
 #[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
@@ -32,7 +32,7 @@ use warpui::ui_components::slider::SliderStateHandle;
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, id,
+    ViewHandle, WeakViewHandle, id,
 };
 
 use super::custom_inference_modal::{
@@ -91,16 +91,17 @@ use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
-    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
-    AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FileBasedMcpEnabled, GeminiEnterpriseCredentialsEnabled,
-    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, InputSettings,
-    IntelligentAutosuggestionsEnabled, LongRunningCommandSubmissionMode, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
-    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
-    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
-    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
-    ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
+    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled,
+    AutoApproveBypassesCommandDenylist, AwsBedrockAutoLogin, AwsBedrockCredentialsEnabled,
+    CanUseWarpCreditsForFallback, CodeSettings, CodebaseContextEnabled, FileBasedMcpEnabled,
+    GeminiEnterpriseCredentialsEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
+    InputSettings, IntelligentAutosuggestionsEnabled, LongRunningCommandSubmissionMode,
+    MemoryEnabled, NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled,
+    OrchestrationMessageDisplayMode, PromptSubmissionMode, RuleSuggestionsEnabled,
+    SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
+    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
+    WarpDriveContextEnabled,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -567,6 +568,25 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 )),
                 &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
                 flags::INCLUDE_AGENT_COMMANDS_IN_HISTORY_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+            ToggleSettingActionPair::custom(
+                SettingActionPairDescriptions::new(
+                    "Allow auto-approve to bypass command denylist",
+                    "Require approval for denylisted commands in auto-approve",
+                ),
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleAutoApproveBypassesCommandDenylist,
+                )),
+                SettingActionPairContexts::new(
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & !id!(flags::AUTO_APPROVE_BYPASSES_COMMAND_DENYLIST_FLAG),
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & id!(flags::AUTO_APPROVE_BYPASSES_COMMAND_DENYLIST_FLAG),
+                ),
+                None,
             )
             .with_group(bindings::BindingGroup::WarpAi),
             ToggleSettingActionPair::new(
@@ -2193,7 +2213,7 @@ impl AISettingsPageView {
         let (active_id, active_provider) = {
             let prefs = LLMPreferences::as_ref(ctx);
             let active = prefs.get_active_base_model(ctx, None);
-            (active.id.clone(), active.provider.clone())
+            (active.id.clone(), active.provider)
         };
         if LLMPreferences::as_ref(ctx)
             .custom_llm_info_for_id(&active_id)
@@ -2237,32 +2257,14 @@ impl AISettingsPageView {
     /// key editor was committed.
     fn maybe_prompt_for_newly_added_provider_key(&mut self, ctx: &mut ViewContext<Self>) {
         let current = ApiKeyManager::as_ref(ctx).keys().clone();
-        let newly_added = [
-            (
-                LLMProvider::OpenAI,
-                &self.last_seen_provider_keys.openai,
-                &current.openai,
-            ),
-            (
-                LLMProvider::Anthropic,
-                &self.last_seen_provider_keys.anthropic,
-                &current.anthropic,
-            ),
-            (
-                LLMProvider::Google,
-                &self.last_seen_provider_keys.google,
-                &current.google,
-            ),
-        ]
-        .into_iter()
-        .find_map(|(provider, previous_key, current_key)| {
-            let was_present = previous_key
-                .as_deref()
+        let newly_added = LLMProvider::API_KEY_PROVIDERS.into_iter().find(|provider| {
+            let was_present = provider
+                .api_key(&self.last_seen_provider_keys)
                 .is_some_and(|key| !key.trim().is_empty());
-            let now_present = current_key
-                .as_deref()
+            let now_present = provider
+                .api_key(&current)
                 .is_some_and(|key| !key.trim().is_empty());
-            (!was_present && now_present).then_some(provider)
+            !was_present && now_present
         });
         self.last_seen_provider_keys = current;
         if let Some(provider) = newly_added {
@@ -2491,6 +2493,7 @@ impl AISettingsPageView {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             } => {
                 if !Self::can_use_custom_inference_controls(ctx) {
@@ -2499,10 +2502,13 @@ impl AISettingsPageView {
                 }
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.add_custom_endpoint(
-                        name.clone(),
-                        url.clone(),
-                        api_key.clone(),
-                        models.clone(),
+                        CustomEndpointParams {
+                            name: name.clone(),
+                            url: url.clone(),
+                            api_key: api_key.clone(),
+                            models: models.clone(),
+                            schema: *schema,
+                        },
                         ctx,
                     );
                 });
@@ -2530,6 +2536,7 @@ impl AISettingsPageView {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             } => {
                 if !Self::can_use_custom_inference_controls(ctx) {
@@ -2539,10 +2546,13 @@ impl AISettingsPageView {
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.save_custom_endpoint(
                         *index,
-                        name.clone(),
-                        url.clone(),
-                        api_key.clone(),
-                        models.clone(),
+                        CustomEndpointParams {
+                            name: name.clone(),
+                            url: url.clone(),
+                            api_key: api_key.clone(),
+                            models: models.clone(),
+                            schema: *schema,
+                        },
                         ctx,
                     );
                 });
@@ -2889,7 +2899,7 @@ impl AISettingsPageView {
                 // Full page: all widgets (legacy behavior)
                 widgets.push(Box::new(GlobalAIWidget::default()));
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::default()));
+                    widgets.push(Box::new(UsageWidget::new(ctx)));
                 }
                 if ai_settings
                     .intelligent_autosuggestions_enabled_internal
@@ -2910,7 +2920,7 @@ impl AISettingsPageView {
                             .git_operations_autogen_enabled_internal
                             .is_supported_on_current_platform())
                 {
-                    widgets.push(Box::new(ActiveAIWidget::default()));
+                    widgets.push(Box::new(ActiveAIWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
                 widgets.push(Box::new(AIInputWidget::default()));
@@ -2960,7 +2970,7 @@ impl AISettingsPageView {
                             .git_operations_autogen_enabled_internal
                             .is_supported_on_current_platform())
                 {
-                    widgets.push(Box::new(ActiveAIWidget::default()));
+                    widgets.push(Box::new(ActiveAIWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AIInputWidget::default()));
                 let voice_supported = cfg!(feature = "voice_input")
@@ -2985,7 +2995,7 @@ impl AISettingsPageView {
             }
             Some(AISubpage::Profiles) => {
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::default()));
+                    widgets.push(Box::new(UsageWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
             }
@@ -3764,6 +3774,7 @@ pub enum AISettingsPageAction {
     ToggleCloudAgentComputerUse,
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
+    ToggleAutoApproveBypassesCommandDenylist,
     ToggleAgentAttribution,
 
     // Custom model routers
@@ -4572,6 +4583,16 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
+            AISettingsPageAction::ToggleAutoApproveBypassesCommandDenylist => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(
+                        settings
+                            .auto_approve_bypasses_command_denylist
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+                ctx.notify();
+            }
             #[cfg(feature = "local_fs")]
             AISettingsPageAction::SetConversationLayout(layout) => {
                 crate::util::file::external_editor::EditorSettings::handle(ctx).update(
@@ -5033,12 +5054,18 @@ impl SettingsWidget for GlobalAIWidget {
     }
 }
 
-#[derive(Default)]
 struct UsageWidget {
+    view_handle: WeakViewHandle<AISettingsPageView>,
     requests_highlight_index: HighlightedHyperlink,
 }
 
 impl UsageWidget {
+    fn new(ctx: &ViewContext<AISettingsPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            requests_highlight_index: Default::default(),
+        }
+    }
     fn render_request_usage_count(
         &self,
         used: usize,
@@ -5199,7 +5226,7 @@ impl SettingsWidget for UsageWidget {
         let next_refresh_time = ai_request_usage_model.next_refresh_time();
         let formatted_next_refresh_time = next_refresh_time.format("%b %d").to_string();
         let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)
-            .current_team()
+            .team_for_view_handle(&self.view_handle, app)
             .map(|team| team.billing_metadata.is_delinquent_due_to_payment_issue())
             .unwrap_or_default();
 
@@ -5252,7 +5279,7 @@ impl SettingsWidget for UsageWidget {
 
         let auth_state = AuthStateProvider::as_ref(app).get();
         let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).current_team()
+            UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app)
         {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
@@ -5321,8 +5348,8 @@ impl SettingsWidget for UsageWidget {
     }
 }
 
-#[derive(Default)]
 struct ActiveAIWidget {
+    view_handle: WeakViewHandle<AISettingsPageView>,
     active_ai_toggle: SwitchStateHandle,
     intelligent_autosuggestions_toggle: SwitchStateHandle,
     prompt_suggestions_toggle: SwitchStateHandle,
@@ -5333,6 +5360,18 @@ struct ActiveAIWidget {
 }
 
 impl ActiveAIWidget {
+    fn new(ctx: &ViewContext<AISettingsPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            active_ai_toggle: Default::default(),
+            intelligent_autosuggestions_toggle: Default::default(),
+            prompt_suggestions_toggle: Default::default(),
+            code_suggestions_toggle: Default::default(),
+            natural_language_autosuggestions_toggle: Default::default(),
+            shared_block_title_generation_toggle: Default::default(),
+            git_operations_autogen_toggle: Default::default(),
+        }
+    }
     fn is_next_command_toggleable(&self, app: &AppContext) -> bool {
         UserWorkspaces::as_ref(app).is_next_command_enabled()
             && AISettings::as_ref(app)
@@ -5369,7 +5408,7 @@ impl ActiveAIWidget {
                 .shared_block_title_generation_enabled_internal
                 .is_supported_on_current_platform()
             && (!UserWorkspaces::as_ref(app)
-                .current_team()
+                .team_for_view_handle(&self.view_handle, app)
                 .is_some_and(|team| {
                     team.billing_metadata.customer_type == CustomerType::Enterprise
                 })
@@ -6622,13 +6661,14 @@ struct AIInputWidget {
     show_input_hint_toggle: SwitchStateHandle,
     show_agent_tips_toggle: SwitchStateHandle,
     include_agent_commands_in_history_toggle: SwitchStateHandle,
+    auto_approve_bypasses_command_denylist_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for AIInputWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc"
+        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc auto-approve fast forward denylist permissions"
     }
 
     fn render(
@@ -6697,6 +6737,28 @@ impl SettingsWidget for AIInputWidget {
             &view.local_only_icon_tooltip_states,
             app,
         ));
+
+        widget_children.push(
+            Flex::column()
+                .with_child(render_ai_setting_toggle::<
+                    AutoApproveBypassesCommandDenylist,
+                >(
+                    "Allow auto-approve to bypass command denylist",
+                    AISettingsPageAction::ToggleAutoApproveBypassesCommandDenylist,
+                    *ai_settings.auto_approve_bypasses_command_denylist,
+                    is_any_ai_enabled,
+                    self.auto_approve_bypasses_command_denylist_toggle
+                        .clone(),
+                    &view.local_only_icon_tooltip_states,
+                    app,
+                ))
+                .with_child(render_ai_setting_description(
+                    "When enabled, fast forward and auto-approve run denylisted commands without asking for confirmation.",
+                    is_any_ai_enabled,
+                    app,
+                ))
+                .finish(),
+        );
 
         if FeatureFlag::QueueSlashCommand.is_enabled() {
             widget_children.push(render_dropdown_item(
@@ -8270,10 +8332,15 @@ impl SettingsWidget for CloudHandoffWidget {
     }
 }
 
+struct ProviderApiKeyEditor {
+    provider: LLMProvider,
+    editor: ViewHandle<EditorView>,
+    team_key_info_tooltip: MouseStateHandle,
+}
+
 struct ApiKeysWidget {
-    openai_api_key_editor: ViewHandle<EditorView>,
-    anthropic_api_key_editor: ViewHandle<EditorView>,
-    google_api_key_editor: ViewHandle<EditorView>,
+    view_handle: WeakViewHandle<AISettingsPageView>,
+    provider_api_key_editors: Vec<ProviderApiKeyEditor>,
     /// Buttons for the SuperGrok (xAI) subscription row; which one renders
     /// depends on whether OAuth tokens are stored or a connect attempt is in
     /// progress.
@@ -8283,9 +8350,6 @@ struct ApiKeysWidget {
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
-    openai_team_key_info_tooltip: MouseStateHandle,
-    anthropic_team_key_info_tooltip: MouseStateHandle,
-    google_team_key_info_tooltip: MouseStateHandle,
 
     custom_inference_info_tooltip: MouseStateHandle,
     custom_inference_terms_index: HighlightedHyperlink,
@@ -8300,24 +8364,20 @@ impl ApiKeysWidget {
         let is_byo_enabled = workspace_handle.as_ref(ctx).is_byo_api_key_enabled(ctx);
         let member_byo_keys_allowed = workspace_handle.as_ref(ctx).are_member_byo_keys_allowed();
 
-        let ApiKeys {
-            openai: openai_key,
-            anthropic: anthropic_key,
-            google: google_key,
-            ..
-        } = ApiKeyManager::as_ref(ctx).keys().clone();
-
-        // A helper macro to create and configure an API key editor.  This avoids a lot
-        // of code duplication and ensures consistency between the editors.
-        macro_rules! create_api_key_editor {
-            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal) => {
-                let $editor = ctx.add_typed_action_view(move |ctx| {
+        let provider_api_key_editors = LLMProvider::API_KEY_PROVIDERS
+            .into_iter()
+            .filter(|provider| provider.supports_pasted_api_key())
+            .map(|provider| {
+                let key = provider
+                    .api_key(ApiKeyManager::as_ref(ctx).keys())
+                    .map(str::to_owned);
+                let placeholder = provider
+                    .api_key_placeholder()
+                    .expect("API-key providers have input placeholders");
+                let editor = ctx.add_typed_action_view(move |ctx| {
                     let appearance = Appearance::handle(ctx).as_ref(ctx);
                     let options = SingleLineEditorOptions {
                         is_password: true,
-                        // Emit Tab/Shift-Tab as navigation events instead of
-                        // inserting whitespace, so focus can move between the
-                        // key fields (see the focus wiring below).
                         propagate_and_no_op_vertical_navigation_keys:
                             PropagateAndNoOpNavigationKeys::Always,
                         text: TextOptions {
@@ -8333,30 +8393,27 @@ impl ApiKeysWidget {
                         ..Default::default()
                     };
                     let mut editor = EditorView::single_line(options, ctx);
-                    editor.set_placeholder_text($placeholder, ctx);
-                    if let Some(key) = &$key {
+                    editor.set_placeholder_text(placeholder, ctx);
+                    if let Some(key) = &key {
                         editor.set_buffer_text(key, ctx);
                     }
                     editor
                 });
                 AISettingsPageView::update_editor_interaction_state(
-                    $editor.clone(),
+                    editor.clone(),
                     is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed,
                     ctx,
                 );
-                // The default-model prompt is driven off `KeysUpdated` (see the
-                // `ApiKeyManager` subscription), so this only needs to persist
-                // the key on commit.
-                ctx.subscribe_to_view(&$editor, |_, $editor, event, ctx| {
+                ctx.subscribe_to_view(&editor, move |_, editor, event, ctx| {
                     if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
-                        let buffer_text = $editor.as_ref(ctx).buffer_text(ctx);
+                        let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
                         let key = buffer_text.is_empty().not().then_some(buffer_text);
-                        ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
-                            model.$set_func(key, ctx);
+                        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.set_provider_key(provider, key, ctx);
                         });
                     }
                 });
-                let editor_clone = $editor.clone();
+                let editor_clone = editor.clone();
                 ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
                     if let UserWorkspacesEvent::TeamsChanged = event {
                         let is_any_ai_enabled =
@@ -8366,19 +8423,14 @@ impl ApiKeysWidget {
                             workspace.as_ref(ctx).are_member_byo_keys_allowed();
                         let is_enabled = is_any_ai_enabled && is_byo_enabled;
                         let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
-                        // Clear stored API keys when BYO is disabled at the billing layer.
-                        // Team member policy is reversible: it only hides and ignores local
-                        // keys. Preserve them so they become usable again if the admin later
-                        // re-enables member BYO.
                         if !is_byo_enabled && has_key {
                             editor_clone.update(ctx, |editor, ctx| {
                                 editor.set_buffer_text("", ctx);
                             });
-                            ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
-                                model.$set_func(None, ctx);
+                            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                                manager.set_provider_key(provider, None, ctx);
                             });
                         }
-
                         AISettingsPageView::update_editor_interaction_state(
                             editor_clone.clone(),
                             is_enabled && member_byo_keys_allowed,
@@ -8386,31 +8438,21 @@ impl ApiKeysWidget {
                         );
                         ctx.notify();
                     }
-                })
-            };
-        }
-
-        create_api_key_editor!(openai_api_key_editor, openai_key, set_openai_key, "sk-...");
-        create_api_key_editor!(
-            anthropic_api_key_editor,
-            anthropic_key,
-            set_anthropic_key,
-            "sk-ant-..."
-        );
-        create_api_key_editor!(
-            google_api_key_editor,
-            google_key,
-            set_google_key,
-            "AIzaSy..."
-        );
+                });
+                ProviderApiKeyEditor {
+                    provider,
+                    editor,
+                    team_key_info_tooltip: MouseStateHandle::default(),
+                }
+            })
+            .collect::<Vec<_>>();
 
         // Tab / Shift-Tab move focus between the provider key fields instead of
         // inserting whitespace.
-        let provider_key_editors = [
-            openai_api_key_editor.clone(),
-            anthropic_api_key_editor.clone(),
-            google_api_key_editor.clone(),
-        ];
+        let provider_key_editors = provider_api_key_editors
+            .iter()
+            .map(|provider| provider.editor.clone())
+            .collect::<Vec<_>>();
         for (index, editor) in provider_key_editors.iter().enumerate() {
             let next = provider_key_editors.get(index + 1).cloned();
             let previous = index
@@ -8433,11 +8475,7 @@ impl ApiKeysWidget {
 
         // Editor text colors are snapshotted at construction via
         // `text_colors_override`, so refresh them whenever the theme changes.
-        let api_key_editors = [
-            openai_api_key_editor.clone(),
-            anthropic_api_key_editor.clone(),
-            google_api_key_editor.clone(),
-        ];
+        let api_key_editors = provider_key_editors.clone();
         ctx.subscribe_to_model(&Appearance::handle(ctx), move |_, _, event, ctx| {
             if let AppearanceEvent::ThemeChanged = event {
                 let text_colors = editor_text_colors(Appearance::as_ref(ctx));
@@ -8508,9 +8546,8 @@ impl ApiKeysWidget {
         });
 
         Self {
-            openai_api_key_editor,
-            anthropic_api_key_editor,
-            google_api_key_editor,
+            view_handle: ctx.handle(),
+            provider_api_key_editors,
 
             grok_connect_button,
             grok_connecting_button,
@@ -8518,9 +8555,6 @@ impl ApiKeysWidget {
 
             can_use_warp_credits_for_fallback: Default::default(),
             upgrade_highlight_index: Default::default(),
-            openai_team_key_info_tooltip: Default::default(),
-            anthropic_team_key_info_tooltip: Default::default(),
-            google_team_key_info_tooltip: Default::default(),
 
             custom_inference_info_tooltip: Default::default(),
             custom_inference_terms_index: Default::default(),
@@ -8608,7 +8642,7 @@ impl ApiKeysWidget {
     fn render_api_key_input(
         &self,
         appearance: &Appearance,
-        label: &'static str,
+        label: String,
         provider: LLMProvider,
         team_key_info_tooltip: MouseStateHandle,
         editor: ViewHandle<EditorView>,
@@ -8666,33 +8700,17 @@ impl ApiKeysWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let mut column = Flex::column().with_spacing(16.);
-        column.add_child(self.render_api_key_input(
-            appearance,
-            crate::menu_label("settings.ai.openai_api_key", "OpenAI API key"),
-            LLMProvider::OpenAI,
-            self.openai_team_key_info_tooltip.clone(),
-            self.openai_api_key_editor.clone(),
-            is_enabled,
-            app,
-        ));
-        column.add_child(self.render_api_key_input(
-            appearance,
-            crate::menu_label("settings.ai.anthropic_api_key", "Anthropic API key"),
-            LLMProvider::Anthropic,
-            self.anthropic_team_key_info_tooltip.clone(),
-            self.anthropic_api_key_editor.clone(),
-            is_enabled,
-            app,
-        ));
-        column.add_child(self.render_api_key_input(
-            appearance,
-            crate::menu_label("settings.ai.google_api_key", "Google API key"),
-            LLMProvider::Google,
-            self.google_team_key_info_tooltip.clone(),
-            self.google_api_key_editor.clone(),
-            is_enabled,
-            app,
-        ));
+        for provider_editor in &self.provider_api_key_editors {
+            column.add_child(self.render_api_key_input(
+                appearance,
+                format!("{} API key", provider_editor.provider.display_name()),
+                provider_editor.provider,
+                provider_editor.team_key_info_tooltip.clone(),
+                provider_editor.editor.clone(),
+                is_enabled,
+                app,
+            ));
+        }
         column.finish()
     }
 
@@ -8719,7 +8737,7 @@ impl ApiKeysWidget {
 
         if show_custom_endpoints {
             add_paragraph(vec![FormattedTextFragment::plain_text(
-                "Add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API.",
+                "Add custom endpoints to use third-party models. Custom endpoints must support OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.",
             )]);
         }
 
@@ -9334,7 +9352,7 @@ impl SettingsWidget for ApiKeysWidget {
         if !is_byo_enabled && show_provider_keys {
             let auth_state = AuthStateProvider::as_ref(app).get();
             let upgrade_text_fragments = if let Some(team) =
-                UserWorkspaces::as_ref(app).current_team()
+                UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app)
             {
                 if team.billing_metadata.customer_type == CustomerType::Enterprise {
                     vec![

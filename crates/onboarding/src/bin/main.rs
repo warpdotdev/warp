@@ -44,7 +44,6 @@ impl AssetProvider for Assets {
 fn main() -> Result<()> {
     // Initialize logging for the onboarding binary.
     warp_logging::init(warp_logging::LogConfig {
-        is_cli: false,
         log_destination: None,
         ..Default::default()
     })?;
@@ -89,7 +88,7 @@ impl OnboardingMainView {
             OnboardingModelInfo {
                 id: LLMId::from("auto"),
                 title: "Auto".to_string(),
-                icon: Icon::Oz,
+                icon: Icon::Agent,
                 is_default: true,
             },
             OnboardingModelInfo {
@@ -168,8 +167,6 @@ impl OnboardingMainView {
             | AgentOnboardingEvent::UpgradePasteTokenFromClipboardRequested
             | AgentOnboardingEvent::LoginFromWelcomeRequested
             | AgentOnboardingEvent::PrivacySettingsFromTerminalThemeSlideRequested
-            | AgentOnboardingEvent::AddApiKeyRequested
-            | AgentOnboardingEvent::AddCustomEndpointRequested
             | AgentOnboardingEvent::AppBecameActive => {
                 // No-op in the standalone demo binary
             }

@@ -6,8 +6,10 @@ use futures::channel::oneshot;
 use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+pub(crate) use super::recording_controller::FinalizeReason;
 use super::recording_controller::{
-    ActiveRecording, FinalizationClaim, RecordingController, StopRecordingControllerError,
+    ActiveRecording, FinalizationClaim, FinalizedRecording, RecordingController,
+    StopRecordingControllerError,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::artifact_upload::{FileArtifactUploadRequest, FileArtifactUploader};
@@ -16,64 +18,33 @@ use crate::server::server_api::ServerApiProvider;
 
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum FinalizeReason {
-    StoppedByAgent,
-    AgentFinished,
-    LimitReached,
-    FfmpegExited,
-    Cancelled,
-}
-
-impl FinalizeReason {
-    fn termination_reason(
-        self,
-        completion_status: computer_use::RecordingCompletionStatus,
-    ) -> String {
-        match self {
-            FinalizeReason::StoppedByAgent => match completion_status {
-                computer_use::RecordingCompletionStatus::Completed => {
-                    "Stopped by agent".to_string()
-                }
-                computer_use::RecordingCompletionStatus::StoppedEarly => {
-                    "Recording stopped before the agent requested it".to_string()
-                }
-            },
-            FinalizeReason::AgentFinished => {
-                "Finalized because the agent finished without stopping the recording".to_string()
-            }
-            FinalizeReason::LimitReached => {
-                "Stopped at the configured duration or size limit".to_string()
-            }
-            FinalizeReason::FfmpegExited => {
-                "Capture process exited before the recording was stopped".to_string()
-            }
-            FinalizeReason::Cancelled => {
-                "Recording was interrupted when the conversation was cancelled".to_string()
-            }
-        }
-    }
-}
-
 /// A handle to the canonical result owned by `RecordingController`.
 ///
 /// `Pending` subscribes to work already owned by the controller; dropping the
 /// receiver does not cancel stop or upload. `Ready` exposes the retained result
-/// after that work has completed.
+/// after that work has completed. Both variants carry the *actual*
+/// [`FinalizeReason`] that drove the work — callers that only joined an
+/// in-progress finalization still learn why it ran, rather than the reason
+/// they claimed when joining.
 pub(crate) enum RecordingFinalization {
-    Pending(oneshot::Receiver<StopRecordingResult>),
-    Ready(StopRecordingResult),
+    Pending(oneshot::Receiver<FinalizedRecording>),
+    Ready(FinalizedRecording),
 }
 
 impl RecordingFinalization {
-    pub(crate) async fn resolve(self) -> StopRecordingResult {
+    pub(crate) async fn resolve(self) -> FinalizedRecording {
         match self {
             RecordingFinalization::Pending(receiver) => receiver.await.unwrap_or_else(|_| {
-                StopRecordingResult::Error(
-                    "Recording finalization ended without producing a result.".to_string(),
+                (
+                    StopRecordingResult::Error(
+                        "Recording finalization ended without producing a result.".to_string(),
+                    ),
+                    // The result channel closed before delivering a result, so the
+                    // real trigger is unknown and distinct from an ffmpeg crash.
+                    FinalizeReason::FinalizationDropped,
                 )
             }),
-            RecordingFinalization::Ready(result) => result,
+            RecordingFinalization::Ready(ready) => ready,
         }
     }
 }
@@ -96,16 +67,18 @@ async fn finalize_recording(
     uploader: FileArtifactUploader,
     server_conversation_token: Option<crate::ai::agent::api::ServerConversationToken>,
 ) -> StopRecordingResult {
-    // Both early exits discard the recording without uploading. They share the
-    // same mechanism — dropping the whole `ActiveRecording` struct, which
-    // kill-on-drops ffmpeg and removes the partial capture — but return
-    // different results to distinguish a user-initiated cancellation from a
-    // genuine finalization error. The cancellation check intentionally comes
-    // first so its `Cancelled` contract holds even when no action group was
-    // committed.
+    // A no-upload finalization discards the recording without publishing: it
+    // drops the whole `ActiveRecording` (kill-on-drops ffmpeg, removes the
+    // partial capture). The reason distinguishes an agent-requested discard
+    // (`Discarded`) from a conversation cancellation (`Cancelled`), which the
+    // agent turn treats differently. This check comes first so it holds even
+    // when no action group was committed.
     if !should_upload {
         drop(recording);
-        return StopRecordingResult::Cancelled;
+        return match reason {
+            FinalizeReason::StoppedByAgent => StopRecordingResult::Discarded,
+            _ => StopRecordingResult::Cancelled,
+        };
     }
     if recording.actions.is_empty() {
         drop(recording);
@@ -135,7 +108,7 @@ async fn finalize_recording(
     // file, when produced, is a sibling of the mp4.
     let mut upload_path = local_path.clone();
     let mut overlay_path: Option<std::path::PathBuf> = None;
-    match computer_use::burn_in_action_log(
+    match computer_use::post_process_recording(
         &local_path,
         &actions,
         (output.width, output.height),
@@ -153,12 +126,22 @@ async fn finalize_recording(
             log::warn!("Recording cut/overlay burn-in failed; uploading original: {error}");
         }
     }
+    let duration = match computer_use::finalized_video_duration(&upload_path).await {
+        Ok(duration) => duration,
+        Err(error) => {
+            log::warn!(
+                "Failed to inspect finalized recording duration; using capture duration: {error}"
+            );
+            output.duration
+        }
+    };
 
     let request = FileArtifactUploadRequest {
         path: upload_path,
         run_id: None,
         conversation_id: server_conversation_token,
-        description: None,
+        title: recording.summary.clone(),
+        description: recording.description.clone(),
     };
     let upload_result = async {
         let association = uploader.resolve_upload_association(&request).await?;
@@ -176,10 +159,10 @@ async fn finalize_recording(
     match upload_result {
         Ok(upload) => StopRecordingResult::Success(RecordingStopped {
             artifact_uid: upload.artifact.artifact_uid,
-            duration: output.duration,
+            duration,
             width_px: output.width as i32,
             height_px: output.height as i32,
-            size_bytes: output.size_bytes as i64,
+            size_bytes: upload.size_bytes,
             completion_status: output.completion_status,
             termination_reason: reason.termination_reason(output.completion_status),
         }),
@@ -220,7 +203,9 @@ fn build_finalize_future(
 }
 
 /// Runs finalization independently of any action future and stores its result
-/// on the controller before waking subscribers.
+/// on the controller before waking subscribers. The `reason` is forwarded to
+/// [`RecordingController::complete_finalization`] so waiters that only joined
+/// this work receive the actual reason it ran, not the reason they claimed.
 fn spawn_finalize(
     recording: ActiveRecording,
     reason: FinalizeReason,
@@ -229,7 +214,7 @@ fn spawn_finalize(
 ) {
     let (recording_id, future) = build_finalize_future(recording, reason, should_upload, ctx);
     ctx.spawn(future, move |controller, result, _ctx| {
-        controller.complete_finalization(&recording_id, result);
+        controller.complete_finalization(&recording_id, result, reason);
     });
 }
 
@@ -265,12 +250,13 @@ fn start_or_join_finalization<T: Entity>(
 pub(crate) fn finalize_recording_by_id<T: Entity>(
     recording_id: &str,
     reason: FinalizeReason,
+    should_persist: bool,
     ctx: &mut ModelContext<T>,
 ) -> Result<RecordingFinalization, StopRecordingControllerError> {
     let claim = RecordingController::handle(ctx).update(ctx, |controller, _| {
         controller.claim_finalization_by_id(recording_id)
     });
-    start_or_join_finalization(claim, reason, true, ctx).ok_or_else(|| {
+    start_or_join_finalization(claim, reason, should_persist, ctx).ok_or_else(|| {
         StopRecordingControllerError::RecordingNotFound {
             recording_id: recording_id.to_string(),
         }
