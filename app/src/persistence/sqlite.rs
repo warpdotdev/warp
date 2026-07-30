@@ -112,7 +112,7 @@ use crate::workflows::WorkflowId;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspaces::team::Team as TeamMetadata;
 use crate::workspaces::user_profiles::{UserProfileWithUID, user_profile_from_persistence};
-use crate::workspaces::workspace::{TeamSettings, Workspace as WorkspaceMetadata, WorkspaceUid};
+use crate::workspaces::workspace::{Workspace as WorkspaceMetadata, WorkspaceUid};
 use crate::{safe_info, send_telemetry_from_app_ctx};
 
 diesel::define_sql_function! {
