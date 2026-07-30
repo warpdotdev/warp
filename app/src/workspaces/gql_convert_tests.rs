@@ -89,7 +89,7 @@ mod team_settings_conversion {
     };
     use crate::workspaces::gql_convert::team_settings_from_gql;
     use crate::workspaces::workspace::{
-        AdminEnablementSetting, TeamSettings, UgcCollectionEnablementSetting, WorkspaceSettings,
+        AdminEnablementSetting, TeamSettings, UgcCollectionEnablementSetting,
     };
 
     fn admin_info(
@@ -347,48 +347,5 @@ mod team_settings_conversion {
             settings.ugc_collection.is_enforced_by_workspace,
             "enforcement metadata from the team payload must be preserved"
         );
-    }
-
-    #[test]
-    fn migrates_legacy_workspace_settings_cache_row() {
-        // A row written by the previous release: a serialized `WorkspaceSettings`
-        // with the old fields at the top level, including the workspace-level
-        // `is_invite_link_enabled` marker key that the current `TeamSettings`
-        // shape never has.
-        let mut legacy = WorkspaceSettings {
-            is_invite_link_enabled: true,
-            is_discoverable: true,
-            ..Default::default()
-        };
-        legacy.llm_settings.enabled = true;
-        legacy.codebase_context_settings.setting = AdminEnablementSetting::Enable;
-        legacy.enable_warp_attribution = AdminEnablementSetting::Disable;
-        let legacy_json = serde_json::to_string(&legacy).expect("serialize legacy row");
-
-        let settings = TeamSettings::from_cached_json(&legacy_json)
-            .expect("legacy WorkspaceSettings cache row should decode, not fall back to default");
-
-        // Cached LLM / policy values survive the migration (they must not be
-        // silently dropped). The workspace-level invite-link/discoverability flags
-        // are intentionally not part of TeamSettings and are dropped here.
-        assert!(
-            settings.llm_settings.enabled,
-            "cached custom-LLM value must not be silently lost"
-        );
-        assert_eq!(
-            settings.codebase_context.value,
-            AdminEnablementSetting::Enable
-        );
-        assert_eq!(
-            settings.enable_warp_attribution,
-            AdminEnablementSetting::Disable
-        );
-
-        // The current cache shape (a serialized TeamSettings) still decodes.
-        let current_json =
-            serde_json::to_string(&settings).expect("serialize current TeamSettings row");
-        let decoded = TeamSettings::from_cached_json(&current_json)
-            .expect("current cache shape should decode");
-        assert!(decoded.llm_settings.enabled);
     }
 }

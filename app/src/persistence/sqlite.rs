@@ -2773,7 +2773,7 @@ fn read_sqlite_data(
         .map(|team| {
             let team_settings = settings_by_team_id
                 .get(&team.id)
-                .and_then(|json| TeamSettings::from_cached_json(json));
+                .and_then(|json| serde_json::from_str(json).ok());
 
             let billing_metadata = team
                 .billing_metadata_json
