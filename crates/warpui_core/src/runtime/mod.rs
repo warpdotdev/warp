@@ -24,6 +24,7 @@
 use std::cell::{Cell, RefCell};
 use std::io::{self, Stdout, Write, stdout};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -506,8 +507,9 @@ impl TuiTerminalGuard {
 
 /// Keeps a headless TUI session alive. Store it for the lifetime of the app
 /// (e.g. in a singleton model) so the session lives as long as the app does;
-/// dropping it tears the session down. Fields drop in declaration order, which
-/// is also the teardown order:
+/// dropping it tears the session down. Its `Drop` implementation first disables
+/// new probes and waits for any in-flight probe I/O, then fields drop in
+/// declaration order:
 /// - `_task`: the input-dispatch loop. It is an [`async_task::Task`], so
 ///   dropping it *cancels* the future (we intentionally don't `detach()`),
 ///   which in turn drops the channel receiver feeding it.
@@ -524,6 +526,8 @@ pub struct TuiDriverHandle {
     /// [`draw_and_schedule_repaint`]). Dropping it cancels the timer.
     _repaint_timer: Rc<RefCell<Option<ForegroundTask>>>,
     _reader: thread::JoinHandle<()>,
+    reader_shutdown: Arc<AtomicBool>,
+    probe_lifecycle_lock: Arc<Mutex<()>>,
     guard: TuiTerminalGuard,
 }
 
@@ -545,6 +549,16 @@ impl TuiDriverHandle {
     ) -> io::Result<()> {
         self.guard
             .set_modifier_key_lifecycle_enabled(report_modifier_key_lifecycle)
+    }
+}
+
+impl Drop for TuiDriverHandle {
+    fn drop(&mut self) {
+        self.reader_shutdown.store(true, Ordering::Release);
+        let _probe_lifecycle_guard = self
+            .probe_lifecycle_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
 }
 
@@ -616,14 +630,26 @@ pub fn spawn_tui_driver<T: TuiView>(
 
     let weak_app = ctx.weak_app();
     let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
+    let reader_shutdown = Arc::new(AtomicBool::new(false));
+    let probe_lifecycle_lock = Arc::new(Mutex::new(()));
 
     // Blocking terminal reads run off the main thread and are forwarded to the
     // foreground executor through the channel. The reader also performs a probe
     // when the terminal gains focus because it is the sole owner of stdin and
     // can keep replies out of the normal crossterm event stream.
+    let reader_shutdown_for_thread = reader_shutdown.clone();
+    let probe_lifecycle_lock_for_thread = probe_lifecycle_lock.clone();
     let reader = thread::Builder::new()
         .name("warp-tui-input".to_owned())
-        .spawn(move || run_tui_input_reader(sender, probe, stdout_write_lock))?;
+        .spawn(move || {
+            run_tui_input_reader(
+                sender,
+                probe,
+                stdout_write_lock,
+                reader_shutdown_for_thread,
+                probe_lifecycle_lock_for_thread,
+            )
+        })?;
 
     let dispatch_screen = screen.clone();
     let task = ctx.foreground_executor().spawn(async move {
@@ -652,6 +678,8 @@ pub fn spawn_tui_driver<T: TuiView>(
         _task: task,
         _repaint_timer: repaint_timer,
         _reader: reader,
+        reader_shutdown,
+        probe_lifecycle_lock,
         guard,
     })
 }
@@ -665,12 +693,15 @@ fn run_tui_input_reader(
     sender: async_channel::Sender<CrosstermEvent>,
     probe: Option<TuiProbe>,
     stdout_write_lock: Arc<Mutex<()>>,
+    reader_shutdown: Arc<AtomicBool>,
+    probe_lifecycle_lock: Arc<Mutex<()>>,
 ) {
     let mut stdout = stdout();
     loop {
         // Stop before another read or query once either foreground consumer has
         // been dropped during session teardown.
-        if sender.is_closed()
+        if reader_shutdown.load(Ordering::Acquire)
+            || sender.is_closed()
             || probe
                 .as_ref()
                 .is_some_and(|probe| probe.results.is_closed())
@@ -692,19 +723,27 @@ fn run_tui_input_reader(
                     false
                 };
                 if should_probe && let Some(probe) = probe.as_ref() {
-                    // Recheck teardown immediately before writing. The shared
-                    // lock keeps the query contiguous with respect to rendered
-                    // frames, but is released before waiting for the reply.
-                    if sender.is_closed() || probe.results.is_closed() {
-                        break;
-                    }
-                    let query_result = {
-                        let _query_write_guard = stdout_write_lock
+                    let background = {
+                        // Teardown waits on this lock before restoring terminal
+                        // modes, while the stdout lock is still released before
+                        // the potentially blocking reply read.
+                        let _probe_lifecycle_guard = probe_lifecycle_lock
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        (probe.write_query)(&mut stdout)
+                        if reader_shutdown.load(Ordering::Acquire)
+                            || sender.is_closed()
+                            || probe.results.is_closed()
+                        {
+                            break;
+                        }
+                        let query_result = {
+                            let _query_write_guard = stdout_write_lock
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            (probe.write_query)(&mut stdout)
+                        };
+                        query_result.ok().and_then(|()| (probe.read_reply)())
                     };
-                    let background = query_result.ok().and_then(|()| (probe.read_reply)());
                     if block_on(probe.results.send(background)).is_err() {
                         break;
                     }

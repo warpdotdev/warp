@@ -43,6 +43,7 @@ use warpui_core::event::{KeyState, ModifiersState};
 use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::runtime::ProbedRgb;
 use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView, WindowInvalidation};
 
@@ -2101,7 +2102,11 @@ fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
     register_tui_session_view_test_singletons(app);
     app.update(|ctx| {
         let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
-        let _ = TuiHostTerminalBackground::register(selected_theme, ctx);
+        TuiHostTerminalBackground::register_for_test(
+            Some(ProbedRgb { r: 0, g: 0, b: 0 }),
+            selected_theme,
+            ctx,
+        );
     });
     add_test_semantic_selection(app);
     app.update(TuiAutoupdater::register);

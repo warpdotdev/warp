@@ -131,6 +131,9 @@ pub fn write_terminal_background_query<W: Write + ?Sized>(writer: &mut W) -> io:
 /// Runtime callers must already own stdin and have raw mode enabled.
 #[cfg(unix)]
 pub fn read_terminal_background_reply(deadline_duration: Duration) -> Option<ProbedRgb> {
+    if !io::stdin().is_terminal() {
+        return None;
+    }
     read_probe_reply(deadline_duration).unwrap_or_default()
 }
 
@@ -142,6 +145,7 @@ fn read_probe_reply(deadline_duration: Duration) -> io::Result<Option<ProbedRgb>
     let deadline = Instant::now() + deadline_duration;
     let mut replies = Vec::new();
     let mut chunk = [0u8; 512];
+    let mut background = None;
     loop {
         let now = Instant::now();
         if now >= deadline {
@@ -167,13 +171,14 @@ fn read_probe_reply(deadline_duration: Duration) -> io::Result<Option<ProbedRgb>
             }
             read => {
                 replies.extend_from_slice(&chunk[..read as usize]);
-                if contains_da1_reply(&replies) {
+                background = parse_complete_reply(&replies);
+                if background.is_some() || contains_da1_reply(&replies) {
                     break;
                 }
             }
         }
     }
-    Ok(parse_reply(&replies))
+    Ok(background.or_else(|| parse_reply(&replies)))
 }
 
 /// Non-unix hosts skip the query because conhost does not answer OSC 11.
@@ -254,6 +259,16 @@ fn poll_stdin(timeout: Duration) -> io::Result<bool> {
 fn parse_reply(replies: &[u8]) -> Option<ProbedRgb> {
     let text = String::from_utf8_lossy(replies);
     parse_osc_color_reply(&text, 11)
+}
+
+/// Extracts a complete, BEL- or ST-terminated OSC 11 background reply.
+#[cfg(any(unix, test))]
+fn parse_complete_reply(replies: &[u8]) -> Option<ProbedRgb> {
+    let text = String::from_utf8_lossy(replies);
+    let prefix = "\x1b]11;";
+    let payload = &text[text.find(prefix)? + prefix.len()..];
+    let end = payload.find('\x07').or_else(|| payload.find("\x1b\\"))?;
+    parse_x11_color(&payload[..end])
 }
 
 /// Finds the reply to an `OSC <code> ; ?` query and parses its color payload.

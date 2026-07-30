@@ -4,6 +4,7 @@
 //! probe lifecycle. The foreground owns all domain state and shares only an
 //! atomic eligibility gate with the runtime reader thread.
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -129,6 +130,8 @@ impl TuiHostTerminalBackground {
         let state = TerminalBackgroundState::new(background);
         let probe_enabled = Arc::new(AtomicBool::new(state.probe_enabled(selected_theme)));
         let reader_probe_enabled = probe_enabled.clone();
+        let live_probe_supported =
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         let (probe_sender, probe_receiver) = async_channel::unbounded();
         ctx.add_singleton_model(move |_| Self {
             state,
@@ -145,7 +148,7 @@ impl TuiHostTerminalBackground {
         });
 
         let probe = TuiProbe::new(
-            move || reader_probe_enabled.load(Ordering::Relaxed),
+            move || live_probe_supported && reader_probe_enabled.load(Ordering::Relaxed),
             probe_sender,
             |writer| write_terminal_background_query(writer),
             move || read_terminal_background_reply(LIVE_PROBE_DEADLINE),
@@ -196,6 +199,20 @@ impl TuiHostTerminalBackground {
     fn update_probe_enabled(&self, selected_theme: TuiTheme) {
         self.probe_enabled
             .store(self.state.probe_enabled(selected_theme), Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_for_test(
+        background: Option<ProbedRgb>,
+        selected_theme: TuiTheme,
+        ctx: &mut AppContext,
+    ) {
+        let state = TerminalBackgroundState::new(background);
+        let probe_enabled = Arc::new(AtomicBool::new(state.probe_enabled(selected_theme)));
+        ctx.add_singleton_model(move |_| Self {
+            state,
+            probe_enabled,
+        });
     }
 }
 

@@ -15,21 +15,18 @@ fn parses_bel_terminated_replies() {
 }
 
 #[test]
-fn factored_probe_deadline_path_parses_da1_bounded_reply() {
-    let replies = b"\x1b]11;rgb:eeee/eeee/eeee\x07\x1b[?6c";
-    // The live path supplies a shorter deadline to the same factored parser;
-    // this fixture proves the OSC 11 + DA1 reply remains parseable after the
-    // deadline refactor.
-    let _live_deadline = Duration::from_millis(50);
+fn complete_background_reply_does_not_require_da1() {
+    let replies = b"\x1b]11;rgb:eeee/eeee/eeee\x07";
     assert_eq!(
-        parse_reply(replies),
+        parse_complete_reply(replies),
         Some(ProbedRgb {
             r: 238,
             g: 238,
             b: 238,
         })
     );
-    assert!(contains_da1_reply(replies));
+    assert!(!contains_da1_reply(replies));
+    assert_eq!(parse_complete_reply(b"\x1b]11;rgb:eeee/eeee/eeee"), None);
 }
 
 #[test]
