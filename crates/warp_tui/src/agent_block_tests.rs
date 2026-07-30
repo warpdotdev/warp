@@ -580,7 +580,8 @@ fn agent_block_renders_tool_calls_in_message_order() {
                     .collect::<Vec<_>>(),
                 vec!["", "before", "", "○ Init project", "", "after"],
             );
-            // A pending tool call renders a dim grey glyph and a dim label.
+            // A pending tool call keeps its dim grey glyph, but renders the
+            // action in bold foreground and its details in regular neutral_7.
             assert_eq!(
                 frame.buffer[(0, 3)].fg,
                 expected_tool_call_text_color(app_ctx)
@@ -588,9 +589,20 @@ fn agent_block_renders_tool_calls_in_message_order() {
             assert!(frame.buffer[(0, 3)].modifier.contains(Modifier::DIM));
             assert_eq!(
                 frame.buffer[(2, 3)].fg,
-                expected_tool_call_text_color(app_ctx)
+                TuiUiBuilder::from_app(app_ctx)
+                    .primary_text_style()
+                    .fg
+                    .unwrap()
             );
-            assert!(frame.buffer[(2, 3)].modifier.contains(Modifier::DIM));
+            assert!(frame.buffer[(2, 3)].modifier.contains(Modifier::BOLD));
+            assert_eq!(
+                frame.buffer[(7, 3)].fg,
+                TuiUiBuilder::from_app(app_ctx)
+                    .neutral_7_text_style()
+                    .fg
+                    .unwrap()
+            );
+            assert!(!frame.buffer[(7, 3)].modifier.contains(Modifier::BOLD));
         });
     });
 }

@@ -12,16 +12,18 @@ use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::model::CoreEditorModel;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, WindowInvalidation};
-use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{TuiView, ViewHandle};
 
 use super::{
     FILE_EDITS_PERMISSION_ACTIVE, SectionKey, SectionStates, ToolCallDisplayState,
-    TuiFileEditsView, deltas_for, file_edit_header_label, verb_and_name,
+    TuiFileEditsView, deltas_for, file_edit_header_label, file_edit_header_spans,
+    file_edit_stats_label, verb_and_name,
 };
 use crate::test_fixtures::{TestHostView, add_test_action_model};
+use crate::tui_builder::TuiUiBuilder;
 use crate::tui_diff_storage::TuiDiffStorageHandle;
 
 fn delta(range: std::ops::Range<usize>, insertion: &str) -> DiffDelta {
@@ -116,6 +118,73 @@ fn blocked_file_edit_headers_use_in_progress_wording() {
         file_edit_header_label(ToolCallDisplayState::Succeeded, "Updated", "lib.rs"),
         "Updated lib.rs"
     );
+}
+
+#[test]
+fn file_edit_stats_omit_zero_sides() {
+    assert_eq!(file_edit_stats_label(3, 0).as_deref(), Some("+3"));
+    assert_eq!(file_edit_stats_label(0, 2).as_deref(), Some("−2"));
+    assert_eq!(file_edit_stats_label(3, 2).as_deref(), Some("+3 −2"));
+    assert_eq!(file_edit_stats_label(0, 0), None);
+}
+
+#[test]
+fn file_edit_header_spans_style_action_details_and_nonzero_stats() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let (added_only, _) = file_edit_header_spans(
+                ToolCallDisplayState::Succeeded,
+                "Updated lib.rs",
+                Some((3, 0)),
+                false,
+                &builder,
+            );
+            assert_eq!(
+                added_only
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["✓ ", "Updated", " lib.rs", " +3"]
+            );
+            assert_eq!(added_only[1].1.fg, builder.primary_text_style().fg);
+            assert!(added_only[1].1.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(added_only[2].1.fg, builder.neutral_7_text_style().fg);
+            assert!(!added_only[2].1.add_modifier.contains(Modifier::BOLD));
+            assert!(!added_only[3].1.add_modifier.contains(Modifier::BOLD));
+
+            let (removed_only, _) = file_edit_header_spans(
+                ToolCallDisplayState::Succeeded,
+                "Deleted old.rs",
+                Some((0, 2)),
+                false,
+                &builder,
+            );
+            assert_eq!(
+                removed_only
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["✓ ", "Deleted", " old.rs", " −2"]
+            );
+
+            let (zero_stats, _) = file_edit_header_spans(
+                ToolCallDisplayState::Succeeded,
+                "Updated empty.rs",
+                Some((0, 0)),
+                false,
+                &builder,
+            );
+            assert_eq!(
+                zero_stats
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["✓ ", "Updated", " empty.rs"]
+            );
+        });
+    });
 }
 
 fn update_diff(path: &str, rename: Option<&str>) -> FileDiff {

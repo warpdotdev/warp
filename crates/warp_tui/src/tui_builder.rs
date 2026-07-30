@@ -12,6 +12,7 @@ use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
 use warp_core::ui::color::Opacity;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::AppContext;
@@ -64,6 +65,12 @@ impl TuiUiBuilder {
     pub(crate) fn primary_text_style(&self) -> TuiStyle {
         TuiStyle::default()
             .fg(self.foreground_text_color(self.warp_theme.details().main_text_opacity))
+    }
+    /// Regular-weight `neutral_7` text used for trailing tool-call details.
+    pub(crate) fn neutral_7_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(internal_colors::neutral_7(
+            &self.warp_theme,
+        ))))
     }
 
     /// The theme foreground over the transcript's base background at

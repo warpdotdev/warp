@@ -45,7 +45,9 @@ use warpui_core::{
 
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
 use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
-use crate::tool_call_labels::{ToolCallDisplayState, tool_call_display_state};
+use crate::tool_call_labels::{
+    ToolCallDisplayState, styled_tool_call_label_spans, tool_call_display_state,
+};
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_diff_storage::{TuiDiffStorage, TuiDiffStorageEvent, TuiDiffStorageHandle};
 use crate::tui_permission_prompt::{
@@ -467,7 +469,10 @@ impl TuiFileEditsView {
                     .unique()
                     .count();
                 let files_label = if files == 1 { "file" } else { "files" };
-                format!("Edited {files} {files_label} (+{lines_added} −{lines_removed})")
+                match file_edit_stats_label(*lines_added, *lines_removed) {
+                    Some(stats) => format!("Edited {files} {files_label} ({stats})"),
+                    None => format!("Edited {files} {files_label}"),
+                }
             }
             Some(RequestFileEditsResult::Cancelled) => "File edits cancelled".to_string(),
             Some(RequestFileEditsResult::DiffApplicationFailed { .. }) => {
@@ -540,29 +545,7 @@ impl TuiFileEditsView {
         builder: &TuiUiBuilder,
         app: &AppContext,
     ) -> (Vec<(String, TuiStyle)>, TuiStyle) {
-        let state = self.display_state(app);
-
-        // State lives in the glyph, mirroring `render_tool_call_section`.
-        let glyph_style = state.glyph_style(builder);
-        let name_style = state.label_style(builder);
-        let bold = |style: TuiStyle| style.add_modifier(Modifier::BOLD);
-        let embolden = |style: TuiStyle| if hovered { bold(style) } else { style };
-
-        let mut spans = vec![
-            (format!("{} ", state.glyph()), glyph_style),
-            (label.to_owned(), embolden(bold(name_style))),
-        ];
-        if let Some((added, removed)) = line_stats {
-            spans.push((
-                format!(" +{added}"),
-                embolden(bold(builder.diff_added_style())),
-            ));
-            spans.push((
-                format!(" −{removed}"),
-                embolden(bold(builder.diff_removed_style())),
-            ));
-        }
-        (spans, embolden(name_style))
+        file_edit_header_spans(self.display_state(app), label, line_stats, hovered, builder)
     }
 
     /// Renders the per-file sections as a column of collapsible sections with
@@ -655,6 +638,39 @@ fn file_edit_header_label(
         completed_verb
     };
     format!("{verb} {subject}")
+}
+fn file_edit_stats_label(added: usize, removed: usize) -> Option<String> {
+    match (added, removed) {
+        (0, 0) => None,
+        (added, 0) => Some(format!("+{added}")),
+        (0, removed) => Some(format!("−{removed}")),
+        (added, removed) => Some(format!("+{added} −{removed}")),
+    }
+}
+
+fn file_edit_header_spans(
+    state: ToolCallDisplayState,
+    label: &str,
+    line_stats: Option<(usize, usize)>,
+    hovered: bool,
+    builder: &TuiUiBuilder,
+) -> (Vec<(String, TuiStyle)>, TuiStyle) {
+    let mut spans = vec![(format!("{} ", state.glyph()), state.glyph_style(builder))];
+    spans.extend(styled_tool_call_label_spans(label, builder));
+    if let Some((added, removed)) = line_stats {
+        if added > 0 {
+            spans.push((format!(" +{added}"), builder.diff_added_style()));
+        }
+        if removed > 0 {
+            spans.push((format!(" −{removed}"), builder.diff_removed_style()));
+        }
+    }
+    let chevron_style = if hovered {
+        state.label_style(builder).add_modifier(Modifier::BOLD)
+    } else {
+        state.label_style(builder)
+    };
+    (spans, chevron_style)
 }
 
 /// The header verb and display name for a diff: file names only (no
@@ -780,9 +796,9 @@ impl TuiFileEditsView {
 
         if self.sections.is_empty() {
             let label = self.fallback_label(app);
-            return TuiContainer::new(Box::new(
-                TuiText::new(label).with_style(builder.dim_text_style()),
-            ))
+            return TuiContainer::new(
+                TuiText::from_spans(styled_tool_call_label_spans(&label, &builder)).finish(),
+            )
             .finish();
         }
 

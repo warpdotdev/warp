@@ -4,6 +4,7 @@ use pathfinder_color::ColorU;
 use warp::tui_export::light_theme;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::{Color, Modifier};
 use warpui_core::runtime::ProbedRgb;
@@ -39,6 +40,15 @@ fn text_styles_follow_light_theme_foreground() {
     .into();
 
     assert_eq!(builder.primary_text_style().fg, Some(expected_primary));
+    let expected_neutral_7: Color =
+        CoreFill::from(ThemeFill::Solid(internal_colors::neutral_7(&theme))).into();
+    assert_eq!(builder.neutral_7_text_style().fg, Some(expected_neutral_7));
+    assert!(
+        !builder
+            .neutral_7_text_style()
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
     assert_eq!(builder.muted_text_style().fg, Some(expected_muted));
     let read_only_menu_label_style = builder.read_only_menu_label_style();
     assert_eq!(

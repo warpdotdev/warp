@@ -12,7 +12,7 @@ use warp::tui_export::{
 };
 use warp_core::command::ExitCode;
 use warpui_core::AppContext;
-use warpui_core::elements::tui::TuiStyle;
+use warpui_core::elements::tui::{Modifier, TuiStyle};
 
 use self::ToolCallDisplayState as State;
 use crate::tui_builder::TuiUiBuilder;
@@ -97,6 +97,131 @@ impl ToolCallDisplayState {
     }
 }
 
+/// Splits a tool-call label into styled action and detail spans.
+///
+/// Most labels are action-led, but a few terminal-state labels put the action
+/// after their subject (for example, `` `cmd` exited ... ``). Find the first
+/// semantic action token wherever it occurs and treat surrounding copy as
+/// details. Unknown, agent-authored summaries fall back to their first word.
+/// Keeping this split in one helper ensures generic rows and bespoke tool-call
+/// headers use the same weight and color treatment.
+pub(crate) fn styled_tool_call_label_spans(
+    label: &str,
+    builder: &TuiUiBuilder,
+) -> Vec<(String, TuiStyle)> {
+    let action_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+    let details_style = builder.neutral_7_text_style();
+    let Some(action_range) = action_word_range(label) else {
+        return vec![(label.to_owned(), action_style)];
+    };
+    let mut spans = Vec::with_capacity(3);
+    if action_range.start > 0 {
+        spans.push((label[..action_range.start].to_owned(), details_style));
+    }
+    spans.push((label[action_range.clone()].to_owned(), action_style));
+    if action_range.end < label.len() {
+        spans.push((label[action_range.end..].to_owned(), details_style));
+    }
+    spans
+}
+
+fn action_word_range(label: &str) -> Option<std::ops::Range<usize>> {
+    const ACTION_WORDS: &[&str] = &[
+        "answered",
+        "asking",
+        "called",
+        "calling",
+        "call",
+        "cancelled",
+        "composing",
+        "configuring",
+        "continuing",
+        "create",
+        "created",
+        "deleted",
+        "denied",
+        "disabled",
+        "discarded",
+        "done",
+        "edited",
+        "editing",
+        "exited",
+        "failed",
+        "fetch",
+        "fetched",
+        "fetching",
+        "find",
+        "finding",
+        "found",
+        "generating",
+        "grep",
+        "grepped",
+        "grepping",
+        "handing",
+        "init",
+        "insert",
+        "inserted",
+        "inserting",
+        "open",
+        "preparing",
+        "read",
+        "reading",
+        "ran",
+        "run",
+        "running",
+        "saved",
+        "search",
+        "searched",
+        "searching",
+        "send",
+        "sending",
+        "sent",
+        "skipped",
+        "spawn",
+        "spawned",
+        "spawning",
+        "start",
+        "started",
+        "starting",
+        "stop",
+        "stopped",
+        "stopping",
+        "suggest",
+        "suggested",
+        "suggesting",
+        "transfer",
+        "update",
+        "updated",
+        "updating",
+        "upload",
+        "uploaded",
+        "uploading",
+        "wait",
+        "waiting",
+        "write",
+        "writing",
+        "wrote",
+    ];
+
+    let mut search_from = 0;
+    let mut first_word = None;
+    for word in label.split_whitespace() {
+        let start = search_from
+            + label[search_from..]
+                .find(word)
+                .expect("split word remains in the source label");
+        let range = start..start + word.len();
+        first_word.get_or_insert_with(|| range.clone());
+        let normalized = word
+            .trim_matches(|character: char| !character.is_alphabetic())
+            .to_ascii_lowercase();
+        if ACTION_WORDS.contains(&normalized.as_str()) {
+            return Some(range);
+        }
+        search_from = range.end;
+    }
+    first_word
+}
 /// Collapses an optional action status into the coarse display state.
 /// `output_streaming` is whether the exchange output is still streaming;
 /// a status-less action in a streaming output is still being constructed
