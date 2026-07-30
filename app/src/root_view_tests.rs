@@ -4,12 +4,14 @@ use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    AccountFirstCompletion, HAS_COMPLETED_ONBOARDING_KEY, RootView, has_completed_local_onboarding,
+    AccountFirstCompletion, HAS_COMPLETED_ONBOARDING_KEY, LoginSlideAuthCompleteRoute, RootView,
+    has_completed_local_onboarding, login_slide_auth_complete_route,
     offer_variant_for_account_class, refresh_pending_onboarding_choices,
     requires_post_onboarding_login,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
+use crate::auth::login_slide::LoginSlideSource;
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::workspace::FtueAccountClass;
 
@@ -45,6 +47,48 @@ fn account_first_class_uses_paid_status_then_fresh_request_limit() {
     assert_eq!(
         RootView::account_first_class(false, None),
         FtueAccountClass::FreeStandard
+    );
+}
+
+#[test]
+fn welcome_login_new_user_resumes_onboarding_after_auth() {
+    assert_eq!(
+        login_slide_auth_complete_route(
+            LoginSlideSource::LoginExistingUserFromWelcome,
+            Some(false),
+            Some(false),
+            false,
+            true,
+        ),
+        LoginSlideAuthCompleteRoute::ResumeOnboarding
+    );
+}
+
+#[test]
+fn welcome_login_onboarded_user_completes_auth() {
+    assert_eq!(
+        login_slide_auth_complete_route(
+            LoginSlideSource::LoginExistingUserFromWelcome,
+            Some(true),
+            Some(false),
+            false,
+            true,
+        ),
+        LoginSlideAuthCompleteRoute::CompleteAuth
+    );
+}
+
+#[test]
+fn account_first_login_keeps_post_auth_routing() {
+    assert_eq!(
+        login_slide_auth_complete_route(
+            LoginSlideSource::AccountFirstOnboarding,
+            Some(false),
+            Some(false),
+            false,
+            true,
+        ),
+        LoginSlideAuthCompleteRoute::AccountFirst
     );
 }
 

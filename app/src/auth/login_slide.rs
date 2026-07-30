@@ -317,6 +317,10 @@ impl LoginSlideView {
         matches!(self.source, LoginSlideSource::AccountFirstOnboarding)
     }
 
+    pub(crate) fn source(&self) -> LoginSlideSource {
+        self.source
+    }
+
     pub fn new(
         ai_enabled: bool,
         uses_third_party_agents: bool,

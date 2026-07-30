@@ -1678,10 +1678,43 @@ enum AuthOnboardingTarget {
 }
 
 #[derive(Clone)]
-struct AccountFirstLoginContext {
+struct LoginSlideContext {
+    source: LoginSlideSource,
     login_slide_view: ViewHandle<LoginSlideView>,
     onboarding_view: ViewHandle<AgentOnboardingView>,
     target: AuthOnboardingTarget,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoginSlideAuthCompleteRoute {
+    AccountFirst,
+    ResumeOnboarding,
+    CompleteAuth,
+}
+
+fn login_slide_auth_complete_route(
+    source: LoginSlideSource,
+    is_onboarded: Option<bool>,
+    is_anonymous: Option<bool>,
+    has_completed_local_onboarding: bool,
+    agent_onboarding_enabled: bool,
+) -> LoginSlideAuthCompleteRoute {
+    match source {
+        LoginSlideSource::AccountFirstOnboarding => LoginSlideAuthCompleteRoute::AccountFirst,
+        LoginSlideSource::LoginExistingUserFromWelcome
+            if !is_onboarded.unwrap_or(true)
+                && !is_anonymous.unwrap_or(false)
+                && !has_completed_local_onboarding
+                && agent_onboarding_enabled =>
+        {
+            LoginSlideAuthCompleteRoute::ResumeOnboarding
+        }
+        LoginSlideSource::OnboardingFlow
+        | LoginSlideSource::LoginExistingUserFromWelcome
+        | LoginSlideSource::PrivacySettingsFromTerminalIntentionTheme => {
+            LoginSlideAuthCompleteRoute::CompleteAuth
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1798,7 +1831,10 @@ pub struct RootView {
     pending_post_auth_onboarding_settings: Option<SelectedSettings>,
     pending_account_first_settings_class: Option<FtueAccountClass>,
     pending_account_first_tutorial_after_settings: bool,
-    pending_account_first_sso_login: Option<AccountFirstLoginContext>,
+    pending_account_first_sso_login: Option<LoginSlideContext>,
+    pending_welcome_login_sso: Option<LoginSlideContext>,
+    pending_account_first_after_welcome_login: Option<LoginSlideContext>,
+    account_first_refresh_context: Option<LoginSlideContext>,
     account_first_refresh_in_flight: bool,
     paste_auth_token_modal: Option<ViewHandle<PasteAuthTokenModalView>>,
 }
@@ -1915,6 +1951,9 @@ impl RootView {
             pending_account_first_settings_class: None,
             pending_account_first_tutorial_after_settings: false,
             pending_account_first_sso_login: None,
+            pending_welcome_login_sso: None,
+            pending_account_first_after_welcome_login: None,
+            account_first_refresh_context: None,
             account_first_refresh_in_flight: false,
             paste_auth_token_modal: None,
         };
@@ -2233,7 +2272,7 @@ impl RootView {
             })
     }
 
-    fn account_first_login_context(&self, ctx: &AppContext) -> Option<AccountFirstLoginContext> {
+    fn login_slide_context(&self, ctx: &AppContext) -> Option<LoginSlideContext> {
         let AuthOnboardingState::LoginSlide {
             login_slide_view,
             onboarding_view,
@@ -2242,14 +2281,48 @@ impl RootView {
         else {
             return None;
         };
-        login_slide_view
-            .as_ref(ctx)
-            .is_account_first_onboarding()
-            .then(|| AccountFirstLoginContext {
-                login_slide_view: login_slide_view.clone(),
-                onboarding_view: onboarding_view.clone(),
-                target: target.clone(),
-            })
+        Some(LoginSlideContext {
+            source: login_slide_view.as_ref(ctx).source(),
+            login_slide_view: login_slide_view.clone(),
+            onboarding_view: onboarding_view.clone(),
+            target: target.clone(),
+        })
+    }
+
+    fn welcome_login_context(&self, ctx: &AppContext) -> Option<LoginSlideContext> {
+        self.login_slide_context(ctx).filter(|context| {
+            matches!(
+                context.source,
+                LoginSlideSource::LoginExistingUserFromWelcome
+            )
+        })
+    }
+
+    fn resume_onboarding_after_welcome_login(
+        &mut self,
+        context: LoginSlideContext,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        context.onboarding_view.update(ctx, |view, ctx| {
+            view.continue_after_welcome_login(ctx);
+        });
+        if FeatureFlag::AccountFirstOnboarding.is_enabled() {
+            self.pending_account_first_after_welcome_login = Some(context.clone());
+        }
+        self.auth_onboarding_state = AuthOnboardingState::Onboarding {
+            onboarding_view: context.onboarding_view,
+            target: context.target,
+        };
+        ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
+        self.focus(ctx);
+        ctx.notify();
+    }
+
+    fn account_first_login_context(&self, ctx: &AppContext) -> Option<LoginSlideContext> {
+        self.login_slide_context(ctx).filter(|context| {
+            login_slide_auth_complete_route(context.source, None, None, false, false)
+                == LoginSlideAuthCompleteRoute::AccountFirst
+        })
     }
 
     fn account_first_is_paid(ctx: &AppContext) -> bool {
@@ -2270,17 +2343,18 @@ impl RootView {
 
     fn begin_account_first_post_auth_refresh(
         &mut self,
-        context: AccountFirstLoginContext,
+        context: LoginSlideContext,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.account_first_refresh_in_flight {
             return;
         }
         self.auth_onboarding_state = AuthOnboardingState::LoginSlide {
-            login_slide_view: context.login_slide_view,
-            onboarding_view: context.onboarding_view,
-            target: context.target,
+            login_slide_view: context.login_slide_view.clone(),
+            onboarding_view: context.onboarding_view.clone(),
+            target: context.target.clone(),
         };
+        self.account_first_refresh_context = Some(context);
         self.account_first_refresh_in_flight = true;
         let workspace_refresh = TeamUpdateManager::handle(ctx)
             .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx));
@@ -2306,7 +2380,7 @@ impl RootView {
         fresh_request_limit: Option<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(context) = self.account_first_login_context(ctx) else {
+        let Some(context) = self.account_first_refresh_context.take() else {
             return;
         };
         let account_class =
@@ -2324,6 +2398,12 @@ impl RootView {
 
         match account_class {
             FtueAccountClass::Paid => {
+                self.auth_onboarding_state = AuthOnboardingState::PostAuthOnboarding {
+                    onboarding_view: context.onboarding_view,
+                    target: context.target,
+                    account_class,
+                    upgrade_started: false,
+                };
                 self.complete_account_first(AccountFirstCompletion::PaidTeam, ctx);
             }
             FtueAccountClass::FreeIcp | FtueAccountClass::FreeStandard => {
@@ -2409,6 +2489,9 @@ impl RootView {
 
         let account_class = completion.account_class();
         self.pending_account_first_sso_login = None;
+        self.pending_welcome_login_sso = None;
+        self.pending_account_first_after_welcome_login = None;
+        self.account_first_refresh_context = None;
         let cloud_ready = CloudPreferencesSyncer::as_ref(ctx).has_completed_initial_load();
         let settings_applied = if account_class.is_none() || cloud_ready {
             self.pending_account_first_settings_class = None;
@@ -2550,6 +2633,17 @@ impl RootView {
                 let target = target.clone();
                 let onboarding_view = onboarding_view.clone();
                 let account_first = FeatureFlag::AccountFirstOnboarding.is_enabled();
+                if account_first
+                    && let Some(context) = self.pending_account_first_after_welcome_login.take()
+                {
+                    refresh_pending_onboarding_choices(
+                        selected_settings,
+                        &mut self.pending_post_auth_onboarding_settings,
+                        &mut self.pending_tutorial,
+                    );
+                    self.begin_account_first_post_auth_refresh(context, ctx);
+                    return;
+                }
                 if !account_first {
                     mark_local_onboarding_completed(ctx);
                     if FeatureFlag::HOAOnboardingFlow.is_enabled() {
@@ -3396,6 +3490,7 @@ impl RootView {
             AuthManagerEvent::AuthComplete => {
                 self.paste_auth_token_modal = None;
                 let login_context = self.account_first_login_context(ctx);
+                let welcome_login_context = self.welcome_login_context(ctx);
                 let resumed_sso_context = if matches!(
                     self.auth_onboarding_state,
                     AuthOnboardingState::NeedsSsoLink { .. }
@@ -3406,6 +3501,17 @@ impl RootView {
                     None
                 };
                 let account_first_context = login_context.or(resumed_sso_context);
+                let welcome_login_context = welcome_login_context.or_else(|| {
+                    if matches!(
+                        self.auth_onboarding_state,
+                        AuthOnboardingState::NeedsSsoLink { .. }
+                    ) && auth_state.needs_sso_link() == Some(false)
+                    {
+                        self.pending_welcome_login_sso.take()
+                    } else {
+                        None
+                    }
+                });
                 let account_first_auth = account_first_context.is_some()
                     || self.pending_account_first_sso_login.is_some()
                     || matches!(
@@ -3423,12 +3529,25 @@ impl RootView {
                     if let Some(context) = account_first_context.clone() {
                         self.pending_account_first_sso_login = Some(context);
                     }
+                    if let Some(context) = welcome_login_context.clone() {
+                        self.pending_welcome_login_sso = Some(context);
+                    }
                     self.show_needs_sso_link_view(
                         auth_state.user_email().unwrap_or_default().clone(),
                         ctx,
                     );
                 } else if let Some(context) = account_first_context {
                     self.begin_account_first_post_auth_refresh(context, ctx);
+                } else if let Some(context) = welcome_login_context
+                    && login_slide_auth_complete_route(
+                        context.source,
+                        auth_state.is_onboarded(),
+                        auth_state.is_user_anonymous(),
+                        has_completed_local_onboarding(ctx),
+                        FeatureFlag::AgentOnboarding.is_enabled(),
+                    ) == LoginSlideAuthCompleteRoute::ResumeOnboarding
+                {
+                    self.resume_onboarding_after_welcome_login(context, ctx);
                 } else if matches!(
                     self.auth_onboarding_state,
                     AuthOnboardingState::PostAuthOnboarding { .. }
@@ -3743,6 +3862,7 @@ impl RootView {
         }
         if self.account_first_login_context(ctx).is_some()
             || self.pending_account_first_sso_login.is_some()
+            || self.account_first_refresh_context.is_some()
             || matches!(
                 self.auth_onboarding_state,
                 AuthOnboardingState::PostAuthOnboarding { .. }

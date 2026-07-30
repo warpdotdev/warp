@@ -400,6 +400,18 @@ impl AgentOnboardingView {
         );
     }
 
+    /// Continues the retained onboarding flow after authentication was started
+    /// from the welcome slide's "Log in" action.
+    pub fn continue_after_welcome_login(&self, ctx: &mut ViewContext<Self>) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            if state.step() == OnboardingStep::Intro {
+                state.next(ctx);
+            }
+        });
+        ctx.focus_self();
+        ctx.notify();
+    }
+
     /// Eagerly loads all onboarding slide images into the asset cache
     /// so they display instantly when the user navigates between slides.
     fn preload_onboarding_images(ctx: &mut ViewContext<Self>) {
