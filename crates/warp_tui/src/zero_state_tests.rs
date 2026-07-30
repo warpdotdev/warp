@@ -2,6 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use channel_versions::{Changelog, MarkdownSection, Section};
+use chrono::DateTime;
 use uuid::Uuid;
 use warp::tui_export::{
     TuiMcpConfigState, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot,
@@ -17,7 +19,7 @@ use warpui_core::{App, AppContext};
 
 use super::{
     ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
-    mcp_status_label,
+    changelog_bullets_from_changelog, mcp_status_label,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
@@ -36,6 +38,37 @@ fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
         can_log_out: false,
         authorization_url: None,
     }
+}
+
+fn changelog(tui_updates: Vec<&str>) -> Changelog {
+    Changelog {
+        date: DateTime::parse_from_rfc3339("2026-07-30T12:00:00+00:00").unwrap(),
+        sections: vec![Section {
+            title: "Improvements".to_owned(),
+            items: vec!["Unrelated GUI improvement".to_owned()],
+        }],
+        markdown_sections: vec![MarkdownSection {
+            title: "Improvements".to_owned(),
+            markdown: "* Unrelated GUI improvement\n".to_owned(),
+        }],
+        image_url: None,
+        oz_updates: vec!["Unrelated Oz improvement".to_owned()],
+        tui_updates: tui_updates.into_iter().map(ToOwned::to_owned).collect(),
+    }
+}
+
+#[test]
+fn changelog_bullets_use_only_the_first_three_tui_updates() {
+    let changelog = changelog(vec!["First", "Second", "Third", "Fourth"]);
+    assert_eq!(
+        changelog_bullets_from_changelog(&changelog),
+        ["First", "Second", "Third"]
+    );
+}
+
+#[test]
+fn changelog_bullets_are_empty_when_only_other_surfaces_have_updates() {
+    assert!(changelog_bullets_from_changelog(&changelog(Vec::new())).is_empty());
 }
 
 #[test]

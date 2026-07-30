@@ -582,28 +582,15 @@ fn changelog_bullets(app: &AppContext) -> Vec<String> {
     let ChangelogState::Some(changelog) = &ChangelogModel::as_ref(app).changelog else {
         return Vec::new();
     };
-    let from_sections = changelog
-        .sections
+    changelog_bullets_from_changelog(changelog)
+}
+
+fn changelog_bullets_from_changelog(changelog: &channel_versions::Changelog) -> Vec<String> {
+    changelog
+        .tui_updates
         .iter()
-        .flat_map(|section| section.items.iter())
         .take(MAX_CHANGELOG_BULLETS)
         .cloned()
-        .collect::<Vec<_>>();
-    if !from_sections.is_empty() {
-        return from_sections;
-    }
-    // Newer payloads may only populate the markdown sections; fall back to
-    // their top-level bullet lines.
-    changelog
-        .markdown_sections
-        .iter()
-        .flat_map(|section| section.markdown.lines())
-        .filter_map(|line| {
-            let line = line.trim();
-            line.strip_prefix("* ").or_else(|| line.strip_prefix("- "))
-        })
-        .take(MAX_CHANGELOG_BULLETS)
-        .map(ToOwned::to_owned)
         .collect()
 }
 
