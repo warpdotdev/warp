@@ -348,7 +348,8 @@ impl TuiSlashCommandModel {
         let input = input_text(&self.input_editor, ctx);
         if matches!(
             self.suggestions_mode.as_ref(ctx).mode(),
-            TuiInputSuggestionsMode::ConversationMenu
+            TuiInputSuggestionsMode::ApiKeys
+                | TuiInputSuggestionsMode::ConversationMenu
                 | TuiInputSuggestionsMode::ModelSelector
                 | TuiInputSuggestionsMode::SkillMenu
                 | TuiInputSuggestionsMode::Mcp

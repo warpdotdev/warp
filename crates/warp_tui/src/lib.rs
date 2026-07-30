@@ -11,6 +11,7 @@ mod agent_block;
 mod agent_block_sections;
 mod agent_message;
 mod alt_screen_view;
+mod api_keys_menu;
 mod attachment_bar;
 mod autoupdate;
 mod cli_agent_osc_event_publisher;

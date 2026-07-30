@@ -6,7 +6,9 @@ use warpui_core::{App, TuiView};
 use super::{ATTACHMENTS_AVAILABLE_FLAG, TUI_BINDING_GROUP, is_tui_owned};
 use crate::attachment_bar::{FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar};
 use crate::input::TuiInputView;
-use crate::input::view::{MCP_LOGOUT_BINDING_NAME, MCP_MENU_ACTIVE_FLAG};
+use crate::input::view::{
+    INLINE_MENU_CAN_CLEAR_SELECTED_FLAG, MCP_LOGOUT_BINDING_NAME, MCP_MENU_ACTIVE_FLAG,
+};
 use crate::terminal_session_view::{
     PASTE_IMAGE_BINDING_NAME, SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG, TuiTerminalSessionView,
 };
@@ -74,6 +76,28 @@ fn tui_binding_registration_passes_the_app_cross_platform_validator() {
         app.update(|ctx| {
             ctx.set_default_binding_validator(warp::util::bindings::is_binding_cross_platform);
             super::init(ctx);
+        });
+    });
+}
+
+#[test]
+fn input_cut_binding_yields_ctrl_x_to_contextual_menu_clear() {
+    App::test((), |mut app| async move {
+        app.update(super::init);
+        app.read(|ctx| {
+            let cut_bindings = ctx
+                .editable_bindings()
+                .filter(|binding| binding.name == "tui:input:cut")
+                .collect::<Vec<_>>();
+            assert_eq!(cut_bindings.len(), 1);
+
+            let mut plain_input = Context::default();
+            plain_input.set.insert(TuiInputView::ui_name());
+            assert!(cut_bindings[0].in_context(&plain_input));
+
+            let mut menu_clear = plain_input;
+            menu_clear.set.insert(INLINE_MENU_CAN_CLEAR_SELECTED_FLAG);
+            assert!(!cut_bindings[0].in_context(&menu_clear));
         });
     });
 }

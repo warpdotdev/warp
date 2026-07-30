@@ -37,9 +37,9 @@ use warpui_core::{
 };
 
 use super::{
-    INPUT_HANDLES_ESCAPE_FLAG, InputKeymapContextConfig, MCP_MENU_ACTIVE_FLAG,
-    SHELL_COMPLETION_AVAILABLE_FLAG, TuiInputAction, TuiInputView, TuiInputViewEvent,
-    input_keymap_context,
+    INLINE_MENU_CAN_CLEAR_SELECTED_FLAG, INPUT_HANDLES_ESCAPE_FLAG, InputKeymapContextConfig,
+    MCP_MENU_ACTIVE_FLAG, SHELL_COMPLETION_AVAILABLE_FLAG, TuiInputAction, TuiInputView,
+    TuiInputViewEvent, input_keymap_context,
 };
 use crate::completion_menu::{TuiCompletionAcceptance, TuiCompletionMenuModel};
 use crate::editor_element::{TuiEditorAction, TuiEditorElement};
@@ -104,7 +104,7 @@ impl Entity for TestSecretMenu {
 
 impl TuiInlineMenuHandle for ModelHandle<TestSecretMenu> {
     fn mode(&self) -> TuiInputSuggestionsMode {
-        TuiInputSuggestionsMode::ModelSelector
+        TuiInputSuggestionsMode::ApiKeys
     }
 
     fn is_open(&self, _ctx: &AppContext) -> bool {
@@ -249,7 +249,7 @@ fn masked_inline_menu_input_suppresses_composer_modes() {
             assert!(!view.as_ref(ctx).is_shell_mode(ctx));
             assert_eq!(
                 view.as_ref(ctx).suggestions_mode.as_ref(ctx).mode(),
-                TuiInputSuggestionsMode::ModelSelector
+                TuiInputSuggestionsMode::ApiKeys
             );
         });
     });
@@ -260,7 +260,7 @@ fn build_view_with_masked_inline_menu(ctx: &mut AppContext) -> ViewHandle<TuiInp
     add_test_semantic_selection(ctx);
     let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
     let input_mode = add_test_input_mode(ctx);
-    let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::ModelSelector);
+    let suggestions_mode = add_suggestions_mode(ctx, TuiInputSuggestionsMode::ApiKeys);
     let menu = ctx.add_model(|_| TestSecretMenu);
     let (_, view) = ctx.add_tui_window(
         AddWindowOptions {
@@ -1087,6 +1087,7 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
         plan_toggle_available: true,
         keyboard_enhancement_supported: true,
         shell_completion_available: true,
+        inline_menu_can_clear_selected: true,
     });
     assert!(open.set.contains("TuiInputView"));
     assert!(open.set.contains(INPUT_HANDLES_ESCAPE_FLAG));
@@ -1100,6 +1101,7 @@ fn input_escape_context_is_present_only_while_escape_is_handled() {
             .contains(crate::keybindings::KEYBOARD_ENHANCEMENT_AVAILABLE_FLAG)
     );
     assert!(open.set.contains(SHELL_COMPLETION_AVAILABLE_FLAG));
+    assert!(open.set.contains(INLINE_MENU_CAN_CLEAR_SELECTED_FLAG));
 }
 #[derive(Clone)]
 struct TestMcpMenu {

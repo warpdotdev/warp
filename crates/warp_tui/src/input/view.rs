@@ -38,7 +38,7 @@ use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::event::KeyState;
 use warpui_core::keymap::macros::*;
-use warpui_core::keymap::{self, EditableBinding, Keystroke};
+use warpui_core::keymap::{self, EditableBinding, FixedBinding, Keystroke};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
@@ -77,6 +77,7 @@ const INPUT_HANDLES_ESCAPE_FLAG: &str = "TuiInputHandlesEscape";
 const SHELL_COMPLETION_AVAILABLE_FLAG: &str = "TuiShellCompletionAvailable";
 pub(crate) const MCP_MENU_ACTIVE_FLAG: &str = "TuiMcpMenuActive";
 pub(crate) const MCP_LOGOUT_BINDING_NAME: &str = "tui:input:mcp_logout";
+pub(crate) const INLINE_MENU_CAN_CLEAR_SELECTED_FLAG: &str = "TuiInlineMenuCanClearSelected";
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,6 +95,12 @@ pub(crate) const MCP_LOGOUT_BINDING_NAME: &str = "tui:input:mcp_logout";
 /// insertion is not a binding — it stays element-level in
 /// [`TuiEditorElement`]'s event dispatch, matching the GUI.
 pub fn init(app: &mut AppContext) {
+    app.register_fixed_bindings([FixedBinding::new(
+        "ctrl-x",
+        TuiInputAction::ClearActiveInlineMenuItem,
+        id!("TuiInputView") & id!(INLINE_MENU_CAN_CLEAR_SELECTED_FLAG),
+    )
+    .with_group(TUI_BINDING_GROUP)]);
     app.register_editable_bindings([
         // Submit and contextual Escape are prompt policy, not editor policy.
         EditableBinding::new(
@@ -190,6 +197,8 @@ pub enum TuiInputAction {
     LogOutSelectedMcp,
     /// Request or advance shell-command completion.
     Complete,
+    /// Clear the selected row in an inline menu that supports this action.
+    ClearActiveInlineMenuItem,
     /// Apply an editing command shared with generic TUI editors.
     EditorCommand(TuiEditorCommand),
     /// Place the cursor at `offset` without starting a drag selection
@@ -689,6 +698,9 @@ impl TuiView for TuiInputView {
             plan_toggle_available: self.plan_toggle_available(ctx),
             keyboard_enhancement_supported: self.keyboard_enhancement_supported,
             shell_completion_available: self.is_shell_mode(ctx) && !inline_menu_owns_input,
+            inline_menu_can_clear_selected: self
+                .active_inline_menu(ctx)
+                .is_some_and(|menu| menu.can_clear_selected(ctx)),
         })
     }
 
@@ -717,6 +729,7 @@ struct InputKeymapContextConfig {
     plan_toggle_available: bool,
     keyboard_enhancement_supported: bool,
     shell_completion_available: bool,
+    inline_menu_can_clear_selected: bool,
 }
 
 fn input_keymap_context(config: InputKeymapContextConfig) -> keymap::Context {
@@ -736,6 +749,9 @@ fn input_keymap_context(config: InputKeymapContextConfig) -> keymap::Context {
     }
     if config.shell_completion_available {
         context.set.insert(SHELL_COMPLETION_AVAILABLE_FLAG);
+    }
+    if config.inline_menu_can_clear_selected {
+        context.set.insert(INLINE_MENU_CAN_CLEAR_SELECTED_FLAG);
     }
     context
 }
@@ -828,6 +844,9 @@ impl TypedActionView for TuiInputView {
                 if self.is_shell_mode(ctx) {
                     ctx.emit(TuiInputViewEvent::RequestShellCompletion);
                 }
+                TuiEditorInteractionOutcome::PreserveViewport
+            }
+            TuiInputAction::ClearActiveInlineMenuItem => {
                 TuiEditorInteractionOutcome::PreserveViewport
             }
             TuiInputAction::EditorCommand(command) => {
@@ -992,7 +1011,10 @@ impl TuiInputView {
             TuiInputAction::Submit
             | TuiInputAction::HandleEscape
             | TuiInputAction::LogOutSelectedMcp
-            | TuiInputAction::Complete => TuiEditorInteractionOutcome::PreserveViewport,
+            | TuiInputAction::Complete
+            | TuiInputAction::ClearActiveInlineMenuItem => {
+                TuiEditorInteractionOutcome::PreserveViewport
+            }
         };
         let outcome = match outcome {
             TuiEditorInteractionOutcome::Clipboard(_) if input_ownership.is_masked() => {
@@ -1016,6 +1038,7 @@ impl TuiInputView {
         }
         ctx.notify();
     }
+
     // ── Read helpers ──────────────────────────────────────────────────────────
     fn open_inline_menu(&self, mode: TuiInputSuggestionsMode, ctx: &mut ViewContext<Self>) {
         if let Some(menu) = self.inline_menus.iter().find(|menu| menu.mode() == mode) {
@@ -1307,6 +1330,7 @@ impl TuiInputView {
                 | TuiInputAction::HandleEscape
                 | TuiInputAction::LogOutSelectedMcp
                 | TuiInputAction::Complete
+                | TuiInputAction::ClearActiveInlineMenuItem
         ) {
             return false;
         }
@@ -1347,6 +1371,9 @@ impl TuiInputView {
                 }
             }
             TuiInputAction::HandleEscape => return self.handle_escape(ctx),
+            TuiInputAction::ClearActiveInlineMenuItem => {
+                inline_menu.clear_selected(ctx);
+            }
             _ => return false,
         }
         ctx.notify();

@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::LLMProvider;
 use async_channel::Sender;
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -68,6 +67,7 @@ use warpui_core::{
 };
 
 use crate::alt_screen_view::AltScreenElement;
+use crate::api_keys_menu::{TuiApiKeysMenuEvent, TuiApiKeysMenuModel, render_api_keys_footer};
 use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
     TuiAttachmentPasteDisposition,
@@ -81,7 +81,6 @@ use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuMode
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
 use crate::exit_confirmation::{CTRL_C_EXIT_WINDOW, ExitConfirmation};
-use crate::grok_oauth::TuiGrokOAuthBlock;
 use crate::handoff::TuiHandoffBlock;
 use crate::inline_menu::{MAX_INLINE_MENU_ROWS, TuiInlineMenu, active_inline_menu};
 use crate::input::view::TuiInputAction;
@@ -139,8 +138,6 @@ use crate::zero_state_animation::{
 };
 mod completions;
 
-#[path = "grok_oauth/session.rs"]
-mod grok_oauth_session;
 #[path = "handoff/session.rs"]
 mod handoff_session;
 mod input_detection;
@@ -222,8 +219,6 @@ pub(super) enum BlockingInputSource {
     Orchestration(ViewHandle<TuiOrchestrationBlock>),
     /// A local-to-cloud handoff configuration or result card.
     Handoff(ViewHandle<TuiHandoffBlock>),
-    /// An in-process Grok OAuth connection flow.
-    GrokOAuth(ViewHandle<TuiGrokOAuthBlock>),
 }
 
 impl BlockingInputSource {
@@ -238,7 +233,6 @@ impl BlockingInputSource {
             Self::Permission(view) => Some(TuiChildView::new(&view).finish()),
             Self::Orchestration(view) => Some(TuiChildView::new(&view).finish()),
             Self::Handoff(view) => Some(TuiChildView::new(&view).finish()),
-            Self::GrokOAuth(view) => Some(TuiChildView::new(&view).finish()),
         }
     }
 }
@@ -355,31 +349,6 @@ fn tui_cli_shell_command(channel: Channel, arguments: &str) -> String {
 /// Shell command used by the exit hint to resume a server conversation.
 pub(crate) fn tui_resume_shell_command(channel: Channel, token: &str) -> String {
     tui_cli_shell_command(channel, &format!("--resume {token}"))
-}
-
-#[derive(Clone, Copy)]
-enum ProviderApiKeyOperation {
-    Set,
-    Clear,
-}
-
-fn provider_api_key_shell_command(
-    channel: Channel,
-    provider: LLMProvider,
-    operation: ProviderApiKeyOperation,
-) -> Option<String> {
-    if !provider.supports_pasted_api_key() {
-        return None;
-    }
-    let provider = provider.api_key_slug()?;
-    let flag = match operation {
-        ProviderApiKeyOperation::Set => "--set-provider-api-key",
-        ProviderApiKeyOperation::Clear => "--clear-provider-api-key",
-    };
-    Some(tui_cli_shell_command(
-        channel,
-        &format!("{flag} {provider}"),
-    ))
 }
 
 fn raw_prompt_if_not_blank(input: &str) -> Option<&str> {
@@ -619,6 +588,7 @@ pub(crate) struct TuiTerminalSessionView {
     open_todo_menu_list_key: Option<(AIConversationId, usize)>,
     /// Session-owned live state model shared by this surface and its input view.
     session_state: ModelHandle<TuiTerminalSessionStateModel>,
+    api_keys_menu: ModelHandle<TuiApiKeysMenuModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
     model_menu: ModelHandle<TuiModelMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
@@ -687,7 +657,6 @@ pub(crate) struct TuiTerminalSessionView {
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
     handoff: Option<ViewHandle<TuiHandoffBlock>>,
-    grok_oauth: Option<ViewHandle<TuiGrokOAuthBlock>>,
     statusline_config_view: Option<ViewHandle<TuiStatuslineConfigView>>,
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
     orchestration_tabs_focused: bool,
@@ -895,9 +864,7 @@ impl TuiTerminalSessionView {
         ctx: &AppContext,
     ) -> Result<TuiTerminalSessionState, TuiTerminalSessionStateResolveError> {
         let state = self.session_state.as_ref(ctx).resolve(ctx)?;
-        Ok(if let Some(grok_oauth) = self.active_grok_oauth(ctx) {
-            state.with_blocking_input_source(BlockingInputSource::GrokOAuth(grok_oauth))
-        } else if let Some(handoff) = self.active_handoff(ctx) {
+        Ok(if let Some(handoff) = self.active_handoff(ctx) {
             state.with_blocking_input_source(BlockingInputSource::Handoff(handoff))
         } else {
             state
@@ -920,7 +887,6 @@ impl TuiTerminalSessionView {
             BlockingInputSource::Permission(view) => ctx.focus(&view),
             BlockingInputSource::Orchestration(view) => ctx.focus(&view),
             BlockingInputSource::Handoff(view) => ctx.focus(&view),
-            BlockingInputSource::GrokOAuth(view) => ctx.focus(&view),
         }
     }
 
@@ -1473,6 +1439,12 @@ impl TuiTerminalSessionView {
         });
         ctx.subscribe_to_model(&slash_commands, |_, _, _, ctx| ctx.notify());
         let window_id = ctx.window_id();
+        let api_keys_menu = ctx.add_model(|ctx| {
+            TuiApiKeysMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
+        });
+        ctx.subscribe_to_model(&api_keys_menu, |_, _, _: &TuiApiKeysMenuEvent, ctx| {
+            ctx.notify();
+        });
         let conversation_menu = ctx.add_model(|ctx| {
             TuiConversationMenuModel::new(
                 input_editor_model.clone(),
@@ -1582,6 +1554,7 @@ impl TuiTerminalSessionView {
         let input_mode_for_input_view = ai_input_model.clone();
         let inline_menus = vec![
             TuiInlineMenu::new(slash_commands.clone()),
+            TuiInlineMenu::new(api_keys_menu.clone()),
             TuiInlineMenu::new(conversation_menu.clone()),
             TuiInlineMenu::new(model_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
@@ -1952,6 +1925,7 @@ impl TuiTerminalSessionView {
             read_only_menu_viewport,
             open_todo_menu_list_key: None,
             session_state,
+            api_keys_menu,
             conversation_menu,
             model_menu,
             skills_menu,
@@ -1994,7 +1968,6 @@ impl TuiTerminalSessionView {
             next_restore_request_id: 0,
             exit_summary,
             handoff: None,
-            grok_oauth: None,
             statusline_config_view: None,
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
@@ -2397,7 +2370,9 @@ impl TuiTerminalSessionView {
             })
             .finish()
         } else {
-            let border_style = if self.is_shell_mode(ctx) {
+            let border_style = if self.api_keys_menu.as_ref(ctx).uses_credential_border(ctx) {
+                builder.credential_entry_accent_style()
+            } else if self.is_shell_mode(ctx) {
                 builder.shell_mode_accent_style()
             } else {
                 builder.accent_border_style()
@@ -2405,7 +2380,9 @@ impl TuiTerminalSessionView {
             bordered_input(&self.input_view, border_style)
         };
 
-        if self.attachment_bar.as_ref(ctx).should_render(ctx) {
+        if !self.api_keys_menu.as_ref(ctx).is_open(ctx)
+            && self.attachment_bar.as_ref(ctx).should_render(ctx)
+        {
             content = content.child(
                 TuiConstrainedBox::new(
                     TuiContainer::new(TuiChildView::new(&self.attachment_bar).finish())
@@ -2421,7 +2398,9 @@ impl TuiTerminalSessionView {
                 .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
                 .finish(),
         );
-        let footer = if matches!(input_target, TuiInputTarget::Disabled) {
+        let footer = if let Some(footer) = self.api_keys_menu.as_ref(ctx).footer(ctx) {
+            render_api_keys_footer(footer, builder)
+        } else if matches!(input_target, TuiInputTarget::Disabled) {
             self.render_footer(ctx).finish()
         } else if self.orchestration_tabs_focused {
             self.render_orchestration_tab_footer(builder, ctx)
@@ -3388,55 +3367,6 @@ impl TuiTerminalSessionView {
         input_mode_policy::is_shell_mode(self.ai_input_model.as_ref(ctx))
     }
 
-    fn execute_provider_api_key_command(
-        &mut self,
-        command: &StaticCommand,
-        argument: Option<&String>,
-        operation: ProviderApiKeyOperation,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let provider = argument
-            .map(String::as_str)
-            .ok_or_else(|| "provider is required".to_owned())
-            .and_then(LLMProvider::from_api_key_slug);
-        let Ok(provider) = provider else {
-            self.show_error_hint(
-                format!(
-                    "Usage: {} <{}>",
-                    command.name,
-                    LLMProvider::API_KEY_PROVIDER_VALUE_NAME
-                ),
-                ctx,
-            );
-            return;
-        };
-        match (provider, operation) {
-            (LLMProvider::Xai, ProviderApiKeyOperation::Set) => {
-                self.start_grok_oauth(command.name, ctx);
-            }
-            (LLMProvider::Xai, ProviderApiKeyOperation::Clear) => {
-                self.clear_grok_oauth(command.name, ctx);
-            }
-            (LLMProvider::OpenAI | LLMProvider::Anthropic | LLMProvider::Google, operation) => {
-                let command_text =
-                    provider_api_key_shell_command(ChannelState::channel(), provider, operation)
-                        .expect("pasted-key providers have canonical API-key slugs");
-                self.execute_user_command(&command_text, None, ctx);
-                record_static_slash_command_accepted(command.name, true, ctx);
-            }
-            (LLMProvider::Unknown, _) => {
-                self.show_error_hint(
-                    format!(
-                        "Usage: {} <{}>",
-                        command.name,
-                        LLMProvider::API_KEY_PROVIDER_VALUE_NAME
-                    ),
-                    ctx,
-                );
-            }
-        }
-    }
-
     /// Routes a submission to shell execution or the agent conversation based
     /// on the input mode.
     fn handle_submitted(
@@ -4014,21 +3944,9 @@ impl TuiTerminalSessionView {
             SlashCommandKind::ResetStatusline => {
                 self.reset_statusline(command.name, ctx);
             }
-            SlashCommandKind::AddApiKey => {
-                self.execute_provider_api_key_command(
-                    command,
-                    argument,
-                    ProviderApiKeyOperation::Set,
-                    ctx,
-                );
-            }
-            SlashCommandKind::ClearApiKey => {
-                self.execute_provider_api_key_command(
-                    command,
-                    argument,
-                    ProviderApiKeyOperation::Clear,
-                    ctx,
-                );
+            SlashCommandKind::ApiKeys => {
+                self.api_keys_menu.update(ctx, |menu, ctx| menu.open(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::Cost => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
@@ -4546,9 +4464,6 @@ impl TuiView for TuiTerminalSessionView {
         if let Some(handoff) = self.active_handoff(ctx) {
             view_ids.push(handoff.id());
         }
-        if let Some(grok_oauth) = self.active_grok_oauth(ctx) {
-            view_ids.push(grok_oauth.id());
-        }
         if let Some(statusline_config_view) = self.statusline_config_view.as_ref() {
             view_ids.push(statusline_config_view.id());
         }
@@ -4873,9 +4788,6 @@ impl TuiTerminalSessionView {
         }
         if let Some(BlockingInputSource::Handoff(handoff)) = state.blocking_input_source() {
             content = content.child(TuiChildView::new(handoff).finish());
-        }
-        if let Some(BlockingInputSource::GrokOAuth(grok_oauth)) = state.blocking_input_source() {
-            content = content.child(TuiChildView::new(grok_oauth).finish());
         }
         if !blocker_active
             && let Some(statusline_config_view) = self.statusline_config_view.as_ref()

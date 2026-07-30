@@ -246,29 +246,6 @@ impl TuiUiBuilder {
         )))
     }
 
-    /// Themed light-blue accent for the Grok OAuth card and code field.
-    pub(crate) fn grok_oauth_accent_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().bright.blue,
-        )))
-    }
-
-    /// Light-blue overlay behind the Grok OAuth card body.
-    pub(crate) fn grok_oauth_surface_background(&self) -> Color {
-        let blue = ThemeFill::from(self.warp_theme.terminal_colors().bright.blue);
-        cell_color(self.base_background().blend(&blue.with_opacity(10)))
-    }
-
-    /// Stronger light-blue overlay behind the Grok OAuth title row.
-    pub(crate) fn grok_oauth_header_background(&self) -> Color {
-        let blue = ThemeFill::from(self.warp_theme.terminal_colors().bright.blue);
-        cell_color(
-            self.base_background()
-                .blend(&blue.with_opacity(10))
-                .blend(&blue.with_opacity(10)),
-        )
-    }
-
     /// Background-independent bold pale-green `!` marker shared by shell-command surfaces.
     pub(crate) fn shell_command_prefix_style(&self) -> TuiStyle {
         self.shell_command_accent_style()
@@ -308,6 +285,13 @@ impl TuiUiBuilder {
     /// preserve alpha.
     pub(crate) fn accent_border_style(&self) -> TuiStyle {
         TuiStyle::default().fg(cell_color(self.cyan_overlay_2()))
+    }
+
+    /// Lilac credential-entry accent used by the API-key input states.
+    pub(crate) fn credential_entry_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.magenta,
+        )))
     }
 
     /// Fixed themed cyan for voice-input status text. Terminal foreground

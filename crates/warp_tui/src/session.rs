@@ -141,7 +141,7 @@ pub fn run() -> Result<()> {
     let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
         if !provider.supports_pasted_api_key() {
             return Err(anyhow!(
-                "Grok credentials must be connected with /add-api-key grok in an active TUI"
+                "Grok credentials must be connected with /api-keys in an active TUI"
             ));
         }
         let Some(api_key) = read_provider_api_key()? else {
@@ -152,7 +152,7 @@ pub fn run() -> Result<()> {
         match args.clear_provider_api_key {
             Some(LLMProvider::Xai) => {
                 return Err(anyhow!(
-                    "Grok credentials must be cleared with /clear-provider-api-key grok in an active TUI"
+                    "Grok credentials must be cleared with /api-keys in an active TUI"
                 ));
             }
             Some(provider) => Some(ProviderApiKeyCommand::Clear { provider }),
