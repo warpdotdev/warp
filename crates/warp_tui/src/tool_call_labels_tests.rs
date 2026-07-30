@@ -370,7 +370,7 @@ fn mcp_tool_call_label_surfaces_tool_and_server_across_lifecycle() {
 }
 
 #[test]
-fn tool_call_label_spans_bold_only_the_semantic_action_word() {
+fn tool_call_label_spans_bold_only_the_first_word() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         app.read(|ctx| {
@@ -383,17 +383,17 @@ fn tool_call_label_spans_bold_only_the_semantic_action_word() {
             assert_eq!(spans[1].1.fg, builder.neutral_7_text_style().fg);
             assert!(!spans[1].1.add_modifier.contains(Modifier::BOLD));
 
-            let trailing_action =
+            let subject_first =
                 styled_tool_call_label_spans("MCP tool create_issue failed", &builder);
             assert_eq!(
-                trailing_action
+                subject_first
                     .iter()
                     .map(|(text, _)| text.as_str())
                     .collect::<Vec<_>>(),
-                vec!["MCP tool create_issue ", "failed"]
+                vec!["MCP", " tool create_issue failed"]
             );
-            assert!(trailing_action[1].1.add_modifier.contains(Modifier::BOLD));
-            assert_eq!(trailing_action[0].1.fg, builder.neutral_7_text_style().fg);
+            assert!(subject_first[0].1.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(subject_first[1].1.fg, builder.neutral_7_text_style().fg);
         });
     });
 }
