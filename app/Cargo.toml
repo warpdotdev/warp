@@ -600,6 +600,7 @@ default = [
     "mcp_grouped_server_context",
     "fork_from_command",
     "context_window_usage_v2",
+    "context_window_usage_breakdown",
     "ambient_agents_command_line",
     "ambient_agents_image_upload",
     "scheduled_ambient_agents",

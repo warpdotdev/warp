@@ -519,8 +519,8 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
-    /// Dev-only: enables the expandable per-segment context window usage
-    /// breakdown in the conversation usage card.
+    /// Enables the expandable per-segment context window usage breakdown in
+    /// the conversation usage card.
     ContextWindowUsageBreakdown,
 
     /// Enables global search
@@ -1000,7 +1000,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
-    FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
