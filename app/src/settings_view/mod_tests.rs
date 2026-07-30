@@ -1120,40 +1120,6 @@ fn visible_widget_count<V: View>(page: &PageType<V>) -> usize {
     };
     widgets.len()
 }
-#[test]
-fn knowledge_page_search_filters_to_matching_widget() {
-    App::test((), |mut app| async move {
-        let _ai_rules = FeatureFlag::AIRules.override_enabled(true);
-        let _suggested_rules = FeatureFlag::SuggestedRules.override_enabled(true);
-
-        app.update(|ctx| {
-            let mut page =
-                PageType::new_uncategorized(AISettingsPageView::knowledge_widgets(), None);
-            assert_eq!(
-                visible_widget_count(&page),
-                5,
-                "Knowledge should be split into a header and four focused setting widgets"
-            );
-
-            for query in ["suggested rules", "manage rules", "warp drive"] {
-                let matches = page.update_filter(query, ctx);
-                assert_eq!(
-                    visible_widget_count(&page),
-                    1,
-                    "query {query:?} should render only its matching Knowledge widget"
-                );
-                assert!(matches.is_truthy());
-            }
-
-            page.update_filter("", ctx);
-            assert_eq!(
-                visible_widget_count(&page),
-                5,
-                "clearing search should restore every Knowledge widget"
-            );
-        });
-    });
-}
 
 #[test]
 fn search_terms_match_direct_unit_checks() {

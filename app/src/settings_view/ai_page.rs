@@ -2850,11 +2850,11 @@ impl AISettingsPageView {
             ctx.notify();
         }
     }
-    pub(super) fn knowledge_widgets() -> Vec<Box<dyn SettingsWidget<View = Self>>> {
-        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
-            Box::new(KnowledgeHeaderWidget),
-            Box::new(RulesWidget::default()),
-        ];
+    fn knowledge_widgets(show_section_header: bool) -> Vec<Box<dyn SettingsWidget<View = Self>>> {
+        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![Box::new(RulesWidget {
+            show_section_header,
+            ..Default::default()
+        })];
         if FeatureFlag::SuggestedRules.is_enabled() {
             widgets.push(Box::new(SuggestedRulesWidget::default()));
         }
@@ -2906,7 +2906,7 @@ impl AISettingsPageView {
                     widgets.push(Box::new(MCPServersWidget::default()));
                 }
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.extend(Self::knowledge_widgets());
+                    widgets.extend(Self::knowledge_widgets(true));
                 }
                 if cfg!(feature = "voice_input")
                     && ai_settings
@@ -2979,7 +2979,7 @@ impl AISettingsPageView {
             }
             Some(AISubpage::Knowledge) => {
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.extend(Self::knowledge_widgets());
+                    widgets.extend(Self::knowledge_widgets(false));
                 }
             }
             Some(AISubpage::ThirdPartyCLIAgents) => {
@@ -2987,9 +2987,10 @@ impl AISettingsPageView {
             }
         }
 
-        // Subpage widgets render their own subheader-sized titles internally,
-        // so we don't pass a page-level title to PageType.
-        let title: Option<&str> = None;
+        // Most subpage widgets render their own subheader-sized titles internally.
+        // Knowledge follows the Account-page convention and renders its title as page chrome,
+        // so filtering its setting widgets never removes the title.
+        let title = (subpage == Some(AISubpage::Knowledge)).then_some("Knowledge");
         PageType::new_uncategorized(widgets, title)
     }
 
@@ -7094,43 +7095,11 @@ impl SettingsWidget for MCPServersWidget {
         column.finish()
     }
 }
-
-struct KnowledgeHeaderWidget;
-
-impl SettingsWidget for KnowledgeHeaderWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "knowledge"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled()
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        build_sub_header(
-            appearance,
-            "Knowledge",
-            Some(styles::header_font_color(
-                AISettings::as_ref(app).is_any_ai_enabled(app),
-                app,
-            )),
-        )
-        .with_margin_bottom(HEADER_PADDING)
-        .finish()
-    }
-}
-
 #[derive(Default)]
 struct RulesWidget {
     rules_toggle: SwitchStateHandle,
     rules_link_index: HighlightedHyperlink,
+    show_section_header: bool,
 }
 
 impl SettingsWidget for RulesWidget {
@@ -7190,10 +7159,22 @@ impl SettingsWidget for RulesWidget {
         .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
         .finish();
 
-        Flex::column()
-            .with_child(toggle)
-            .with_child(description)
-            .finish()
+        let mut column = Flex::column();
+        if self.show_section_header {
+            column.add_child(
+                build_sub_header(
+                    appearance,
+                    "Knowledge",
+                    Some(styles::header_font_color(
+                        ai_settings.is_any_ai_enabled(app),
+                        app,
+                    )),
+                )
+                .with_margin_bottom(HEADER_PADDING)
+                .finish(),
+            );
+        }
+        column.with_child(toggle).with_child(description).finish()
     }
 }
 
