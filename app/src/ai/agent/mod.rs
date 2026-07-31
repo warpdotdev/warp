@@ -726,9 +726,11 @@ pub enum RenderableAIError {
         is_user_error: bool,
     },
     /// An agent-issued command caused the shell process to exit, so the run
-    /// cannot continue. Surfaced as a terminal failure (FAILED) rather than a
-    /// user cancellation.
-    AgentExitedShell,
+    /// cannot continue. Surfaced as a terminal failure (FAILED).
+    /// `command` is the (secret-redacted) command that exited the shell.
+    AgentExitedShell {
+        command: String,
+    },
     /// A cloud-mode startup failure. Carries the raw server error message and
     /// surfaces it without the generic apology prefix, matching the dedicated
     /// GUI error card (`render_cloud_mode_error_screen`) which shows the
@@ -739,8 +741,6 @@ pub enum RenderableAIError {
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
-    /// User-facing message shown when an agent-issued command exits the shell.
-    pub const AGENT_EXITED_SHELL_MESSAGE: &'static str = "The shell exited while the agent was running a command, so the run could not continue. Ensure the agent is not asked to run commands or source scripts that can exit the shell.";
     /// Creates a transient network error. `kind` is the structured cause (including the raw API
     /// error where one exists), preserved so user reports can disambiguate the different causes
     /// behind the shared user-facing copy.
@@ -918,7 +918,12 @@ impl Display for RenderableAIError {
                 )
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
-            Self::AgentExitedShell => write!(f, "{}", Self::AGENT_EXITED_SHELL_MESSAGE),
+            Self::AgentExitedShell { command } => write!(
+                f,
+                "The shell exited while the agent was running the command `{command}`, so the run \
+                 could not continue. Ensure the agent is not asked to run commands or source \
+                 scripts that can exit the shell."
+            ),
             Self::CloudStartupFailed(msg) => write!(f, "{msg}"),
         }
     }

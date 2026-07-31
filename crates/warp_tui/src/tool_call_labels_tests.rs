@@ -6,14 +6,18 @@ use ai::agent::action_result::{
 };
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
-    AIAgentActionType, BlockId, RequestCommandOutputResult, TaskId,
+    AIAgentActionType, Appearance, BlockId, RequestCommandOutputResult, TaskId,
 };
 use warp_core::command::ExitCode;
+use warpui::App;
+use warpui_core::elements::tui::Modifier;
 
 use super::{
     CommandBlockState, ResolvedCommandBlock, ToolCallDisplayState, launched_agents_label,
-    tool_call_display_state, tool_call_label, tool_call_label_with_server,
+    styled_tool_call_label_spans, tool_call_display_state, tool_call_label,
+    tool_call_label_with_server,
 };
+use crate::tui_builder::TuiUiBuilder;
 
 /// Builds a `Finished` status wrapping the given result.
 fn finished(result: AIAgentActionResultType) -> AIActionStatus {
@@ -363,4 +367,33 @@ fn mcp_tool_call_label_surfaces_tool_and_server_across_lifecycle() {
         tool_call_label_with_server(&action, None, false, Some(&succeeded), None),
         "Called MCP tool create_issue"
     );
+}
+
+#[test]
+fn tool_call_label_spans_bold_only_the_first_word() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let spans = styled_tool_call_label_spans("Grepped for needle in src", &builder);
+            assert_eq!(spans[0].0, "Grepped");
+            assert_eq!(spans[1].0, " for needle in src");
+            assert_eq!(spans[0].1.fg, builder.primary_text_style().fg);
+            assert!(spans[0].1.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(spans[1].1.fg, builder.neutral_7_text_style().fg);
+            assert!(!spans[1].1.add_modifier.contains(Modifier::BOLD));
+
+            let subject_first =
+                styled_tool_call_label_spans("MCP tool create_issue failed", &builder);
+            assert_eq!(
+                subject_first
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["MCP", " tool create_issue failed"]
+            );
+            assert!(subject_first[0].1.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(subject_first[1].1.fg, builder.neutral_7_text_style().fg);
+        });
+    });
 }

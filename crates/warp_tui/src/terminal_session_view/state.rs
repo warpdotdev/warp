@@ -6,7 +6,9 @@ use std::{error, fmt};
 use parking_lot::FairMutex;
 use warp::tui_export::{BlocklistAIInputModel, CLISubagentController, TerminalModel};
 use warpui_core::keymap::Context;
-use warpui_core::{AppContext, Entity, ModelHandle, ViewHandle, WeakModelHandle, WeakViewHandle};
+use warpui_core::{
+    AppContext, Entity, ModelContext, ModelHandle, ViewHandle, WeakModelHandle, WeakViewHandle,
+};
 
 use super::{
     AUTO_APPROVE_TOGGLE_BINDING_NAME, BlockingInputSource,
@@ -54,6 +56,7 @@ enum TuiTerminalSessionStateSource {
 /// presentation components one shared state source.
 pub(crate) struct TuiTerminalSessionStateModel {
     source: TuiTerminalSessionStateSource,
+    show_first_zero_state: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,6 +104,7 @@ impl TuiTerminalSessionStateModel {
         input_mode: &ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: &ModelHandle<TuiInputSuggestionsModeModel>,
         orchestration_tab_bar: &ViewHandle<TuiTabBarView>,
+        show_first_zero_state: bool,
     ) -> Self {
         Self {
             source: TuiTerminalSessionStateSource::Session {
@@ -111,6 +115,18 @@ impl TuiTerminalSessionStateModel {
                 suggestions_mode: suggestions_mode.downgrade(),
                 orchestration_tab_bar: orchestration_tab_bar.downgrade(),
             },
+            show_first_zero_state,
+        }
+    }
+
+    pub(crate) fn show_first_zero_state(&self) -> bool {
+        self.show_first_zero_state
+    }
+
+    pub(crate) fn set_show_first_zero_state(&mut self, show: bool, ctx: &mut ModelContext<Self>) {
+        if self.show_first_zero_state != show {
+            self.show_first_zero_state = show;
+            ctx.notify();
         }
     }
     #[cfg(test)]
@@ -125,6 +141,7 @@ impl TuiTerminalSessionStateModel {
                 suggestions_mode: suggestions_mode.downgrade(),
                 orchestration_tabs_available: Rc::new(orchestration_tabs_available),
             },
+            show_first_zero_state: false,
         }
     }
 

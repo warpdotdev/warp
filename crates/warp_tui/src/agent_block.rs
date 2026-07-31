@@ -5,12 +5,13 @@
 //! composition ([`TuiAIBlock::render_element`]); the per-section render
 //! functions live in [`crate::agent_block_sections`].
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::TimeDelta;
 use itertools::Itertools;
 use markdown_parser::{FormattedTable, FormattedText};
 use parking_lot::FairMutex;
@@ -21,7 +22,8 @@ use warp::tui_export::{
     BlocklistAIActionModel, BlocklistAIHistoryModel, CancellationReason,
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, MessageId, ModelEvent,
     ModelEventDispatcher, ReceivedMessageDisplay, RenderableAIError, SummarizationType,
-    TerminalModel, TodoOperation, TodoStatus, failed_output_presentation,
+    TelemetryEvent, TerminalModel, TodoOperation, TodoStatus, TuiOnboardingMarker,
+    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, failed_output_presentation,
     should_show_failed_output_usage_notice,
 };
 use warpui::SingletonEntity;
@@ -63,12 +65,66 @@ const OUT_OF_CREDITS_DETAIL: &str =
     "In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits.";
 const OUT_OF_CREDITS_ACTION_LABEL: &str = "Get started with AI";
 const OUT_OF_CREDITS_ACTION_HINT: &str = "(ctrl+o)";
+const FIRST_CREDIT_GATE_TITLE: &str = "You need AI credits in order to use Warp’s agent.";
+const FIRST_CREDIT_GATE_ACTION_LABEL: &str = "Start using AI";
+const FIRST_CREDIT_GATE_ACTION_HINT: &str = "(ctrl+o).";
 const FAILURE_WARNING_PREFIX: &str = "⚠ ";
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct TuiCodeBlockKey {
     message_id: MessageId,
     section_index: usize,
+}
+
+fn should_consume_first_credit_gate(
+    is_restored: bool,
+    presentation: Option<&FailedOutputPresentation>,
+) -> bool {
+    !is_restored
+        && matches!(
+            presentation,
+            Some(FailedOutputPresentation::OutOfCredits { .. })
+        )
+}
+
+fn render_first_credit_gate(
+    out_of_credits_hover_state: &MouseStateHandle,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    let primary_style = builder.primary_text_style();
+    let action = TuiHoverable::new(
+        out_of_credits_hover_state.clone(),
+        TuiText::new(FIRST_CREDIT_GATE_ACTION_LABEL)
+            .with_style(primary_style.add_modifier(Modifier::UNDERLINED))
+            .finish(),
+    )
+    .on_click(|_, app| app.open_url(OUT_OF_CREDITS_URL))
+    .finish();
+    TuiFlex::column()
+        .child(
+            TuiText::new(FIRST_CREDIT_GATE_TITLE)
+                .with_style(builder.attention_glyph_style())
+                .finish(),
+        )
+        .child(
+            TuiFlex::row()
+                .child(action)
+                .child(TuiText::new(" ").with_style(primary_style).finish())
+                .child(
+                    TuiText::new(FIRST_CREDIT_GATE_ACTION_HINT)
+                        .with_style(builder.accent_text_style())
+                        .finish(),
+                )
+                .finish(),
+        )
+        .child(TuiText::new(" ").finish())
+        .child(
+            TuiText::new(OUT_OF_CREDITS_URL)
+                .with_style(primary_style)
+                .finish(),
+        )
+        .finish()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -116,6 +172,7 @@ enum TuiAIBlockSection {
     /// A message delivered by another agent in the orchestration.
     AgentMessage(ReceivedMessageDisplay),
     Failure(FailedOutputPresentation),
+    FirstCreditGate,
     UsageNotice,
 }
 
@@ -365,6 +422,7 @@ pub(super) struct TuiAIBlock {
     /// (thinking blocks and task lists).
     collapsible_states: CollapsibleSectionStates,
     out_of_credits_hover_state: MouseStateHandle,
+    first_credit_gate: bool,
     /// Every tool-call action id seen in this exchange's output, maintained by
     /// [`Self::sync_action_views`]. Mirrors the GUI `AIBlock`'s
     /// `requested_action_ids` so per-action-event lookups are a cheap set
@@ -381,6 +439,10 @@ pub(super) struct TuiAIBlock {
     /// conversation-wide todo/status invalidations to the blocks whose
     /// rendering can actually change.
     renders_todos: bool,
+    is_restored_for_telemetry: bool,
+    time_to_first_token: OnceCell<TimeDelta>,
+    time_to_last_token: Option<TimeDelta>,
+    terminal_telemetry_emitted: bool,
     last_measured_width: Cell<Option<u16>>,
 }
 
@@ -391,14 +453,15 @@ impl TuiAIBlock {
     /// child views for tool calls already present, then re-syncs whenever the
     /// exchange's output updates (via `on_updated_output`).
     pub(super) fn new(
-        conversation_id: AIConversationId,
-        exchange_id: AIAgentExchangeId,
+        identity: (AIConversationId, AIAgentExchangeId),
         block_model: Rc<dyn AIBlockModel<View = Self>>,
         action_model: ModelHandle<BlocklistAIActionModel>,
         model_events: &ModelHandle<ModelEventDispatcher>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
+        is_restored_for_telemetry: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        let (conversation_id, exchange_id) = identity;
         let mut block = Self {
             conversation_id,
             exchange_id,
@@ -407,14 +470,31 @@ impl TuiAIBlock {
             terminal_model,
             collapsible_states: Default::default(),
             out_of_credits_hover_state: MouseStateHandle::default(),
+            first_credit_gate: false,
             action_ids: HashSet::new(),
             action_views: HashMap::new(),
             code_block_views: HashMap::new(),
             renders_todos: false,
+            is_restored_for_telemetry,
+            time_to_first_token: OnceCell::new(),
+            time_to_last_token: None,
+            terminal_telemetry_emitted: false,
             last_measured_width: Cell::new(None),
         };
         block.sync_action_views(&action_model, ctx);
         block.sync_code_block_views(ctx);
+        block.sync_first_credit_gate(ctx);
+
+        ctx.subscribe_to_model(
+            &TuiOnboardingMarkers::handle(ctx),
+            |block, _, event, ctx| match event {
+                TuiOnboardingMarkersEvent::Loading => {}
+                TuiOnboardingMarkersEvent::Ready => {
+                    block.sync_first_credit_gate(ctx);
+                    block.invalidate_layout(ctx);
+                }
+            },
+        );
 
         ctx.subscribe_to_model(
             &action_model,
@@ -471,8 +551,10 @@ impl TuiAIBlock {
         });
         block.block_model.on_updated_output(
             Box::new(move |me, ctx| {
+                me.record_output_telemetry(ctx);
                 me.sync_action_views(&action_model, ctx);
                 me.sync_code_block_views(ctx);
+                me.sync_first_credit_gate(ctx);
                 // The presenter caches this block's rendered element; new
                 // output must invalidate both the view and its canonical
                 // block-list height or scrolling keeps a stale extent after
@@ -482,6 +564,72 @@ impl TuiAIBlock {
             ctx,
         );
         block
+    }
+
+    fn sync_first_credit_gate(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.first_credit_gate {
+            return;
+        }
+        let presentation = {
+            let status = self.block_model.status(ctx);
+            self.visible_failure(&status, ctx)
+                .map(|(_, presentation)| presentation)
+        };
+        let is_out_of_credits =
+            should_consume_first_credit_gate(self.block_model.is_restored(), presentation.as_ref());
+        if is_out_of_credits {
+            self.first_credit_gate = TuiOnboardingMarkers::handle(ctx)
+                .update(ctx, |markers, ctx| {
+                    markers.consume(TuiOnboardingMarker::FirstCreditGate, ctx)
+                });
+        }
+    }
+
+    fn record_output_telemetry(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.is_restored_for_telemetry || self.terminal_telemetry_emitted {
+            return;
+        }
+        let status = self.block_model.status(ctx);
+        if status.output_to_render().is_some()
+            && let Some(latency) = self.block_model.time_since_request_start(ctx)
+        {
+            if self.time_to_first_token.set(latency).is_ok() {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                    history.set_exchange_time_to_first_token(
+                        self.conversation_id,
+                        self.exchange_id,
+                        latency.num_milliseconds(),
+                    );
+                });
+            }
+            self.time_to_last_token = Some(latency);
+        }
+        let (was_user_facing_error, cancelled) = match status {
+            AIBlockOutputStatus::Pending | AIBlockOutputStatus::PartiallyReceived { .. } => return,
+            AIBlockOutputStatus::Complete { .. } => (false, false),
+            AIBlockOutputStatus::Cancelled { .. } => (false, true),
+            AIBlockOutputStatus::Failed { .. } => (true, false),
+        };
+        self.terminal_telemetry_emitted = true;
+        warp::send_telemetry_from_ctx!(
+            TelemetryEvent::AgentModeCreatedAIBlock {
+                client_exchange_id: self.exchange_id.to_string(),
+                server_output_id: self.block_model.server_output_id(ctx),
+                was_autodetected_ai_query: self.block_model.was_autodetected_ai_query(ctx),
+                time_to_first_token_ms: self
+                    .time_to_first_token
+                    .get()
+                    .map(|duration| duration.num_milliseconds() as u128),
+                time_to_last_token_ms: self
+                    .time_to_last_token
+                    .map(|duration| duration.num_milliseconds() as u128),
+                was_user_facing_error,
+                cancelled,
+                conversation_id: self.conversation_id,
+                is_udi_enabled: false,
+            },
+            ctx
+        );
     }
 
     /// Records the exchange's tool-call action ids and todo presence, and
@@ -741,9 +889,11 @@ impl TuiAIBlock {
             let card_action_model = action_model.clone();
             let run_agents_executor = action_model.as_ref(ctx).run_agents_executor(ctx);
             let fallback_base_model_id = self.block_model.base_model(ctx).map(|id| id.to_string());
-            let is_restored = self.block_model.is_restored();
+            let is_restored = self.is_restored_for_telemetry;
+            let conversation_id = self.conversation_id;
             let view = ctx.add_typed_action_tui_view(move |ctx| {
                 TuiOrchestrationBlock::new(
+                    conversation_id,
                     action,
                     &request,
                     active_config,
@@ -1321,6 +1471,9 @@ impl TuiAIBlock {
             TuiAIBlockSection::Failure(presentation) => {
                 render_failure_section(presentation, &self.out_of_credits_hover_state, app)
             }
+            TuiAIBlockSection::FirstCreditGate => {
+                render_first_credit_gate(&self.out_of_credits_hover_state, app)
+            }
             TuiAIBlockSection::UsageNotice => render_usage_notice(app),
         })
     }
@@ -1455,14 +1608,22 @@ impl TuiAIBlock {
         }
 
         if let Some((error, presentation)) = self.visible_failure(&status, app) {
-            sections.push(TuiAIBlockSection::Failure(presentation));
-            if should_show_failed_output_usage_notice(
-                error,
-                self.block_model
-                    .is_latest_visible_exchange_in_root_task(app),
-                self.has_expanded_last_requested_command(app),
-                self.block_model.is_restored(),
-            ) {
+            if self.first_credit_gate
+                && matches!(presentation, FailedOutputPresentation::OutOfCredits { .. })
+            {
+                sections.push(TuiAIBlockSection::FirstCreditGate);
+            } else {
+                sections.push(TuiAIBlockSection::Failure(presentation));
+            }
+            if !self.first_credit_gate
+                && should_show_failed_output_usage_notice(
+                    error,
+                    self.block_model
+                        .is_latest_visible_exchange_in_root_task(app),
+                    self.has_expanded_last_requested_command(app),
+                    self.block_model.is_restored(),
+                )
+            {
                 sections.push(TuiAIBlockSection::UsageNotice);
             }
         }
@@ -1707,6 +1868,9 @@ impl TuiAIBlock {
                 TuiAIBlockSection::Failure(presentation) => {
                     render_failure_section(presentation, &self.out_of_credits_hover_state, app)
                 }
+                TuiAIBlockSection::FirstCreditGate => {
+                    render_first_credit_gate(&self.out_of_credits_hover_state, app)
+                }
                 TuiAIBlockSection::UsageNotice => render_usage_notice(app),
             };
 
@@ -1774,6 +1938,10 @@ fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
         | TuiAIBlockSection::CompletedTodos { .. }
         | TuiAIBlockSection::AgentMessage(_) => None,
         TuiAIBlockSection::Failure(presentation) => Some(failure_text(presentation)),
+        TuiAIBlockSection::FirstCreditGate => Some(format!(
+            "{FIRST_CREDIT_GATE_TITLE}\n{FIRST_CREDIT_GATE_ACTION_LABEL} \
+             {FIRST_CREDIT_GATE_ACTION_HINT}\n\n{OUT_OF_CREDITS_URL}"
+        )),
         TuiAIBlockSection::UsageNotice => Some(FAILED_OUTPUT_USAGE_NOTICE_TEXT.to_owned()),
     }
 }

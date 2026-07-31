@@ -5,17 +5,10 @@ use std::time::Duration;
 use channel_versions::{Changelog, MarkdownSection, Section};
 use chrono::DateTime;
 use uuid::Uuid;
-use warp::settings::{
-    TuiZeroStateExtrusionDepthSetting, TuiZeroStateObjectSetting,
-    TuiZeroStateRotationPeriodSecondsSetting, TuiZeroStateSettings,
-    TuiZeroStateShowAnimationSetting, TuiZeroStateShowChangelogSetting, TuiZeroStateShowMcpSetting,
-    TuiZeroStateShowProjectInfoSetting, TuiZeroStateShowSignedInUserSetting,
-};
 use warp::tui_export::{
-    ChangelogModel, ChangelogState, TuiMcpConfigState, TuiMcpServerId, TuiMcpServerSnapshot,
+    TuiMcpConfigDiagnostic, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
     TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, register_tui_session_view_test_singletons,
 };
-use warp_core::settings::Setting as _;
 use warpui::{EntityIdMap, SingletonEntity};
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
@@ -25,42 +18,24 @@ use warpui_core::elements::tui::{
 use warpui_core::{App, AppContext};
 
 use super::{
-    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, ZeroStateSectionVisibility,
-    build_zero_state_copy_only_layout, build_zero_state_layout, build_zero_state_overlay,
-    changelog_bullets_from_changelog, mcp_status_label,
+    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
+    build_zero_state_stack_layout, changelog_bullets_from_changelog, mcp_status_label,
+    render_first_run_top_section,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
-    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement, ZeroStateStarfieldElement,
+    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement,
+    ZeroStateInteractionHandle, ZeroStateStarfieldElement,
 };
-
-/// Every optional zero-state section hidden.
-fn all_sections_hidden() -> ZeroStateSectionVisibility {
-    ZeroStateSectionVisibility {
-        signed_in_user: false,
-        changelog: false,
-        project_info: false,
-        mcp: false,
-        animation: false,
-    }
-}
-
-/// Installs a changelog with a single TUI bullet so the "What's new" section
-/// has content to render.
-fn add_test_changelog(app: &mut App) {
-    app.update(|ctx| {
-        ChangelogModel::handle(ctx).update(ctx, |model, _| {
-            model.changelog = ChangelogState::Some(changelog(vec!["Configurable zero state"]));
-        });
-    });
-}
 
 fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     TuiMcpServerSnapshot {
-        id: TuiMcpServerId(id),
-        installation_uuid: Uuid::from_u128(id as u128),
+        id: TuiMcpServerId::Installation(Uuid::from_u128(id as u128)),
+        installation_uuid: Some(Uuid::from_u128(id as u128)),
         name: format!("server-{id}"),
-        transport: TuiMcpTransport::Stdio,
+        description: None,
+        source: TuiMcpServerSource::Installation,
+        transport: Some(TuiMcpTransport::Stdio),
         status,
         tool_count: 2,
         resource_count: 0,
@@ -101,24 +76,59 @@ fn changelog_bullets_are_empty_when_only_other_surfaces_have_updates() {
 }
 
 #[test]
-fn mcp_summary_keeps_missing_config_action_short() {
+fn first_zero_state_matches_welcome_design_copy() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+
+        let lines = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            render_element_lines(
+                render_first_run_top_section(&builder, ctx).finish(),
+                ctx,
+                LEFT_COLUMN_COLS,
+                16,
+            )
+        });
+        let rendered = lines.join("\n");
+        for expected in [
+            "Welcome to Warp",
+            "What’s different about Warp",
+            "✶ /natural-language-detection",
+            "to autodetect",
+            "prompts or shell commands",
+            "✶ /modify-settings to set up custom model",
+            "routers",
+            "✶ /orchestrate to spawn fleets of agents",
+            "✶ Run full-screen terminal apps and cd into",
+            "other directories",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "first zero state should contain {expected:?}:\n{rendered}"
+            );
+        }
+        assert!(!rendered.contains("What's new"));
+        assert!(!rendered.contains("████"));
+    });
+}
+
+#[test]
+fn mcp_summary_keeps_empty_catalog_action_short() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Missing,
+        diagnostics: Vec::new(),
         servers: Vec::new(),
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
-        ("Not configured · /mcp".to_string(), false)
+        ("No servers available · run /mcp".to_string(), false)
     );
 }
 
 #[test]
 fn mcp_summary_reports_mixed_runtime_states() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Ready,
+        diagnostics: Vec::new(),
         servers: vec![
             server(1, TuiMcpServerStatus::Running),
             server(2, TuiMcpServerStatus::Starting),
@@ -131,13 +141,14 @@ fn mcp_summary_reports_mixed_runtime_states() {
                 },
             ),
             server(6, TuiMcpServerStatus::Offline),
+            server(7, TuiMcpServerStatus::Available),
         ],
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
         (
-            "1 connected · 1 starting · 1 needs auth · 1 stopping · 1 failed · 1 offline · /mcp"
+            "1 connected · 1 starting · 1 needs auth · 1 stopping · 1 failed · 1 offline · 1 available · /mcp"
                 .to_string(),
             false
         )
@@ -147,16 +158,24 @@ fn mcp_summary_reports_mixed_runtime_states() {
 #[test]
 fn mcp_summary_marks_config_errors() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Invalid {
-            message: "invalid JSON".to_string(),
-        },
+        diagnostics: vec![
+            TuiMcpConfigDiagnostic {
+                provider: "Claude".to_owned(),
+                config_path: PathBuf::from("/tmp/.claude.json"),
+                message: "invalid JSON".to_owned(),
+            },
+            TuiMcpConfigDiagnostic {
+                provider: "Codex".to_owned(),
+                config_path: PathBuf::from("/tmp/config.toml"),
+                message: "invalid TOML".to_owned(),
+            },
+        ],
         servers: Vec::new(),
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
-        ("Config error · run /mcp".to_string(), true)
+        ("2 config errors · /mcp".to_string(), true)
     );
 }
 
@@ -213,6 +232,50 @@ fn render_element_lines(
     height: u16,
 ) -> Vec<String> {
     render_to_buffer(element, ctx, width, height).to_lines()
+}
+
+fn static_zero_state_layers(
+    width: u16,
+    height: u16,
+) -> (
+    Box<dyn TuiElement>,
+    Box<dyn TuiElement>,
+    Box<dyn TuiElement>,
+) {
+    let stars = (0..height)
+        .map(|_| "*".repeat(usize::from(width)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (
+        TuiText::new(stars).finish(),
+        TuiText::new("animation").finish(),
+        TuiText::new("copy here\n\nsecond line").finish(),
+    )
+}
+
+#[test]
+fn direct_zero_state_layers_match_scratch_composition() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            for (width, height) in [(60, 12), (80, 24), (120, 40), (240, 80)] {
+                let (stars, animation, overlay) = static_zero_state_layers(width, height);
+                let direct = render_to_buffer(
+                    build_zero_state_layout(stars, animation, overlay),
+                    ctx,
+                    width,
+                    height,
+                );
+                let (stars, animation, overlay) = static_zero_state_layers(width, height);
+                let scratch = render_to_buffer(
+                    build_zero_state_stack_layout(stars, animation, overlay),
+                    ctx,
+                    width,
+                    height,
+                );
+                assert_eq!(direct, scratch, "layout differs at {width}x{height}");
+            }
+        });
+    });
 }
 
 #[test]
@@ -287,6 +350,7 @@ fn zero_state_animation_is_centered_in_remaining_space_and_hidden_when_space_is_
                 ZeroStateAnimationElement::new(
                     AnimationClock::starting_at(Duration::ZERO),
                     Arc::new(ZeroStateAnimationConfig::default()),
+                    ZeroStateInteractionHandle::default(),
                     WarpLogoStyles {
                         front: style,
                         back: style,
@@ -381,12 +445,7 @@ fn zero_state_path_header_not_truncated_at_wide_terminal() {
 
             // Give the overlay exactly enough width for the displayed path.
             // Call build_zero_state_overlay -- the same function render() calls.
-            let overlay = build_zero_state_overlay(
-                Some(long_cwd),
-                ZeroStateSectionVisibility::default(),
-                &builder,
-                app_ctx,
-            );
+            let overlay = build_zero_state_overlay(Some(long_cwd), &builder, app_ctx);
             let buffer = render_to_buffer(overlay, app_ctx, text_width(&header_text), 12);
             let lines = buffer.to_lines();
 
@@ -471,12 +530,7 @@ fn zero_state_path_header_wraps_without_losing_content_at_narrow_terminal() {
                 "test path must wrap at the narrow terminal width"
             );
 
-            let overlay = build_zero_state_overlay(
-                Some(long_cwd),
-                ZeroStateSectionVisibility::default(),
-                &builder,
-                app_ctx,
-            );
+            let overlay = build_zero_state_overlay(Some(long_cwd), &builder, app_ctx);
             let buffer = render_to_buffer(overlay, app_ctx, narrow_width, 12);
             let lines = buffer.to_lines();
 
@@ -497,213 +551,6 @@ fn zero_state_path_header_wraps_without_losing_content_at_narrow_terminal() {
                 "wrapped path rows {expected_wrapped:?} must appear consecutively \
                  in narrow output;\ngot lines:\n{}",
                 lines.join("\n")
-            );
-        });
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Per-section visibility (APP-5070)
-// ---------------------------------------------------------------------------
-
-/// With the default settings every section is rendered, so the overlay keeps
-/// showing the account line, the changelog, the project path, and MCP.
-#[test]
-fn zero_state_shows_every_section_by_default() {
-    App::test((), |mut app| async move {
-        register_tui_session_view_test_singletons(&mut app);
-        app.update(crate::autoupdate::TuiAutoupdater::register);
-        add_test_changelog(&mut app);
-
-        app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            let overlay = build_zero_state_overlay(
-                Some("/tmp/project"),
-                ZeroStateSectionVisibility::default(),
-                &builder,
-                ctx,
-            );
-            let rendered = render_element_lines(overlay, ctx, 60, 24).join("\n");
-
-            assert!(rendered.contains("Warp Agent CLI"), "{rendered}");
-            assert!(
-                rendered.contains("Signed in as test_user@warp.dev"),
-                "{rendered}"
-            );
-            assert!(rendered.contains("What's new"), "{rendered}");
-            assert!(rendered.contains("Configurable zero state"), "{rendered}");
-            assert!(rendered.contains("/tmp/project"), "{rendered}");
-            assert!(rendered.contains("MCP"), "{rendered}");
-        });
-    });
-}
-
-/// Each toggle hides exactly its own section and leaves the others alone.
-#[test]
-fn zero_state_hides_only_the_section_whose_toggle_is_off() {
-    App::test((), |mut app| async move {
-        register_tui_session_view_test_singletons(&mut app);
-        app.update(crate::autoupdate::TuiAutoupdater::register);
-        add_test_changelog(&mut app);
-
-        app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            let render_with = |visibility| {
-                let overlay =
-                    build_zero_state_overlay(Some("/tmp/project"), visibility, &builder, ctx);
-                render_element_lines(overlay, ctx, 60, 24).join("\n")
-            };
-
-            let hidden_account = render_with(ZeroStateSectionVisibility {
-                signed_in_user: false,
-                ..ZeroStateSectionVisibility::default()
-            });
-            assert!(!hidden_account.contains("Signed in"), "{hidden_account}");
-            assert!(hidden_account.contains("What's new"), "{hidden_account}");
-            assert!(hidden_account.contains("/tmp/project"), "{hidden_account}");
-            assert!(hidden_account.contains("MCP"), "{hidden_account}");
-
-            let hidden_changelog = render_with(ZeroStateSectionVisibility {
-                changelog: false,
-                ..ZeroStateSectionVisibility::default()
-            });
-            assert!(
-                !hidden_changelog.contains("What's new"),
-                "{hidden_changelog}"
-            );
-            assert!(
-                !hidden_changelog.contains("Configurable zero state"),
-                "{hidden_changelog}"
-            );
-            assert!(hidden_changelog.contains("Signed in"), "{hidden_changelog}");
-
-            let hidden_project = render_with(ZeroStateSectionVisibility {
-                project_info: false,
-                ..ZeroStateSectionVisibility::default()
-            });
-            assert!(!hidden_project.contains("/tmp/project"), "{hidden_project}");
-            assert!(hidden_project.contains("MCP"), "{hidden_project}");
-
-            let hidden_mcp = render_with(ZeroStateSectionVisibility {
-                mcp: false,
-                ..ZeroStateSectionVisibility::default()
-            });
-            assert!(!hidden_mcp.contains("MCP"), "{hidden_mcp}");
-            assert!(hidden_mcp.contains("/tmp/project"), "{hidden_mcp}");
-        });
-    });
-}
-
-/// Turning every section off leaves only the always-on title and version rows —
-/// no orphaned headers and no blank spacer rows for the hidden sections.
-#[test]
-fn zero_state_with_all_sections_hidden_renders_only_title_and_version() {
-    App::test((), |mut app| async move {
-        register_tui_session_view_test_singletons(&mut app);
-        app.update(crate::autoupdate::TuiAutoupdater::register);
-        add_test_changelog(&mut app);
-
-        app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            let overlay = build_zero_state_overlay(
-                Some("/tmp/project"),
-                all_sections_hidden(),
-                &builder,
-                ctx,
-            );
-            let lines = render_element_lines(overlay, ctx, 60, 24);
-
-            assert_eq!(
-                lines.len(),
-                2,
-                "only the title and version rows should remain;\ngot lines:\n{}",
-                lines.join("\n")
-            );
-            assert_eq!(lines[0].trim_end(), "Warp Agent CLI");
-            assert!(!lines[1].trim_end().is_empty(), "{:?}", lines[1]);
-        });
-    });
-}
-
-/// Hiding the animation drops the starfield and the reserved animation panel
-/// instead of leaving an empty region beside the copy.
-#[test]
-fn zero_state_copy_only_layout_reserves_no_animation_panel() {
-    App::test((), |app| async move {
-        app.read(|ctx| {
-            let copy_only = render_to_buffer(
-                build_zero_state_copy_only_layout(TuiText::new("copy here").finish()),
-                ctx,
-                120,
-                9,
-            );
-            assert_eq!(
-                copy_only.area.width,
-                text_width("copy here"),
-                "the copy-only layout should occupy just the copy, not the animation panel"
-            );
-            assert!(
-                copy_only
-                    .to_lines()
-                    .iter()
-                    .any(|line| line.trim_end() == "copy here")
-            );
-
-            let with_animation = render_to_buffer(
-                build_zero_state_layout(
-                    TuiText::new("*".repeat(120)).finish(),
-                    TuiText::new("").finish(),
-                    TuiText::new("copy here").finish(),
-                ),
-                ctx,
-                120,
-                9,
-            );
-            assert!(
-                with_animation.area.width > copy_only.area.width,
-                "the animated layout still spans the full width"
-            );
-        });
-    });
-}
-
-/// The visibility snapshot reads the settings group when it is registered and
-/// falls back to "everything visible" when it is not.
-#[test]
-fn zero_state_visibility_reads_settings_and_defaults_to_visible() {
-    App::test((), |mut app| async move {
-        app.read(|ctx| {
-            assert_eq!(
-                ZeroStateSectionVisibility::from_settings(ctx),
-                ZeroStateSectionVisibility::default(),
-                "an unregistered settings group must keep every section visible"
-            );
-        });
-
-        app.update(|ctx| {
-            ctx.add_singleton_model(|_| TuiZeroStateSettings {
-                object: TuiZeroStateObjectSetting::new(None),
-                rotation_period_seconds: TuiZeroStateRotationPeriodSecondsSetting::new(None),
-                extrusion_depth: TuiZeroStateExtrusionDepthSetting::new(None),
-                show_signed_in_user: TuiZeroStateShowSignedInUserSetting::new(Some(false)),
-                show_changelog: TuiZeroStateShowChangelogSetting::new(None),
-                show_project_info: TuiZeroStateShowProjectInfoSetting::new(Some(false)),
-                show_mcp: TuiZeroStateShowMcpSetting::new(None),
-                show_animation: TuiZeroStateShowAnimationSetting::new(Some(false)),
-            });
-        });
-
-        app.read(|ctx| {
-            assert_eq!(
-                ZeroStateSectionVisibility::from_settings(ctx),
-                ZeroStateSectionVisibility {
-                    signed_in_user: false,
-                    changelog: true,
-                    project_info: false,
-                    mcp: true,
-                    animation: false,
-                },
-                "unset toggles keep their visible default while set ones are honored"
             );
         });
     });

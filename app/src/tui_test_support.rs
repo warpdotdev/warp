@@ -12,7 +12,7 @@ use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity as _};
 
 use crate::LaunchMode;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::{AIAgentAction, AIAgentExchangeId};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::history_model::AIQueryHistoryOutputStatus;
@@ -59,6 +59,7 @@ use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::{History, HistoryEntry, HistoryEvent};
+use crate::tui_onboarding_markers::TuiOnboardingMarkers;
 use crate::user_config::WarpConfig;
 #[cfg(feature = "voice_input")]
 use crate::voice::transcriber::VoiceTranscriber;
@@ -87,6 +88,59 @@ pub fn blocklist_ai_history_model_with_queries(queries: Vec<String>) -> Blocklis
         .collect();
 
     BlocklistAIHistoryModel::new(persisted_queries, Vec::new(), &[])
+}
+
+/// Builds a restored conversation with one completed exchange for TUI fork tests.
+pub fn forkable_tui_conversation_for_test(query: &str) -> AIConversation {
+    let task_id = "tui-fork-test-root";
+    let request_id = "tui-fork-test-request";
+    let messages = vec![
+        warp_multi_agent_api::Message {
+            fetched_memories: Vec::new(),
+            id: "tui-fork-test-user".to_owned(),
+            task_id: task_id.to_owned(),
+            server_message_data: String::new(),
+            citations: Vec::new(),
+            message: Some(warp_multi_agent_api::message::Message::UserQuery(
+                warp_multi_agent_api::message::UserQuery {
+                    query: query.to_owned(),
+                    context: None,
+                    referenced_attachments: HashMap::new(),
+                    mode: None,
+                    intended_agent: Default::default(),
+                },
+            )),
+            request_id: request_id.to_owned(),
+            timestamp: None,
+        },
+        warp_multi_agent_api::Message {
+            fetched_memories: Vec::new(),
+            id: "tui-fork-test-agent".to_owned(),
+            task_id: task_id.to_owned(),
+            server_message_data: String::new(),
+            citations: Vec::new(),
+            message: Some(warp_multi_agent_api::message::Message::AgentOutput(
+                warp_multi_agent_api::message::AgentOutput {
+                    text: "Original response".to_owned(),
+                },
+            )),
+            request_id: request_id.to_owned(),
+            timestamp: None,
+        },
+    ];
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![warp_multi_agent_api::Task {
+            id: task_id.to_owned(),
+            messages,
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        None,
+    )
+    .expect("TUI fork test conversation should restore")
 }
 
 /// Registers seeded command history and an active session for focused TUI history tests.
@@ -241,6 +295,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|_| TuiOnboardingMarkers::new_ready_for_test(false, false));
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(|ctx| {
         let (team_client, workspace_client) = {
@@ -305,7 +360,6 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| ai::project_context::model::ProjectContextModel::default());
     app.update(crate::settings::TuiAutoupdateSettings::register);
     app.update(crate::settings::TuiThemeSettings::register);
-    app.update(crate::settings::TuiZeroStateSettings::register);
     app.update(crate::settings::CodeSettings::register);
     app.update(crate::settings::FontSettings::register);
     app.update(crate::settings::InputSettings::register);

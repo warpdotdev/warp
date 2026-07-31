@@ -36,7 +36,7 @@ pub use pipeline::{
     HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated, HandoffPrepareError,
     HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
     HandoffTargetMaterialization, MaterializeHandoffTarget, PendingHandoff, execute_handoff,
-    prepare_handoff,
+    handoff_dispatch_error, prepare_handoff,
 };
 #[cfg(feature = "local_fs")]
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]

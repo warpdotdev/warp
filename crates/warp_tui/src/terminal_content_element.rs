@@ -176,6 +176,7 @@ impl TuiElement for TuiTerminalContentElement {
                         return true;
                     }
                 }
+                TuiEvent::FocusGained | TuiEvent::FocusLost => {}
                 TuiEvent::ScrollWheel { .. }
                 | TuiEvent::LeftMouseDown { .. }
                 | TuiEvent::LeftMouseUp { .. }
@@ -257,7 +258,9 @@ fn forwarded_pty_input_for_event<'a>(
                 possible_typeahead: Some(Cow::Owned(normalized)),
             })
         }
-        TuiEvent::KeyDown {
+        TuiEvent::FocusGained
+        | TuiEvent::FocusLost
+        | TuiEvent::KeyDown {
             is_composing: true, ..
         }
         | TuiEvent::ModifierKeyChanged { .. }

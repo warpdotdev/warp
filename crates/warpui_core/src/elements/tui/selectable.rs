@@ -420,7 +420,9 @@ where
                 event_ctx.notify();
                 true
             }
-            TuiEvent::LeftMouseDown { .. }
+            TuiEvent::FocusGained
+            | TuiEvent::FocusLost
+            | TuiEvent::LeftMouseDown { .. }
             | TuiEvent::LeftMouseDragged { .. }
             | TuiEvent::LeftMouseUp { .. }
             | TuiEvent::ScrollWheel { .. }

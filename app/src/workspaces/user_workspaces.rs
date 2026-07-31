@@ -28,7 +28,7 @@ use crate::pricing::PricingInfoModel;
 use crate::server::experiments::{ServerExperiment, ServerExperiments, ServerExperimentsEvent};
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::TeamClient;
-use crate::server::server_api::workspace::WorkspaceClient;
+use crate::server::server_api::workspace::{PurchaseAddonCreditsOutcome, WorkspaceClient};
 #[cfg(test)]
 use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient};
 use crate::settings::{
@@ -37,7 +37,8 @@ use crate::settings::{
 #[cfg(test)]
 use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
 use crate::workspaces::workspace::{
-    AiAutonomySettings, AiOverages, SandboxedAgentSettings, UsageBasedPricingSettings,
+    AiAutonomySettings, AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
+    UsageBasedPricingSettings,
 };
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
@@ -74,6 +75,12 @@ pub enum UserWorkspacesEvent {
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
     PurchaseAddonCreditsSuccess,
+    /// The purchase requires the user to complete checkout in the browser
+    /// (no saved payment method). Credits arrive via webhook + polling after
+    /// checkout completes.
+    PurchaseAddonCreditsCheckoutRequired {
+        checkout_url: String,
+    },
     PurchaseAddonCreditsRejected(anyhow::Error),
     /// Fired whenever the set of teams the user is on changes.
     TeamsChanged,
@@ -91,6 +98,12 @@ pub struct UserWorkspaces {
     workspaces: Tracked<Vec<Workspace>>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
+    /// The user-level add-on credits purchase policy from the latest
+    /// workspaces-metadata response. Teamless (fresh free) users have no
+    /// team and their only workspace is the server's placeholder, which is
+    /// filtered out of `workspaces` — this is the only place their purchase
+    /// policy survives.
+    user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
 }
@@ -109,6 +122,9 @@ pub struct WorkspacesMetadataResponse {
     /// It makes most sense to fetch this in workspaces which is queried every 10 minutes.
     /// This is list of available LLM models for the user.
     pub feature_model_choices: Option<FeatureModelChoice>,
+    /// The user-level add-on credits purchase policy; the teamless-purchase
+    /// fallback (see [`UserWorkspaces::purchase_policy`]).
+    pub user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
 }
 
 // A representation of all data we fetch at a single time via our 10 minute poll.
@@ -140,6 +156,7 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
+            user_purchase_policy: None,
             team_client,
             workspace_client,
         }
@@ -189,6 +206,7 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
+            user_purchase_policy: None,
             team_client,
             workspace_client,
         }
@@ -443,6 +461,49 @@ impl UserWorkspaces {
     pub fn current_workspace_billing_metadata(&self) -> Option<&BillingMetadata> {
         self.current_workspace()
             .map(|workspace| &workspace.billing_metadata)
+    }
+
+    /// The given team's billing metadata when the team is known, otherwise
+    /// the current workspace's. For purchase surfaces that need
+    /// team/workspace-scoped state (e.g. delinquency); for the purchase
+    /// policy itself use [`Self::purchase_policy_for_team`], which adds the
+    /// user-level fallback for teamless users.
+    pub fn team_billing_metadata<'a>(
+        &'a self,
+        team: Option<&'a Team>,
+    ) -> Option<&'a BillingMetadata> {
+        team.map(|team| &team.billing_metadata)
+            .or_else(|| self.current_workspace_billing_metadata())
+    }
+
+    /// The add-on credits purchase policy for the current viewer context: the
+    /// current workspace's policy when one exists, else the user-level policy
+    /// from the workspaces-metadata response (how teamless users get one).
+    ///
+    /// Callers bound to a view/window should use
+    /// [`Self::purchase_policy_for_team`] instead, since their team can
+    /// differ from the current workspace's in multi-team situations.
+    pub fn purchase_policy(&self) -> Option<PurchaseAddOnCreditsPolicy> {
+        self.current_workspace_billing_metadata()
+            .and_then(|billing| billing.tier.purchase_add_on_credits_policy)
+            .or(self.user_purchase_policy)
+    }
+
+    /// [`Self::purchase_policy`], preferring the given team's policy when the
+    /// team is known (e.g. resolved from a view or window).
+    pub fn purchase_policy_for_team(
+        &self,
+        team: Option<&Team>,
+    ) -> Option<PurchaseAddOnCreditsPolicy> {
+        team.and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
+            .or_else(|| self.purchase_policy())
+    }
+
+    /// Updates the user-level add-on credits purchase policy captured from a
+    /// workspaces-metadata response. Must be called on every path that
+    /// applies such a response so the teamless fallback can't go stale.
+    pub fn set_user_purchase_policy(&mut self, policy: Option<PurchaseAddOnCreditsPolicy>) {
+        self.user_purchase_policy = policy;
     }
 
     pub fn current_workspace_mut(&mut self) -> Option<&mut Workspace> {
@@ -983,6 +1044,7 @@ impl UserWorkspaces {
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
 
+                self.set_user_purchase_policy(response.metadata.user_purchase_policy);
                 self.update_workspaces(workspaces.clone(), ctx);
                 self.update_joinable_teams(joinable_teams, ctx);
 
@@ -1462,7 +1524,7 @@ impl UserWorkspaces {
 
     pub fn purchase_addon_credits(
         &mut self,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         credits: i32,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1479,17 +1541,22 @@ impl UserWorkspaces {
 
     fn on_purchase_addon_credits(
         &mut self,
-        result: Result<WorkspacesMetadataResponse>,
+        result: Result<PurchaseAddonCreditsOutcome>,
         ctx: &mut ModelContext<Self>,
     ) {
         match result {
-            Ok(result) => {
+            Ok(PurchaseAddonCreditsOutcome::Completed(result)) => {
                 let wrapped = WorkspacesMetadataWithPricing {
-                    metadata: result,
+                    metadata: *result,
                     pricing_info: None,
                 };
                 self.on_workspaces_updated(Ok(wrapped), ctx);
                 ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsSuccess);
+            }
+            Ok(PurchaseAddonCreditsOutcome::CheckoutRequired { checkout_url }) => {
+                ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired {
+                    checkout_url,
+                });
             }
             Err(err) => {
                 ctx.emit(UserWorkspacesEvent::PurchaseAddonCreditsRejected(

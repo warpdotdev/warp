@@ -20,6 +20,8 @@ pub use auth_manager::AuthManager;
 pub use auth_state::AuthStateProvider;
 use itertools::Itertools;
 pub use login_failure_notification::LoginFailureReason;
+#[cfg(feature = "tui")]
+use url::Url;
 pub use user_uid::UserUid;
 use warp_core::channel::ChannelState;
 use warp_core::user_preferences::GetUserPreferences as _;
@@ -39,6 +41,7 @@ use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
 use crate::env_vars::manager::EnvVarCollectionManager;
 use crate::notebooks::manager::NotebookManager;
 use crate::palette::PaletteMode;
+use crate::root_view::RootView;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::{PaletteSource, TelemetryEvent};
@@ -74,6 +77,37 @@ pub fn web_logout_url() -> String {
         "{}/logout",
         ChannelState::server_root_url().trim_end_matches('/')
     )
+}
+
+/// Returns the configured Warp web logout URL with a validated browser continuation.
+///
+/// TUI logout only continues to the same Warp web origin's device page. This
+/// keeps the logout endpoint from becoming an open redirect if an unexpected
+/// device-authorization response reaches the client.
+#[cfg(feature = "tui")]
+pub fn web_logout_url_with_continue(continue_url: &str) -> Option<String> {
+    let mut logout_url =
+        Url::parse(&web_logout_url()).expect("configured Warp web logout URL must be valid");
+    let continue_url = Url::parse(continue_url).ok()?;
+    let has_required_query = continue_url
+        .query_pairs()
+        .any(|(key, value)| key == "user_code" && !value.is_empty())
+        && continue_url
+            .query_pairs()
+            .any(|(key, value)| key == "source" && value == "warp-agent-cli");
+    if continue_url.origin() != logout_url.origin()
+        || continue_url.path() != "/device"
+        || !continue_url.username().is_empty()
+        || continue_url.password().is_some()
+        || continue_url.fragment().is_some()
+        || !has_required_query
+    {
+        return None;
+    }
+    logout_url
+        .query_pairs_mut()
+        .append_pair("continue", continue_url.as_str());
+    Some(logout_url.into())
 }
 
 /// If the app has running processes or dirty objects, we'll show a confirmation modal before logging out.
@@ -297,14 +331,17 @@ pub fn log_out(app: &mut AppContext) {
         manager.clear_joined();
     });
 
-    // Dispatch action on root view of every open window so the state can be updated
-    // correctly.
+    // Dispatch the GUI root-view action on every open GUI window so its state can be updated
+    // correctly. Other front-ends, such as the TUI, manage their logout transition separately.
     let window_ids = app.window_ids().collect_vec();
     for window_id in window_ids {
-        if let Some(root_view_id) = app.root_view_id(window_id) {
+        if let Some(root_views) = app.views_of_type::<RootView>(window_id) {
+            let Some(root_view) = root_views.first() else {
+                continue;
+            };
             app.dispatch_action(
                 window_id,
-                &[root_view_id],
+                &[root_view.id()],
                 "root_view:log_out",
                 &(),
                 log::Level::Info,

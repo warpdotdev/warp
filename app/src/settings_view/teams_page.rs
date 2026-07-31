@@ -1049,6 +1049,9 @@ impl TeamsPageView {
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 // Addon credits purchase success is handled in billing_and_usage_page
             }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { .. } => {
+                // Checkout handoff is handled by the surface that initiated the purchase
+            }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(_) => {
                 // Addon credits purchase rejection is handled in billing_and_usage_page
             }

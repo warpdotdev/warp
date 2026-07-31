@@ -200,6 +200,8 @@ pub struct ManagedByokByoePolicy {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
+    pub premium_enabled: bool,
+    pub price_premium_bps: i32,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
@@ -272,7 +274,26 @@ impl AddonCreditsOption {
     pub fn rate(&self) -> f32 {
         self.price_usd_cents as f32 / self.credits as f32
     }
+
+    /// Returns the purchase price in cents after applying a plan surcharge
+    /// expressed in basis points (1000 bps = +10%). `price_usd_cents` always
+    /// carries the list price; plans whose `PurchaseAddOnCreditsPolicy` has a
+    /// non-zero `price_premium_bps` pay a premium on top of it. The surcharge
+    /// is rounded up to the next cent using the same integer math as the
+    /// server so displayed prices always match what is charged.
+    pub fn price_usd_cents_with_premium(&self, premium_bps: i32) -> i32 {
+        if premium_bps <= 0 {
+            return self.price_usd_cents;
+        }
+        let price = self.price_usd_cents as i64;
+        let surcharge = (price * premium_bps as i64 + 9_999) / 10_000;
+        (price + surcharge) as i32
+    }
 }
+
+#[cfg(test)]
+#[path = "billing_tests.rs"]
+mod tests;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct PricingInfo {

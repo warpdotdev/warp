@@ -47,9 +47,8 @@ use crate::ai::blocklist::inline_action::requested_action::{
     CTRL_C_KEYSTROKE, ENTER_KEYSTROKE, render_requested_action_row_for_text,
 };
 use crate::ai::blocklist::telemetry::{
-    BlocklistOrchestrationTelemetryEvent, OrchestrationApprovalStatus, OrchestrationEnteredEvent,
-    OrchestrationEntrySource, OrchestrationExecutionModeKind, OrchestrationHarnessKind,
-    RunAgentsCardDecision, RunAgentsCardDecisionEvent, orchestration_modified_field,
+    BlocklistOrchestrationTelemetryEvent, OrchestrationEnteredEvent, OrchestrationEntrySource,
+    RunAgentsCardDecision, run_agents_card_decision_event,
 };
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -759,57 +758,17 @@ impl RunAgentsCardView {
         let Some(conversation_id) = self.block_model.conversation_id(ctx) else {
             return;
         };
-        let modified_fields_from_tool_call = diverged_orch_fields(
+        let event = run_agents_card_decision_event(
+            conversation_id,
+            (!self.card.plan_id.is_empty()).then(|| self.card.plan_id.clone()),
+            decision,
+            self.card.agent_run_configs.len(),
             &self.orchestration_edit_state.orchestration_config_state,
             &self.original_tool_call_request,
+            self.active_config.as_ref(),
         );
-        let (had_active_config, active_config_status, modified_fields_from_active_config) =
-            match &self.active_config {
-                Some((cfg, status)) => {
-                    let status_enum = if status.is_approved() {
-                        Some(OrchestrationApprovalStatus::Approved)
-                    } else if status.is_disapproved() {
-                        Some(OrchestrationApprovalStatus::Disapproved)
-                    } else {
-                        None
-                    };
-                    let diff = if status.is_approved() {
-                        diverged_orch_fields_against_config(
-                            &self.orchestration_edit_state.orchestration_config_state,
-                            cfg,
-                        )
-                    } else {
-                        Vec::new()
-                    };
-                    (true, status_enum, diff)
-                }
-                None => (false, None, Vec::new()),
-            };
         send_telemetry_from_ctx!(
-            BlocklistOrchestrationTelemetryEvent::RunAgentsCardDecision(
-                RunAgentsCardDecisionEvent {
-                    conversation_id,
-                    plan_id: (!self.card.plan_id.is_empty()).then(|| self.card.plan_id.clone()),
-                    decision,
-                    agent_count: self.card.agent_run_configs.len(),
-                    harness: OrchestrationHarnessKind::from_str(
-                        &self
-                            .orchestration_edit_state
-                            .orchestration_config_state
-                            .harness_type
-                    ),
-                    execution_mode: OrchestrationExecutionModeKind::from_run_agents(
-                        &self
-                            .orchestration_edit_state
-                            .orchestration_config_state
-                            .execution_mode,
-                    ),
-                    modified_fields_from_tool_call,
-                    modified_fields_from_active_config,
-                    had_active_config,
-                    active_config_status,
-                }
-            ),
+            BlocklistOrchestrationTelemetryEvent::RunAgentsCardDecision(event),
             ctx
         );
     }
@@ -1483,95 +1442,6 @@ impl TypedActionView for RunAgentsCardView {
             }
         }
     }
-}
-
-/// Field names from [`orchestration_modified_field`] that differ
-/// between the user-edited `state` and the LLM's original
-/// `RunAgentsRequest`.
-fn diverged_orch_fields(
-    state: &oc::OrchestrationConfigState,
-    original: &RunAgentsRequest,
-) -> Vec<&'static str> {
-    let mut fields = Vec::new();
-    if state.model_id != original.model_id {
-        fields.push(orchestration_modified_field::MODEL_ID);
-    }
-    if state.harness_type != original.harness_type {
-        fields.push(orchestration_modified_field::HARNESS);
-    }
-    let state_remote = state.execution_mode.is_remote();
-    let original_remote = original.execution_mode.is_remote();
-    if state_remote != original_remote {
-        fields.push(orchestration_modified_field::EXECUTION_MODE);
-    } else if let (
-        RunAgentsExecutionMode::Remote {
-            environment_id: state_env,
-            worker_host: state_host,
-            ..
-        },
-        RunAgentsExecutionMode::Remote {
-            environment_id: orig_env,
-            worker_host: orig_host,
-            ..
-        },
-    ) = (&state.execution_mode, &original.execution_mode)
-    {
-        if state_env != orig_env {
-            fields.push(orchestration_modified_field::ENVIRONMENT_ID);
-        }
-        if state_host != orig_host {
-            fields.push(orchestration_modified_field::WORKER_HOST);
-        }
-    }
-    if state.auth_secret_name() != original.harness_auth_secret_name.as_deref() {
-        fields.push(orchestration_modified_field::AUTH_SECRET);
-    }
-    fields
-}
-
-/// Same shape as [`diverged_orch_fields`] but compares against an
-/// approved `OrchestrationConfig`. auth_secret is omitted: managed
-/// secrets are per-user, not stored on the config.
-fn diverged_orch_fields_against_config(
-    state: &oc::OrchestrationConfigState,
-    config: &OrchestrationConfig,
-) -> Vec<&'static str> {
-    use ai::agent::orchestration_config::OrchestrationExecutionMode;
-    let mut fields = Vec::new();
-    if state.model_id != config.model_id {
-        fields.push(orchestration_modified_field::MODEL_ID);
-    }
-    if state.harness_type != config.harness_type {
-        fields.push(orchestration_modified_field::HARNESS);
-    }
-    let state_remote = state.execution_mode.is_remote();
-    let config_remote = matches!(
-        config.execution_mode,
-        OrchestrationExecutionMode::Remote { .. }
-    );
-    if state_remote != config_remote {
-        fields.push(orchestration_modified_field::EXECUTION_MODE);
-    } else if let (
-        RunAgentsExecutionMode::Remote {
-            environment_id: state_env,
-            worker_host: state_host,
-            ..
-        },
-        OrchestrationExecutionMode::Remote {
-            environment_id: cfg_env,
-            worker_host: cfg_host,
-            ..
-        },
-    ) = (&state.execution_mode, &config.execution_mode)
-    {
-        if state_env != cfg_env {
-            fields.push(orchestration_modified_field::ENVIRONMENT_ID);
-        }
-        if state_host != cfg_host {
-            fields.push(orchestration_modified_field::WORKER_HOST);
-        }
-    }
-    fields
 }
 
 fn render_confirmation_card(

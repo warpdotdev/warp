@@ -30,6 +30,7 @@ fn task_with(
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id,
         session_link,
         creator: None,

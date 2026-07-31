@@ -86,6 +86,8 @@ mod tracing;
 mod tui;
 #[cfg(feature = "tui")]
 pub mod tui_export;
+#[cfg(feature = "tui")]
+mod tui_onboarding_markers;
 #[cfg(all(feature = "tui", any(test, feature = "test-util")))]
 mod tui_test_support;
 mod ui_components;

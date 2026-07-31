@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
@@ -16,6 +17,10 @@ pub use crate::geap_credentials::GeapRefreshOutcome;
 pub use crate::geap_credentials::{
     GEAP_MINT_FAILURE_COOLDOWN, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState,
     GeapFederation, GeapMintBinding, LoadGeapCredentialsError,
+};
+use crate::telemetry::{
+    AITelemetryEvent, ProviderCredentialTelemetryAction, ProviderCredentialTelemetryKind,
+    ProviderCredentialTelemetryProvider,
 };
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
@@ -277,6 +282,44 @@ pub struct CustomEndpointParams {
     pub models: Vec<(String, Option<String>, Option<String>)>,
     pub schema: CustomEndpointSchema,
 }
+fn provider_credential_action(is_present: bool) -> ProviderCredentialTelemetryAction {
+    if is_present {
+        ProviderCredentialTelemetryAction::Added
+    } else {
+        ProviderCredentialTelemetryAction::Removed
+    }
+}
+
+fn provider_telemetry_provider(
+    provider: LLMProvider,
+) -> Option<ProviderCredentialTelemetryProvider> {
+    match provider {
+        LLMProvider::OpenAI => Some(ProviderCredentialTelemetryProvider::OpenAi),
+        LLMProvider::Anthropic => Some(ProviderCredentialTelemetryProvider::Anthropic),
+        LLMProvider::Google => Some(ProviderCredentialTelemetryProvider::Google),
+        LLMProvider::Xai => Some(ProviderCredentialTelemetryProvider::Xai),
+        LLMProvider::Unknown => None,
+    }
+}
+
+fn send_provider_credential_telemetry(
+    provider: LLMProvider,
+    credential_kind: ProviderCredentialTelemetryKind,
+    action: ProviderCredentialTelemetryAction,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    let Some(provider) = provider_telemetry_provider(provider) else {
+        return;
+    };
+    send_telemetry_from_ctx!(
+        AITelemetryEvent::ProviderCredentialChanged {
+            provider,
+            credential_kind,
+            action,
+        },
+        ctx
+    );
+}
 
 impl ApiKeyManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
@@ -326,6 +369,7 @@ impl ApiKeyManager {
         key: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
+        let was_present = provider.api_key(&self.keys).is_some();
         let mut keys = self.keys.clone();
         if !provider.set_api_key(&mut keys, key) {
             return Err(anyhow::anyhow!(
@@ -341,8 +385,17 @@ impl ApiKeyManager {
                 anyhow::Error::new(error).context("Failed to write API keys to secure storage")
             })?;
         if self.keys != keys {
+            let is_present = provider.api_key(&keys).is_some();
             self.keys = keys;
             ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+            if was_present != is_present {
+                send_provider_credential_telemetry(
+                    provider,
+                    ProviderCredentialTelemetryKind::PastedKey,
+                    provider_credential_action(is_present),
+                    ctx,
+                );
+            }
         }
         Ok(())
     }
@@ -375,9 +428,19 @@ impl ApiKeyManager {
         if self.grok_tokens == tokens {
             return;
         }
+        let was_connected = self.grok_tokens.is_some();
+        let is_connected = tokens.is_some();
         self.grok_tokens = tokens;
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_grok_tokens_to_secure_storage(ctx);
+        if was_connected != is_connected {
+            send_provider_credential_telemetry(
+                LLMProvider::Xai,
+                ProviderCredentialTelemetryKind::Oauth,
+                provider_credential_action(is_connected),
+                ctx,
+            );
+        }
     }
 
     pub fn set_provider_key(
@@ -386,11 +449,21 @@ impl ApiKeyManager {
         key: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let was_present = provider.api_key(&self.keys).is_some();
         if !provider.set_api_key(&mut self.keys, key) {
             return;
         }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
+        let is_present = provider.api_key(&self.keys).is_some();
+        if was_present != is_present {
+            send_provider_credential_telemetry(
+                provider,
+                ProviderCredentialTelemetryKind::PastedKey,
+                provider_credential_action(is_present),
+                ctx,
+            );
+        }
     }
 
     pub fn add_custom_endpoint(

@@ -2,7 +2,8 @@
 //!
 //! [`run`] boots the real headless Warp app via [`warp::run_tui`]. Once shared
 //! initialization is done, the mount built here starts the TUI driver and
-//! defers creating the first terminal session until login.
+//! creates the first terminal session once browser authentication starts, while
+//! allowing authentication to complete in the background.
 
 use std::io::{self, IsTerminal as _, Read as _};
 
@@ -23,6 +24,7 @@ use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::spawn_tui_driver;
 use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
+use crate::clipboard::copy_to_clipboard;
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
@@ -220,7 +222,7 @@ fn init(
     exit_summary: TuiExitSummaryHandle,
     ctx: &mut AppContext,
 ) {
-    warp_core::send_telemetry_from_app_ctx!(TuiStartupTelemetryEvent, ctx);
+    warp_core::send_telemetry_from_app_ctx!(TuiStartupTelemetryEvent::from_environment(), ctx);
     // Register the TUI views' keybindings (and, in debug builds, the
     // cross-surface binding validators) before any input can be dispatched.
     crate::keybindings::init(ctx);
@@ -286,10 +288,12 @@ fn init(
             let login_model = TuiLoginModel::handle(ctx);
             ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
                 TuiLoginEvent::PhaseChanged => {
-                    root_for_login.update(ctx, |_, ctx| ctx.notify());
+                    root_for_login.update(ctx, |root, ctx| {
+                        root.handle_login_phase_changed(ctx, copy_to_clipboard);
+                    });
                 }
                 TuiLoginEvent::LoggedIn => {
-                    create_terminal_session_after_login(&sessions_for_login, &root_for_login, ctx)
+                    ensure_terminal_session(&sessions_for_login, &root_for_login, ctx)
                 }
                 TuiLoginEvent::LoggedOut => {
                     root_for_login.update(ctx, |root, ctx| root.show_auth(ctx));
@@ -298,7 +302,7 @@ fn init(
             });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
-                create_terminal_session_after_login(&sessions, &root, ctx);
+                ensure_terminal_session(&sessions, &root, ctx);
             }
         }
         Err(error) => {
@@ -310,7 +314,7 @@ fn init(
 }
 
 /// Creates the focused bootstrap session and restores the requested conversation.
-fn create_terminal_session_after_login(
+fn ensure_terminal_session(
     sessions: &ModelHandle<TuiSessions>,
     root: &ViewHandle<RootTuiView>,
     ctx: &mut AppContext,
@@ -321,10 +325,12 @@ fn create_terminal_session_after_login(
 
     let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
     let window_id = root.window_id(ctx);
+    let handles_first_run_onboarding = resume_token.is_none();
     let (_, surface) = TuiSessions::create_local_terminal_session(
         sessions,
         window_id,
         true,
+        handles_first_run_onboarding,
         std::env::current_dir().ok(),
         ctx,
     );
