@@ -105,6 +105,7 @@ use crate::terminal::view::ConversationRestorationInNewPaneType;
 pub(crate) mod attachments;
 #[cfg(feature = "local_fs")]
 pub(crate) mod cache_setup;
+mod checkpoint_coordinator;
 pub(crate) mod cloud_provider;
 pub(crate) mod environment;
 mod error_classification;
