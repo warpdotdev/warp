@@ -101,6 +101,58 @@ const AMBIENT_AGENT_TRIAL_TITLE: &str = "Cloud agent trial";
 /// The threshold below which we only show the "Buy more" button (not "New agent").
 use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
 
+pub(super) fn render_anthropic_credits_widget(
+    ai_request_usage_model: &AIRequestUsageModel,
+    appearance: &Appearance,
+) -> Option<Box<dyn Element>> {
+    let credits_remaining = ai_request_usage_model.anthropic_credits_remaining()?;
+    if credits_remaining <= 0 {
+        return None;
+    }
+
+    let theme = appearance.theme();
+    let credits_text = if credits_remaining == 1 {
+        "1 credit remaining".to_string()
+    } else {
+        format!(
+            "{} credits remaining",
+            credits_remaining.separate_with_commas()
+        )
+    };
+    let content = Flex::row()
+        .with_child(
+            Text::new_inline("Anthropic credits", appearance.ui_font_family(), 14.)
+                .with_color(theme.active_ui_text_color().into())
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .finish(),
+        )
+        .with_child(
+            Container::new(
+                Text::new_inline(credits_text, appearance.ui_font_family(), 12.)
+                    .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+                    .finish(),
+            )
+            .with_margin_left(8.)
+            .finish(),
+        )
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .finish();
+
+    let bright_blue: ColorU = theme.terminal_colors().bright.blue.into();
+    let gradient_start = ColorU::transparent_black();
+    let gradient_end = ColorU::new(bright_blue.r, bright_blue.g, bright_blue.b, 40);
+
+    Some(
+        Container::new(content)
+            .with_horizontal_background_gradient(gradient_start, gradient_end)
+            .with_border(Border::all(1.).with_border_color(theme.accent_overlay().into()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_margin_bottom(16.)
+            .with_uniform_padding(12.)
+            .finish(),
+    )
+}
+
 pub fn create_discount_badge(discount: u32, appearance: &Appearance) -> Box<dyn Element> {
     if discount == 0 {
         return Empty::new().finish();
@@ -2842,6 +2894,11 @@ impl BillingAndUsagePageView {
             self.render_ambient_agent_trial_widget(ai_request_usage_model, appearance, app)
         {
             usage.add_child(ambient_trial_widget);
+        }
+        if let Some(anthropic_credits_widget) =
+            render_anthropic_credits_widget(ai_request_usage_model, appearance)
+        {
+            usage.add_child(anthropic_credits_widget);
         }
 
         if let (Some(workspace), Some(team)) = (workspace, team) {

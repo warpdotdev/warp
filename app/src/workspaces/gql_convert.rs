@@ -6,9 +6,10 @@ use warp_errors::report_error;
 use warp_graphql::billing::{
     AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
-    BonusGrant as GqlBonusGrant, ByoApiKeyPolicy as GqlByoApiKeyPolicy,
-    ByoEndpointPolicy as GqlByoEndpointPolicy, CodebaseContextPolicy as GqlCodebaseContextPolicy,
-    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
+    BonusGrant as GqlBonusGrant, BonusGrantType as GqlBonusGrantType,
+    ByoApiKeyPolicy as GqlByoApiKeyPolicy, ByoEndpointPolicy as GqlByoEndpointPolicy,
+    CodebaseContextPolicy as GqlCodebaseContextPolicy, CustomerType as GqlCustomerType,
+    DelinquencyStatus as GqlDelinquencyStatus,
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
     ManagedByokByoePolicy as GqlManagedByokByoePolicy, MultiAdminPolicy as GqlMultiAdminPolicy,
@@ -88,6 +89,13 @@ impl From<GqlTeamMember> for TeamMember {
             email: gql_team_member.email,
             role: gql_team_member.role.into(),
         }
+    }
+}
+
+fn normalize_bonus_grant_type(grant_type: GqlBonusGrantType) -> GqlBonusGrantType {
+    match grant_type {
+        GqlBonusGrantType::AmbientOnly => GqlBonusGrantType::AmbientOnly,
+        GqlBonusGrantType::Any | GqlBonusGrantType::Other(_) => GqlBonusGrantType::Any,
     }
 }
 
@@ -669,11 +677,12 @@ impl From<GqlDelinquencyStatus> for DelinquencyStatus {
 
 impl BonusGrant {
     pub fn from_gql_bonus_grant(bonus_grant: GqlBonusGrant, scope: BonusGrantScope) -> Self {
+        let grant_type = normalize_bonus_grant_type(bonus_grant.grant_type);
         Self {
             created_at: bonus_grant.created_at.utc(),
             cost_cents: bonus_grant.cost_cents,
             expiration: bonus_grant.expiration.map(|exp| exp.utc()),
-            grant_type: bonus_grant.grant_type,
+            grant_type,
             reason: bonus_grant.reason,
             user_facing_message: bonus_grant.user_facing_message,
             request_credits_granted: bonus_grant.request_credits_granted,

@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn unknown_bonus_grant_type_normalizes_to_any() {
+    assert_eq!(
+        normalize_bonus_grant_type(GqlBonusGrantType::Other("FUTURE_GRANT".to_string())),
+        GqlBonusGrantType::Any,
+    );
+    assert_eq!(
+        normalize_bonus_grant_type(GqlBonusGrantType::AmbientOnly),
+        GqlBonusGrantType::AmbientOnly,
+    );
+}
+
 fn team(name: &str, member_uids: &[&str]) -> Team {
     Team::from_local_cache(
         ServerId::from_string_lossy(format!("{name:0>22}")),

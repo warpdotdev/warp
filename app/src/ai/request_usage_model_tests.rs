@@ -27,6 +27,109 @@ fn create_test_workspace() -> (WorkspaceUid, Workspace) {
     (uid, workspace)
 }
 
+#[test]
+fn test_buy_credits_banner_shows_with_only_anthropic_promotion_credits() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants = vec![BonusGrant {
+                created_at: Utc::now(),
+                cost_cents: 0,
+                expiration: Some(Utc::now() + chrono::Duration::days(7)),
+                grant_type: BonusGrantType::Any,
+                reason: ANTHROPIC_PROMOTION_REASON.to_string(),
+                user_facing_message: None,
+                request_credits_granted: 2500,
+                request_credits_remaining: 2500,
+                scope: BonusGrantScope::User,
+            }];
+
+            assert_eq!(
+                model.compute_buy_addon_credits_banner_display_state(ctx),
+                BuyCreditsBannerDisplayState::OutOfCredits,
+            );
+        });
+    });
+}
+
+#[test]
+fn test_anthropic_and_personal_credit_balances_remain_independent() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants = vec![
+                BonusGrant {
+                    created_at: Utc::now(),
+                    cost_cents: 0,
+                    expiration: Some(Utc::now() + chrono::Duration::days(7)),
+                    grant_type: BonusGrantType::Any,
+                    reason: ANTHROPIC_PROMOTION_REASON.to_string(),
+                    user_facing_message: None,
+                    request_credits_granted: 2500,
+                    request_credits_remaining: 2500,
+                    scope: BonusGrantScope::User,
+                },
+                BonusGrant {
+                    created_at: Utc::now(),
+                    cost_cents: 100,
+                    expiration: Some(Utc::now() + chrono::Duration::days(7)),
+                    grant_type: BonusGrantType::Any,
+                    reason: "purchased_addon_credits_a_la_carte".to_string(),
+                    user_facing_message: None,
+                    request_credits_granted: 500,
+                    request_credits_remaining: 500,
+                    scope: BonusGrantScope::User,
+                },
+            ];
+
+            assert_eq!(model.anthropic_credits_remaining(), Some(2500));
+            assert_eq!(model.total_user_interactive_bonus_credits_remaining(), 500);
+            assert!(model.has_any_ai_remaining(ctx));
+
+            model.bonus_grants[0].request_credits_remaining = 2490;
+            assert_eq!(model.anthropic_credits_remaining(), Some(2490));
+            assert_eq!(model.total_user_interactive_bonus_credits_remaining(), 500);
+            assert_eq!(model.bonus_grants[1].request_credits_remaining, 500);
+        });
+    });
+}
+
+#[test]
+fn test_expired_anthropic_promotion_has_zero_active_balance() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, _ctx| {
+            model.bonus_grants = vec![BonusGrant {
+                created_at: Utc::now() - chrono::Duration::days(10),
+                cost_cents: 0,
+                expiration: Some(Utc::now() - chrono::Duration::days(1)),
+                grant_type: BonusGrantType::Any,
+                reason: ANTHROPIC_PROMOTION_REASON.to_string(),
+                user_facing_message: None,
+                request_credits_granted: 2500,
+                request_credits_remaining: 1200,
+                scope: BonusGrantScope::User,
+            }];
+
+            assert_eq!(model.anthropic_credits_remaining(), Some(0));
+        });
+    });
+}
+
 fn add_user_workspaces_with_workspace(app: &mut App, workspace: Workspace) {
     app.add_singleton_model(|ctx| {
         UserWorkspaces::mock(

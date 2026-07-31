@@ -31,10 +31,12 @@ pub struct BonusGrantSpendingInfo {
     pub current_month_spend_cents: i32,
 }
 
-#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
 pub enum BonusGrantType {
     AmbientOnly,
     Any,
+    #[cynic(fallback)]
+    Other(String),
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

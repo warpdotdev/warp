@@ -33,7 +33,9 @@ use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, Spending
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
-use super::billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab};
+use super::billing_and_usage_page::{
+    BillingAndUsagePageAction, BillingUsageTab, render_anthropic_credits_widget,
+};
 use super::settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::request_usage_model::{
@@ -232,7 +234,7 @@ impl ClassifiedGrants {
             let in_user_scope = grant.scope == BonusGrantScope::User;
             let in_workspace_scope =
                 workspace_uid.is_some_and(|uid| grant.scope == BonusGrantScope::Workspace(uid));
-            if grant.grant_type == BonusGrantType::AmbientOnly {
+            if grant.is_anthropic_promotion() || grant.grant_type == BonusGrantType::AmbientOnly {
                 continue;
             } else if in_user_scope {
                 personal.push(grant.clone());
@@ -1679,6 +1681,11 @@ impl BillingAndUsagePageV2View {
         {
             content.add_child(ambient_trial_widget);
         }
+        if let Some(anthropic_credits_widget) =
+            render_anthropic_credits_widget(ai_model, appearance)
+        {
+            content.add_child(anthropic_credits_widget);
+        }
         if let Some(balance) = self.render_balance_section(appearance, app) {
             content.add_child(balance);
         }
@@ -2249,4 +2256,38 @@ fn render_balance_card(
     .with_horizontal_padding(16.)
     .with_vertical_padding(12.)
     .finish()
+}
+
+#[cfg(test)]
+mod classified_grants_tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    fn user_grant(reason: &str, balance: i32) -> BonusGrant {
+        BonusGrant {
+            created_at: Utc::now(),
+            cost_cents: 0,
+            expiration: Some(Utc::now() + chrono::Duration::days(7)),
+            grant_type: BonusGrantType::Any,
+            reason: reason.to_string(),
+            user_facing_message: None,
+            request_credits_granted: balance,
+            request_credits_remaining: balance,
+            scope: BonusGrantScope::User,
+        }
+    }
+
+    #[test]
+    fn anthropic_promotion_is_not_in_personal_balance() {
+        let grants = vec![
+            user_grant("anthropic_model_checkout_promotion", 2500),
+            user_grant("purchased_addon_credits_a_la_carte", 500),
+        ];
+
+        let classified = ClassifiedGrants::new(&grants, None);
+
+        assert_eq!(classified.personal.total_balance(), 500);
+        assert!(classified.team.is_empty());
+    }
 }

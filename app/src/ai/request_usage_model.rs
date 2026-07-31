@@ -24,6 +24,7 @@ use crate::workspaces::workspace::WorkspaceUid;
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
 pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
+pub const ANTHROPIC_PROMOTION_REASON: &str = "anthropic_model_checkout_promotion";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BonusGrantScope {
@@ -50,6 +51,12 @@ pub struct BonusGrant {
     pub request_credits_granted: i32,
     pub request_credits_remaining: i32,
     pub scope: BonusGrantScope,
+}
+
+impl BonusGrant {
+    pub fn is_anthropic_promotion(&self) -> bool {
+        self.scope == BonusGrantScope::User && self.reason == ANTHROPIC_PROMOTION_REASON
+    }
 }
 
 /// The key for the corresponding entry in UserDefaults.
@@ -437,6 +444,9 @@ impl AIRequestUsageModel {
         let has_base_plan_ai_requests = self.has_requests_remaining();
 
         let user_bonus_credits = self.total_user_interactive_bonus_credits_remaining() > 0;
+        let anthropic_promotion_credits = self
+            .anthropic_credits_remaining()
+            .is_some_and(|credits| credits > 0);
         let workspace_bonus_credits = current_workspace
             .map(|workspace| self.total_workspace_bonus_credits_remaining(workspace.uid) > 0)
             .unwrap_or_default();
@@ -469,6 +479,7 @@ impl AIRequestUsageModel {
 
         has_base_plan_ai_requests
             || (user_bonus_credits || workspace_bonus_credits)
+            || anthropic_promotion_credits
             || workspace_has_overages
             || is_payg_enabled
             || is_enterprise_auto_reload_enabled
@@ -552,6 +563,26 @@ impl AIRequestUsageModel {
         }
     }
 
+    /// Returns the active Anthropic promotion balance, or None when there is no promotion history.
+    pub fn anthropic_credits_remaining(&self) -> Option<i32> {
+        let now = Utc::now();
+        let has_promotion_history = self
+            .bonus_grants
+            .iter()
+            .any(|grant| grant.is_anthropic_promotion());
+        if !has_promotion_history {
+            return None;
+        }
+        Some(
+            self.bonus_grants
+                .iter()
+                .filter(|grant| grant.is_anthropic_promotion())
+                .filter(|grant| grant.expiration.is_none_or(|expiration| now < expiration))
+                .map(|grant| grant.request_credits_remaining)
+                .sum(),
+        )
+    }
+
     pub fn is_ambient_credits_banner_dismissed(&self) -> bool {
         self.ambient_credits_banner_dismissed
     }
@@ -588,6 +619,7 @@ impl AIRequestUsageModel {
             .iter()
             .filter(|grant| grant.scope == BonusGrantScope::User)
             .filter(|grant| grant.grant_type != BonusGrantType::AmbientOnly)
+            .filter(|grant| !grant.is_anthropic_promotion())
             .filter(|grant| grant.expiration.is_none_or(|exp| now < exp))
             .map(|grant| grant.request_credits_remaining)
             .sum()
@@ -621,6 +653,7 @@ impl AIRequestUsageModel {
             .bonus_grants
             .iter()
             .filter(|grant| grant.grant_type != BonusGrantType::AmbientOnly)
+            .filter(|grant| !grant.is_anthropic_promotion())
             .filter(|grant| grant.expiration.is_none_or(|exp| now < exp))
             .filter(|grant| grant.request_credits_remaining > 0)
             .any(|grant| match grant.scope {
