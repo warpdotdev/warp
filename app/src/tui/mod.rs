@@ -25,6 +25,7 @@ use crate::ai::mcp::FileBasedMCPManager;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::{self, AuthStateProvider};
 use crate::terminal::focus_env::FOCUS_URL_ENV;
+use crate::tui_onboarding_markers::TuiOnboardingMarkers;
 
 /// Login state of the headless TUI, observed by the `warp_tui` root view to
 /// decide whether to show the login placeholder or the input UI.
@@ -180,12 +181,18 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
     });
     ctx.add_singleton_model(TuiMcpManager::new);
     ctx.add_singleton_model(TuiUserInfoManager::new);
+    let onboarding_markers = ctx.add_singleton_model(TuiOnboardingMarkers::new);
 
     // Keep the auth subscription alive for the full process lifetime so a
     // logged-in TUI can complete device authorization again after logout.
     ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
         handle_auth_manager_event(event, ctx);
     });
+    if logged_in {
+        onboarding_markers.update(ctx, |markers, ctx| {
+            markers.load_current_account(ctx);
+        });
+    }
     // Mount the TUI now so it renders immediately; signed-out users see the
     // welcome screen before explicitly starting browser authentication.
     mount(ctx);
@@ -233,6 +240,9 @@ fn handle_auth_manager_event(event: &AuthManagerEvent, ctx: &mut AppContext) {
         }
         AuthManagerEvent::AuthComplete => {
             set_login_phase(ctx, TuiLoginPhase::LoggedIn);
+            TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
+                markers.load_current_account(ctx);
+            });
             activate_global_mcp_servers(ctx);
         }
         AuthManagerEvent::AuthFailed(err) => {
@@ -358,6 +368,9 @@ pub fn start_tui_device_login(ctx: &mut AppContext) {
 /// Logs out the current TUI user and sends them to Warp web's logged-out flow.
 pub fn log_out_tui(ctx: &mut AppContext) {
     auth::log_out(ctx);
+    TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
+        markers.reset_for_account_transition(ctx);
+    });
     set_logged_out_phase(ctx);
     authorize_device(ctx);
 }

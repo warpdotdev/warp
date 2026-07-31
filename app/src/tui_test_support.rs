@@ -59,6 +59,7 @@ use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::{History, HistoryEntry, HistoryEvent};
+use crate::tui_onboarding_markers::TuiOnboardingMarkers;
 use crate::user_config::WarpConfig;
 #[cfg(feature = "voice_input")]
 use crate::voice::transcriber::VoiceTranscriber;
@@ -241,6 +242,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|_| TuiOnboardingMarkers::new_ready_for_test(false, false));
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(|ctx| {
         let (team_client, workspace_client) = {

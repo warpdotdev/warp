@@ -252,6 +252,9 @@ pub use crate::tui::{
     TuiMcpTransport, TuiMcpVariableValue, TuiUserInfoManager, TuiUserInfoManagerEvent,
     TuiUserInfoSnapshot, log_out_tui,
 };
+pub use crate::tui_onboarding_markers::{
+    TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+};
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
     add_tui_history_test_models, append_tui_history_test_command,
