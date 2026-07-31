@@ -19,7 +19,8 @@ use warpui_core::{App, AppContext};
 
 use super::{
     ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
-    changelog_bullets_from_changelog, mcp_status_label, render_first_run_top_section,
+    build_zero_state_stack_layout, changelog_bullets_from_changelog, mcp_status_label,
+    render_first_run_top_section,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
@@ -231,6 +232,50 @@ fn render_element_lines(
     height: u16,
 ) -> Vec<String> {
     render_to_buffer(element, ctx, width, height).to_lines()
+}
+
+fn static_zero_state_layers(
+    width: u16,
+    height: u16,
+) -> (
+    Box<dyn TuiElement>,
+    Box<dyn TuiElement>,
+    Box<dyn TuiElement>,
+) {
+    let stars = (0..height)
+        .map(|_| "*".repeat(usize::from(width)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (
+        TuiText::new(stars).finish(),
+        TuiText::new("animation").finish(),
+        TuiText::new("copy here\n\nsecond line").finish(),
+    )
+}
+
+#[test]
+fn direct_zero_state_layers_match_scratch_composition() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            for (width, height) in [(60, 12), (80, 24), (120, 40), (240, 80)] {
+                let (stars, animation, overlay) = static_zero_state_layers(width, height);
+                let direct = render_to_buffer(
+                    build_zero_state_layout(stars, animation, overlay),
+                    ctx,
+                    width,
+                    height,
+                );
+                let (stars, animation, overlay) = static_zero_state_layers(width, height);
+                let scratch = render_to_buffer(
+                    build_zero_state_stack_layout(stars, animation, overlay),
+                    ctx,
+                    width,
+                    height,
+                );
+                assert_eq!(direct, scratch, "layout differs at {width}x{height}");
+            }
+        });
+    });
 }
 
 #[test]

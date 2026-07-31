@@ -123,6 +123,11 @@ name = "transcript_bench"
 harness = false
 required-features = ["test-util"]
 
+[[bench]]
+name = "zero_state_bench"
+harness = false
+required-features = ["test-util"]
+
 [features]
 # Exposes deterministic, production-shaped transcript fixtures to benchmarks.
 test-util = ["warp/test-util", "warp_core/test-util"]
