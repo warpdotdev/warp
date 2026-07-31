@@ -374,15 +374,18 @@ impl View for PromptAlertView {
         self.primary_text(&state, &mut text_fragments);
 
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app);
-        let has_admin_permissions = auth_state
-            .user_email()
-            .zip(current_team)
-            .is_some_and(|(email, team)| team.has_admin_permissions(&email));
+        let workspaces = UserWorkspaces::as_ref(app);
+        let current_team = workspaces.team_for_view_handle(&self.view_handle, app);
+        // A teamless user can be considered the admin of their non-existent team.
+        let has_admin_permissions = current_team.is_none_or(|team| {
+            auth_state
+                .user_email()
+                .is_some_and(|email| team.has_admin_permissions(&email))
+        });
 
-        let can_purchase_addon_credits = current_team
-            .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-            .is_some_and(|policy| policy.enabled);
+        let can_purchase_addon_credits = workspaces
+            .purchase_policy_for_team(current_team)
+            .is_some_and(|policy| policy.allows_purchases());
 
         let suggest_buy_credits = can_purchase_addon_credits
             && has_admin_permissions
