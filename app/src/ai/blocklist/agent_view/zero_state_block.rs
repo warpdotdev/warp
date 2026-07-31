@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use itertools::Itertools as _;
-use markdown_parser::{parse_markdown, FormattedText, FormattedTextFragment, FormattedTextLine};
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine, parse_markdown};
 use parking_lot::FairMutex;
 use settings::Setting;
 use warp_core::features::FeatureFlag;
@@ -43,9 +43,12 @@ use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::model::blocks::BlockHeightItem;
 use crate::terminal::model::session::{BootstrapSessionType, Session, SessionType, Sessions};
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
-use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::view::TerminalAction;
-use crate::terminal::{self, prompt, TerminalModel};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use crate::terminal::{self, TerminalModel, prompt};
+use crate::ui_components::icon_with_status::{
+    CIRCLE_RATIO, IconWithStatusVariant, render_icon_with_status,
+};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
@@ -107,18 +110,16 @@ impl AgentViewZeroStateBlock {
                 if let BlocklistAIHistoryEvent::AppendedExchange {
                     conversation_id, ..
                 } = event
+                    && *conversation_id == me.conversation_id
                 {
-                    if *conversation_id == me.conversation_id {
-                        me.should_hide = true;
-                        ctx.unsubscribe_to_model(&model_events_clone);
-                        ctx.unsubscribe_to_model(&history_model);
-                        if let Some(cloud_agent_view_model) = cloud_agent_view_model_clone.as_ref()
-                        {
-                            ctx.unsubscribe_to_model(cloud_agent_view_model);
-                        }
-                        ctx.notify();
-                        return;
+                    me.should_hide = true;
+                    ctx.unsubscribe_to_model(&model_events_clone);
+                    ctx.unsubscribe_to_model(&history_model);
+                    if let Some(cloud_agent_view_model) = cloud_agent_view_model_clone.as_ref() {
+                        ctx.unsubscribe_to_model(cloud_agent_view_model);
                     }
+                    ctx.notify();
+                    return;
                 }
 
                 match event {
@@ -405,7 +406,10 @@ impl View for AgentViewZeroStateBlock {
             HeaderProps {
                 title: "New Oz cloud agent conversation".into(),
                 description: AgentViewDescription::CloudModeWithDocsLink,
-                icon: Icon::OzCloud,
+                icon: IconWithStatusVariant::OzAgent {
+                    status: None,
+                    is_ambient: true,
+                },
             }
         } else {
             let mut local_description =
@@ -421,7 +425,10 @@ impl View for AgentViewZeroStateBlock {
             HeaderProps {
                 title: "New Oz agent conversation".into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
-                icon: Icon::Oz,
+                icon: IconWithStatusVariant::OzAgent {
+                    status: None,
+                    is_ambient: false,
+                },
             }
         };
 
@@ -429,19 +436,19 @@ impl View for AgentViewZeroStateBlock {
             .with_main_axis_size(MainAxisSize::Min)
             .with_children(render_title_and_description(header_props, app));
 
-        if !self.origin.is_cloud_agent() {
-            if let Some(oz_updates_section) = render_oz_updates(
+        if !self.origin.is_cloud_agent()
+            && let Some(oz_updates_section) = render_oz_updates(
                 OzUpdatesProps {
                     is_expanded: self.is_oz_updates_expanded,
                     state_handles: &self.state_handles,
                 },
                 app,
-            ) {
-                content.add_children([Container::new(oz_updates_section)
-                    .with_margin_top(8.)
-                    .with_margin_bottom(16.)
-                    .finish()]);
-            }
+            )
+        {
+            content.add_children([Container::new(oz_updates_section)
+                .with_margin_top(8.)
+                .with_margin_bottom(16.)
+                .finish()]);
         }
 
         let active_session = self.active_session(app);
@@ -516,9 +523,11 @@ impl TypedActionView for AgentViewZeroStateBlock {
                 self.is_oz_updates_expanded = !is_expanded;
 
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .should_expand_oz_updates
-                        .set_value(!is_expanded, ctx));
+                    report_if_error!(
+                        settings
+                            .should_expand_oz_updates
+                            .set_value(!is_expanded, ctx)
+                    );
                 });
             }
             AgentViewZeroStateAction::OpenConversation { conversation_id } => {
@@ -568,7 +577,7 @@ enum AgentViewDescription {
 struct HeaderProps {
     title: Cow<'static, str>,
     description: AgentViewDescription,
-    icon: Icon,
+    icon: IconWithStatusVariant,
 }
 
 fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box<dyn Element>> {
@@ -582,23 +591,17 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
     } = props;
 
     let title_font_size = styles::title_font_size(appearance);
+    let icon_size = title_font_size / CIRCLE_RATIO;
     let title = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(
-            Container::new(
-                ConstrainedBox::new(
-                    icon.to_warpui_icon(
-                        theme
-                            .main_text_color(theme.background())
-                            .into_solid()
-                            .into(),
-                    )
-                    .finish(),
-                )
-                .with_height(title_font_size)
-                .with_width(title_font_size)
-                .finish(),
-            )
+            Container::new(render_icon_with_status(
+                icon,
+                icon_size,
+                0.,
+                theme,
+                theme.background(),
+            ))
             .with_margin_right(8.)
             .finish(),
         )
@@ -715,90 +718,94 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
     if origin.is_cloud_agent() {
         return vec![];
     }
-    let mut body_items = if let Some(recent_conversations_section) =
-        render_recent_conversations_section(
-            RecentConversationProps {
-                recent_conversations,
-                active_session,
-                current_working_directory,
-                state_handles,
-            },
-            app,
-        ) {
-        vec![recent_conversations_section]
-    } else {
-        let mut body_items = vec![
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
-                        MessageItem::text("start a new agent conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation {
-                            origin: AgentViewEntryOrigin::Input {
-                                was_prompt_autodetected: false,
-                            },
-                        });
-                    },
-                    state_handles.start_new_conversation.clone(),
-                )]),
-                app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(
-                            ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
-                        ),
-                        MessageItem::text("start a new cloud agent conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
-                    },
-                    state_handles.start_cloud_conversation.clone(),
-                )]),
-                app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(Keystroke {
-                            key: "/model".to_owned(),
-                            ..Default::default()
-                        }),
-                        MessageItem::text("switch model"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::OpenModelSelector);
-                    },
-                    state_handles.switch_model.clone(),
-                )]),
-                app,
-            ),
-        ];
-
-        // Only show "escape to go back" if there's a parent terminal
-        if has_parent_terminal {
-            body_items.push(render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(Keystroke {
-                            key: "escape".to_owned(),
-                            ..Default::default()
-                        }),
-                        MessageItem::text("go back to terminal"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::ExitAgentView);
-                    },
-                    state_handles.exit.clone(),
-                )]),
-                app,
-            ));
+    let mut body_items = match render_recent_conversations_section(
+        RecentConversationProps {
+            recent_conversations,
+            active_session,
+            current_working_directory,
+            state_handles,
+        },
+        app,
+    ) {
+        Some(recent_conversations_section) => {
+            vec![recent_conversations_section]
         }
+        _ => {
+            let mut body_items = vec![
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(
+                                ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
+                            ),
+                            MessageItem::text("start a new agent conversation"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation {
+                                origin: AgentViewEntryOrigin::Input {
+                                    was_prompt_autodetected: false,
+                                },
+                            });
+                        },
+                        state_handles.start_new_conversation.clone(),
+                    )]),
+                    app,
+                ),
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(
+                                ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
+                            ),
+                            MessageItem::text("start a new cloud agent conversation"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
+                        },
+                        state_handles.start_cloud_conversation.clone(),
+                    )]),
+                    app,
+                ),
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(Keystroke {
+                                key: "/model".to_owned(),
+                                ..Default::default()
+                            }),
+                            MessageItem::text("switch model"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::OpenModelSelector);
+                        },
+                        state_handles.switch_model.clone(),
+                    )]),
+                    app,
+                ),
+            ];
 
-        body_items
+            // Only show "escape to go back" if there's a parent terminal
+            if has_parent_terminal {
+                body_items.push(render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(Keystroke {
+                                key: "escape".to_owned(),
+                                ..Default::default()
+                            }),
+                            MessageItem::text("go back to terminal"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::ExitAgentView);
+                        },
+                        state_handles.exit.clone(),
+                    )]),
+                    app,
+                ));
+            }
+
+            body_items
+        }
     };
 
     if should_show_init_callout {

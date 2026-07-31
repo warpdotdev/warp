@@ -37,8 +37,8 @@ use super::{
     TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
     TuiZIndex,
 };
-use crate::elements::{MouseState, MouseStateHandle};
 use crate::AppContext;
+use crate::elements::{MouseState, MouseStateHandle};
 
 type ClickCallback = Box<dyn for<'a> FnMut(&mut TuiEventContext<'a>, &AppContext)>;
 

@@ -21,8 +21,8 @@ use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::AIClient;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -34,18 +34,37 @@ pub fn validate_agent_mode_base_model_id(
     ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
     let llm_prefs = LLMPreferences::as_ref(ctx);
-
-    let llm_id: LLMId = model_id.into();
     let valid_ids = llm_prefs
         .get_base_llm_choices_for_agent_mode(ctx)
         .map(|info| info.id.clone())
         .collect::<Vec<_>>();
 
+    classify_agent_mode_base_model_id(
+        model_id,
+        &valid_ids,
+        llm_prefs.agent_mode_models_unavailable(),
+    )
+}
+
+/// Classifies a user-supplied agent-mode model id against the available model
+/// list, distinguishing "the model list fetch failed (so the list is empty or
+/// stale)" from "the id is genuinely not in a valid list".
+fn classify_agent_mode_base_model_id(
+    model_id: &str,
+    valid_ids: &[LLMId],
+    list_unavailable: bool,
+) -> anyhow::Result<LLMId> {
+    let llm_id: LLMId = model_id.into();
     if valid_ids.contains(&llm_id) {
         Ok(llm_id)
+    } else if list_unavailable {
+        Err(anyhow::anyhow!(
+            "Could not retrieve the agent-mode model list from the server \
+             (the request failed or returned no models). Try again later."
+        ))
     } else {
         let suggestions = valid_ids
-            .into_iter()
+            .iter()
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(", ");
@@ -84,7 +103,7 @@ pub(super) fn set_ambient_task_context_from_run_id(
 pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyhow::Result<Owner> {
     if team_flag {
         let team_id = UserWorkspaces::as_ref(ctx)
-            .current_team_uid()
+            .sole_team_uid()
             .ok_or_else(|| anyhow::anyhow!("User is not on a team"))?;
         return Ok(Owner::Team { team_uid: team_id });
     }
@@ -98,7 +117,7 @@ pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyh
     }
 
     // Default: try team first, fall back to user
-    if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+    if let Some(team_uid) = UserWorkspaces::as_ref(ctx).sole_team_uid() {
         return Ok(Owner::Team { team_uid });
     }
 
@@ -116,7 +135,7 @@ pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyh
 /// other operations that depend on team membership.
 pub fn refresh_workspace_metadata<C>(
     ctx: &mut C,
-) -> impl Future<Output = anyhow::Result<()>> + Send + 'static
+) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<C>
 where
     C: GetSingletonModelHandle + UpdateModel,
 {
@@ -137,7 +156,7 @@ where
 /// Refresh Warp Drive before executing an operation.
 pub fn refresh_warp_drive(
     ctx: &AppContext,
-) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
     UpdateManager::as_ref(ctx)
         .initial_load_complete()
         .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)

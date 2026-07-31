@@ -21,8 +21,8 @@ use crate::settings::CodeSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
-use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
+use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 fn std_path(path: &std::path::Path) -> warp_util::standardized_path::StandardizedPath {
@@ -330,12 +330,14 @@ fn repo_transition_unregisters_lazy_loaded_path() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(view.registered_lazy_loaded_paths.contains(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    view.registered_lazy_loaded_paths.contains(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap()
                     )
-                    .unwrap()
-                ));
+                );
                 let displayed_std =
                     warp_util::standardized_path::StandardizedPath::try_from_local(&displayed_root)
                         .unwrap();
@@ -347,13 +349,15 @@ fn repo_transition_unregisters_lazy_loaded_path() {
                 );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap(),
+                        ctx
                     )
-                    .unwrap(),
-                    ctx
-                ));
+                );
             });
 
             repository_metadata_model.update(&mut app, |model, ctx| {
@@ -381,13 +385,15 @@ fn repo_transition_unregisters_lazy_loaded_path() {
                 );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(!model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    !model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap(),
+                        ctx
                     )
-                    .unwrap(),
-                    ctx
-                ));
+                );
             });
         });
     });
@@ -442,18 +448,22 @@ fn repo_backed_unloaded_directory_loads_through_model() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(!view
-                    .root_directories
-                    .get(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                assert!(
+                    !view
+                        .root_directories
+                        .get(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &repo_root
+                            )
                             .unwrap()
-                    )
-                    .is_some_and(|root_dir| root_dir.entry.contains(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(
-                            &source_file
                         )
-                        .unwrap()
-                    )));
+                        .is_some_and(|root_dir| root_dir.entry.contains(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &source_file
+                            )
+                            .unwrap()
+                        ))
+                );
             });
 
             file_tree_view.update(&mut app, |view, ctx| {
@@ -469,18 +479,21 @@ fn repo_backed_unloaded_directory_loads_through_model() {
                 .await;
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(view
-                    .root_directories
-                    .get(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                assert!(
+                    view.root_directories
+                        .get(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &repo_root
+                            )
                             .unwrap()
-                    )
-                    .is_some_and(|root_dir| root_dir.entry.contains(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(
-                            &nested_dir
                         )
-                        .unwrap()
-                    )));
+                        .is_some_and(|root_dir| root_dir.entry.contains(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &nested_dir
+                            )
+                            .unwrap()
+                        ))
+                );
             });
 
             file_tree_view.update(&mut app, |view, ctx| {
@@ -501,25 +514,30 @@ fn repo_backed_unloaded_directory_loads_through_model() {
             .await;
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(view
-                    .root_directories
-                    .get(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                assert!(
+                    view.root_directories
+                        .get(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &repo_root
+                            )
                             .unwrap()
-                    )
-                    .is_some_and(|root_dir| root_dir.entry.contains(
-                        &warp_util::standardized_path::StandardizedPath::try_from_local(
-                            &source_file
                         )
-                        .unwrap()
-                    )));
+                        .is_some_and(|root_dir| root_dir.entry.contains(
+                            &warp_util::standardized_path::StandardizedPath::try_from_local(
+                                &source_file
+                            )
+                            .unwrap()
+                        ))
+                );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(!model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
-                        .unwrap(),
-                    ctx
-                ));
+                assert!(
+                    !model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                            .unwrap(),
+                        ctx
+                    )
+                );
                 let id = repo_metadata::RepositoryIdentifier::local(
                     warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
                         .unwrap(),
@@ -584,17 +602,21 @@ fn pending_repository_root_does_not_register_lazy_loaded_path() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(!view.registered_lazy_loaded_paths.contains(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
-                        .unwrap()
-                ));
+                assert!(
+                    !view.registered_lazy_loaded_paths.contains(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                            .unwrap()
+                    )
+                );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(!model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
-                        .unwrap(),
-                    ctx
-                ));
+                assert!(
+                    !model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
+                            .unwrap(),
+                        ctx
+                    )
+                );
                 let id = repo_metadata::RepositoryIdentifier::local(
                     warp_util::standardized_path::StandardizedPath::try_from_local(&repo_root)
                         .unwrap(),
@@ -624,21 +646,25 @@ fn failed_lazy_loaded_path_registration_is_retried() {
             });
 
             file_tree_view.read(&app, |view, _ctx| {
-                assert!(!view.registered_lazy_loaded_paths.contains(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    !view.registered_lazy_loaded_paths.contains(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap()
                     )
-                    .unwrap()
-                ));
+                );
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(!model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    !model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap(),
+                        ctx
                     )
-                    .unwrap(),
-                    ctx
-                ));
+                );
             });
 
             vfs.mkdir("late_dir")
@@ -658,13 +684,15 @@ fn failed_lazy_loaded_path_registration_is_retried() {
                 ));
             });
             repository_metadata_model.read(&app, |model, ctx| {
-                assert!(model.is_lazy_loaded_path(
-                    &warp_util::standardized_path::StandardizedPath::try_from_local(
-                        &displayed_root
+                assert!(
+                    model.is_lazy_loaded_path(
+                        &warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &displayed_root
+                        )
+                        .unwrap(),
+                        ctx
                     )
-                    .unwrap(),
-                    ctx
-                ));
+                );
             });
         });
     });
@@ -1056,9 +1084,11 @@ fn cd_into_descendant_absorbs_into_existing_ancestor_root() {
                 assert_eq!(view.displayed_directories, vec![std_path(&tree)]);
                 // Ancestor chain is auto-expanded down to the cwd.
                 let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
-                assert!(root_dir
-                    .expanded_folders
-                    .contains(&std_path(&tree.join("a"))));
+                assert!(
+                    root_dir
+                        .expanded_folders
+                        .contains(&std_path(&tree.join("a")))
+                );
                 assert!(root_dir.expanded_folders.contains(&std_path(&z)));
             });
         });

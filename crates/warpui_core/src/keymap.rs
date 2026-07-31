@@ -2,8 +2,8 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::anyhow;
 use lazy_static::lazy_static;
@@ -16,7 +16,7 @@ use crate::{Action, AppContext, Tracked};
 mod context;
 mod matcher;
 
-pub use context::{macros, Context, ContextPredicate};
+pub use context::{Context, ContextPredicate, macros};
 pub use matcher::{IsBindingValid, MatchResult, Matcher};
 
 use crate::platform::OperatingSystem;
@@ -337,8 +337,8 @@ impl schemars::JsonSchema for Keystroke {
         std::borrow::Cow::Borrowed("Keystroke")
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<String>()
+    fn json_schema(sgen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        sgen.subschema_for::<String>()
     }
 }
 

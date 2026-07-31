@@ -8,7 +8,7 @@ use crate::terminal::input::{
     SET_INPUT_MODE_UNLOCKED_AGENT_ACTION_NAME, SET_INPUT_MODE_UNLOCKED_TERMINAL_ACTION_NAME,
 };
 use crate::util::bindings::{
-    custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction,
+    CustomAction, custom_tag_to_keystroke, keybinding_name_to_display_string,
 };
 
 /// Cache of keybindings used in terminal.

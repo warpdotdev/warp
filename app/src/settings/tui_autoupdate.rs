@@ -16,6 +16,6 @@ define_settings_group!(TuiAutoupdateSettings, settings: [
         surface: settings::SettingSurfaces::TUI,
         private: false,
         toml_path: "general.autoupdate_enabled",
-        description: "Whether Warp automatically installs TUI updates in the background.",
+        description: "Whether Warp Agent CLI automatically installs updates in the background.",
     },
 ]);

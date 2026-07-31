@@ -31,7 +31,7 @@ impl ReadSkillExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput { action, .. } = input;
         let AIAgentActionType::ReadSkill(ReadSkillRequest { skill: skill_ref }) = &action.action
         else {

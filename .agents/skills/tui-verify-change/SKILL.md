@@ -59,16 +59,11 @@ path below.
   runner) with no browser for device-auth, so reaching a **signed-in** surface
   relies on the non-interactive `WARP_API_KEY` already in the environment. That
   does **not** mean bypassing `./script/run-tui`: when the `warp-channel-config`
-  generator is available, `./script/run-tui` selects the internal **`local`
-  dogfood** binary, and with `WARP_API_KEY` inherited that binary logs in through
-  the **same** API-key path described below — so prefer `./script/run-tui`
-  whenever it resolves to a dogfood channel, rather than skipping the maintained
-  runner. Build and run a dogfood binary **explicitly** (`warp-tui-dev`, see
-  **Logging in non-interactively** below) only when `./script/run-tui` would fall
-  back to **`warp-tui-oss`** (no generator / no repo access) — OSS isn't a dogfood
-  channel and silently drops the key — or when you need a specific binary or
-  profile. Either way, in the cloud it's the inherited `WARP_API_KEY` that signs
-  you in; the browser device-auth login is the local-only path.
+  generator is available, `./script/run-tui` selects the internal `local`
+  binary; otherwise it falls back to `warp-tui-oss`. Both accept the inherited
+  `WARP_API_KEY`, so prefer the maintained runner unless you need a specific
+  binary or profile. In the cloud, the inherited key signs you in without the
+  browser device-auth flow.
 
 The logged-**out** surface (the `Sign in to continue` placeholder and any pure
 element/layout) needs neither login path — a plain OSS build is enough in either
@@ -124,16 +119,14 @@ headless cloud runner where the key *is* set and there's no browser for
 device-auth.
 
 You can reach the authenticated (`LoggedIn`) state headlessly — no browser, no
-device-auth flow — by launching a **dogfood-channel** TUI binary with a
-`WARP_API_KEY` in the environment. This is the fast way to verify live
-terminal/transcript/input changes.
+device-auth flow — by launching any TUI channel binary with a `WARP_API_KEY` in
+the environment. This is the fast way to verify live terminal/transcript/input
+changes.
 
 Key constraints:
 
-- **Dogfood channels only.** API-key login is gated to dogfood channels (`dev`,
-  `local`) behind the `APIKeyAuthentication` flag, so it works with
-  `warp-tui-dev` (or the internal `local` binary) — **not** `warp-tui-oss`,
-  which is not a dogfood channel and will stay logged out.
+- **All channels are supported.** API-key login works with `warp-tui-oss` as
+  well as the Preview, Dev, Local, and Stable binaries.
 - **The key must already be in the environment.** In a sandbox where
   `WARP_API_KEY` is set, a freshly started `tmux` server inherits it. Never echo,
   print, or inline the secret value in a command — just rely on the inherited
@@ -142,10 +135,10 @@ Key constraints:
 
 ```bash
 cd <warp-repo-root>
-CARGO_BUILD_JOBS=2 cargo build -p warp_tui --bin warp-tui-dev
+CARGO_BUILD_JOBS=2 cargo build -p warp_tui --bin warp-tui-oss
 tmux kill-session -t tuicheck 2>/dev/null
 # WARP_API_KEY is inherited from the environment by the new tmux server.
-tmux new-session -d -s tuicheck -x 120 -y 40 './target/debug/warp-tui-dev'
+tmux new-session -d -s tuicheck -x 120 -y 40 './target/debug/warp-tui-oss'
 sleep 20                                      # login + session start
 tmux capture-pane -t tuicheck -p              # expect the logged-in zero state
 ```

@@ -1,11 +1,11 @@
 //! Configuration pages and shared-model adapters for the orchestration card.
 
 use warp::tui_export::{
+    AIActionStatus, AIAgentActionId, BlocklistAIActionModel, OptionSnapshot,
+    OrchestrationConfigState, OrchestrationEditState, RunAgentsExecutionMode, RunAgentsRequest,
     accept_disabled_reason_with_auth, api_key_snapshot, environment_snapshot, harness_snapshot,
     host_snapshot, location_snapshot, model_snapshot, persist_environment_selection,
-    persist_host_selection, AIActionStatus, AIAgentActionId, BlocklistAIActionModel,
-    OptionSnapshot, OrchestrationConfigState, OrchestrationEditState, RunAgentsExecutionMode,
-    RunAgentsRequest,
+    persist_host_selection,
 };
 use warpui_core::{AppContext, ModelHandle};
 
@@ -69,7 +69,7 @@ impl ConfigPage {
 
     /// Whether this page opts into the selector's pinned search editor.
     pub(super) fn is_searchable(self) -> bool {
-        matches!(self, Self::Model)
+        matches!(self, Self::Environment | Self::Model)
     }
 }
 
@@ -100,15 +100,15 @@ pub(super) trait OrchestrationBlockController {
         ctx: &mut AppContext,
     );
 
-    /// Validates and dispatches an accepted request, returning the blocking
-    /// reason when the edited configuration cannot launch.
-    fn accept(
+    /// Returns the blocking reason when the edited configuration cannot launch.
+    fn accept_disabled_reason(
         &self,
-        action_id: &AIAgentActionId,
-        request: RunAgentsRequest,
         state: &OrchestrationConfigState,
-        ctx: &mut AppContext,
-    ) -> Result<(), String>;
+        ctx: &AppContext,
+    ) -> Option<String>;
+
+    /// Dispatches a request that has already passed validation.
+    fn accept(&self, action_id: &AIAgentActionId, request: RunAgentsRequest, ctx: &mut AppContext);
 }
 
 /// Production controller backed by the shared orchestration models.
@@ -189,19 +189,17 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
         }
     }
 
-    fn accept(
+    fn accept_disabled_reason(
         &self,
-        action_id: &AIAgentActionId,
-        request: RunAgentsRequest,
         state: &OrchestrationConfigState,
-        ctx: &mut AppContext,
-    ) -> Result<(), String> {
-        if let Some(reason) = accept_disabled_reason_with_auth(state, ctx) {
-            return Err(reason);
-        }
+        ctx: &AppContext,
+    ) -> Option<String> {
+        accept_disabled_reason_with_auth(state, ctx)
+    }
+
+    fn accept(&self, action_id: &AIAgentActionId, request: RunAgentsRequest, ctx: &mut AppContext) {
         self.action_model.update(ctx, |action_model, ctx| {
             action_model.execute_run_agents(action_id, request, ctx);
         });
-        Ok(())
     }
 }

@@ -1,6 +1,6 @@
 pub use pathfinder_color::ColorU;
 pub use pathfinder_geometry::rect::RectF;
-pub use pathfinder_geometry::vector::{vec2f, Vector2F};
+pub use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 pub use crate::core::{
     AppContext, Entity, GetSingletonModelHandle as _, ModelContext, ModelHandle, SingletonEntity,

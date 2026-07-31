@@ -1,12 +1,12 @@
 use std::num::NonZeroUsize;
 
 use super::GridStorage;
+use crate::terminal::SizeInfo;
 use crate::terminal::model::ansi::{self, Handler as _};
-use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::index::{Point, VisiblePoint, VisibleRow};
 use crate::terminal::model::secrets::ObfuscateSecrets;
-use crate::terminal::SizeInfo;
 
 macro_rules! assert_cell_char_eq {
     ($grid:ident[$row:literal][$col:literal], $expected:literal) => {

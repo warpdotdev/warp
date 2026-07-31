@@ -210,7 +210,7 @@ pub fn script_for_shell(shell_type: ShellType, assets: &dyn AssetProvider) -> Co
 pub fn generate_session_id() -> SessionId {
     let mut rng = rand::thread_rng();
     loop {
-        let session_id = rng.gen::<u64>();
+        let session_id = rng.r#gen::<u64>();
         if session_id != 0 {
             return SessionId::from(session_id);
         }

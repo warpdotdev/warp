@@ -1,8 +1,10 @@
+use std::future::Future;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
+use futures::future::Either;
 use settings::Setting as _;
 #[cfg(target_family = "wasm")]
 use url::Url;
@@ -14,6 +16,7 @@ use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
 use warp_server_auth::user::persistence::PersistedUser;
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::{Entity, ModelContext, SingletonEntity, UpdateModel};
 
@@ -23,9 +26,9 @@ use super::credentials::{Credentials, FirebaseToken, LoginToken};
 use super::user::User;
 use super::user_properties::UserProperties;
 use super::{AuthStateProvider, UserUid};
+use crate::ai::AIRequestUsageModel;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai::AIRequestUsageModel;
 use crate::autoupdate::AutoupdateState;
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -36,17 +39,17 @@ use crate::server::server_api::auth::{
 };
 use crate::server::server_api::{ServerApi, ServerApiProvider};
 use crate::server::telemetry::AnonymousUserSignupEntrypoint;
+use crate::settings::PrivacySettings;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings::initializer::SettingsInitializer;
-use crate::settings::PrivacySettings;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::{
-    persistence, send_telemetry_from_ctx, send_telemetry_sync_from_ctx,
-    GlobalResourceHandlesProvider, TelemetryEvent,
+    GlobalResourceHandlesProvider, TelemetryEvent, persistence, send_telemetry_from_ctx,
+    send_telemetry_sync_from_ctx,
 };
 
 #[derive(Debug)]
@@ -86,6 +89,46 @@ pub enum AuthManagerEvent {
 pub type LoginGatedFeature = &'static str;
 
 type URLConstructorCallback = Box<dyn FnOnce(Option<&str>) -> String>;
+const DEVICE_CODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const DEVICE_CODE_REQUEST_ATTEMPTS: usize = 2;
+
+async fn request_device_code_with_timeout<F, Fut>(
+    mut request: F,
+    timeout: Duration,
+    attempts: usize,
+) -> StdResult<oauth2::StandardDeviceAuthorizationResponse, UserAuthenticationError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<
+        Output = StdResult<oauth2::StandardDeviceAuthorizationResponse, UserAuthenticationError>,
+    >,
+{
+    assert!(
+        attempts > 0,
+        "device code request requires at least one attempt"
+    );
+
+    for attempt in 1..=attempts {
+        let request = request();
+        let timeout = Timer::after(timeout);
+        futures::pin_mut!(request);
+        futures::pin_mut!(timeout);
+
+        match futures::future::select(request, timeout).await {
+            Either::Left((result, _)) => return result,
+            Either::Right(_) if attempt < attempts => {
+                log::info!(
+                    "Device authorization code request timed out; retrying ({attempt}/{attempts})"
+                );
+            }
+            Either::Right(_) => {
+                return Err(UserAuthenticationError::DeviceCodeRequestTimedOut { attempts });
+            }
+        }
+    }
+
+    unreachable!("attempt count is asserted to be nonzero")
+}
 
 /// AuthManager is a singleton model which manages the currently logged-in user's state.
 /// If you need to access the state, use `AuthStateProvider`.
@@ -274,7 +317,14 @@ impl AuthManager {
         let auth_client = self.auth_client.clone();
         // Request a device code the user can enter in their browser.
         ctx.spawn(
-            async move { auth_client.request_device_code().await },
+            async move {
+                request_device_code_with_timeout(
+                    || auth_client.request_device_code(),
+                    DEVICE_CODE_REQUEST_TIMEOUT,
+                    DEVICE_CODE_REQUEST_ATTEMPTS,
+                )
+                .await
+            },
             Self::on_device_code_received,
         );
     }
@@ -394,9 +444,9 @@ impl AuthManager {
 
                 if !user.is_user_anonymous() {
                     GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(settings
-                            .did_non_anonymous_user_log_in
-                            .set_value(true, ctx));
+                        report_if_error!(
+                            settings.did_non_anonymous_user_log_in.set_value(true, ctx)
+                        );
                     });
                 }
 
@@ -415,18 +465,19 @@ impl AuthManager {
                 // Reconstruct the database if it was removed.
                 // Do nothing if the database was not removed.
                 persistence::reconstruct(&global_resource_handles.model_event_sender);
-                if let Some(model_event_sender) = &global_resource_handles.model_event_sender {
-                    if let Err(e) =
+                if let Some(model_event_sender) = &global_resource_handles.model_event_sender
+                    && let Err(e) =
                         model_event_sender.send(ModelEvent::UpsertCurrentUserInformation {
                             user_information: PersistedCurrentUserInformation {
                                 email: self.auth_state.user_email().unwrap_or_default(),
                             },
                         })
-                    {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Error persisting user information to database"));
-                    };
-                }
+                {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Error persisting user information to database")
+                    );
+                };
 
                 // Fetch the user's privacy settings from the server if any or update the server settings.
                 let privacy_settings_handle = PrivacySettings::handle(ctx);
@@ -503,6 +554,7 @@ impl AuthManager {
                         self.set_needs_reauth(true, ctx);
                     }
                     UserAuthenticationError::UserAccountDisabled(_) => {}
+                    UserAuthenticationError::DeviceCodeRequestTimedOut { .. } => {}
                     UserAuthenticationError::Unexpected(_) => {}
                     UserAuthenticationError::InvalidStateParameter => {}
                     UserAuthenticationError::MissingStateParameter => {}

@@ -14,14 +14,15 @@ use std::{io, ptr};
 use anyhow::{Context as _, Error, Result};
 use command::blocking::Command;
 use itertools::Itertools;
-use libc::{self, c_int, winsize, TIOCSCTTY};
-use mio::unix::SourceFd;
+use libc::{self, TIOCSCTTY, c_int, winsize};
 use mio::Interest;
+use mio::unix::SourceFd;
 use nix::pty::openpty;
 use nix::sys::termios::{self, InputFlags, SetArg};
 use serde::{Deserialize, Serialize};
 use signal_hook_mio::v1_0::Signals;
 use warp_core::channel::ChannelState;
+use warp_core::cli_agent_protocol::{WARP_CLI_AGENT_PROTOCOL_VERSION_ENV, WARP_CLIENT_VERSION_ENV};
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
 use warp_errors::report_if_error;
@@ -30,17 +31,17 @@ use warpui::{AppContext, SingletonEntity};
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
 use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
 use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
+use crate::ASSETS;
 use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::local_tty::docker_sandbox::{
-    DockerSandboxShellStarter, DOCKER_SANDBOX_HOME_DIR,
+    DOCKER_SANDBOX_HOME_DIR, DockerSandboxShellStarter,
 };
 use crate::terminal::local_tty::shell::{
-    extra_path_entries, ssh_socket_dir, DirectShellStarter, ShellStarter,
+    DirectShellStarter, ShellStarter, extra_path_entries, ssh_socket_dir,
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
-use crate::ASSETS;
 
 const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
@@ -340,11 +341,11 @@ fn build_host_shell_command(
         // plugins can do warp-specific version checks without worrying
         // that the version env var might be coming from a different terminal
         // (for ex., in the ssh case).
-        builder.env("WARP_CLIENT_VERSION", version);
+        builder.env(WARP_CLIENT_VERSION_ENV, version);
     } else {
         // Local builds don't have GIT_RELEASE_TAG, so app_version() is None.
         // Use "local" so plugins can still distinguish this from a missing value.
-        builder.env("WARP_CLIENT_VERSION", "local");
+        builder.env(WARP_CLIENT_VERSION_ENV, "local");
     }
 
     // Set the `SHELL` environment variable to match the path of the shell we are using.
@@ -386,7 +387,7 @@ fn build_host_shell_command(
     // so the plugin should fall back to legacy notifications.
     if FeatureFlag::HOANotifications.is_enabled() {
         builder.env(
-            "WARP_CLI_AGENT_PROTOCOL_VERSION",
+            WARP_CLI_AGENT_PROTOCOL_VERSION_ENV,
             current_protocol_version().to_string(),
         );
     }
@@ -755,10 +756,12 @@ impl ToWinsize for &SizeInfo {
 }
 
 unsafe fn set_nonblocking(fd: c_int) {
-    use libc::{fcntl, F_GETFL, F_SETFL, O_NONBLOCK};
+    unsafe {
+        use libc::{F_GETFL, F_SETFL, O_NONBLOCK, fcntl};
 
-    let res = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-    assert_eq!(res, 0);
+        let res = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        assert_eq!(res, 0);
+    }
 }
 
 /// Spawn the PTY for a Docker sandbox session.
@@ -870,9 +873,9 @@ fn build_docker_sandbox_command(
     builder.env_remove("DESKTOP_STARTUP_ID");
     if let Some(version) = ChannelState::app_version() {
         builder.env("TERM_PROGRAM_VERSION", version);
-        builder.env("WARP_CLIENT_VERSION", version);
+        builder.env(WARP_CLIENT_VERSION_ENV, version);
     } else {
-        builder.env("WARP_CLIENT_VERSION", "local");
+        builder.env(WARP_CLIENT_VERSION_ENV, "local");
     }
     builder.env("SHELL", docker_starter.logical_shell_path());
     if let Some(window_id) = window_id {
@@ -890,7 +893,7 @@ fn build_docker_sandbox_command(
     builder.env("WARP_IS_LOCAL_SHELL_SESSION", "1");
     if FeatureFlag::HOANotifications.is_enabled() {
         builder.env(
-            "WARP_CLI_AGENT_PROTOCOL_VERSION",
+            WARP_CLI_AGENT_PROTOCOL_VERSION_ENV,
             current_protocol_version().to_string(),
         );
     }

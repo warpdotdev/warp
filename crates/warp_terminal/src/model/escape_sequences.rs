@@ -4,9 +4,9 @@ use lazy_static::lazy_static;
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::OperatingSystem;
 
+use super::TermMode;
 use super::indexing::Point;
 use super::mouse::{MouseAction, MouseButton, MouseState};
-use super::TermMode;
 
 mod kitty_keyboard_protocol;
 
@@ -138,6 +138,17 @@ pub mod C1 {
     }
 }
 
+/// Wraps an escape sequence in a tmux DCS passthrough, doubling inner escapes
+/// so tmux forwards the sequence to the hosting terminal rather than
+/// intercepting it.
+pub fn tmux_passthrough(sequence: &str) -> String {
+    let esc = char::from(C0::ESC);
+    let escaped = sequence.replace(esc, "\x1b\x1b");
+    let dcs = C1::to_utf8(C1::DCS);
+    let st = C1::to_utf8(C1::ST);
+    format!("{dcs}tmux;{escaped}{st}")
+}
+
 /// Escape sequences used to control 'bracketed paste' mode.
 ///
 /// If the shell supports bracketed paste mode, these control sequences should be inserted at the
@@ -148,7 +159,7 @@ pub const BRACKETED_PASTE_END: &[u8] = &[C0::ESC, b'[', b'2', b'0', b'1', b'~'];
 
 #[allow(non_snake_case)]
 pub mod EscCodes {
-    use super::{ModeProvider, TermMode, C0, C1};
+    use super::{C0, C1, ModeProvider, TermMode};
 
     // Arrows-related escape codes
     pub const ARROW_UP: u8 = b'A';

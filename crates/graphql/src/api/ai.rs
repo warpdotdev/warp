@@ -1,6 +1,6 @@
 use crate::object::ObjectMetadata;
 use crate::object_permissions::ObjectPermissions;
-use crate::queries::get_conversation_usage::{convert_token_usage, TokenUsage, ToolUsageMetadata};
+use crate::queries::get_conversation_usage::{TokenUsage, ToolUsageMetadata, convert_token_usage};
 use crate::scalars::Time;
 use crate::schema;
 use crate::user::PublicUserProfile;

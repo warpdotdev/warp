@@ -1,24 +1,34 @@
 //! Small presentation helpers for the `warp-tui` front-end's TUI views.
+use std::sync::Arc;
 use std::time::Duration;
 
+use warpui_core::AppContext;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
-    Modifier, TuiConstrainedBox, TuiElement, TuiFlex, TuiStyle, TuiText,
+    Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiEventContext, TuiEventHandler,
+    TuiFlex, TuiHoverable, TuiStack, TuiStyle, TuiText,
 };
-use warpui_core::elements::CrossAxisAlignment;
-use warpui_core::AppContext;
+use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
 
+use crate::transient_hint::TransientHintTone;
 use crate::tui_builder::TuiUiBuilder;
 use crate::warping_indicator::render_spinner;
+use crate::zero_state_animation::{
+    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement,
+    ZeroStateInteractionHandle, ZeroStateStarfieldElement,
+};
+
+const AUTH_COPY_COLS: u16 = 48;
+const AUTH_ANIMATION_COLS: u16 = 32;
 
 /// Abbreviates a leading home-directory prefix of `path` to `~`.
 pub(crate) fn abbreviate_home_prefix(path: &str) -> String {
     if let Some(home) = dirs::home_dir() {
         let home = home.to_string_lossy();
-        if let Some(rest) = path.strip_prefix(&*home) {
-            if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
-                return format!("~{rest}");
-            }
+        if let Some(rest) = path.strip_prefix(&*home)
+            && (rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\'))
+        {
+            return format!("~{rest}");
         }
     }
     path.to_owned()
@@ -109,62 +119,466 @@ fn vertically_centered(content: TuiFlex) -> Box<dyn TuiElement> {
         .finish()
 }
 
-/// Centers `content` horizontally and vertically within the viewport.
-fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
-    let centered_row = TuiFlex::row()
+/// Centers `content` horizontally within its available row.
+pub(crate) fn horizontally_centered(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
+    TuiFlex::row()
         .flex_child(TuiFlex::row().finish())
         .child(content)
-        .flex_child(TuiFlex::row().finish());
+        .flex_child(TuiFlex::row().finish())
+        .finish()
+}
+
+/// Centers `content` horizontally and vertically within the viewport.
+pub(crate) fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiElement> {
     TuiFlex::column()
         .flex_child(TuiFlex::column().finish())
-        .child(centered_row.finish())
+        .child(horizontally_centered(content))
         .flex_child(TuiFlex::column().finish())
         .finish()
 }
 
-/// Placeholder shown while the user completes device-authorization login. The
-/// verification URL/code are surfaced once known (the browser also auto-opens).
-pub(crate) fn login_placeholder(
-    verification_uri: Option<&str>,
-    user_code: Option<&str>,
+/// Signed-out welcome shown before browser device authorization begins.
+pub(crate) fn signed_out_welcome(
+    clock: AnimationClock,
+    animation_config: Arc<ZeroStateAnimationConfig>,
+    login_mouse: MouseStateHandle,
+    copy_mouse: MouseStateHandle,
+    app: &AppContext,
+    on_login: impl FnMut(&mut TuiEventContext, &AppContext) + Clone + 'static,
+    on_copy: impl FnMut(&mut TuiEventContext, &AppContext) + Clone + 'static,
 ) -> Box<dyn TuiElement> {
-    let dim = TuiStyle::default().add_modifier(Modifier::DIM);
-    let mut content =
-        TuiFlex::column().child(TuiText::new("Sign in to continue").truncate().finish());
-    match (verification_uri, user_code) {
-        (Some(uri), Some(code)) => {
-            content = content
-                .child(
-                    TuiText::new(format!("Open {uri} in your browser"))
-                        .with_style(dim)
-                        .truncate()
-                        .finish(),
-                )
-                .child(
-                    TuiText::new(format!("and enter code: {code}"))
-                        .with_style(dim)
-                        .truncate()
-                        .finish(),
-                );
-        }
-        (Some(uri), None) => {
-            content = content.child(
-                TuiText::new(format!("Open {uri} in your browser"))
-                    .with_style(dim)
+    let builder = TuiUiBuilder::from_app(app);
+    let primary = builder.primary_text_style();
+    let muted = builder.muted_text_style();
+    let title = builder
+        .credential_entry_accent_style()
+        .add_modifier(Modifier::BOLD);
+    let success = builder.success_glyph_style();
+    let login_style = if login_mouse.lock().is_ok_and(|state| state.is_hovered()) {
+        primary
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::UNDERLINED)
+    } else {
+        builder.link_text_style().add_modifier(Modifier::UNDERLINED)
+    };
+    let copy_style = if copy_mouse.lock().is_ok_and(|state| state.is_hovered()) {
+        primary.add_modifier(Modifier::BOLD)
+    } else {
+        builder.link_text_style()
+    };
+    let mut on_login_key = on_login.clone();
+    let mut on_copy_key = on_copy.clone();
+    let content = TuiFlex::column()
+        .child(
+            TuiText::new("Welcome to Warp")
+                .with_style(title)
+                .truncate()
+                .finish(),
+        )
+        .child(
+            TuiText::from_spans([
+                ("> ".to_owned(), success),
+                ("Press ".to_owned(), muted),
+                ("enter".to_owned(), success.add_modifier(Modifier::BOLD)),
+                (" to get started".to_owned(), muted),
+            ])
+            .finish(),
+        )
+        .child(
+            TuiHoverable::new(
+                login_mouse,
+                TuiText::new("Log in with Warp")
+                    .with_style(login_style)
                     .truncate()
                     .finish(),
-            );
-        }
-        _ => {
-            content = content.child(
-                TuiText::new("Opening your browser…")
-                    .with_style(dim)
+            )
+            .on_click(on_login)
+            .finish(),
+        )
+        .child(
+            TuiHoverable::new(
+                copy_mouse,
+                TuiText::new("Copy login URL (c)")
+                    .with_style(copy_style)
                     .truncate()
                     .finish(),
-            );
-        }
+            )
+            .on_click(on_copy)
+            .finish(),
+        )
+        .child(blank_row())
+        .child(blank_row())
+        .child(
+            TuiText::new("What’s different about Warp")
+                .with_style(muted)
+                .finish(),
+        )
+        .child(capability_row(
+            "⟡",
+            "Prompts or shell commands autodetected",
+            builder.credential_entry_accent_style(),
+            primary,
+        ))
+        .child(capability_row(
+            "⊹",
+            "Set up custom model routers",
+            builder.link_text_style(),
+            primary,
+        ))
+        .child(capability_row(
+            "✶",
+            "Orchestrate fleets of agents",
+            success,
+            primary,
+        ))
+        .child(capability_row(
+            "*",
+            "Run full-screen terminal apps",
+            builder.credential_entry_accent_style(),
+            primary,
+        ))
+        .child(capability_row(
+            "◊",
+            "Persist sessions through state changes",
+            builder.attention_glyph_style(),
+            primary,
+        ))
+        .finish();
+    TuiEventHandler::new(auth_layout(clock, animation_config, content, &builder))
+        .on_key("enter", move |_, event_ctx, app| {
+            on_login_key(event_ctx, app);
+        })
+        .on_key("c", move |_, event_ctx, app| {
+            on_copy_key(event_ctx, app);
+        })
+        .finish()
+}
+
+/// Browser interaction state for the waiting login screen.
+pub(crate) struct LoginWaitingParams<'a> {
+    pub(crate) browser_url: Option<&'a str>,
+    pub(crate) login_mouse: MouseStateHandle,
+    pub(crate) copy_mouse: MouseStateHandle,
+    pub(crate) copy_feedback: Option<(&'a str, TransientHintTone)>,
+}
+/// Device-authorization request failure with no verification URL available yet.
+pub(crate) struct LoginFailedParams<'a> {
+    pub(crate) message: &'a str,
+    pub(crate) retry_mouse: MouseStateHandle,
+}
+
+/// Browser-launch recovery controls retain the exact device URL.
+pub(crate) struct LoginBrowserOpenFailedParams<'a> {
+    pub(crate) browser_url: &'a str,
+    pub(crate) login_mouse: MouseStateHandle,
+    pub(crate) copy_mouse: MouseStateHandle,
+    pub(crate) retry_mouse: MouseStateHandle,
+    pub(crate) copy_feedback: Option<(&'a str, TransientHintTone)>,
+}
+
+/// Waiting state shown after device authorization starts.
+pub(crate) fn login_waiting(
+    clock: AnimationClock,
+    animation_config: Arc<ZeroStateAnimationConfig>,
+    params: LoginWaitingParams<'_>,
+    app: &AppContext,
+    on_open: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
+    on_copy: impl FnMut(&mut TuiEventContext, &AppContext) + Clone + 'static,
+) -> Box<dyn TuiElement> {
+    let LoginWaitingParams {
+        browser_url,
+        login_mouse,
+        copy_mouse,
+        copy_feedback,
+    } = params;
+    let builder = TuiUiBuilder::from_app(app);
+    let primary = builder.primary_text_style();
+    let muted = builder.muted_text_style();
+    let title = builder
+        .credential_entry_accent_style()
+        .add_modifier(Modifier::BOLD);
+    let mut content = TuiFlex::column()
+        .child(
+            TuiText::new("Welcome to Warp")
+                .with_style(title)
+                .truncate()
+                .finish(),
+        )
+        .child(
+            TuiText::from_spans([
+                ("● ".to_owned(), builder.attention_glyph_style()),
+                ("Waiting for login...".to_owned(), primary),
+            ])
+            .finish(),
+        )
+        .child(blank_row())
+        .child(blank_row());
+
+    let has_browser_url = browser_url.is_some();
+    let mut on_copy_key = on_copy.clone();
+    if let Some(browser_url) = browser_url {
+        let link_style = if login_mouse.lock().is_ok_and(|state| state.is_hovered()) {
+            primary
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED)
+        } else {
+            primary.add_modifier(Modifier::UNDERLINED)
+        };
+        content = content.child(
+            TuiHoverable::new(
+                login_mouse,
+                TuiText::from_spans([
+                    ("Visit ".to_owned(), muted),
+                    (browser_url.to_owned(), link_style),
+                    (" to get started, then come back here.".to_owned(), muted),
+                ])
+                .finish(),
+            )
+            .on_click(on_open)
+            .finish(),
+        );
+        let copy_hovered = copy_mouse.lock().is_ok_and(|state| state.is_hovered());
+        let (copy_label, copy_style) = match copy_feedback {
+            Some((message, TransientHintTone::Muted)) => (message.to_owned(), muted),
+            Some((message, TransientHintTone::Success)) => {
+                (message.to_owned(), builder.success_glyph_style())
+            }
+            Some((message, TransientHintTone::Error)) => {
+                (message.to_owned(), builder.error_text_style())
+            }
+            None => {
+                let style = if copy_hovered {
+                    primary.add_modifier(Modifier::BOLD)
+                } else {
+                    builder.link_text_style()
+                };
+                ("Copy URL (c)".to_owned(), style)
+            }
+        };
+        content = content.child(
+            TuiHoverable::new(
+                copy_mouse,
+                TuiText::new(copy_label)
+                    .with_style(copy_style)
+                    .truncate()
+                    .finish(),
+            )
+            .on_click(on_copy)
+            .finish(),
+        );
+    } else {
+        content = content.child(
+            TuiText::new("Requesting a secure sign-in link...")
+                .with_style(muted)
+                .finish(),
+        );
     }
-    vertically_centered(content)
+
+    let content = auth_layout(clock, animation_config, content.finish(), &builder);
+    if has_browser_url {
+        TuiEventHandler::new(content)
+            .on_key("c", move |_, event_ctx, app| {
+                on_copy_key(event_ctx, app);
+            })
+            .finish()
+    } else {
+        content
+    }
+}
+
+/// Recovery state shown when the default browser rejects the launch request.
+pub(crate) fn login_browser_open_failed(
+    clock: AnimationClock,
+    animation_config: Arc<ZeroStateAnimationConfig>,
+    params: LoginBrowserOpenFailedParams<'_>,
+    app: &AppContext,
+    on_retry: impl FnMut(&mut TuiEventContext, &AppContext) + Clone + 'static,
+    on_copy: impl FnMut(&mut TuiEventContext, &AppContext) + Clone + 'static,
+) -> Box<dyn TuiElement> {
+    let LoginBrowserOpenFailedParams {
+        browser_url,
+        login_mouse,
+        copy_mouse,
+        retry_mouse,
+        copy_feedback,
+    } = params;
+    let builder = TuiUiBuilder::from_app(app);
+    let primary = builder.primary_text_style();
+    let muted = builder.muted_text_style();
+    let title = builder
+        .credential_entry_accent_style()
+        .add_modifier(Modifier::BOLD);
+    let link_style = if login_mouse.lock().is_ok_and(|state| state.is_hovered()) {
+        primary
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::UNDERLINED)
+    } else {
+        primary.add_modifier(Modifier::UNDERLINED)
+    };
+    let copy_hovered = copy_mouse.lock().is_ok_and(|state| state.is_hovered());
+    let (copy_label, copy_style) = match copy_feedback {
+        Some((message, TransientHintTone::Muted)) => (message.to_owned(), muted),
+        Some((message, TransientHintTone::Success)) => {
+            (message.to_owned(), builder.success_glyph_style())
+        }
+        Some((message, TransientHintTone::Error)) => {
+            (message.to_owned(), builder.error_text_style())
+        }
+        None => {
+            let style = if copy_hovered {
+                primary.add_modifier(Modifier::BOLD)
+            } else {
+                builder.link_text_style()
+            };
+            ("Copy URL (c)".to_owned(), style)
+        }
+    };
+    let retry_style = if retry_mouse.lock().is_ok_and(|state| state.is_hovered()) {
+        primary.add_modifier(Modifier::BOLD)
+    } else {
+        builder.link_text_style()
+    };
+    let mut on_retry_key = on_retry.clone();
+    let mut on_copy_key = on_copy.clone();
+    let content = TuiFlex::column()
+        .child(
+            TuiText::new("Welcome to Warp")
+                .with_style(title)
+                .truncate()
+                .finish(),
+        )
+        .child(
+            TuiText::new("We couldn’t open your browser.")
+                .with_style(builder.attention_glyph_style())
+                .finish(),
+        )
+        .child(blank_row())
+        .child(
+            TuiText::new("Open this exact URL manually:")
+                .with_style(muted)
+                .finish(),
+        )
+        .child(
+            TuiHoverable::new(
+                login_mouse,
+                TuiText::new(browser_url).with_style(link_style).finish(),
+            )
+            .on_click(on_retry.clone())
+            .finish(),
+        )
+        .child(
+            TuiHoverable::new(
+                copy_mouse,
+                TuiText::new(copy_label)
+                    .with_style(copy_style)
+                    .truncate()
+                    .finish(),
+            )
+            .on_click(on_copy)
+            .finish(),
+        )
+        .child(blank_row())
+        .child(
+            TuiHoverable::new(
+                retry_mouse,
+                TuiText::new("Retry opening browser (r)")
+                    .with_style(retry_style)
+                    .truncate()
+                    .finish(),
+            )
+            .on_click(on_retry)
+            .finish(),
+        )
+        .finish();
+    TuiEventHandler::new(auth_layout(clock, animation_config, content, &builder))
+        .on_key("c", move |_, event_ctx, app| {
+            on_copy_key(event_ctx, app);
+        })
+        .on_key("r", move |_, event_ctx, app| {
+            on_retry_key(event_ctx, app);
+        })
+        .finish()
+}
+
+fn capability_row(
+    glyph: &str,
+    label: &str,
+    glyph_style: TuiStyle,
+    text_style: TuiStyle,
+) -> Box<dyn TuiElement> {
+    TuiText::from_spans([
+        (format!("{glyph} "), glyph_style),
+        (label.to_owned(), text_style),
+    ])
+    .finish()
+}
+
+fn auth_layout(
+    clock: AnimationClock,
+    animation_config: Arc<ZeroStateAnimationConfig>,
+    content: Box<dyn TuiElement>,
+    builder: &TuiUiBuilder,
+) -> Box<dyn TuiElement> {
+    let starfield = ZeroStateStarfieldElement::new(
+        clock,
+        builder.muted_text_style(),
+        AUTH_COPY_COLS,
+        AUTH_ANIMATION_COLS,
+    )
+    .finish();
+    let animation = ZeroStateAnimationElement::new(
+        clock,
+        animation_config,
+        ZeroStateInteractionHandle::non_interactive(),
+        WarpLogoStyles {
+            front: builder.accent_text_style(),
+            back: builder.primary_text_style(),
+            side: builder.dim_text_style(),
+            background: builder.muted_text_style(),
+        },
+    )
+    .without_background_stars()
+    .finish();
+    let copy_reservation = TuiConstrainedBox::new(TuiText::new("").finish())
+        .with_min_cols(AUTH_COPY_COLS)
+        .with_max_cols(AUTH_COPY_COLS)
+        .finish();
+    let animation = TuiConstrainedBox::new(animation)
+        .with_max_cols(AUTH_ANIMATION_COLS)
+        .finish();
+    let animation_region = TuiFlex::row()
+        .flex_child(TuiText::new("").finish())
+        .child(animation)
+        .flex_child(TuiText::new("").finish())
+        .finish();
+    let animation_layer = TuiFlex::row()
+        .child(copy_reservation)
+        .flex_child(animation_region)
+        .finish();
+
+    let content = TuiContainer::new(content)
+        .with_padding_left(3)
+        .with_background(Color::Reset)
+        .finish();
+    let content = TuiConstrainedBox::new(content)
+        .with_min_cols(AUTH_COPY_COLS)
+        .with_max_cols(AUTH_COPY_COLS)
+        .finish();
+    let content_layer = TuiFlex::column()
+        .flex_child(TuiText::new("").finish())
+        .child(content)
+        .flex_child(TuiText::new("").finish())
+        .finish();
+
+    TuiStack::new()
+        .child(starfield)
+        .child(animation_layer)
+        .child(content_layer)
+        .finish()
+}
+
+fn blank_row() -> Box<dyn TuiElement> {
+    TuiText::new(" ").truncate().finish()
 }
 
 /// Placeholder shown between login completion and terminal session creation.
@@ -180,22 +594,70 @@ pub(crate) fn terminal_starting() -> Box<dyn TuiElement> {
     )
 }
 
-/// Placeholder shown when login fails; the user can quit with `Ctrl-C`.
-pub(crate) fn login_failed(message: &str) -> Box<dyn TuiElement> {
-    let dim = TuiStyle::default().add_modifier(Modifier::DIM);
+/// Retryable failure shown when device authorization fails before login completes.
+pub(crate) fn login_failed(
+    clock: AnimationClock,
+    animation_config: Arc<ZeroStateAnimationConfig>,
+    params: LoginFailedParams<'_>,
+    app: &AppContext,
+    on_retry: impl FnMut(&mut TuiEventContext, &AppContext) + Clone + 'static,
+) -> Box<dyn TuiElement> {
+    let LoginFailedParams {
+        message,
+        retry_mouse,
+    } = params;
+    let builder = TuiUiBuilder::from_app(app);
+    let primary = builder.primary_text_style();
+    let muted = builder.muted_text_style();
+    let title = builder
+        .credential_entry_accent_style()
+        .add_modifier(Modifier::BOLD);
+    let retry_style = if retry_mouse.lock().is_ok_and(|state| state.is_hovered()) {
+        primary.add_modifier(Modifier::BOLD)
+    } else {
+        builder.link_text_style()
+    };
+    let mut on_retry_key = on_retry.clone();
+    let mut on_retry_enter = on_retry.clone();
     let content = TuiFlex::column()
         .child(
-            TuiText::new(format!("Login failed: {message}"))
+            TuiText::new("Welcome to Warp")
+                .with_style(title)
                 .truncate()
                 .finish(),
         )
         .child(
-            TuiText::new("Press Ctrl-C to exit.")
-                .with_style(dim)
+            TuiText::new(format!("Login failed: {message}"))
+                .with_style(builder.error_text_style())
                 .truncate()
                 .finish(),
-        );
-    vertically_centered(content)
+        )
+        .child(
+            TuiHoverable::new(
+                retry_mouse,
+                TuiText::new("Retry login (r)")
+                    .with_style(retry_style)
+                    .truncate()
+                    .finish(),
+            )
+            .on_click(on_retry)
+            .finish(),
+        )
+        .child(
+            TuiText::new("Press enter or r to retry · Ctrl-C to exit")
+                .with_style(muted)
+                .truncate()
+                .finish(),
+        )
+        .finish();
+    TuiEventHandler::new(auth_layout(clock, animation_config, content, &builder))
+        .on_key("r", move |_, event_ctx, app| {
+            on_retry_key(event_ctx, app);
+        })
+        .on_key("enter", move |_, event_ctx, app| {
+            on_retry_enter(event_ctx, app);
+        })
+        .finish()
 }
 
 #[cfg(test)]

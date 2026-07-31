@@ -1,5 +1,6 @@
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_core::ui::theme::Fill;
+use warpui::Element;
 use warpui::elements::{
     Align, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, SavePosition, Shrinkable,
@@ -7,7 +8,6 @@ use warpui::elements::{
 };
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
-use warpui::Element;
 
 use super::super::header_content::HeaderRenderContext;
 use super::{ActionPayload, PaneHeaderAction};

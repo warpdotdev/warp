@@ -2,13 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
-pub use ai::LLMId;
+pub use ai::{LLMId, LLMProvider};
 use anyhow::Context as _;
 use parking_lot::FairMutex;
-use serde::{de, Deserialize, Serialize};
-use settings::Setting as _;
+use serde::{Deserialize, Serialize, de};
 use warp_core::features::FeatureFlag;
-use warp_core::ui::icons::Icon;
+use warp_core::ui::Icon;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
@@ -16,11 +15,10 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::custom_model_routers::{self, CustomModelRouter, ModelConfigError};
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::server_api::ServerApiProvider;
-use crate::settings::AISettings;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
@@ -167,12 +165,39 @@ pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
     )
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModelIconFlags {
+    pub is_custom_router: bool,
+    pub is_auto: bool,
+    pub is_using_bedrock: bool,
+    pub is_using_gemini_enterprise: bool,
+}
+
+/// The leading icon shown next to a model in the model picker and model menus.
+///
+/// Auto models deliberately get the generic agent glyph rather than a host or
+/// provider logo.
+pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
+    if flags.is_custom_router {
+        Icon::Dataflow
+    } else if flags.is_auto {
+        Icon::Agent
+    } else if flags.is_using_bedrock {
+        Icon::Aws
+    } else if flags.is_using_gemini_enterprise {
+        Icon::GeminiEnterpriseAgentPlatform
+    } else {
+        llm.provider.icon().unwrap_or(Icon::Agent)
+    }
+}
+
 /// Key for cached LLM metadata in user preferences.
 ///
 /// Note: this key used to store a single [`AvailableLLMs`]
 /// but was migrated to store a full [`ModelsByFeature`].
 pub const MODELS_BY_FEATURE_CACHE_KEY: &str = "AvailableLLMs";
 const CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL: &str = "Custom endpoint";
+const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LLMUsageMetadata {
@@ -236,39 +261,6 @@ pub struct LLMSpec {
     pub cost: f32,
     pub quality: f32,
     pub speed: f32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum LLMProvider {
-    OpenAI,
-    Anthropic,
-    Google,
-    Xai,
-    Unknown,
-}
-
-impl LLMProvider {
-    /// Maps an LLMProvider to its corresponding icon.
-    pub fn icon(&self) -> Option<Icon> {
-        match self {
-            LLMProvider::OpenAI => Some(Icon::OpenAILogo),
-            LLMProvider::Anthropic => Some(Icon::ClaudeLogo),
-            LLMProvider::Google => Some(Icon::GeminiLogo),
-            LLMProvider::Xai => None,
-            LLMProvider::Unknown => None,
-        }
-    }
-
-    /// Human-readable provider name for user-facing copy.
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            LLMProvider::OpenAI => "OpenAI",
-            LLMProvider::Anthropic => "Anthropic",
-            LLMProvider::Google => "Google",
-            LLMProvider::Xai => "xAI",
-            LLMProvider::Unknown => "this provider",
-        }
-    }
 }
 
 /// The host where an LLM can be routed to.
@@ -727,6 +719,8 @@ struct AvailableLLMsUpdate {
 /// use as well as the user's preferred LLM for Agent Mode.
 pub struct LLMPreferences {
     models_by_feature: ModelsByFeature,
+    /// Whether the most recent authed agent-mode model-list fetch failed.
+    agent_mode_models_unavailable: bool,
     last_update: Option<AvailableLLMsUpdate>,
     // Stores model overrides for a given terminal view. User selections are
     // normalized against the GUI profile default, while explicit child-run
@@ -803,6 +797,7 @@ impl LLMPreferences {
 
         let mut me = Self {
             models_by_feature,
+            agent_mode_models_unavailable: false,
             last_update: None,
             base_llm_for_terminal_view,
             custom_llms,
@@ -840,35 +835,14 @@ impl LLMPreferences {
         app: &AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &LLMInfo {
-        self.get_preferred_base_model_for_settings_mode(
-            settings::settings_mode(),
-            app,
-            terminal_view_id,
-        )
-    }
-
-    fn get_preferred_base_model_for_settings_mode(
-        &self,
-        settings_mode: settings::SettingsMode,
-        app: &AppContext,
-        terminal_view_id: Option<EntityId>,
-    ) -> &LLMInfo {
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
-            if let Some(llm_id) = raw_override {
-                if let Some(llm_info) =
+            if let Some(llm_id) = raw_override
+                && let Some(llm_info) =
                     self.model_info_for_id(&self.models_by_feature.agent_mode, llm_id, app)
-                {
-                    return llm_info;
-                }
+            {
+                return llm_info;
             }
-        }
-
-        // In the TUI, the file-backed `agents.model` setting is the default
-        // for every surface. Explicit per-surface overrides still take
-        // precedence for orchestrated children launched with a model override.
-        if settings_mode == settings::SettingsMode::Tui {
-            return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
         }
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
 
@@ -900,8 +874,8 @@ impl LLMPreferences {
     /// local custom routers (both gated on their respective entitlement /
     /// feature flag).
     ///
-    /// Shared by the per-surface override, execution-profile, and TUI
-    /// `agents.model` resolution paths so their lookup semantics can't drift.
+    /// Shared by the per-surface override and execution-profile resolution
+    /// paths so their lookup semantics can't drift.
     fn model_info_for_id<'a>(
         &'a self,
         available: &'a AvailableLLMs,
@@ -911,28 +885,6 @@ impl LLMPreferences {
         Self::server_info_for_id_router_gated(available, id)
             .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
-    }
-
-    /// Resolves the TUI's file-backed `agents.model` setting (the
-    /// `TuiAgentModel` setting) to an `LLMInfo`.
-    ///
-    /// `"auto"` — the default — resolves to the server-provided default model
-    /// (i.e. defers to Warp's automatic model selection). Unknown ids also
-    /// fall back to the default, so an invalid TOML value never sends an
-    /// unresolvable model id to the server.
-    ///
-    /// TODO: once the TUI grows general invalid-settings UI support, surface
-    /// unknown `agents.model` values to the user instead of silently falling
-    /// back to the default model.
-    fn tui_agent_model_info(&self, setting: &str, app: &AppContext) -> &LLMInfo {
-        if setting != TUI_AUTO_MODEL_SETTING {
-            let id = LLMId::from(setting);
-            if let Some(info) = self.model_info_for_id(&self.models_by_feature.agent_mode, &id, app)
-            {
-                return info;
-            }
-        }
-        self.models_by_feature.agent_mode.default_llm_info()
     }
 
     pub fn get_active_coding_model<'a>(
@@ -981,7 +933,7 @@ impl LLMPreferences {
     pub fn get_base_llm_choices_for_agent_mode(
         &self,
         app: &AppContext,
-    ) -> impl Iterator<Item = &LLMInfo> {
+    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         self.models_by_feature
@@ -999,7 +951,10 @@ impl LLMPreferences {
     }
 
     /// Returns the set of LLMs available for coding.
-    pub fn get_coding_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> {
+    pub fn get_coding_llm_choices(
+        &self,
+        app: &AppContext,
+    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         self.models_by_feature
@@ -1016,7 +971,10 @@ impl LLMPreferences {
     }
 
     /// Returns the set of LLMs available for CLI agent.
-    pub fn get_cli_agent_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> {
+    pub fn get_cli_agent_llm_choices(
+        &self,
+        app: &AppContext,
+    ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         self.get_cli_agent_available()
             .choices
@@ -1139,6 +1097,16 @@ impl LLMPreferences {
             || custom_model_routers::is_local_custom_router_id(id.as_str()))
     }
 
+    /// Returns a cloud-runnable Oz model id, falling back to server-side
+    /// automatic model selection when the requested model is local-only.
+    pub(crate) fn cloud_runnable_oz_model_id_or_fallback(&self, id: &LLMId) -> String {
+        if self.is_cloud_runnable_oz_model_id(id) {
+            id.to_string()
+        } else {
+            CLOUD_FALLBACK_OZ_MODEL_ID.to_owned()
+        }
+    }
+
     /// True when the pane's active Agent Mode model can run in a Warp cloud
     /// (Oz) agent (see [`Self::is_cloud_runnable_oz_model_id`]).
     pub(crate) fn is_active_base_model_cloud_runnable(
@@ -1221,10 +1189,10 @@ impl LLMPreferences {
         let mut models = Vec::new();
         let mut seen = HashSet::new();
         for id in [base_id, coding_id] {
-            if let Some(entry) = self.custom_router_proto_entry(id) {
-                if seen.insert(entry.config_key.clone()) {
-                    models.push(entry);
-                }
+            if let Some(entry) = self.custom_router_proto_entry(id)
+                && seen.insert(entry.config_key.clone())
+            {
+                models.push(entry);
             }
         }
         api::request::settings::CustomModelRouters { routers: models }
@@ -1303,10 +1271,20 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
-    /// Resets any persisted *local* custom-router selection that no longer resolves
-    /// to a loaded definition, so a deleted/invalid local config falls back to the
-    /// default model and the visible selection updates. Scoped to local
-    /// ids so a cloud selection isn't reset by a local reload.
+    /// Clears the in-memory per-pane Agent Mode override for any local custom-router
+    /// selection that no longer resolves to a loaded definition, so the visible
+    /// model chip updates to the fallback when a config file is removed or renamed.
+    ///
+    /// **Execution-profile (persisted/synced) preferences are intentionally NOT
+    /// cleared here**, even when a `custom-router:local:…` id is absent from the
+    /// current registry.  An id missing from the local registry may have been
+    /// configured on another device and synced to this one; clearing it would
+    /// propagate the removal back to cloud and erase the user's setting on the
+    /// device that still has the router configured.  This mirrors the QUALITY-866
+    /// guard in `reconcile_disabled_model_preferences`: only recognised (locally
+    /// known) ids are cleared.  The display fallback (`model_info_for_id` returning
+    /// `None` → `fallback_llm_info`) already shows the default when a router
+    /// cannot be resolved locally — no explicit profile clear is required.
     fn reconcile_stale_custom_router_selection(&mut self, ctx: &mut ModelContext<Self>) {
         let valid_local: HashSet<LLMId> = self
             .custom_model_routers
@@ -1315,7 +1293,6 @@ impl LLMPreferences {
             .collect();
 
         let mut updated_agent_mode = false;
-        let mut updated_coding = false;
 
         self.base_llm_for_terminal_view.retain(|_, id| {
             let stale = custom_model_routers::is_local_custom_router_id(id.as_str())
@@ -1324,38 +1301,9 @@ impl LLMPreferences {
             !stale
         });
 
-        AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-            for profile_id in profiles.get_all_profile_ids() {
-                let Some(profile) = profiles.get_profile_by_id(profile_id, ctx) else {
-                    continue;
-                };
-                let profile_data = profile.data();
-                let base_stale = profile_data.base_model.as_ref().is_some_and(|id| {
-                    custom_model_routers::is_local_custom_router_id(id.as_str())
-                        && !valid_local.contains(id)
-                });
-                if base_stale {
-                    profiles.set_base_model(profile_id, None, ctx);
-                    profiles.set_context_window_limit(profile_id, None, ctx);
-                    updated_agent_mode = true;
-                }
-                let coding_stale = profile_data.coding_model.as_ref().is_some_and(|id| {
-                    custom_model_routers::is_local_custom_router_id(id.as_str())
-                        && !valid_local.contains(id)
-                });
-                if coding_stale {
-                    profiles.set_coding_model(profile_id, None, ctx);
-                    updated_coding = true;
-                }
-            }
-        });
-
         if updated_agent_mode {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
-        }
-        if updated_coding {
-            ctx.emit(LLMPreferencesEvent::UpdatedActiveCodingLLM);
         }
     }
 
@@ -1388,7 +1336,7 @@ impl LLMPreferences {
 
         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
-                let Some(profile) = profiles.get_profile_by_id(profile_id, ctx) else {
+                let Some(profile) = profiles.get_profile_by_id(&profile_id, ctx) else {
                     continue;
                 };
                 let profile_data = profile.data();
@@ -1398,8 +1346,8 @@ impl LLMPreferences {
                     .as_ref()
                     .is_some_and(|id| custom_ids.contains(id))
                 {
-                    profiles.set_base_model(profile_id, None, ctx);
-                    profiles.set_context_window_limit(profile_id, None, ctx);
+                    profiles.set_base_model(&profile_id, None, ctx);
+                    profiles.set_context_window_limit(&profile_id, None, ctx);
                     updated_agent_mode = true;
                 }
                 if profile_data
@@ -1407,7 +1355,7 @@ impl LLMPreferences {
                     .as_ref()
                     .is_some_and(|id| custom_ids.contains(id))
                 {
-                    profiles.set_coding_model(profile_id, None, ctx);
+                    profiles.set_coding_model(&profile_id, None, ctx);
                     updated_coding = true;
                 }
                 if profile_data
@@ -1415,7 +1363,7 @@ impl LLMPreferences {
                     .as_ref()
                     .is_some_and(|id| custom_ids.contains(id))
                 {
-                    profiles.set_cli_agent_model(profile_id, None, ctx);
+                    profiles.set_cli_agent_model(&profile_id, None, ctx);
                     updated_other = true;
                 }
                 if profile_data
@@ -1423,7 +1371,7 @@ impl LLMPreferences {
                     .as_ref()
                     .is_some_and(|id| custom_ids.contains(id))
                 {
-                    profiles.set_computer_use_model(profile_id, None, ctx);
+                    profiles.set_computer_use_model(&profile_id, None, ctx);
                     updated_other = true;
                 }
             }
@@ -1460,6 +1408,20 @@ impl LLMPreferences {
             .preferred_codex_model_id
             .as_ref()
             .and_then(|id| self.models_by_feature.agent_mode.info_for_id(id))
+    }
+
+    /// Returns `true` when the most recent authed agent-mode model-list fetch
+    /// failed, so the server-provided model list is currently unavailable.
+    pub fn agent_mode_models_unavailable(&self) -> bool {
+        self.agent_mode_models_unavailable
+    }
+
+    /// Sets whether the authed agent-mode model list is currently unavailable.
+    /// Called from the authed fetch path on failure, from
+    /// [`Self::on_server_update`] on any successful model-list update, and
+    /// from tests.
+    pub(crate) fn set_agent_mode_models_unavailable(&mut self, unavailable: bool) {
+        self.agent_mode_models_unavailable = unavailable;
     }
 
     #[cfg(feature = "integration_tests")]
@@ -1502,6 +1464,42 @@ impl LLMPreferences {
             self.trigger_snapshot_save(ctx);
             ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
         }
+    }
+
+    /// Updates the active execution profile's default Agent Mode model.
+    pub fn update_active_profile_base_model(
+        &self,
+        preferred_llm_id: &LLMId,
+        terminal_view_id: Option<EntityId>,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let profiles = AIExecutionProfilesModel::handle(ctx);
+        let profile_id = profiles
+            .as_ref(ctx)
+            .active_profile(terminal_view_id, ctx)
+            .id()
+            .clone();
+        let (persisted, changed) = profiles.update(ctx, |profiles, ctx| {
+            let profile = profiles
+                .get_profile_by_id(&profile_id, ctx)
+                .expect("active execution profile should exist");
+            if profile.data().base_model.as_ref() == Some(preferred_llm_id) {
+                return (true, false);
+            }
+            profiles.set_base_model(&profile_id, Some(preferred_llm_id.clone()), ctx);
+            profiles.set_context_window_limit(&profile_id, None, ctx);
+            let persisted = profiles
+                .get_profile_by_id(&profile_id, ctx)
+                .is_some_and(|profile| {
+                    profile.data().base_model.as_ref() == Some(preferred_llm_id)
+                        && profile.data().context_window_limit.is_none()
+                });
+            (persisted, persisted)
+        });
+        if changed {
+            ctx.emit(LLMPreferencesEvent::UpdatedActiveAgentModeLLM);
+        }
+        persisted
     }
 
     /// Pins an explicit child-run model independently of profile or TUI
@@ -1589,7 +1587,7 @@ impl LLMPreferences {
             let profile = profiles.active_profile(terminal_view_id, ctx);
 
             if profile.data().coding_model != new_value {
-                profiles.set_coding_model(*profile.id(), new_value, ctx);
+                profiles.set_coding_model(profile.id(), new_value, ctx);
                 changed = true;
             }
         });
@@ -1624,14 +1622,13 @@ impl LLMPreferences {
     }
 
     pub fn mark_new_choices_popup_as_shown(&self, view_id: EntityId) {
-        if let Some(update) = self.last_update.as_ref() {
-            if matches!(
+        if let Some(update) = self.last_update.as_ref()
+            && matches!(
                 &*update.popup_visibility_state.lock(),
                 UpdatePopupVisibilityState::WaitingToBeShown
-            ) {
-                *update.popup_visibility_state.lock() =
-                    UpdatePopupVisibilityState::Visible(view_id);
-            }
+            )
+        {
+            *update.popup_visibility_state.lock() = UpdatePopupVisibilityState::Visible(view_id);
         }
     }
 
@@ -1660,9 +1657,14 @@ impl LLMPreferences {
                     if update != me.models_by_feature {
                         me.on_server_update(update, ctx);
                     }
+                    // Clear the flag; on_server_update also clears it but may be skipped when the list is unchanged.
+                    me.set_agent_mode_models_unavailable(false);
                 }
                 Err(e) => {
                     report_error!(e.context("Failed to fetch LLMs from server"));
+                    // Mark the model list unavailable so validators surface a server error
+                    // instead of blaming the user's model id.
+                    me.set_agent_mode_models_unavailable(true);
                 }
             },
         );
@@ -1705,6 +1707,9 @@ impl LLMPreferences {
     }
 
     fn on_server_update(&mut self, update: ModelsByFeature, ctx: &mut ModelContext<Self>) {
+        // Clear the unavailable flag on every successful model-list update.
+        self.set_agent_mode_models_unavailable(false);
+
         let has_existing_persisted_config = get_cached_models(ctx).is_some();
 
         let old = std::mem::replace(&mut self.models_by_feature, update);
@@ -1718,7 +1723,7 @@ impl LLMPreferences {
                     .write_value(MODELS_BY_FEATURE_CACHE_KEY, serialized_update)
                     .context("Failed to cache LLMs")
                 {
-                    report_error!(e);
+                    log::warn!("{e:#}");
                 }
             }
             Err(e) => {
@@ -1772,7 +1777,7 @@ impl LLMPreferences {
         let profiles_model = AIExecutionProfilesModel::handle(ctx);
         profiles_model.update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
-                if let Some(profile) = profiles.get_profile_by_id(profile_id, ctx) {
+                if let Some(profile) = profiles.get_profile_by_id(&profile_id, ctx) {
                     let profile_data = profile.data();
                     let preferred_base_model = profile_data.base_model.clone();
                     let effective_base_model_id = preferred_base_model
@@ -1810,13 +1815,13 @@ impl LLMPreferences {
                         && preferred_base_model_is_recognized
                         && effective_base_model_unusable
                     {
-                        profiles.set_base_model(profile_id, None, ctx);
+                        profiles.set_base_model(&profile_id, None, ctx);
                     }
                     if has_context_window_limit
                         && preferred_base_model_is_recognized
                         && (effective_base_model_unusable || !effective_base_model_is_configurable)
                     {
-                        profiles.set_context_window_limit(profile_id, None, ctx);
+                        profiles.set_context_window_limit(&profile_id, None, ctx);
                     }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
                         // Same guard: only clear recognized IDs.
@@ -1836,7 +1841,7 @@ impl LLMPreferences {
                                 })
                                 .is_none()
                         {
-                            profiles.set_coding_model(profile_id, None, ctx);
+                            profiles.set_coding_model(&profile_id, None, ctx);
                         }
                     }
                     if let Some(preferred_llm_id) = &profile.data().cli_agent_model {
@@ -1855,17 +1860,16 @@ impl LLMPreferences {
                                 })
                                 .is_none()
                         {
-                            profiles.set_cli_agent_model(profile_id, None, ctx);
+                            profiles.set_cli_agent_model(&profile_id, None, ctx);
                         }
                     }
-                    if let Some(preferred_llm_id) = &profile.data().computer_use_model {
-                        if self
+                    if let Some(preferred_llm_id) = &profile.data().computer_use_model
+                        && self
                             .get_computer_use_available()
                             .usable_info_for_id(preferred_llm_id, ctx)
                             .is_none()
-                        {
-                            profiles.set_computer_use_model(profile_id, None, ctx);
-                        }
+                    {
+                        profiles.set_computer_use_model(&profile_id, None, ctx);
                     }
                 }
             }
@@ -1904,10 +1908,6 @@ impl LLMPreferences {
         }
     }
 }
-
-/// The TUI `agents.model` value that defers model choice to Warp's automatic
-/// model selection (the server-provided default).
-const TUI_AUTO_MODEL_SETTING: &str = "auto";
 
 #[derive(Clone, Debug)]
 pub enum LLMPreferencesEvent {

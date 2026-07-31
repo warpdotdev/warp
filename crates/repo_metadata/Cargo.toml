@@ -2,7 +2,7 @@
 name = "repo_metadata"
 authors = ["Warp Team <dev@warp.dev>"]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Repository metadata utilities for Warp"
 publish.workspace = true
 license.workspace = true

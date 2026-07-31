@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 #[cfg(feature = "local_fs")]
-use futures::{future::OptionFuture, FutureExt as _};
+use futures::{FutureExt as _, future::OptionFuture};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
@@ -171,10 +171,11 @@ impl DirectoryWatcher {
             );
             let wt_std = StandardizedPath::from_local_canonicalized(wt_dir.as_path()).ok();
             for repo_handle in self.directories.values() {
-                if let Some(ext) = repo_handle.as_ref(ctx).external_git_directory() {
-                    if wt_std.as_ref() == Some(ext) && !affected.iter().any(|r| r == repo_handle) {
-                        affected.push(repo_handle.clone());
-                    }
+                if let Some(ext) = repo_handle.as_ref(ctx).external_git_directory()
+                    && wt_std.as_ref() == Some(ext)
+                    && !affected.iter().any(|r| r == repo_handle)
+                {
+                    affected.push(repo_handle.clone());
                 }
             }
         } else if is_remote_tracking_ref(git_path) {
@@ -198,19 +199,18 @@ impl DirectoryWatcher {
             );
             let standardized = StandardizedPath::from_local_canonicalized(git_path).ok();
             if let Some(ref std_path) = standardized {
-                if let Some(repo) = self.find_containing_directory(std_path) {
-                    if !affected.iter().any(|r| r == &repo) {
-                        affected.push(repo);
-                    }
+                if let Some(repo) = self.find_containing_directory(std_path)
+                    && !affected.iter().any(|r| r == &repo)
+                {
+                    affected.push(repo);
                 }
                 for repo_handle in self.directories.values() {
                     let common = repo_handle.read(ctx, |repo, _| repo.common_git_dir());
-                    if let Ok(common_std) = StandardizedPath::try_from_local(common.as_path()) {
-                        if std_path.starts_with(&common_std)
-                            && !affected.iter().any(|r| r == repo_handle)
-                        {
-                            affected.push(repo_handle.clone());
-                        }
+                    if let Ok(common_std) = StandardizedPath::try_from_local(common.as_path())
+                        && std_path.starts_with(&common_std)
+                        && !affected.iter().any(|r| r == repo_handle)
+                    {
+                        affected.push(repo_handle.clone());
                     }
                 }
             }
@@ -236,10 +236,10 @@ impl DirectoryWatcher {
                 git_path.display()
             );
             let standardized = StandardizedPath::from_local_canonicalized(git_path).ok();
-            if let Some(ref std_path) = standardized {
-                if let Some(repo) = self.find_containing_directory(std_path) {
-                    affected.push(repo);
-                }
+            if let Some(ref std_path) = standardized
+                && let Some(repo) = self.find_containing_directory(std_path)
+            {
+                affected.push(repo);
             }
         }
 
@@ -324,7 +324,7 @@ impl DirectoryWatcher {
         directory_paths: Vec<StandardizedPath>,
         gitignores: Vec<Gitignore>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), RepoMetadataError>> {
+    ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let futures: Vec<_> = directory_paths
             .into_iter()
             .map(|path| self.start_watching_directory(&path, gitignores.clone(), ctx))
@@ -347,7 +347,7 @@ impl DirectoryWatcher {
         directory_path: &StandardizedPath,
         gitignores: Vec<Gitignore>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), RepoMetadataError>> {
+    ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {

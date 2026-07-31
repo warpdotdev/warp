@@ -57,9 +57,11 @@ impl SettingsInitializer {
             if cfg!(windows) {
                 log::debug!("Setting default font size to 16px (12pt) for a new Windows user");
                 FontSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .monospace_font_size
-                        .set_value(DEFAULT_WINDOWS_MONOSPACE_FONT_SIZE, ctx));
+                    report_if_error!(
+                        settings
+                            .monospace_font_size
+                            .set_value(DEFAULT_WINDOWS_MONOSPACE_FONT_SIZE, ctx)
+                    );
                 })
             }
 
@@ -68,9 +70,11 @@ impl SettingsInitializer {
                     && *settings.input_box_type.value() == InputBoxType::Classic
                 {
                     log::debug!("Setting default input type to Warp prompt for new user");
-                    report_if_error!(settings
-                        .input_box_type
-                        .set_value(InputBoxType::Universal, ctx));
+                    report_if_error!(
+                        settings
+                            .input_box_type
+                            .set_value(InputBoxType::Universal, ctx)
+                    );
                     ctx.notify();
                     return true;
                 }
@@ -112,9 +116,11 @@ impl SettingsInitializer {
                 let is_existing_user = auth_state.is_onboarded() == Some(true);
                 let was_global_autodetection_enabled_for_existing_user =
                     *ai_settings.ai_autodetection_enabled_internal && is_existing_user;
-                report_if_error!(ai_settings
-                    .nld_in_terminal_enabled_internal
-                    .set_value(was_global_autodetection_enabled_for_existing_user, ctx));
+                report_if_error!(
+                    ai_settings
+                        .nld_in_terminal_enabled_internal
+                        .set_value(was_global_autodetection_enabled_for_existing_user, ctx)
+                );
             });
         }
 
@@ -158,9 +164,11 @@ impl SettingsInitializer {
                     == Some(true);
 
                 if old_value_was_true {
-                    report_if_error!(ai_settings
-                        .thinking_display_mode
-                        .set_value(ThinkingDisplayMode::AlwaysShow, ctx));
+                    report_if_error!(
+                        ai_settings
+                            .thinking_display_mode
+                            .set_value(ThinkingDisplayMode::AlwaysShow, ctx)
+                    );
                 }
 
                 // Clean up the old key.

@@ -29,13 +29,15 @@
 
 use std::mem;
 
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    text_width, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
-    TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
+    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle, text_width,
 };
 use crate::AppContext;
 
@@ -44,6 +46,11 @@ enum TuiTextOverflow {
     #[default]
     Clip,
     Ellipsis,
+}
+#[derive(Clone, Copy)]
+struct TuiTextMeasurement {
+    available_width: u16,
+    natural_size: TuiSize,
 }
 
 pub struct TuiText {
@@ -54,6 +61,7 @@ pub struct TuiText {
     style: TuiStyle,
     wrap: bool,
     overflow: TuiTextOverflow,
+    cached_measurement: Option<TuiTextMeasurement>,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
@@ -73,6 +81,7 @@ impl TuiText {
             style: TuiStyle::default(),
             wrap: true,
             overflow: TuiTextOverflow::default(),
+            cached_measurement: None,
             size: None,
             origin: None,
         }
@@ -86,6 +95,7 @@ impl TuiText {
     /// Lays each hard line out as a single (clipped) row instead of wrapping.
     pub fn truncate(mut self) -> Self {
         self.wrap = false;
+        self.cached_measurement = None;
         self
     }
     /// Truncates each hard line at grapheme boundaries and appends `...`
@@ -93,6 +103,7 @@ impl TuiText {
     pub fn truncate_with_ellipsis(mut self) -> Self {
         self.wrap = false;
         self.overflow = TuiTextOverflow::Ellipsis;
+        self.cached_measurement = None;
         self
     }
 
@@ -103,6 +114,33 @@ impl TuiText {
             return 0;
         }
         u16::try_from(self.paragraph(width).line_count(width)).unwrap_or(u16::MAX)
+    }
+    /// The cell width occupied by the first rendered row at `width`, including
+    /// trailing whitespace that belongs to the row.
+    pub(super) fn first_rendered_line_width(&self, width: u16) -> u16 {
+        if width == 0 || self.is_empty() {
+            return 0;
+        }
+
+        let area = Rect::new(0, 0, width, 1);
+        // An explicitly empty symbol distinguishes untouched cells from
+        // rendered spaces, whose symbols are `" "`. This lets callers retain
+        // intentional trailing whitespace without duplicating the wrapping
+        // algorithm used by `Paragraph`.
+        let mut buffer = Buffer::filled(area, Cell::new(""));
+        self.paragraph(width).render(area, &mut buffer);
+        let mut occupied_width = 0;
+        let mut column = 0;
+        while column < width {
+            let symbol = buffer[(column, 0)].symbol();
+            if symbol.is_empty() {
+                break;
+            }
+            let symbol_width = text_width(symbol).max(1);
+            occupied_width = column.saturating_add(symbol_width).min(width);
+            column = column.saturating_add(symbol_width);
+        }
+        occupied_width
     }
 
     /// Whether this element holds no text at all (and so occupies no rows).
@@ -119,10 +157,10 @@ impl TuiText {
             let mut parts = content.split('\n');
             // `split` always yields at least one part; parts after the first
             // are each preceded by a newline, i.e. a completed line.
-            if let Some(first) = parts.next() {
-                if !first.is_empty() {
-                    current_line.push(Span::styled(first, *style));
-                }
+            if let Some(first) = parts.next()
+                && !first.is_empty()
+            {
+                current_line.push(Span::styled(first, *style));
             }
             for part in parts {
                 lines.push(Line::from(mem::take(&mut current_line)));
@@ -143,10 +181,10 @@ impl TuiText {
         let mut current_line = Vec::new();
         for (content, style) in &self.spans {
             let mut parts = content.split('\n');
-            if let Some(first) = parts.next() {
-                if !first.is_empty() {
-                    current_line.push((first.to_owned(), *style));
-                }
+            if let Some(first) = parts.next()
+                && !first.is_empty()
+            {
+                current_line.push((first.to_owned(), *style));
             }
             for part in parts {
                 source_lines.push(mem::take(&mut current_line));
@@ -233,18 +271,30 @@ impl TuiElement for TuiText {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        let size = if self.is_empty() {
-            constraint.clamp(TuiSize::ZERO)
+        let width = constraint.max.width;
+        let natural_size = if self.is_empty() {
+            TuiSize::ZERO
+        } else if let Some(measurement) = self
+            .cached_measurement
+            .filter(|measurement| measurement.available_width == width)
+        {
+            measurement.natural_size
         } else {
             let paragraph = self.paragraph(constraint.max.width);
             let height =
                 u16::try_from(paragraph.line_count(constraint.max.width)).unwrap_or(u16::MAX);
             let content_width = u16::try_from(paragraph.line_width()).unwrap_or(u16::MAX);
-            TuiSize::new(
-                constraint.constrain_width(content_width),
-                constraint.constrain_height(height),
-            )
+            let size = TuiSize::new(content_width, height);
+            self.cached_measurement = Some(TuiTextMeasurement {
+                available_width: width,
+                natural_size: size,
+            });
+            size
         };
+        let size = TuiSize::new(
+            constraint.constrain_width(natural_size.width),
+            constraint.constrain_height(natural_size.height),
+        );
         self.size = Some(size);
         size
     }
@@ -262,7 +312,7 @@ impl TuiElement for TuiText {
         if size.width == 0 || size.height == 0 {
             return;
         }
-        surface.render_widget(self.paragraph(size.width), origin, size);
+        surface.render_widget(origin, size, self.paragraph(size.width));
     }
 
     fn size(&self) -> Option<TuiSize> {

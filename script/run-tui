@@ -105,14 +105,19 @@ if [ -n "${TARGET_TRIPLE}" ]; then
 fi
 BUILD_DIR="${BUILD_DIR}/${PROFILE_DIR}"
 
-# Stage bundled skills next to the binary so the standalone TUI can resolve them
-# at runtime. License generation and the settings schema are skipped to keep dev
-# runs fast (mirroring script/macos/run); the vast majority of bundled skills are
-# always active and don't depend on the schema.
+# Stage bundled skills and the settings schema next to the binary so the
+# standalone TUI can resolve them at runtime. License generation remains skipped
+# for local runs. Reuse the selected Cargo profile for schema generation so its
+# dependencies do not need to be rebuilt in a separate profile.
 prepare_tui_bundled_resources() {
   echo "Preparing bundled resources at ${BUILD_DIR}/resources (channel: ${CHANNEL})..."
-  NO_LICENSES=1 SKIP_SETTINGS_SCHEMA=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
-    "${BUILD_DIR}/resources" "${CHANNEL}"
+  if [ "${PROFILE_DIR}" = "debug" ]; then
+    NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
+      "${BUILD_DIR}/resources" "${CHANNEL}"
+  else
+    NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
+      "${BUILD_DIR}/resources" "${CHANNEL}" "${PROFILE_DIR}"
+  fi
 }
 
 if [[ "$(uname -s)" = "Darwin" ]]; then

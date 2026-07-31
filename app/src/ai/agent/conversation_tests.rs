@@ -1,19 +1,19 @@
 use std::collections::HashMap;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    artifact_from_fork_proto, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, ConversationUsageTotals,
-    RecordingSpanStatus, RestoreConversationError,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
+    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
 use crate::persistence::model::AgentConversationData;
 use crate::server::server_api::ServerApiProvider;
@@ -118,6 +118,7 @@ fn tool_call_result_message(
 
 fn start_recording_tool_call() -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StartRecording(api::message::tool_call::StartRecording {
+        description: String::new(),
         frame_rate: 15,
         limits: None,
         summary: String::new(),
@@ -162,6 +163,7 @@ fn use_computer_tool_call(summary: &str) -> api::message::tool_call::Tool {
 fn stop_recording_tool_call(recording_id: &str) -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StopRecording(api::message::tool_call::StopRecording {
         recording_id: recording_id.to_string(),
+        discard: false,
     })
 }
 
@@ -408,9 +410,11 @@ fn recording_span_ignores_failed_start() {
         ),
     ]);
 
-    assert!(conversation
-        .recording_span_for_action(&"use".to_string().into(), None)
-        .is_none());
+    assert!(
+        conversation
+            .recording_span_for_action(&"use".to_string().into(), None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -481,9 +485,11 @@ fn recording_span_clears_when_stop_errors() {
         ),
     ]);
 
-    assert!(conversation
-        .recording_span_for_action(&"use".to_string().into(), None)
-        .is_none());
+    assert!(
+        conversation
+            .recording_span_for_action(&"use".to_string().into(), None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -596,14 +602,17 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
         initialize_custom_endpoint_usage_test_app(&mut app);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.add_custom_endpoint(
-                "Endpoint".to_string(),
-                "https://custom.example".to_string(),
-                "key".to_string(),
-                vec![(
-                    "raw-model".to_string(),
-                    Some("Friendly alias".to_string()),
-                    Some("config-key".to_string()),
-                )],
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Friendly alias".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -758,14 +767,17 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
         initialize_custom_endpoint_usage_test_app(&mut app);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.add_custom_endpoint(
-                "Endpoint".to_string(),
-                "https://custom.example".to_string(),
-                "key".to_string(),
-                vec![(
-                    "raw-model".to_string(),
-                    Some("Resolved custom".to_string()),
-                    Some("config-key".to_string()),
-                )],
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Resolved custom".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -1112,10 +1124,12 @@ fn is_done_only_includes_success_error_cancelled() {
     assert!(ConversationStatus::Cancelled.is_done());
 
     assert!(!ConversationStatus::InProgress.is_done());
-    assert!(!ConversationStatus::Blocked {
-        blocked_action: "approve".to_string()
-    }
-    .is_done());
+    assert!(
+        !ConversationStatus::Blocked {
+            blocked_action: "approve".to_string()
+        }
+        .is_done()
+    );
     assert!(!ConversationStatus::WaitingForEvents.is_done());
 }
 
@@ -1128,10 +1142,12 @@ fn is_waiting_for_events_returns_true_only_for_waiting_for_events_variant() {
     assert!(!ConversationStatus::Success.is_waiting_for_events());
     assert!(!ConversationStatus::Error.is_waiting_for_events());
     assert!(!ConversationStatus::Cancelled.is_waiting_for_events());
-    assert!(!ConversationStatus::Blocked {
-        blocked_action: "approve".to_string()
-    }
-    .is_waiting_for_events());
+    assert!(
+        !ConversationStatus::Blocked {
+            blocked_action: "approve".to_string()
+        }
+        .is_waiting_for_events()
+    );
 }
 
 /// A conversation that was yielded via `wait_for_events` at shutdown

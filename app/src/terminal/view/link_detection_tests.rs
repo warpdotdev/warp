@@ -3,7 +3,7 @@ use std::iter;
 use warp_util::path::CleanPathResult;
 
 use super::super::TerminalView;
-use super::{path_without_trailing_sentence_punctuation, GridHighlightedLink};
+use super::{GridHighlightedLink, path_without_trailing_sentence_punctuation};
 use crate::terminal::model::grid::grid_handler::PossiblePath;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::WithinModel;

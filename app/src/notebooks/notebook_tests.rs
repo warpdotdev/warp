@@ -5,16 +5,16 @@ use futures_util::future::BoxFuture;
 use itertools::Itertools;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::editor::EditorView;
+use warpui::r#async::Timer;
 use warpui::platform::WindowStyle;
 use warpui::presenter::ChildView;
-use warpui::r#async::Timer;
 use warpui::telemetry::EventPayload;
 use warpui::{
     AddSingletonModel, App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
     ViewHandle, WindowId,
 };
 
-use super::{NotebookEvent, NotebookView, EDIT_WINDOW_DURATION, SAVE_PERIOD};
+use super::{EDIT_WINDOW_DURATION, NotebookEvent, NotebookView, SAVE_PERIOD};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::user::{TEST_USER_EMAIL, TEST_USER_UID};
 use crate::auth::{AuthStateProvider, UserUid};
@@ -899,10 +899,12 @@ fn test_conflicting_notebook_read_only() {
         });
 
         notebook_view.read(&app, |notebook_view, ctx| {
-            assert!(notebook_view
-                .active_notebook_data
-                .as_ref(ctx)
-                .has_conflicts(ctx));
+            assert!(
+                notebook_view
+                    .active_notebook_data
+                    .as_ref(ctx)
+                    .has_conflicts(ctx)
+            );
             assert_eq!(notebook_view.mode(ctx), Mode::View);
         })
     });

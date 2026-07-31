@@ -3,14 +3,14 @@ use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, ViewHandle};
 
+use crate::GlobalResourceHandles;
 use crate::auth::UserUid;
 use crate::editor::ReplicaId;
 use crate::pane_group::PaneGroup;
 use crate::server::server_api::ServerApiProvider;
-use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::TerminalView;
+use crate::terminal::shared_session::manager::Manager;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
-use crate::GlobalResourceHandles;
 
 /// Creates a terminal view that is created via the terminal manager
 /// for shared session viewers. That is, it has all of the relevant models

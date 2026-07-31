@@ -1,6 +1,6 @@
+use crate::AppContext;
 use crate::actions::StandardAction;
 use crate::keymap::Keystroke;
-use crate::AppContext;
 
 pub enum MenuItem {
     Custom(CustomMenuItem),

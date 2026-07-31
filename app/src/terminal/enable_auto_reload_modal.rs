@@ -16,7 +16,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity as _, View, ViewContex
 
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
-use crate::modal::{Modal, ModalEvent, MODAL_PADDING, MODAL_WIDTH};
+use crate::modal::{MODAL_PADDING, MODAL_WIDTH, Modal, ModalEvent};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{AutoReloadModalAction, TelemetryEvent};
@@ -77,6 +77,13 @@ impl EnableAutoReloadModalBody {
             &UserWorkspaces::handle(ctx),
             |me, _handle, event, ctx| {
                 match event {
+                    UserWorkspacesEvent::TeamsChanged => {
+                        // Pricing labels depend on the current team's purchase
+                        // policy (premium surcharge), so rebuild them when
+                        // teams change.
+                        me.update_addon_credits_options(ctx);
+                        ctx.notify();
+                    }
                     UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => {
                         if me.update_workspace_settings_loading {
                             me.update_workspace_settings_loading = false;
@@ -144,6 +151,10 @@ impl EnableAutoReloadModalBody {
             .map(|opts| opts.to_vec())
             .unwrap_or_default();
 
+        let workspaces = UserWorkspaces::as_ref(ctx);
+        let premium_bps = workspaces
+            .purchase_policy_for_team(workspaces.team_for_view(ctx))
+            .map_or(0, |policy| policy.effective_premium_bps());
         let base_rate = self
             .addon_credits_options
             .first()
@@ -153,11 +164,13 @@ impl EnableAutoReloadModalBody {
             .iter()
             .enumerate()
             .map(|(index, option)| {
-                let primary_text = format!(
-                    "${:.0} / {} credits",
-                    option.price_usd_cents as f32 / 100.,
-                    option.credits
-                );
+                let price_cents = option.price_usd_cents_with_premium(premium_bps);
+                let price_label = if price_cents % 100 == 0 {
+                    format!("${}", price_cents / 100)
+                } else {
+                    format!("${:.2}", price_cents as f64 / 100.)
+                };
+                let primary_text = format!("{price_label} / {} credits", option.credits);
                 let discount_percent = if base_rate > 0.0 {
                     let actual_rate = option.rate();
                     ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
@@ -389,7 +402,7 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
             }
             Action::Enable => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let Some(team_uid) = workspaces.current_team_uid() else {
+                let Some(team_uid) = workspaces.team_uid_for_window(ctx.window_id()) else {
                     ctx.emit(EnableAutoReloadModalBodyEvent::ShowToast {
                         message: "Oops, something went wrong; your team's data could not be found."
                             .to_string(),

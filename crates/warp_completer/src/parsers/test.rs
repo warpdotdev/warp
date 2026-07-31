@@ -6,7 +6,7 @@ use crate::parsers::hir::{CommandCallInfo, Flags, ShellCommand};
 #[cfg(not(feature = "v2"))]
 use crate::parsers::hir::{Flag, FlagType};
 use crate::parsers::simple::parse_for_completions;
-use crate::parsers::{classify_command, ClassifiedCommand};
+use crate::parsers::{ClassifiedCommand, classify_command};
 use crate::signatures::testing::{create_test_command_registry, test_signature};
 
 #[test]

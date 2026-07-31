@@ -4,7 +4,7 @@ pub mod oz_launch;
 
 use std::collections::HashMap;
 
-use markdown_parser::{parse_markdown, FormattedText, FormattedTextLine};
+use markdown_parser::{FormattedText, FormattedTextLine, parse_markdown};
 // Re-export slide types for convenience
 pub use oz_launch::OzLaunchSlide;
 use pathfinder_color::ColorU;

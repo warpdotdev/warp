@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 /// Runs a git command and returns the output as a string.
 /// Thin wrapper over [`run_git_command_with_env`] with no `PATH` override.
@@ -18,8 +18,8 @@ pub async fn run_git_command_with_env(
     args: &[&str],
     path_env: Option<&str>,
 ) -> Result<String> {
-    use command::r#async::Command;
     use command::Stdio;
+    use command::r#async::Command;
 
     log::debug!(
         "[GIT OPERATION] git.rs run_git_command git {}",

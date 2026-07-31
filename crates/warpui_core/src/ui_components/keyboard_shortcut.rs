@@ -6,8 +6,8 @@ use itertools::Itertools;
 use super::components::{UiComponent, UiComponentStyles};
 use super::text::Span;
 use crate::elements::{
-    Align, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Icon, MinSize,
-    ParentElement, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Align, ConstrainedBox, Container, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Element,
+    Flex, Icon, MinSize, ParentElement,
 };
 use crate::keymap::Keystroke;
 use crate::platform::OperatingSystem;

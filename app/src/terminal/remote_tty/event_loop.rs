@@ -127,8 +127,10 @@ impl EventLoop {
                     match message {
                         EventLoopMessage::Input(bytes) => {
                             if let Err(e) = sink.send(Message::new_binary(bytes.to_vec())).await {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to send message to network-backed PTY"));
+                                report_error!(
+                                    anyhow::Error::new(e)
+                                        .context("Failed to send message to network-backed PTY")
+                                );
                             };
                         }
                         EventLoopMessage::Resize(size_info) => {
@@ -148,8 +150,10 @@ impl EventLoop {
                             // control channel message. The SSH proxy server should
                             // make this distinction.
                             if let Err(e) = sink.send(Message::new_text(serialized)).await {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to send message to network-backed PTY"));
+                                report_error!(
+                                    anyhow::Error::new(e)
+                                        .context("Failed to send message to network-backed PTY")
+                                );
                             };
                         }
                         // TODO(alokedesai): Implement shutdown on the network backed PTY.

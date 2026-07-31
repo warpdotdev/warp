@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use lsp::supported_servers::LSPServerType;
-use lsp_server_selector::{create_lsp_server_selector, LSPServerInfo};
+use lsp_server_selector::{LSPServerInfo, create_lsp_server_selector};
 pub use model::{InitProjectModel, InitProjectModelEvent, InitStepKind};
 use model::{InitStepData, InitStepStatus};
 use warp_core::ui::theme::Fill;
@@ -24,7 +24,7 @@ use warpui::{
 
 use crate::ai::agent::icons::{in_progress_icon, yellow_stop_icon};
 use crate::ai::blocklist::block::keyboard_navigable_buttons::{
-    simple_navigation_button, KeyboardNavigableButtonBuilder, KeyboardNavigableButtons,
+    KeyboardNavigableButtonBuilder, KeyboardNavigableButtons, simple_navigation_button,
 };
 use crate::ai::blocklist::block::toggleable_items::ToggleableItemsView;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
@@ -40,7 +40,7 @@ use crate::server::telemetry::{
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const ONBOARDING_TEXT: &str = "Great - let's begin setting up this project! Would you like to give me permission to index this codebase? It allows me to quickly understand context and provide more targeted solutions when working in this codebase. No code is stored on Warp servers.";
 const ALREADY_SETUP_TEXT: &str = "It looks like this project has already been initialized. You can re-generate the AGENTS.md for this codebase by clicking the button below.";

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use alt_screen::{run_find_on_alt_screen, AltScreenFindRun};
+use alt_screen::{AltScreenFindRun, run_find_on_alt_screen};
 pub use async_find::{AsyncFindController, AsyncFindStatus};
 use block_list::run_find_on_block_list;
 pub use block_list::{BlockGridMatch, BlockListFindRun, BlockListMatch};
@@ -23,10 +23,10 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHa
 use crate::settings::InputModeSettings;
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::model::TerminalModel;
 use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::model::TerminalModel;
 use crate::terminal::settings::TerminalSettings;
 use crate::view_components::find::{FindDirection, FindEvent, FindModel};
 

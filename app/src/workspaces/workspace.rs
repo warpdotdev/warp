@@ -135,19 +135,18 @@ impl Workspace {
     }
 
     pub fn are_overages_remaining(&self) -> bool {
-        if self.settings.usage_based_pricing_settings.enabled {
-            if let Some(max_spend_cents) = self
+        if self.settings.usage_based_pricing_settings.enabled
+            && let Some(max_spend_cents) = self
                 .settings
                 .usage_based_pricing_settings
                 .max_monthly_spend_cents
-            {
-                if let Some(ai_overages) = &self.billing_metadata.ai_overages {
-                    return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
-                } else {
-                    // If they have the setting enabled but no overages usage so far,
-                    // that means they have no database entry, so they have overages remaining.
-                    return true;
-                }
+        {
+            if let Some(ai_overages) = &self.billing_metadata.ai_overages {
+                return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
+            } else {
+                // If they have the setting enabled but no overages usage so far,
+                // that means they have no database entry, so they have overages remaining.
+                return true;
             }
         }
 
@@ -176,7 +175,8 @@ impl Workspace {
         }
     }
 
-    /// Returns the price in cents for the selected auto-reload credit denomination.
+    /// Returns the price in cents for the selected auto-reload credit denomination,
+    /// including any plan surcharge (premium plans reload at the premium price).
     /// Returns None if auto-reload is not configured or if the denomination can't be found in pricing options.
     pub fn get_auto_reload_price_cents(
         &self,
@@ -190,7 +190,11 @@ impl Workspace {
         addon_credits_options
             .iter()
             .find(|option| option.credits == selected_credits)
-            .map(|option| option.price_usd_cents)
+            .map(|option| {
+                option.price_usd_cents_with_premium(
+                    self.billing_metadata.addon_credits_price_premium_bps(),
+                )
+            })
     }
 }
 
@@ -386,9 +390,36 @@ pub struct ManagedByokByoePolicy {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
+    /// When `enabled` is false, allows purchasing add-on credit packs at a
+    /// `price_premium_bps` surcharge over list price (e.g. on the Free plan).
+    #[serde(default)]
+    pub premium_enabled: bool,
+    /// Surcharge in basis points applied to list prices when purchasing via
+    /// the premium path (1000 bps = +10%). 0 for standard purchasing plans.
+    #[serde(default)]
+    pub price_premium_bps: i32,
+}
+
+impl PurchaseAddOnCreditsPolicy {
+    /// Whether this plan may purchase add-on credit packs at all, either at
+    /// list price (`enabled`) or at a premium surcharge (`premium_enabled`).
+    pub fn allows_purchases(&self) -> bool {
+        self.enabled || self.premium_enabled
+    }
+
+    /// The surcharge in basis points applied to pack list prices. 0 whenever
+    /// standard (list price) purchasing is enabled — standard purchasing
+    /// wins if the server ever sends both flags.
+    pub fn effective_premium_bps(&self) -> i32 {
+        if !self.enabled && self.premium_enabled {
+            self.price_premium_bps
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
@@ -507,6 +538,26 @@ pub struct BillingMetadata {
     pub ai_overages: Option<AiOverages>,
 }
 
+/// The effective account outcome used to route users after account-first signup.
+///
+/// Paid status and free AI availability are resolved from fresh server-authored
+/// data during post-auth onboarding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FtueAccountClass {
+    Paid,
+    FreeIcp,
+    FreeStandard,
+}
+
+impl FtueAccountClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FtueAccountClass::Paid => "paid",
+            FtueAccountClass::FreeIcp => "free_icp",
+            FtueAccountClass::FreeStandard => "free_standard",
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct BonusGrantsPurchased {
     pub total_credits_purchased: i32,
@@ -756,10 +807,28 @@ impl BillingMetadata {
                 .is_some_and(|policy| policy.enabled)
     }
 
+    /// Whether this plan may purchase add-on credit packs at all, either at
+    /// list price (`enabled`) or at a premium surcharge (`premium_enabled`).
     pub fn is_purchase_add_on_credits_policy_enabled(&self) -> bool {
         self.tier
             .purchase_add_on_credits_policy
-            .is_some_and(|policy| policy.enabled)
+            .is_some_and(|policy| policy.allows_purchases())
+    }
+
+    /// Whether add-on credit purchases on this plan go through the premium
+    /// (surcharged) path rather than standard list-price purchasing.
+    pub fn is_premium_addon_credits_purchase(&self) -> bool {
+        self.tier
+            .purchase_add_on_credits_policy
+            .is_some_and(|policy| !policy.enabled && policy.premium_enabled)
+    }
+
+    /// The surcharge in basis points applied to add-on credit pack list
+    /// prices for this plan. 0 whenever standard purchasing is enabled.
+    pub fn addon_credits_price_premium_bps(&self) -> i32 {
+        self.tier
+            .purchase_add_on_credits_policy
+            .map_or(0, |policy| policy.effective_premium_bps())
     }
 }
 

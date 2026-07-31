@@ -8,7 +8,7 @@ use warpui_core::elements::{
     Radius, Stack, Text,
 };
 use warpui_core::fonts::{FamilyId, Properties, Weight};
-use warpui_core::geometry::vector::{vec2f, Vector2F};
+use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::Cursor;
 use warpui_core::ui_components::button::{Button, ButtonVariant};
@@ -31,9 +31,9 @@ use warpui_core::ui_components::toggle_menu::{
 use warpui_core::ui_components::tool_tip::{Tooltip, TooltipWithSublabel};
 use warpui_core::{Element, View, ViewHandle};
 
+use super::color::ContrastingColor;
 use super::color::blend::Blend;
 use super::color::contrast::MinimumAllowedContrast;
-use super::color::ContrastingColor;
 use super::theme::color::internal_colors::{self, text_main};
 use super::theme::{Fill, WarpTheme};
 
@@ -205,7 +205,7 @@ impl UiBuilder {
                     self.warp_theme.outline(),
                     self.warp_theme
                         .main_text_color(self.warp_theme.background()),
-                )
+                );
             }
             ButtonVariant::Warn => (Fill::warn(), self.warp_theme.foreground().with_opacity(0)),
             ButtonVariant::Error => (Fill::error(), self.warp_theme.foreground().with_opacity(0)),
