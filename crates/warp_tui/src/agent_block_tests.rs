@@ -2256,9 +2256,6 @@ struct FakeAgentBlockModel {
 /// Builds an agent block with fresh test identity, registered in a fresh TUI
 /// window and backed by a real action model.
 fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<TuiAIBlock> {
-    if !app.read(|ctx| ctx.has_singleton_model::<TuiOnboardingMarkers>()) {
-        app.add_singleton_model(|_| TuiOnboardingMarkers::new_ready_for_test(false, false));
-    }
     let (action_model, model_events) = add_test_action_model_and_events(app);
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
     app.update(|ctx| {
