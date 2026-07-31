@@ -5,7 +5,9 @@
 //! Composition and layout stay with the views and the element library; the
 //! builder only owns styles.
 
+#[cfg(feature = "voice_input")]
 use std::f32::consts::TAU;
+#[cfg(feature = "voice_input")]
 use std::time::Duration;
 
 use pathfinder_color::ColorU;
@@ -310,12 +312,14 @@ impl TuiUiBuilder {
     /// Fixed themed cyan for voice-input status text. Terminal foreground
     /// colors cannot preserve the alpha from `cyan_overlay_2`, so use the
     /// corresponding opaque color instead of pre-blending it into gray.
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_input_status_style(&self) -> TuiStyle {
         self.accent_text_style()
     }
 
     /// Smoothly pulsing border between the themed equivalents of
     /// `cyan_overlay_2` and `Lilac-600`.
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_input_border_style(&self, elapsed: Duration) -> TuiStyle {
         const PERIOD: Duration = Duration::from_secs(2);
 

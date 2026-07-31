@@ -22,6 +22,7 @@ use super::{
 use crate::transient_hint::TransientHintTone;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::compact_footer_path;
+#[cfg(feature = "voice_input")]
 use crate::voice_input::TuiVoiceInputState;
 
 const STATUSLINE_DATETIME_REPAINT_INTERVAL: Duration = Duration::from_secs(60);
@@ -35,6 +36,7 @@ enum FooterHintStyle {
     Muted,
     Success,
     Error,
+    #[cfg(feature = "voice_input")]
     VoiceInput,
 }
 
@@ -46,6 +48,7 @@ impl<'a> FooterHint<'a> {
         }
     }
 
+    #[cfg(feature = "voice_input")]
     fn voice_input(text: &'a str) -> Self {
         Self {
             text,
@@ -58,6 +61,7 @@ impl<'a> FooterHint<'a> {
             FooterHintStyle::Muted => builder.muted_text_style(),
             FooterHintStyle::Success => builder.success_glyph_style(),
             FooterHintStyle::Error => builder.error_text_style(),
+            #[cfg(feature = "voice_input")]
             FooterHintStyle::VoiceInput => builder.voice_input_status_style(),
         };
         TuiFlex::row().child(
@@ -132,6 +136,7 @@ pub(super) enum FooterSegment {
     GitHubPullRequest(Box<dyn TuiElement>),
     DateTime(Box<dyn TuiElement>),
     AgentTodoList(Box<dyn TuiElement>),
+    #[cfg(feature = "voice_input")]
     VoiceInput(Box<dyn TuiElement>),
 }
 
@@ -147,6 +152,8 @@ impl FooterSegment {
             | (Self::DateTime(_), Self::DateTime(_))
             | (Self::ShellMode, _)
             | (_, Self::ShellMode) => " • ",
+            #[cfg(feature = "voice_input")]
+            (Self::VoiceInput(_), _) | (_, Self::VoiceInput(_)) => " | ",
             (
                 Self::AutoApproveIndicator(_)
                 | Self::VimIndicator(_)
@@ -159,8 +166,7 @@ impl FooterSegment {
                 | Self::GitBranchStatus(_)
                 | Self::GitHubPullRequest(_)
                 | Self::DateTime(_)
-                | Self::AgentTodoList(_)
-                | Self::VoiceInput(_),
+                | Self::AgentTodoList(_),
                 Self::AutoApproveIndicator(_)
                 | Self::VimIndicator(_)
                 | Self::Model(_)
@@ -172,8 +178,7 @@ impl FooterSegment {
                 | Self::GitBranchStatus(_)
                 | Self::GitHubPullRequest(_)
                 | Self::DateTime(_)
-                | Self::AgentTodoList(_)
-                | Self::VoiceInput(_),
+                | Self::AgentTodoList(_),
             ) => " | ",
         }
     }
@@ -220,8 +225,11 @@ pub(super) fn render_status_footer_row(
             | FooterSegment::GitBranchStatus(element)
             | FooterSegment::GitHubPullRequest(element)
             | FooterSegment::DateTime(element)
-            | FooterSegment::AgentTodoList(element)
-            | FooterSegment::VoiceInput(element) => {
+            | FooterSegment::AgentTodoList(element) => {
+                row = row.child(element);
+            }
+            #[cfg(feature = "voice_input")]
+            FooterSegment::VoiceInput(element) => {
                 row = row.child(element);
             }
             FooterSegment::WorkingDirectory(cwd) => {
@@ -363,23 +371,28 @@ impl TuiTerminalSessionView {
         {
             return Some(FooterHint::muted(RUNNING_COMMAND_DETACH_HINT));
         }
-        if voice_statusline_visible {
-            return None;
-        }
-        match self.input_view.as_ref(ctx).voice_state(ctx) {
-            TuiVoiceInputState::Listening => {
-                let hint = if self.input_view.as_ref(ctx).voice_hold_key(ctx).is_some() {
-                    "listening to voice input... · release key to stop"
-                } else {
-                    "listening to voice input... · esc or enter to stop"
-                };
-                return Some(FooterHint::voice_input(hint));
+        #[cfg(feature = "voice_input")]
+        {
+            if voice_statusline_visible {
+                return None;
             }
-            TuiVoiceInputState::Transcribing => {
-                return Some(FooterHint::voice_input("Transcribing... · esc to cancel"));
+            match self.input_view.as_ref(ctx).voice_state(ctx) {
+                TuiVoiceInputState::Listening => {
+                    let hint = if self.input_view.as_ref(ctx).voice_hold_key(ctx).is_some() {
+                        "listening to voice input... · release key to stop"
+                    } else {
+                        "listening to voice input... · esc or enter to stop"
+                    };
+                    return Some(FooterHint::voice_input(hint));
+                }
+                TuiVoiceInputState::Transcribing => {
+                    return Some(FooterHint::voice_input("Transcribing... · esc to cancel"));
+                }
+                TuiVoiceInputState::Idle => {}
             }
-            TuiVoiceInputState::Idle => {}
         }
+        #[cfg(not(feature = "voice_input"))]
+        let _ = voice_statusline_visible;
         None
     }
 
@@ -586,9 +599,18 @@ impl TuiTerminalSessionView {
                             .finish(),
                         )
                     }),
-                TuiStatuslineItem::VoiceInput => voice_statusline_visible.then(|| {
-                    FooterSegment::VoiceInput(self.render_voice_statusline(&builder, ctx))
-                }),
+                TuiStatuslineItem::VoiceInput => {
+                    #[cfg(feature = "voice_input")]
+                    {
+                        voice_statusline_visible.then(|| {
+                            FooterSegment::VoiceInput(self.render_voice_statusline(&builder, ctx))
+                        })
+                    }
+                    #[cfg(not(feature = "voice_input"))]
+                    {
+                        None
+                    }
+                }
             };
             if let Some(segment) = segment {
                 ordered.push(segment);
@@ -642,10 +664,21 @@ impl TuiTerminalSessionView {
         .finish()
     }
 
+    #[cfg(feature = "voice_input")]
     pub(super) fn voice_statusline_is_available(&self, shell_mode: bool, ctx: &AppContext) -> bool {
         !shell_mode && AISettings::as_ref(ctx).is_voice_input_enabled(ctx)
     }
 
+    #[cfg(not(feature = "voice_input"))]
+    pub(super) fn voice_statusline_is_available(
+        &self,
+        _shell_mode: bool,
+        _ctx: &AppContext,
+    ) -> bool {
+        false
+    }
+
+    #[cfg(feature = "voice_input")]
     fn render_voice_statusline(
         &self,
         builder: &TuiUiBuilder,

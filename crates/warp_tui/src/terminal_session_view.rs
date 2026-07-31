@@ -11,10 +11,14 @@ use instant::Instant;
 use parking_lot::FairMutex;
 use warp::appearance::AppearanceEvent;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
+#[cfg(feature = "voice_input")]
+use warp::settings::TuiVoiceSettings;
 use warp::settings::{
     AISettings, AISettingsChangedEvent, AppEditorSettings, SettingsFileError, TuiStatuslineConfig,
-    TuiTheme, TuiThemeSettings, TuiVoiceSettings,
+    TuiTheme, TuiThemeSettings,
 };
+#[cfg(feature = "voice_input")]
+use warp::tui_export::slash_commands;
 use warp::tui_export::{
     AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentExchangeId,
     AIAgentPtyWriteMode, AIConversation, AIConversationAutoexecuteMode, AIConversationId,
@@ -45,7 +49,7 @@ use warp::tui_export::{
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
     record_static_slash_command_accepted, saved_prompt_text_for_id,
-    slash_command_selection_behavior, slash_commands, throttle,
+    slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -54,17 +58,20 @@ use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
+#[cfg(feature = "voice_input")]
 use warpui::event::KeyState;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    Modifier, TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiDispatchEventResult,
-    TuiElement, TuiEventHandler, TuiFlex, TuiHoverable, TuiSelectionHandle, TuiSize, TuiStyle,
-    TuiText, TuiViewportedListState,
+    Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
+    TuiSelectionHandle, TuiSize, TuiStyle, TuiText, TuiViewportedListState,
 };
+#[cfg(feature = "voice_input")]
+use warpui_core::elements::tui::{TuiAnimated, TuiDispatchEventResult, TuiEventHandler};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
 use warpui_core::platform::TerminationMode;
+#[cfg(feature = "voice_input")]
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
@@ -140,6 +147,7 @@ use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::tui_permission_prompt::TuiPermissionPrompt;
 use crate::ui::{abbreviate_home_prefix, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
+#[cfg(feature = "voice_input")]
 use crate::voice_input::{
     TuiVoiceInputEvent, TuiVoiceInputState, VoiceInputStartSource, configured_hold_key,
 };
@@ -173,6 +181,7 @@ const MAX_INPUT_TEXT_ROWS: u16 = 6;
 /// Top and bottom border rows plus one padding row inside each border.
 const BORDERED_INPUT_CHROME_ROWS: u16 = 4;
 const AUTO_APPROVE_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
+#[cfg(feature = "voice_input")]
 const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
@@ -229,6 +238,7 @@ pub(crate) const ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME: &str =
     "tui:session:attach_agent_to_running_command";
 pub(crate) const DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME: &str =
     "tui:session:detach_agent_from_running_command";
+#[cfg(feature = "voice_input")]
 pub(crate) const VOICE_INPUT_BINDING_NAME: &str = "tui:session:start_voice_input";
 
 /// The current source preventing the normal session composer from owning input.
@@ -357,6 +367,7 @@ const ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT: &str =
     "Could not load custom ASCII art. Using the built-in Warp logo.";
 const ZERO_STATE_ASCII_RELOAD_FAILED_HINT: &str =
     "Could not reload custom ASCII art. Keeping the current object.";
+#[cfg(feature = "voice_input")]
 const VOICE_USAGE_HINT: &str = "Usage: /voice (no arguments)";
 const AUTO_APPROVE_ENABLED_HINT: &str = "Auto approve on";
 const AUTO_APPROVE_DISABLED_HINT: &str = "Auto approve off";
@@ -412,6 +423,7 @@ fn attachment_focus_available(is_shell_mode: bool, attachments_should_render: bo
     !is_shell_mode && attachments_should_render
 }
 
+#[cfg(feature = "voice_input")]
 fn voice_command_argument(input: &str) -> Option<&str> {
     let argument = input.strip_prefix(slash_commands::VOICE.name)?;
     argument
@@ -421,6 +433,7 @@ fn voice_command_argument(input: &str) -> Option<&str> {
         .then_some(argument)
 }
 
+#[cfg(feature = "voice_input")]
 fn voice_argument_is_empty(argument: Option<&String>) -> bool {
     argument.is_none_or(|argument| argument.trim().is_empty())
 }
@@ -618,6 +631,7 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Paste host clipboard text or attach image data and image paths.
     PasteFromClipboard,
     /// Start recording voice input from the session composer.
+    #[cfg(feature = "voice_input")]
     StartVoiceInput,
     /// Left-click on the inline menu at absolute snapshot index `index`:
     /// selects and accepts that row.
@@ -626,8 +640,10 @@ pub(crate) enum TuiTerminalSessionAction {
     /// without changing the selection.
     InlineMenuMouseScrollBy(isize),
     /// Start or stop voice input from the configured statusline control.
+    #[cfg(feature = "voice_input")]
     ToggleVoiceInputFromStatusline,
     /// Route a configured hold-to-talk modifier transition to the input view.
+    #[cfg(feature = "voice_input")]
     VoiceHoldKeyChanged { key: KeyCode, state: KeyState },
     /// A drag selection started inside the shared read-only menu.
     ReadOnlyMenuSelectionStarted,
@@ -691,6 +707,7 @@ pub(crate) struct TuiTerminalSessionView {
     /// Hover and click state for the configured TODO statusline control.
     todo_list_mouse: MouseStateHandle,
     /// Hover and click state for the configured Voice statusline control.
+    #[cfg(feature = "voice_input")]
     voice_input_mouse: MouseStateHandle,
     github_pr_link: TuiLink,
     keyboard_enhancement_supported: bool,
@@ -866,6 +883,7 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-shift-V"),
+        #[cfg(feature = "voice_input")]
         EditableBinding::new(
             VOICE_INPUT_BINDING_NAME,
             "Start voice input",
@@ -1833,7 +1851,9 @@ impl TuiTerminalSessionView {
             })
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
+        #[cfg(feature = "voice_input")]
         let voice_input_model = input_view.as_ref(ctx).voice_input_model().clone();
+        #[cfg(feature = "voice_input")]
         ctx.subscribe_to_model(&voice_input_model, |view, _, event, ctx| {
             view.handle_voice_input_event(event, ctx);
         });
@@ -1963,6 +1983,7 @@ impl TuiTerminalSessionView {
                 .scroll_to_rows_from_top(scroll_top);
             ctx.notify();
         });
+        #[cfg(feature = "voice_input")]
         ctx.subscribe_to_model(&TuiVoiceSettings::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
@@ -2205,6 +2226,7 @@ impl TuiTerminalSessionView {
             hidden_response_summary_exchange_ids: HashSet::new(),
             model_label_hover: MouseStateHandle::default(),
             todo_list_mouse: MouseStateHandle::default(),
+            #[cfg(feature = "voice_input")]
             voice_input_mouse: MouseStateHandle::default(),
             github_pr_link: TuiLink::default(),
             keyboard_enhancement_supported,
@@ -2650,6 +2672,7 @@ impl TuiTerminalSessionView {
                 .finish(),
             );
         }
+        #[cfg(feature = "voice_input")]
         let input = if self.input_view.as_ref(ctx).voice_state(ctx) == TuiVoiceInputState::Listening
         {
             let input_view = self.input_view.clone();
@@ -2663,6 +2686,17 @@ impl TuiTerminalSessionView {
             })
             .finish()
         } else {
+            let border_style = if self.api_keys_menu.as_ref(ctx).uses_credential_border(ctx) {
+                builder.credential_entry_accent_style()
+            } else if self.is_shell_mode(ctx) {
+                builder.shell_mode_accent_style()
+            } else {
+                builder.accent_border_style()
+            };
+            bordered_input(&self.input_view, border_style)
+        };
+        #[cfg(not(feature = "voice_input"))]
+        let input = {
             let border_style = if self.api_keys_menu.as_ref(ctx).uses_credential_border(ctx) {
                 builder.credential_entry_accent_style()
             } else if self.is_shell_mode(ctx) {
@@ -3867,6 +3901,7 @@ impl TuiTerminalSessionView {
     /// composer area — a permission prompt or a conversation restore, for
     /// instance — and the release that ends a recording must still reach the
     /// voice model from those states.
+    #[cfg(feature = "voice_input")]
     fn with_voice_hold_handler(
         &self,
         child: Box<dyn TuiElement>,
@@ -3898,6 +3933,7 @@ impl TuiTerminalSessionView {
             .finish()
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn handle_voice_hold_key_setting_changed(
         &mut self,
         modifier_key_lifecycle_enabled: bool,
@@ -3911,6 +3947,7 @@ impl TuiTerminalSessionView {
     }
 
     /// Asks the input-owned voice model to start recording.
+    #[cfg(feature = "voice_input")]
     fn start_voice_input(
         &mut self,
         source: VoiceInputStartSource,
@@ -3932,6 +3969,7 @@ impl TuiTerminalSessionView {
         started
     }
 
+    #[cfg(feature = "voice_input")]
     fn toggle_voice_input_from_statusline(&mut self, ctx: &mut ViewContext<Self>) {
         match self.input_view.as_ref(ctx).voice_state(ctx) {
             TuiVoiceInputState::Idle => {
@@ -3944,6 +3982,7 @@ impl TuiTerminalSessionView {
             TuiVoiceInputState::Transcribing => {}
         }
     }
+    #[cfg(feature = "voice_input")]
     fn handle_voice_input_event(
         &mut self,
         event: &TuiVoiceInputEvent,
@@ -3972,10 +4011,13 @@ impl TuiTerminalSessionView {
             return;
         }
 
-        if voice_command_argument(input).is_some_and(|argument| !argument.trim().is_empty()) {
-            self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
-            self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-            return;
+        #[cfg(feature = "voice_input")]
+        {
+            if voice_command_argument(input).is_some_and(|argument| !argument.trim().is_empty()) {
+                self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                return;
+            }
         }
 
         match self
@@ -4397,12 +4439,15 @@ impl TuiTerminalSessionView {
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::Voice => {
-                if !voice_argument_is_empty(argument) {
-                    self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
-                    self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-                    return;
+                #[cfg(feature = "voice_input")]
+                {
+                    if !voice_argument_is_empty(argument) {
+                        self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
+                        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                        return;
+                    }
+                    self.start_voice_input(VoiceInputStartSource::SlashCommand, ctx);
                 }
-                self.start_voice_input(VoiceInputStartSource::SlashCommand, ctx);
             }
             SlashCommandKind::CreateNewProject => {
                 let Some(query) = argument
@@ -4922,7 +4967,15 @@ impl TuiView for TuiTerminalSessionView {
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let (content, composer_shortcuts_active) = self.render_session_content(ctx);
-        self.with_voice_hold_handler(content, composer_shortcuts_active, ctx)
+        #[cfg(feature = "voice_input")]
+        {
+            self.with_voice_hold_handler(content, composer_shortcuts_active, ctx)
+        }
+        #[cfg(not(feature = "voice_input"))]
+        {
+            let _ = composer_shortcuts_active;
+            content
+        }
     }
 }
 
@@ -5328,6 +5381,7 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.attachment_bar
                     .update(ctx, |bar, ctx| bar.paste_from_clipboard(ctx));
             }
+            #[cfg(feature = "voice_input")]
             TuiTerminalSessionAction::StartVoiceInput => {
                 self.start_voice_input(VoiceInputStartSource::Keybinding, ctx);
             }
@@ -5341,9 +5395,11 @@ impl TypedActionView for TuiTerminalSessionView {
                     ctx.notify();
                 }
             }
+            #[cfg(feature = "voice_input")]
             TuiTerminalSessionAction::ToggleVoiceInputFromStatusline => {
                 self.toggle_voice_input_from_statusline(ctx)
             }
+            #[cfg(feature = "voice_input")]
             TuiTerminalSessionAction::VoiceHoldKeyChanged { key, state } => {
                 let local_skills_available = self
                     .slash_commands_source

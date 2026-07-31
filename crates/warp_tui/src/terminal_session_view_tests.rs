@@ -9,10 +9,11 @@ use chrono::NaiveDate;
 use instant::Instant;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
+#[cfg(feature = "voice_input")]
+use warp::settings::TuiVoiceSettings;
 use warp::settings::{
     AISettings, SettingsFileError, TuiStatuslineConfig, TuiStatuslineItem, TuiTheme,
-    TuiThemeSettings, TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiVoiceSettings,
-    TuiZeroStateObject,
+    TuiThemeSettings, TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiZeroStateObject,
 };
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
@@ -42,7 +43,9 @@ use warpui_core::elements::tui::{
     TuiPoint, TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
     TuiViewportPosition,
 };
-use warpui_core::event::{KeyState, ModifiersState};
+#[cfg(feature = "voice_input")]
+use warpui_core::event::KeyState;
+use warpui_core::event::ModifiersState;
 use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -66,13 +69,16 @@ use super::{
     LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT, RUNNING_COMMAND_DETACH_HINT,
     SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
     SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
-    SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG,
-    SHELL_MODE_HINT, STATUSLINE_RESET_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
-    TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
-    attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
-    log_bundle_success_message, mcp_primary_action_hint, raw_prompt_if_not_blank,
-    render_mcp_install_footer, render_mcp_menu_footer, voice_argument_is_empty,
-    voice_command_argument,
+    SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SHELL_MODE_HINT, STATUSLINE_RESET_HINT,
+    TuiConversationRestoreOrigin, TuiTerminalSessionAction, TuiTerminalSessionEvent,
+    TuiTerminalSessionView, attachment_focus_available, cost_command_unavailable_hint,
+    export_file_success_message, log_bundle_success_message, mcp_primary_action_hint,
+    raw_prompt_if_not_blank, render_mcp_install_footer, render_mcp_menu_footer,
+};
+#[cfg(feature = "voice_input")]
+use super::{
+    SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
+    voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -105,6 +111,7 @@ use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::transient_hint::TransientHintTone;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
+#[cfg(feature = "voice_input")]
 use crate::voice_input::{TuiVoiceInputState, requires_modifier_key_reporting};
 use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
@@ -482,6 +489,7 @@ fn footer_supports_arbitrary_order_and_figma_group_dividers() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
@@ -905,6 +913,7 @@ fn nld_reset_only_unlocks_after_agent_control_and_not_on_user_edit() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_accepts_exact_and_whitespace_only_arguments() {
     assert_eq!(voice_command_argument("/voice"), Some(""));
     assert_eq!(voice_command_argument("/voice   "), Some("   "));
@@ -917,6 +926,7 @@ fn voice_accepts_exact_and_whitespace_only_arguments() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_slash_command_rejects_arguments_before_prompt_fallback() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -1251,6 +1261,7 @@ fn startup_settings_parse_failure_renders_as_an_error_footer_hint() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn listening_voice_input_animates_the_input_border() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -3967,6 +3978,7 @@ fn set_enabled_statusline_items(app: &mut App, items: Vec<TuiStatuslineItem>) {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn footer_falls_back_to_replacing_voice_hints_when_voice_item_is_disabled() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4019,6 +4031,7 @@ fn footer_falls_back_to_replacing_voice_hints_when_voice_item_is_disabled() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn configured_voice_item_renders_idle_listening_and_transcribing_states() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4085,6 +4098,7 @@ fn configured_voice_item_renders_idle_listening_and_transcribing_states() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_click_is_interactive_only_within_the_segment_bounds() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4147,6 +4161,7 @@ fn voice_click_is_interactive_only_within_the_segment_bounds() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_toggle_stops_listening_and_ignores_transcribing() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4736,6 +4751,7 @@ fn voice_hold_keys_preserve_left_and_right_modifiers() {
     }
 }
 
+#[cfg(feature = "voice_input")]
 fn voice_key_event(key: KeyCode, state: KeyState) -> TuiEvent {
     TuiEvent::ModifierKeyChanged {
         key_code: key,
@@ -4743,6 +4759,7 @@ fn voice_key_event(key: KeyCode, state: KeyState) -> TuiEvent {
     }
 }
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_hold_handler_matches_only_the_configured_side() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4790,6 +4807,7 @@ fn voice_hold_handler_matches_only_the_configured_side() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_hold_handler_keeps_release_after_composer_loses_input() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4839,6 +4857,23 @@ fn voice_hold_handler_keeps_release_after_composer_loses_input() {
         ));
     });
 }
+
+#[test]
+#[cfg(not(feature = "voice_input"))]
+fn voice_controls_stay_disabled_without_voice_input_support() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            assert!(
+                ctx.editable_bindings()
+                    .all(|binding| binding.name != "tui:session:start_voice_input")
+            );
+            assert!(!view.as_ref(ctx).voice_statusline_is_available(false, ctx));
+        });
+    });
+}
 #[test]
 fn blocked_terminal_use_action_acceptance_uses_ctrl_enter_without_rebinding_submit() {
     App::test((), |mut app| async move {
@@ -4874,6 +4909,7 @@ fn blocked_terminal_use_action_acceptance_uses_ctrl_enter_without_rebinding_subm
     });
 }
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_input_uses_ctrl_s_only_when_composer_shortcuts_are_active() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);

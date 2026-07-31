@@ -459,7 +459,7 @@ elif [[ "$ARTIFACT" == tui ]]; then
     oss) WARP_BIN="warp-tui-oss" ;;
     *) WARP_BIN="warp-tui-$RELEASE_CHANNEL" ;;
   esac
-  WARP_TUI_FEATURES="release_bundle,standalone"
+  WARP_TUI_FEATURES="release_bundle,standalone,voice_input"
   if [[ "$RELEASE_CHANNEL" != "oss" ]]; then
     WARP_TUI_FEATURES="$WARP_TUI_FEATURES,crash_reporting"
   fi
