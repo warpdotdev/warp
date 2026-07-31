@@ -14,6 +14,8 @@ use warpui_core::{AppContext, Entity, EntityId, TuiView, TypedActionView, ViewCo
 
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::session_registry::{TuiSessionView, TuiSessions};
+use crate::clipboard::copy_to_clipboard;
+use crate::transient_hint::TransientHint;
 use crate::ui::{login_failed, login_waiting, signed_out_welcome, terminal_starting};
 use crate::zero_state_animation::ZeroStateAnimationConfig;
 
@@ -26,6 +28,8 @@ pub enum RootTuiAction {
     StartDeviceLogin,
     /// Opens the manual browser fallback shown while authorization is pending.
     OpenLoginUrl(String),
+    /// Copies the manual browser fallback shown while authorization is pending.
+    CopyLoginUrl(String),
 }
 
 /// Whether the root is presenting authentication or the live session container.
@@ -40,6 +44,8 @@ pub struct RootTuiView {
     auth_animation_clock: AnimationClock,
     auth_animation_config: Arc<ZeroStateAnimationConfig>,
     waiting_login_mouse: MouseStateHandle,
+    waiting_login_copy_mouse: MouseStateHandle,
+    login_copy_hint: TransientHint,
 }
 
 /// Registers the root view's keybindings.
@@ -60,6 +66,8 @@ impl RootTuiView {
             auth_animation_clock: AnimationClock::starting_at(Duration::ZERO),
             auth_animation_config: Arc::new(ZeroStateAnimationConfig::default()),
             waiting_login_mouse: MouseStateHandle::default(),
+            waiting_login_copy_mouse: MouseStateHandle::default(),
+            login_copy_hint: TransientHint::default(),
         }
     }
 
@@ -123,12 +131,24 @@ impl TuiView for RootTuiView {
                     self.auth_animation_config.clone(),
                     browser_url.as_deref(),
                     self.waiting_login_mouse.clone(),
+                    self.waiting_login_copy_mouse.clone(),
+                    self.login_copy_hint.current(),
                     ctx,
                     {
                         let browser_url = browser_url.clone();
                         move |event_ctx, _| {
                             if let Some(browser_url) = browser_url.clone() {
                                 event_ctx.dispatch_typed_action(RootTuiAction::OpenLoginUrl(
+                                    browser_url,
+                                ));
+                            }
+                        }
+                    },
+                    {
+                        let browser_url = browser_url.clone();
+                        move |event_ctx, _| {
+                            if let Some(browser_url) = browser_url.clone() {
+                                event_ctx.dispatch_typed_action(RootTuiAction::CopyLoginUrl(
                                     browser_url,
                                 ));
                             }
@@ -169,6 +189,33 @@ impl TypedActionView for RootTuiView {
                 }
             }
             RootTuiAction::OpenLoginUrl(url) => ctx.open_url(url),
+            RootTuiAction::CopyLoginUrl(url) => {
+                let is_current_url = matches!(
+                    TuiLoginModel::as_ref(ctx).phase(),
+                    TuiLoginPhase::AwaitingLogin {
+                        browser_url: Some(current_url),
+                    } if current_url == url
+                );
+                if !is_current_url {
+                    return;
+                }
+
+                match copy_to_clipboard(url) {
+                    Ok(()) => self.login_copy_hint.show_success(
+                        "Login URL copied to clipboard".to_owned(),
+                        ctx,
+                        |view| &mut view.login_copy_hint,
+                    ),
+                    Err(error) => {
+                        log::warn!("Failed to copy TUI login URL: {error}");
+                        self.login_copy_hint.show_error(
+                            "Unable to copy login URL".to_owned(),
+                            ctx,
+                            |view| &mut view.login_copy_hint,
+                        );
+                    }
+                }
+            }
         }
     }
 }

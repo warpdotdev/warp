@@ -9,6 +9,7 @@ use warpui_core::elements::tui::{
     TuiFlex, TuiHoverable, TuiStack, TuiStyle, TuiText,
 };
 use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
+use crate::transient_hint::TransientHintTone;
 
 use crate::tui_builder::TuiUiBuilder;
 use crate::warping_indicator::render_spinner;
@@ -216,8 +217,11 @@ pub(crate) fn login_waiting(
     animation_config: Arc<ZeroStateAnimationConfig>,
     browser_url: Option<&str>,
     login_mouse: MouseStateHandle,
+    copy_mouse: MouseStateHandle,
+    copy_feedback: Option<(&str, TransientHintTone)>,
     app: &AppContext,
     on_open: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
+    on_copy: impl FnMut(&mut TuiEventContext, &AppContext) + Clone + 'static,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let primary = builder.primary_text_style();
@@ -242,6 +246,8 @@ pub(crate) fn login_waiting(
         .child(blank_row())
         .child(blank_row());
 
+    let has_browser_url = browser_url.is_some();
+    let mut on_copy_key = on_copy.clone();
     if let Some(browser_url) = browser_url {
         let link_style = if login_mouse.lock().is_ok_and(|state| state.is_hovered()) {
             primary
@@ -263,6 +269,35 @@ pub(crate) fn login_waiting(
             .on_click(on_open)
             .finish(),
         );
+        let copy_hovered = copy_mouse.lock().is_ok_and(|state| state.is_hovered());
+        let (copy_label, copy_style) = match copy_feedback {
+            Some((message, TransientHintTone::Muted)) => (message.to_owned(), muted),
+            Some((message, TransientHintTone::Success)) => {
+                (message.to_owned(), builder.success_glyph_style())
+            }
+            Some((message, TransientHintTone::Error)) => {
+                (message.to_owned(), builder.error_text_style())
+            }
+            None => {
+                let style = if copy_hovered {
+                    primary.add_modifier(Modifier::BOLD)
+                } else {
+                    builder.link_text_style()
+                };
+                ("Copy URL (c)".to_owned(), style)
+            }
+        };
+        content = content.child(
+            TuiHoverable::new(
+                copy_mouse,
+                TuiText::new(copy_label)
+                    .with_style(copy_style)
+                    .truncate()
+                    .finish(),
+            )
+            .on_click(on_copy)
+            .finish(),
+        );
     } else {
         content = content.child(
             TuiText::new("Requesting a secure sign-in link...")
@@ -271,7 +306,16 @@ pub(crate) fn login_waiting(
         );
     }
 
-    auth_layout(clock, animation_config, content.finish(), &builder)
+    let content = auth_layout(clock, animation_config, content.finish(), &builder);
+    if has_browser_url {
+        TuiEventHandler::new(content)
+            .on_key("c", move |_, event_ctx, app| {
+                on_copy_key(event_ctx, app);
+            })
+            .finish()
+    } else {
+        content
+    }
 }
 
 fn capability_row(
