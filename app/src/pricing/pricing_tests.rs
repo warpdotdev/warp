@@ -41,10 +41,10 @@ fn free_plan_packs_apply_the_twenty_percent_premium() {
     assert_eq!(
         labels,
         [
-            ("400 credits".to_string(), "$12".to_string()),
-            ("1,000 credits".to_string(), "$24".to_string()),
-            ("3,000 credits".to_string(), "$60".to_string()),
-            ("6,500 credits".to_string(), "$120".to_string()),
+            ("400".to_string(), "$12".to_string()),
+            ("1,000".to_string(), "$24".to_string()),
+            ("3,000".to_string(), "$60".to_string()),
+            ("6,500".to_string(), "$120".to_string()),
         ]
     );
 }

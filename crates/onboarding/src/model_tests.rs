@@ -266,7 +266,7 @@ fn credit_pack_labels_are_formatted_for_display() {
         price_usd_cents: 12_000,
         savings_percent: 38,
     };
-    assert_eq!(pack.credits_label(), "6,500 credits");
+    assert_eq!(pack.credits_label(), "6,500");
     assert_eq!(pack.price_label(), "$120");
 
     let fractional = CreditPackOption {
@@ -274,7 +274,7 @@ fn credit_pack_labels_are_formatted_for_display() {
         price_usd_cents: 1_250,
         savings_percent: 0,
     };
-    assert_eq!(fractional.credits_label(), "400 credits");
+    assert_eq!(fractional.credits_label(), "400");
     assert_eq!(fractional.price_label(), "$12.50");
 }
 

@@ -6,7 +6,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
     Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
+    Empty, Expanded, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Stack,
 };
 use warpui_core::fonts::Weight;
@@ -30,6 +30,10 @@ use crate::telemetry::OnboardingEvent;
 /// keeps a fixed pool of mouse states (hover tracking needs stable handles)
 /// without capping what the server may add later in any meaningful way.
 const MAX_CREDIT_PACKS: usize = 8;
+
+/// Gap between credit pack tiles, matching the Billing & Usage page's add-on
+/// credit denominations row.
+const CREDIT_PACK_TILE_SPACING: f32 = 8.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfferVariant {
@@ -57,7 +61,9 @@ impl OfferVariant {
     pub(crate) fn primary_label(self) -> &'static str {
         match self {
             OfferVariant::HeadStart => "Unlock the full AI experience",
-            OfferVariant::ChooseHowToStart => "Use Warp with AI",
+            // Two of the three options are ways to use Warp with AI, so this
+            // card is named for what actually distinguishes it: the plan.
+            OfferVariant::ChooseHowToStart => "Subscribe to a Warp plan",
         }
     }
 
@@ -137,6 +143,9 @@ impl OfferVariant {
     fn primary_action(self) -> &'static str {
         match self {
             OfferVariant::HeadStart => "get_more_ai",
+            // Telemetry identifier, not user-facing copy: kept stable across
+            // the card's rename to "Subscribe to a Warp plan" so existing
+            // dashboards don't lose continuity.
             OfferVariant::ChooseHowToStart => "use_warp_with_ai",
         }
     }
@@ -404,7 +413,12 @@ impl OfferSlide {
             .finish()
     }
 
-    /// The selectable credit packs shown inside the buy-credits card.
+    /// The selectable credit packs, laid out as a single horizontal row of
+    /// equal-width tiles so the whole slide fits without the onboarding
+    /// container scrolling. Mirrors the Billing & Usage page's add-on credit
+    /// denominations row (`Wrap::row` of compact credit chips, 8px apart);
+    /// tiles are `Expanded` here so the packs always stay on one line rather
+    /// than wrapping onto a second.
     fn render_credit_packs(
         &self,
         appearance: &Appearance,
@@ -416,23 +430,32 @@ impl OfferSlide {
             .onboarding_state
             .as_ref(app)
             .selected_credit_pack_index();
-        let mut list = Flex::column()
-            .with_main_axis_size(MainAxisSize::Min)
+        let mut row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_spacing(8.);
+            .with_spacing(CREDIT_PACK_TILE_SPACING);
         for (index, pack) in packs.iter().enumerate() {
-            list.add_child(Self::render_credit_pack_row(
-                appearance,
-                *pack,
-                index == selected_index,
-                self.credit_pack_mouse_states[index].clone(),
-                index,
-            ));
+            row.add_child(
+                Expanded::new(
+                    1.,
+                    Self::render_credit_pack_tile(
+                        appearance,
+                        *pack,
+                        index == selected_index,
+                        self.credit_pack_mouse_states[index].clone(),
+                        index,
+                    ),
+                )
+                .finish(),
+            );
         }
-        list.finish()
+        row.finish()
     }
 
-    fn render_credit_pack_row(
+    /// One pack tile: the credit count (with the same credits icon the Billing
+    /// & Usage denominations use), the premium-adjusted price, and the volume
+    /// savings badge. Stacked vertically so four tiles fit across the card.
+    fn render_credit_pack_tile(
         appearance: &Appearance,
         pack: CreditPackOption,
         selected: bool,
@@ -446,38 +469,51 @@ impl OfferSlide {
         } else {
             Fill::Solid(internal_colors::neutral_4(theme))
         };
+        let text_main = internal_colors::text_main(theme, bg_solid);
+        let text_sub = internal_colors::text_sub(theme, bg_solid);
 
+        let credits_icon = ConstrainedBox::new(Box::new(
+            Icon::Credits.to_warpui_icon(Fill::Solid(text_main)),
+        ))
+        .with_width(13.)
+        .with_height(13.)
+        .finish();
         let credits = appearance
             .ui_builder()
             .paragraph(pack.credits_label())
             .with_style(UiComponentStyles {
-                font_size: Some(14.),
+                font_size: Some(15.),
                 font_weight: Some(Weight::Semibold),
+                font_color: Some(text_main),
                 ..Default::default()
             })
             .build()
             .finish();
+        let credits_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(credits_icon)
+            .with_child(Container::new(credits).with_margin_left(5.).finish())
+            .finish();
+
         let price = appearance
             .ui_builder()
             .paragraph(pack.price_label())
             .with_style(UiComponentStyles {
-                font_size: Some(14.),
-                font_color: Some(internal_colors::text_sub(theme, bg_solid)),
+                font_size: Some(13.),
+                font_color: Some(text_sub),
                 ..Default::default()
             })
             .build()
             .finish();
 
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(credits);
-
-        let mut trailing = Flex::row()
+        let mut tile = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(price);
+            .with_child(credits_row)
+            .with_child(Container::new(price).with_margin_top(4.).finish());
+
         if pack.savings_percent > 0 {
             let green = theme.ansi_fg_green();
             let badge = Container::new(
@@ -485,26 +521,27 @@ impl OfferSlide {
                     .ui_builder()
                     .paragraph(format!("Save {}%", pack.savings_percent))
                     .with_style(UiComponentStyles {
-                        font_size: Some(12.),
+                        font_size: Some(11.),
                         font_color: Some(green),
                         ..Default::default()
                     })
                     .build()
                     .finish(),
             )
-            .with_horizontal_padding(8.)
-            .with_vertical_padding(2.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(10.)))
+            .with_horizontal_padding(6.)
+            .with_vertical_padding(1.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(9.)))
             .with_background(Fill::Solid(green).with_opacity(10))
             .finish();
-            trailing = trailing.with_child(Container::new(badge).with_margin_left(8.).finish());
+            tile = tile.with_child(Container::new(badge).with_margin_top(6.).finish());
         }
-        let row = row.with_child(trailing.finish()).finish();
+
+        let tile = tile.finish();
         let background = selected.then(|| internal_colors::accent_overlay_1(theme));
 
         Hoverable::new(mouse_state, move |_| {
-            let mut container = Container::new(row)
-                .with_horizontal_padding(12.)
+            let mut container = Container::new(tile)
+                .with_horizontal_padding(8.)
                 .with_vertical_padding(10.)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
                 .with_border(Border::all(1.).with_border_fill(border));

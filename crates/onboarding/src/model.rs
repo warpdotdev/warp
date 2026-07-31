@@ -190,7 +190,9 @@ impl CreditPackOption {
         }
     }
 
-    /// `"6,500 credits"` — thousands-separated so large packs stay readable.
+    /// The credit count, thousands-separated so large packs stay readable
+    /// (`"6,500"`). The unit comes from the surrounding card, matching how the
+    /// Billing & Usage denominations are labelled.
     pub fn credits_label(&self) -> String {
         let digits = self.credits.abs().to_string();
         let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
@@ -203,7 +205,7 @@ impl CreditPackOption {
         if self.credits < 0 {
             grouped.insert(0, '-');
         }
-        format!("{grouped} credits")
+        grouped
     }
 }
 

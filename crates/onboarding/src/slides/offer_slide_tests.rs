@@ -110,7 +110,7 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
 
     assert_eq!(variant.title(), "Choose how to start");
     assert_eq!(variant.subtitle(), None);
-    assert_eq!(variant.primary_label(), "Use Warp with AI");
+    assert_eq!(variant.primary_label(), "Subscribe to a Warp plan");
     assert_eq!(
         variant.primary_description(),
         "Warp Agent works locally or in the cloud with frontier and OSS models. Get monthly credits at the best value, and save 20% on add-on credits with any Build plan."
