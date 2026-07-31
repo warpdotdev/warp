@@ -34,7 +34,9 @@ Each widget implements `SettingsWidget` (`settings_page.rs`):
 `widget.should_render(app) && search_terms_match(widget.search_terms(), query)`.
 `search_terms_match` requires **every whitespace-delimited word** of the query to appear (case-insensitively, as a substring) somewhere in the widget's terms; an empty query matches everything. So filtering happens **per widget** — a widget is the smallest unit that can survive or disappear.
 
-**The page title is exempt from filtering.** `PageType::render_page` draws the title **once, before the loop** over the filtered widget list:
+**Whether the page title survives a search depends on the variant.** `PageType::render_page` treats the title differently for widget-list pages than for a monolith, and that difference is the easiest thing here to get wrong.
+
+For **`Uncategorized` and `Categorized`**, the title is drawn **once, before the loop** over the filtered widget list, unconditionally:
 
 ```rust
 let mut page = Flex::column();
@@ -44,13 +46,31 @@ if let Some(title) = title {
 for widget in widgets { /* … only the widgets that matched … */ }
 ```
 
-That structural fact is the whole point of the title slot: a title passed through `PageType` **cannot** be filtered away; a title rendered inside a widget **can**.
+The filter cannot reach it. That is what makes the title slot a fix for bug class 1: a title passed through `PageType` survives filtering on these two variants, while a title rendered inside a widget does not.
+
+For **`Monolith`**, the title is **gated on the sole widget surviving the filter**:
+
+```rust
+FilteredPageType::Monolith { widget, title, .. } => {
+    let mut page = Empty::new().finish();
+    if let Some(widget) = widget          // None when the widget didn't match
+        && widget.should_render(app)
+    {
+        if let Some(title) = title { /* … title, then the widget … */ }
+    }
+    page                                  // otherwise nothing renders at all
+}
+```
+
+`get_filtered` sets that `widget` to `filter.then_some(..)`, so a non-matching query makes it `None` and the page renders empty — **title included**. On a monolith the title slot buys no search protection; the page is all-or-nothing, title and all.
+
+One more thing worth knowing before you go looking for a title stranded over zero rows: you won't find one. `SettingsView::filtered_pages` (`app/src/settings_view/mod.rs`) drops any page whose `MatchData` is falsy from the sidebar and auto-selects the first page that still matches, so a fully non-matching page is never displayed. The state the title slot actually protects is the **partial** match — some widgets survive, some don't — and only widget-list pages can be in it.
 
 ## The decision that matters: where does the heading live?
 
 For any heading on a settings page, ask **what does it name?**
 
-- **It names the whole page** → it belongs in the `PageType` title slot.
+- **It names the whole page** → it belongs in the `PageType` title slot. On `Uncategorized` / `Categorized` that is also what keeps it on screen while the page is filtered; on a `Monolith` it is a structural choice only (see above).
 - **It names one section among several** → it belongs inside the widget (or `Category`) that owns that section, so it disappears together with its own rows.
 
 Getting this wrong in the first direction is bug class 1 below. Getting it wrong in the second direction leaves a section header stranded above unrelated rows.
@@ -61,7 +81,7 @@ Classify the page before you write it:
 
 - **Single-topic page** — one heading names everything on it. Knowledge, Third party CLI agents, Editor and Code Review, Codebase Indexing, Account, Scripting. → **Title in the `PageType` slot.**
 - **Multi-section page** — several independent sections, each with its own heading. Warp Agent, Agent profiles, Appearance, Features. → **Per-section headings live in widgets/categories** and correctly disappear with their rows. (For `Categorized`, `get_filtered` drops categories whose widgets all filtered out, so their subheaders vanish automatically — that's the behavior you want.)
-- **Monolith page** — Keybindings, Teams, About, Environments. The page filters all-or-nothing, so an in-widget title can never be stranded. Not this bug class. Using the title slot is still tidier (Billing and Usage and Referrals do).
+- **Monolith page** — Keybindings, Teams, About, Environments. There is no partial-match state: the sole widget either matches, and the whole page renders, or it doesn't, and the whole page renders empty and drops out of the sidebar. So a monolith can never strand an orphaned setting under a missing heading — it is **not** affected by bug class 1, but for that reason, *not* because its title is protected. Passing the title through the slot is still the tidier structure (Billing and Usage and Referrals do), just don't expect it to keep the title on screen during a non-matching search; on a monolith it will not.
 
 The two are not mutually exclusive: a page can name itself in the title slot **and** have per-section subheaders inside its widgets. Privacy does exactly that — `PageType::new_uncategorized(widgets, Some("Privacy"))` plus `render_sub_header` calls inside individual widgets. The rule is per heading, not per page.
 
@@ -69,7 +89,7 @@ Worked positive example: **Scripting** (`scripting_page.rs`) is a small page don
 
 ## Bug class 1 — the vanishing title
 
-**Symptom:** on a single-topic page, typing a search term that matches one row makes the page heading disappear along with the non-matching rows, leaving an unlabeled orphan setting.
+**Symptom:** on a single-topic `Uncategorized` or `Categorized` page, typing a search term that matches one row makes the page heading disappear along with the non-matching rows, leaving an unlabeled orphan setting. (A monolith can't reach this state — see the taxonomy above.)
 
 **Cause:** the only heading was rendered inside a widget — via `build_sub_header` / `render_page_title` in that widget's `render`, or via a header-only widget that exists just to draw a title. Filtering removes the widget, and the heading goes with it.
 
@@ -166,7 +186,7 @@ Verification is cheap here; do both.
 1. **Unit-test the filter.** `app/src/settings_view/mod_tests.rs` has the harness — `StubWidget`, `stub_widgets_page`, and `visible_widget_count` (which reads `PageType::get_filtered`). Assert that a term unique to one widget yields exactly one visible widget, and that clearing the query restores all of them. Follow the `${filename}_tests.rs` convention from AGENTS.md; run with `cargo nextest run -p warp settings_view`.
 2. **Exercise the real search.** Open Settings, go to the page, and check three things:
    - a term matching exactly one row leaves **only** that row,
-   - the **page title is still visible** while that filter is active,
+   - the **page title is still visible** while that filter is active — expect this on an `Uncategorized` / `Categorized` page; a monolith correctly disappears whole instead,
    - clearing the search restores the full page, with the title spacing unchanged.
 
 ## Anti-patterns
@@ -195,4 +215,9 @@ Container::new(content).with_margin_top(24.).finish()
 // A non-exhaustive match over subpages when deciding the title — a new subpage
 // silently inherits `None` instead of forcing the single-topic/multi-section call.
 let title = match subpage { Some(Subpage::Knowledge) => Some("Knowledge"), _ => None };
+
+// Assuming the title slot protects a Monolith from filtering the way it does an
+// Uncategorized/Categorized page. It does not — render_page gates a monolith's
+// title on its sole widget surviving, so the title goes with it.
+PageType::new_monolith(widget, Some("Teams"), false)  // still all-or-nothing
 ```
