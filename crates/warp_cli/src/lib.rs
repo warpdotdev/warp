@@ -336,12 +336,6 @@ impl Args {
             });
         }
 
-        if !FeatureFlag::AmbientAgentsCommandLine.is_enabled() {
-            command = command.mut_subcommand("agent", |agent_cmd| {
-                agent_cmd.mut_subcommand("run-cloud", |c| c.hide(true))
-            });
-        }
-
         // Hide the third-party harness flags on `run-cloud` when the harness
         // feature is off, so `--help` matches the runtime gating (a non-oz
         // `--harness` is rejected unless AgentHarness is enabled).

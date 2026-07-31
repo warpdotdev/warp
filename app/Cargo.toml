@@ -600,7 +600,6 @@ default = [
     "mcp_grouped_server_context",
     "fork_from_command",
     "context_window_usage_v2",
-    "ambient_agents_command_line",
     "ambient_agents_image_upload",
     "scheduled_ambient_agents",
     "warp_managed_secrets",
@@ -758,7 +757,6 @@ agent_mode_evals = [
     "warp_multi_agent_client/agent_mode_evals",
     "warp_server_client/agent_mode_evals",
 ]
-ambient_agents_command_line = []
 ambient_agents_image_upload = []
 scheduled_ambient_agents = []
 allow_ignoring_input_suggestions = []

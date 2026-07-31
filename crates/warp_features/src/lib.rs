@@ -451,9 +451,6 @@ pub enum FeatureFlag {
     /// Enables auto-opening code review pane on first agent change and its setting UI.
     AutoOpenCodeReviewPane,
 
-    /// Enables the ambient agents command-line interface.
-    AmbientAgentsCommandLine,
-
     /// Feature flags for the Build Plan Auto Reload experiment.
     BuildPlanAutoReloadBannerToggle,
     BuildPlanAutoReloadPostPurchaseModal,

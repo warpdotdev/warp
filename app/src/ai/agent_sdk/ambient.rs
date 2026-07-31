@@ -231,9 +231,6 @@ impl AmbientAgentRunner {
         });
     }
     fn run_agent(&self, args: RunCloudArgs, ctx: &mut ModelContext<Self>) -> anyhow::Result<()> {
-        if !FeatureFlag::AmbientAgentsCommandLine.is_enabled() {
-            return Err(anyhow::anyhow!("Unsupported feature"));
-        }
         let skill_enabled = FeatureFlag::OzPlatformSkills.is_enabled();
         if args.skill.is_some() && !skill_enabled {
             return Err(anyhow::anyhow!("unexpected argument '--skill' found"));
