@@ -600,9 +600,6 @@ pub enum FeatureFlag {
     /// When disabled (the default), the terminal message bar is shown instead.
     AgentViewPromptChip,
 
-    /// Enables editing the agent input footer layout from the prompt context menu.
-    AgentToolbarEditor,
-
     /// Enables configuring header toolbar item order, side placement, and visibility.
     ConfigurableToolbar,
 
