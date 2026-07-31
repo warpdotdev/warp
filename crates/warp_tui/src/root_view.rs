@@ -2,6 +2,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Result;
 use warp::{TuiLoginModel, TuiLoginPhase};
 use warpui::SingletonEntity as _;
 use warpui_core::elements::MouseStateHandle;
@@ -17,7 +18,8 @@ use crate::keybindings::TUI_BINDING_GROUP;
 use crate::session_registry::{TuiSessionView, TuiSessions};
 use crate::transient_hint::TransientHint;
 use crate::ui::{
-    LoginWaitingParams, login_failed, login_waiting, signed_out_welcome, terminal_starting,
+    LoginBrowserOpenFailedParams, LoginFailedParams, LoginWaitingParams, login_browser_open_failed,
+    login_failed, login_waiting, signed_out_welcome, terminal_starting,
 };
 use crate::zero_state_animation::ZeroStateAnimationConfig;
 
@@ -26,10 +28,12 @@ use crate::zero_state_animation::ZeroStateAnimationConfig;
 pub enum RootTuiAction {
     /// Exits the app while no terminal session is focused.
     ExitApp,
-    /// Starts browser device authorization from the signed-out welcome screen.
+    /// Starts or retries browser device authorization from a signed-out screen.
     StartDeviceLogin,
-    /// Opens the manual browser fallback shown while authorization is pending.
-    OpenLoginUrl(String),
+    /// Starts device authorization and copies its exact URL once generated.
+    StartDeviceLoginAndCopyUrl,
+    /// Retries the manual browser fallback shown after launch failure.
+    RetryOpenLoginUrl(String),
     /// Copies the manual browser fallback shown while authorization is pending.
     CopyLoginUrl(String),
 }
@@ -45,8 +49,13 @@ pub struct RootTuiView {
     state: RootTuiState,
     auth_animation_clock: AnimationClock,
     auth_animation_config: Arc<ZeroStateAnimationConfig>,
+    welcome_login_mouse: MouseStateHandle,
+    welcome_copy_mouse: MouseStateHandle,
     waiting_login_mouse: MouseStateHandle,
     waiting_login_copy_mouse: MouseStateHandle,
+    waiting_login_retry_mouse: MouseStateHandle,
+    failed_login_retry_mouse: MouseStateHandle,
+    copy_login_url_when_available: bool,
     login_copy_hint: TransientHint,
 }
 
@@ -67,20 +76,27 @@ impl RootTuiView {
             state: RootTuiState::Auth,
             auth_animation_clock: AnimationClock::starting_at(Duration::ZERO),
             auth_animation_config: Arc::new(ZeroStateAnimationConfig::default()),
+            welcome_login_mouse: MouseStateHandle::default(),
+            welcome_copy_mouse: MouseStateHandle::default(),
             waiting_login_mouse: MouseStateHandle::default(),
             waiting_login_copy_mouse: MouseStateHandle::default(),
+            waiting_login_retry_mouse: MouseStateHandle::default(),
+            failed_login_retry_mouse: MouseStateHandle::default(),
+            copy_login_url_when_available: false,
             login_copy_hint: TransientHint::default(),
         }
     }
 
     /// Transitions from the authentication gate to the live session container.
     pub(crate) fn show_terminal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.copy_login_url_when_available = false;
         self.state = RootTuiState::Terminal;
         ctx.notify();
     }
 
     /// Returns to the authentication gate after the current user logs out.
     pub(crate) fn show_auth(&mut self, ctx: &mut ViewContext<Self>) {
+        self.copy_login_url_when_available = false;
         self.state = RootTuiState::Auth;
         ctx.focus_self();
         ctx.notify();
@@ -94,6 +110,78 @@ impl RootTuiView {
         TuiSessions::as_ref(ctx)
             .focused_session()
             .map(|session| session.view().clone())
+    }
+
+    pub(crate) fn handle_login_phase_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.handle_login_phase_changed_with(ctx, copy_to_clipboard);
+    }
+
+    fn handle_login_phase_changed_with(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+        copy: impl FnOnce(&str) -> Result<()>,
+    ) {
+        if !self.copy_login_url_when_available {
+            ctx.notify();
+            return;
+        }
+
+        let browser_url = match TuiLoginModel::as_ref(ctx).phase() {
+            TuiLoginPhase::AwaitingLogin {
+                browser_url: Some(browser_url),
+            }
+            | TuiLoginPhase::BrowserOpenFailed { browser_url } => Some(browser_url.clone()),
+            TuiLoginPhase::AwaitingLogin { browser_url: None } => None,
+            TuiLoginPhase::SignedOutWelcome
+            | TuiLoginPhase::Failed { .. }
+            | TuiLoginPhase::LoggedIn => {
+                self.copy_login_url_when_available = false;
+                None
+            }
+        };
+        if let Some(browser_url) = browser_url {
+            self.copy_login_url_when_available = false;
+            self.copy_login_url_with(&browser_url, ctx, copy);
+        }
+        ctx.notify();
+    }
+
+    fn copy_login_url_with(
+        &mut self,
+        url: &str,
+        ctx: &mut ViewContext<Self>,
+        copy: impl FnOnce(&str) -> Result<()>,
+    ) {
+        let is_current_url = matches!(
+            TuiLoginModel::as_ref(ctx).phase(),
+            TuiLoginPhase::AwaitingLogin {
+                browser_url: Some(current_url),
+            } if current_url == url
+        ) || matches!(
+            TuiLoginModel::as_ref(ctx).phase(),
+            TuiLoginPhase::BrowserOpenFailed {
+                browser_url: current_url,
+            } if current_url == url
+        );
+        if !is_current_url {
+            return;
+        }
+
+        match copy(url) {
+            Ok(()) => self.login_copy_hint.show_success(
+                "Login URL copied to clipboard".to_owned(),
+                ctx,
+                |view| &mut view.login_copy_hint,
+            ),
+            Err(error) => {
+                log::warn!("Failed to copy TUI login URL: {error}");
+                self.login_copy_hint.show_error(
+                    "Unable to copy login URL".to_owned(),
+                    ctx,
+                    |view| &mut view.login_copy_hint,
+                );
+            }
+        }
     }
 }
 
@@ -122,9 +210,14 @@ impl TuiView for RootTuiView {
                 TuiLoginPhase::SignedOutWelcome => signed_out_welcome(
                     self.auth_animation_clock,
                     self.auth_animation_config.clone(),
+                    self.welcome_login_mouse.clone(),
+                    self.welcome_copy_mouse.clone(),
                     ctx,
                     |event_ctx, _| {
                         event_ctx.dispatch_typed_action(RootTuiAction::StartDeviceLogin);
+                    },
+                    |event_ctx, _| {
+                        event_ctx.dispatch_typed_action(RootTuiAction::StartDeviceLoginAndCopyUrl);
                     },
                 ),
                 TuiLoginPhase::LoggedIn => terminal_starting(),
@@ -142,7 +235,7 @@ impl TuiView for RootTuiView {
                         let browser_url = browser_url.clone();
                         move |event_ctx, _| {
                             if let Some(browser_url) = browser_url.clone() {
-                                event_ctx.dispatch_typed_action(RootTuiAction::OpenLoginUrl(
+                                event_ctx.dispatch_typed_action(RootTuiAction::RetryOpenLoginUrl(
                                     browser_url,
                                 ));
                             }
@@ -159,7 +252,46 @@ impl TuiView for RootTuiView {
                         }
                     },
                 ),
-                TuiLoginPhase::Failed { message } => login_failed(message.as_str()),
+                TuiLoginPhase::BrowserOpenFailed { browser_url } => login_browser_open_failed(
+                    self.auth_animation_clock,
+                    self.auth_animation_config.clone(),
+                    LoginBrowserOpenFailedParams {
+                        browser_url,
+                        login_mouse: self.waiting_login_mouse.clone(),
+                        copy_mouse: self.waiting_login_copy_mouse.clone(),
+                        retry_mouse: self.waiting_login_retry_mouse.clone(),
+                        copy_feedback: self.login_copy_hint.current(),
+                    },
+                    ctx,
+                    {
+                        let browser_url = browser_url.clone();
+                        move |event_ctx, _| {
+                            event_ctx.dispatch_typed_action(RootTuiAction::RetryOpenLoginUrl(
+                                browser_url.clone(),
+                            ));
+                        }
+                    },
+                    {
+                        let browser_url = browser_url.clone();
+                        move |event_ctx, _| {
+                            event_ctx.dispatch_typed_action(RootTuiAction::CopyLoginUrl(
+                                browser_url.clone(),
+                            ));
+                        }
+                    },
+                ),
+                TuiLoginPhase::Failed { message } => login_failed(
+                    self.auth_animation_clock,
+                    self.auth_animation_config.clone(),
+                    LoginFailedParams {
+                        message,
+                        retry_mouse: self.failed_login_retry_mouse.clone(),
+                    },
+                    ctx,
+                    |event_ctx, _| {
+                        event_ctx.dispatch_typed_action(RootTuiAction::StartDeviceLogin);
+                    },
+                ),
             },
             RootTuiState::Terminal => self
                 .focused_session_view(ctx)
@@ -187,38 +319,26 @@ impl TypedActionView for RootTuiView {
             RootTuiAction::StartDeviceLogin => {
                 if matches!(
                     TuiLoginModel::as_ref(ctx).phase(),
-                    TuiLoginPhase::SignedOutWelcome
+                    TuiLoginPhase::SignedOutWelcome | TuiLoginPhase::Failed { .. }
                 ) {
+                    self.copy_login_url_when_available = false;
                     TuiLoginModel::start_device_login(ctx);
                 }
             }
-            RootTuiAction::OpenLoginUrl(url) => ctx.open_url(url),
-            RootTuiAction::CopyLoginUrl(url) => {
-                let is_current_url = matches!(
+            RootTuiAction::StartDeviceLoginAndCopyUrl => {
+                if matches!(
                     TuiLoginModel::as_ref(ctx).phase(),
-                    TuiLoginPhase::AwaitingLogin {
-                        browser_url: Some(current_url),
-                    } if current_url == url
-                );
-                if !is_current_url {
-                    return;
+                    TuiLoginPhase::SignedOutWelcome | TuiLoginPhase::Failed { .. }
+                ) {
+                    self.copy_login_url_when_available = true;
+                    TuiLoginModel::start_device_login(ctx);
                 }
-
-                match copy_to_clipboard(url) {
-                    Ok(()) => self.login_copy_hint.show_success(
-                        "Login URL copied to clipboard".to_owned(),
-                        ctx,
-                        |view| &mut view.login_copy_hint,
-                    ),
-                    Err(error) => {
-                        log::warn!("Failed to copy TUI login URL: {error}");
-                        self.login_copy_hint.show_error(
-                            "Unable to copy login URL".to_owned(),
-                            ctx,
-                            |view| &mut view.login_copy_hint,
-                        );
-                    }
-                }
+            }
+            RootTuiAction::RetryOpenLoginUrl(url) => {
+                TuiLoginModel::retry_open_login_url(url, ctx);
+            }
+            RootTuiAction::CopyLoginUrl(url) => {
+                self.copy_login_url_with(url, ctx, copy_to_clipboard);
             }
         }
     }

@@ -6,8 +6,8 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     TuiAuthBrowserFlow, TuiLoginEvent, TuiLoginModel, TuiLoginPhase, handle_auth_manager_event,
-    set_logged_out_phase, set_login_phase, start_tui_device_login,
-    tui_verification_url_with_return, validated_tui_focus_url,
+    handle_browser_launch_result, retry_open_login_url, set_logged_out_phase, set_login_phase,
+    start_tui_device_login, tui_verification_url_with_return, validated_tui_focus_url,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
@@ -173,6 +173,84 @@ fn stores_device_fallback_before_opening_browser() {
 }
 
 #[test]
+fn successful_browser_launch_keeps_auth_pending() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            login_model(TuiLoginPhase::AwaitingLogin { browser_url: None })
+        });
+        app.update(|ctx| {
+            handle_browser_launch_result(
+                "https://app.warp.dev/device?user_code=ABCD-EFGH".to_owned(),
+                true,
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::AwaitingLogin { .. }
+            ));
+        });
+    });
+}
+
+#[test]
+fn failed_browser_launch_retains_exact_url_for_recovery() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            login_model(TuiLoginPhase::AwaitingLogin { browser_url: None })
+        });
+        let browser_url =
+            "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli".to_owned();
+
+        app.update(|ctx| handle_browser_launch_result(browser_url.clone(), false, ctx));
+
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::BrowserOpenFailed {
+                    browser_url: retained_url,
+                } if retained_url == &browser_url
+            ));
+        });
+    });
+}
+#[test]
+fn retry_uses_retained_url_and_keeps_auth_pending() {
+    App::test((), |mut app| async move {
+        let browser_url =
+            "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli".to_owned();
+        app.add_singleton_model({
+            let browser_url = browser_url.clone();
+            move |_| login_model(TuiLoginPhase::BrowserOpenFailed { browser_url })
+        });
+        let browser_opened = Rc::new(Cell::new(false));
+        let browser_opened_for_callback = browser_opened.clone();
+        app.update(|ctx| {
+            let expected_url = browser_url.clone();
+            ctx.set_before_open_url(move |url, _| {
+                assert_eq!(url, expected_url);
+                browser_opened_for_callback.set(true);
+                url.to_owned()
+            });
+            retry_open_login_url("https://example.com/wrong", ctx);
+            retry_open_login_url(&browser_url, ctx);
+        });
+
+        assert!(browser_opened.get());
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::AwaitingLogin {
+                    browser_url: Some(current_url),
+                } if current_url == &browser_url
+            ));
+        });
+    });
+}
+
+#[test]
 fn post_logout_device_auth_opens_logout_with_device_continuation() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| TuiLoginModel {
@@ -245,7 +323,6 @@ fn renders_device_code_request_timeout_without_id_token_prefix() {
         });
     });
 }
-
 #[test]
 fn post_logout_device_code_failure_still_opens_web_logout() {
     App::test((), |mut app| async move {

@@ -17,7 +17,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, EntityId, EntityIdMap};
 
 use super::{
-    LoginWaitingParams, compact_footer_path, conversation_restoring, horizontally_centered,
+    LoginBrowserOpenFailedParams, LoginFailedParams, LoginWaitingParams, compact_footer_path,
+    conversation_restoring, horizontally_centered, login_browser_open_failed, login_failed,
     login_waiting, signed_out_welcome,
 };
 use crate::transient_hint::TransientHintTone;
@@ -26,6 +27,90 @@ use crate::zero_state_animation::ZeroStateAnimationConfig;
 #[test]
 fn compact_footer_path_preserves_short_paths() {
     assert_eq!(compact_footer_path("/erica/project"), "/erica/project");
+}
+#[test]
+fn failed_login_renders_clickable_retry_and_handles_retry_keys() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let retry_count = Rc::new(Cell::new(0));
+            let retry_count_for_action = retry_count.clone();
+            let mut element = login_failed(
+                AnimationClock::starting_at(Duration::ZERO),
+                Arc::new(ZeroStateAnimationConfig::default()),
+                LoginFailedParams {
+                    message: "Failed to generate device code",
+                    retry_mouse: MouseStateHandle::default(),
+                },
+                app_ctx,
+                move |_, _| retry_count_for_action.set(retry_count_for_action.get() + 1),
+            );
+            let area = TuiRect::new(0, 0, 80, 24);
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(
+                TuiConstraint::tight(TuiSize::new(area.width, area.height)),
+                &mut layout_ctx,
+                app_ctx,
+            );
+            element.after_layout(&mut layout_ctx, app_ctx);
+            let mut buffer = TuiBuffer::empty(area);
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            {
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+            }
+            let lines = buffer.to_lines();
+            let rendered = lines.join("\n");
+            assert!(rendered.contains("Login failed: Failed to generate device code"));
+            assert!(rendered.contains("Retry login (r)"));
+            assert!(rendered.contains("Press enter or r to retry · Ctrl-C to exit"));
+            assert!(!rendered.contains("Copy URL (c)"));
+
+            let row = lines
+                .iter()
+                .position(|line| line.contains("Retry login (r)"))
+                .expect("retry action renders") as u16;
+            let col = lines[usize::from(row)]
+                .find("Retry login (r)")
+                .expect("retry action offset") as u16;
+            let scene = Rc::new(paint_ctx.scene.clone());
+            drop(paint_ctx);
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            for event in [
+                TuiEvent::LeftMouseDown {
+                    position: (col, row).into(),
+                    modifiers: ModifiersState::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                TuiEvent::LeftMouseUp {
+                    position: (col, row).into(),
+                    modifiers: ModifiersState::default(),
+                },
+            ] {
+                assert!(element.dispatch_event(&event, &mut event_ctx, app_ctx));
+            }
+            assert_eq!(retry_count.get(), 1);
+
+            let key_down = |key: &str| TuiEvent::KeyDown {
+                keystroke: Keystroke {
+                    key: key.to_owned(),
+                    ..Default::default()
+                },
+                chars: String::new(),
+                details: Default::default(),
+                is_composing: false,
+            };
+            assert!(element.dispatch_event(&key_down("r"), &mut event_ctx, app_ctx));
+            assert!(element.dispatch_event(&key_down("enter"), &mut event_ctx, app_ctx));
+            assert!(!element.dispatch_event(&key_down("c"), &mut event_ctx, app_ctx));
+            assert_eq!(retry_count.get(), 3);
+        });
+    });
 }
 
 #[test]
@@ -138,7 +223,10 @@ fn signed_out_welcome_matches_designed_copy_and_layout() {
                 signed_out_welcome(
                     AnimationClock::starting_at(Duration::ZERO),
                     Arc::new(ZeroStateAnimationConfig::default()),
+                    MouseStateHandle::default(),
+                    MouseStateHandle::default(),
                     app_ctx,
+                    |_, _| {},
                     |_, _| {},
                 ),
                 TuiRect::new(0, 0, 80, 24),
@@ -149,6 +237,8 @@ fn signed_out_welcome_matches_designed_copy_and_layout() {
             for expected in [
                 "Welcome to Warp",
                 "> Press enter to get started",
+                "Log in with Warp",
+                "Copy login URL (c)",
                 "What’s different about Warp",
                 "Prompts or shell commands autodetected",
                 "Set up custom model routers",
@@ -335,17 +425,22 @@ fn waiting_login_copy_control_handles_click_and_key() {
     });
 }
 #[test]
-fn signed_out_welcome_handles_enter() {
+fn signed_out_welcome_handles_enter_and_copy_shortcuts() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
-            let activated = Rc::new(Cell::new(false));
-            let activated_for_enter = activated.clone();
+            let login_count = Rc::new(Cell::new(0));
+            let copy_count = Rc::new(Cell::new(0));
+            let login_count_for_enter = login_count.clone();
+            let copy_count_for_key = copy_count.clone();
             let mut element = signed_out_welcome(
                 AnimationClock::starting_at(Duration::ZERO),
                 Arc::new(ZeroStateAnimationConfig::default()),
+                MouseStateHandle::default(),
+                MouseStateHandle::default(),
                 app_ctx,
-                move |_, _| activated_for_enter.set(true),
+                move |_, _| login_count_for_enter.set(login_count_for_enter.get() + 1),
+                move |_, _| copy_count_for_key.set(copy_count_for_key.get() + 1),
             );
             let mut rendered_views = EntityIdMap::default();
             let scene = Rc::new(Default::default());
@@ -362,9 +457,170 @@ fn signed_out_welcome_handles_enter() {
             };
 
             assert!(!element.dispatch_event(&key_down("a"), &mut event_ctx, app_ctx));
-            assert!(!activated.get());
+            assert_eq!(login_count.get(), 0);
+            assert_eq!(copy_count.get(), 0);
             assert!(element.dispatch_event(&key_down("enter"), &mut event_ctx, app_ctx));
+            assert_eq!(login_count.get(), 1);
+            assert_eq!(copy_count.get(), 0);
+            assert!(element.dispatch_event(&key_down("c"), &mut event_ctx, app_ctx));
+            assert_eq!(login_count.get(), 1);
+            assert_eq!(copy_count.get(), 1);
+        });
+    });
+}
+
+#[test]
+fn signed_out_welcome_handles_login_link_click() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let activated = Rc::new(Cell::new(false));
+            let activated_for_click = activated.clone();
+            let mut element = signed_out_welcome(
+                AnimationClock::starting_at(Duration::ZERO),
+                Arc::new(ZeroStateAnimationConfig::default()),
+                MouseStateHandle::default(),
+                MouseStateHandle::default(),
+                app_ctx,
+                move |_, _| activated_for_click.set(true),
+                |_, _| {},
+            );
+            let area = TuiRect::new(0, 0, 80, 24);
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(
+                TuiConstraint::tight(TuiSize::new(area.width, area.height)),
+                &mut layout_ctx,
+                app_ctx,
+            );
+            element.after_layout(&mut layout_ctx, app_ctx);
+            let mut buffer = TuiBuffer::empty(area);
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            {
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+            }
+            let lines = buffer.to_lines();
+            let row = lines
+                .iter()
+                .position(|line| line.contains("Log in with Warp"))
+                .expect("login action renders") as u16;
+            let col = lines[usize::from(row)]
+                .find("Log in with Warp")
+                .expect("login action offset") as u16;
+            let scene = Rc::new(paint_ctx.scene.clone());
+            drop(paint_ctx);
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            for event in [
+                TuiEvent::LeftMouseDown {
+                    position: (col, row).into(),
+                    modifiers: ModifiersState::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                TuiEvent::LeftMouseUp {
+                    position: (col, row).into(),
+                    modifiers: ModifiersState::default(),
+                },
+            ] {
+                assert!(element.dispatch_event(&event, &mut event_ctx, app_ctx));
+            }
             assert!(activated.get());
+        });
+    });
+}
+
+#[test]
+fn browser_open_failure_renders_exact_fallback_and_handles_recovery_keys() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let browser_url =
+                "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli";
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                login_browser_open_failed(
+                    AnimationClock::starting_at(Duration::ZERO),
+                    Arc::new(ZeroStateAnimationConfig::default()),
+                    LoginBrowserOpenFailedParams {
+                        browser_url,
+                        login_mouse: MouseStateHandle::default(),
+                        copy_mouse: MouseStateHandle::default(),
+                        retry_mouse: MouseStateHandle::default(),
+                        copy_feedback: None,
+                    },
+                    app_ctx,
+                    |_, _| {},
+                    |_, _| {},
+                ),
+                TuiRect::new(0, 0, 80, 24),
+                app_ctx,
+            );
+            let rendered = frame.buffer.to_lines().join("\n");
+            for expected in [
+                "We couldn’t open your browser.",
+                "Open this exact URL manually:",
+                "https://app.warp.dev/device?user_code=ABCD-EF",
+                "GH&source=warp-agent-cli",
+                "Copy URL (c)",
+                "Retry opening browser (r)",
+            ] {
+                assert!(
+                    rendered.contains(expected),
+                    "browser failure should render {expected:?}: {rendered:?}"
+                );
+            }
+            assert!(!rendered.contains("Continue to terminal"));
+
+            let retry_count = Rc::new(Cell::new(0));
+            let copy_count = Rc::new(Cell::new(0));
+            let retry_count_for_action = retry_count.clone();
+            let copy_count_for_action = copy_count.clone();
+            let mut element = login_browser_open_failed(
+                AnimationClock::starting_at(Duration::ZERO),
+                Arc::new(ZeroStateAnimationConfig::default()),
+                LoginBrowserOpenFailedParams {
+                    browser_url,
+                    login_mouse: MouseStateHandle::default(),
+                    copy_mouse: MouseStateHandle::default(),
+                    retry_mouse: MouseStateHandle::default(),
+                    copy_feedback: None,
+                },
+                app_ctx,
+                move |_, _| retry_count_for_action.set(retry_count_for_action.get() + 1),
+                move |_, _| copy_count_for_action.set(copy_count_for_action.get() + 1),
+            );
+            let mut rendered_views = EntityIdMap::default();
+            let scene = Rc::new(Default::default());
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            for key in ["r", "c"] {
+                let event = TuiEvent::KeyDown {
+                    keystroke: Keystroke {
+                        key: key.to_owned(),
+                        ..Default::default()
+                    },
+                    chars: String::new(),
+                    details: Default::default(),
+                    is_composing: false,
+                };
+                assert!(element.dispatch_event(&event, &mut event_ctx, app_ctx));
+            }
+            let enter = TuiEvent::KeyDown {
+                keystroke: Keystroke {
+                    key: "enter".to_owned(),
+                    ..Default::default()
+                },
+                chars: String::new(),
+                details: Default::default(),
+                is_composing: false,
+            };
+            assert!(!element.dispatch_event(&enter, &mut event_ctx, app_ctx));
+            assert_eq!(retry_count.get(), 1);
+            assert_eq!(copy_count.get(), 1);
         });
     });
 }

@@ -2,7 +2,8 @@
 //!
 //! [`run`] boots the real headless Warp app via [`warp::run_tui`]. Once shared
 //! initialization is done, the mount built here starts the TUI driver and
-//! defers creating the first terminal session until login.
+//! creates the first terminal session once browser authentication starts, while
+//! allowing authentication to complete in the background.
 
 use std::io::{self, IsTerminal as _, Read as _};
 
@@ -286,10 +287,12 @@ fn init(
             let login_model = TuiLoginModel::handle(ctx);
             ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
                 TuiLoginEvent::PhaseChanged => {
-                    root_for_login.update(ctx, |_, ctx| ctx.notify());
+                    root_for_login.update(ctx, |root, ctx| {
+                        root.handle_login_phase_changed(ctx);
+                    });
                 }
                 TuiLoginEvent::LoggedIn => {
-                    create_terminal_session_after_login(&sessions_for_login, &root_for_login, ctx)
+                    ensure_terminal_session(&sessions_for_login, &root_for_login, ctx)
                 }
                 TuiLoginEvent::LoggedOut => {
                     root_for_login.update(ctx, |root, ctx| root.show_auth(ctx));
@@ -298,7 +301,7 @@ fn init(
             });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
-                create_terminal_session_after_login(&sessions, &root, ctx);
+                ensure_terminal_session(&sessions, &root, ctx);
             }
         }
         Err(error) => {
@@ -310,7 +313,7 @@ fn init(
 }
 
 /// Creates the focused bootstrap session and restores the requested conversation.
-fn create_terminal_session_after_login(
+fn ensure_terminal_session(
     sessions: &ModelHandle<TuiSessions>,
     root: &ViewHandle<RootTuiView>,
     ctx: &mut AppContext,
