@@ -53,10 +53,127 @@ pub enum UploadFieldValue {
     ContentData,
 }
 
+/// Selects how the server accounts for a `SnapshotUploadRequest`'s uploads.
+///
+/// `Legacy` (the default) uses unprefixed object names and counts uploads against
+/// the execution's cumulative lifetime attachment quota, matching today's one-shot
+/// end-of-run snapshot. `Checkpoint` signs generation-prefixed object names and does
+/// not consume that cumulative quota; the server enforces per-attempt limits instead
+/// when the generation is committed via [`HarnessSupportClient::commit_snapshot`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotUploadMode {
+    #[default]
+    Legacy,
+    Checkpoint,
+}
+
 /// Request body for upload-snapshot upload targets.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SnapshotUploadRequest {
+    /// Upload accounting mode. Omitted (default) is equivalent to `legacy` on the
+    /// server; see [`SnapshotUploadMode`].
+    #[serde(skip_serializing_if = "is_default_mode")]
+    pub mode: SnapshotUploadMode,
+    /// Required when `mode` is [`SnapshotUploadMode::Checkpoint`]. Identifies the
+    /// checkpoint attempt; every requested file is uploaded by the server as
+    /// `checkpoint_<generation>__<filename>`. Ignored for `legacy` mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
     pub files: Vec<SnapshotFileInfo>,
+}
+
+fn is_default_mode(mode: &SnapshotUploadMode) -> bool {
+    *mode == SnapshotUploadMode::default()
+}
+
+impl SnapshotUploadRequest {
+    /// Build a legacy-mode request, matching today's one-shot end-of-run upload.
+    pub fn legacy(files: Vec<SnapshotFileInfo>) -> Self {
+        Self {
+            mode: SnapshotUploadMode::Legacy,
+            generation: None,
+            files,
+        }
+    }
+
+    /// Build a checkpoint-mode request for the given generation.
+    pub fn checkpoint(generation: CheckpointGeneration, files: Vec<SnapshotFileInfo>) -> Self {
+        Self {
+            mode: SnapshotUploadMode::Checkpoint,
+            generation: Some(generation.into_inner()),
+            files,
+        }
+    }
+}
+
+/// A checkpoint generation identifier minted by the client for one checkpoint attempt.
+///
+/// Must match the server's `[A-Za-z0-9._-]{1,128}` format and must not contain the
+/// reserved `__` separator (validated by
+/// [`crate::ai::agent_sdk::driver::snapshot::mint_generation`], the only production
+/// constructor). Storage object basenames are `checkpoint_<generation>__<logical_name>`;
+/// the generation is a GCS keying detail only and must never leak into agent-visible
+/// paths or restore commands.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct CheckpointGeneration(String);
+
+impl CheckpointGeneration {
+    /// Wrap an already-validated generation string. Exposed for tests; production
+    /// code should go through `snapshot::mint_generation` instead.
+    ///
+    /// The only caller (`driver::snapshot`'s test module) is itself excluded on
+    /// Windows (snapshot upload is cloud-agent-only and Linux-only), so this must
+    /// be gated the same way or it is dead code under Windows clippy/test builds.
+    #[cfg(all(test, not(windows)))]
+    pub(crate) fn new_for_test(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Construct from a pre-validated string. Crate-visible so `driver::snapshot` can
+    /// mint generations without duplicating this type.
+    // Only called by `snapshot::mint_generation`, which is itself unused until the
+    // periodic checkpoint coordinator (a follow-up, stacked PR) lands.
+    #[allow(dead_code)]
+    pub(crate) fn from_validated(value: String) -> Self {
+        Self(value)
+    }
+
+    #[allow(dead_code)]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Display for CheckpointGeneration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Request body for committing a fully uploaded checkpoint generation. Exact-set: the
+/// server persists `objects` verbatim as the commit marker and later selection returns
+/// exactly that set, never every object sharing the generation prefix. See
+/// `docs/remote-2111-checkpoint-spec.md` (warp-server) for the full protocol.
+// Not constructed until the periodic checkpoint coordinator (a follow-up, stacked PR)
+// starts calling `HarnessSupportClient::commit_snapshot`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommitSnapshotRequest {
+    pub generation: String,
+    pub manifest_object: String,
+    pub objects: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CommitSnapshotResponse {
+    pub generation: String,
 }
 
 /// Describes a single file in a snapshot upload request.
@@ -223,6 +340,19 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         &self,
         request: &SnapshotUploadRequest,
     ) -> Result<Vec<UploadTarget>>;
+
+    /// Commit a fully uploaded checkpoint generation for the active execution's exact
+    /// object set. Must only be called after every object named in `request.objects`
+    /// (including `request.manifest_object`) has itself uploaded successfully; the
+    /// server verifies existence and per-attempt size limits before this becomes the
+    /// selected checkpoint.
+    // Not called until the periodic checkpoint coordinator (a follow-up, stacked PR)
+    // lands.
+    #[allow(dead_code)]
+    async fn commit_snapshot(
+        &self,
+        request: &CommitSnapshotRequest,
+    ) -> Result<CommitSnapshotResponse>;
 
     /// Download the raw third-party harness transcript bytes for the current task's
     /// conversation.
@@ -455,6 +585,14 @@ impl HarnessSupportClient for ServerApi {
             .post_public_api("harness-support/upload-snapshot", request)
             .await?;
         Ok(response.uploads)
+    }
+
+    async fn commit_snapshot(
+        &self,
+        request: &CommitSnapshotRequest,
+    ) -> Result<CommitSnapshotResponse> {
+        self.post_public_api("harness-support/commit-snapshot", request)
+            .await
     }
 
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {

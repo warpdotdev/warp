@@ -48,7 +48,8 @@ use crate::server::server_api::ai::{
     UploadLocalHandoffSnapshotRequest,
 };
 use crate::server::server_api::harness_support::{
-    HarnessSupportClient, SnapshotFileInfo, SnapshotUploadRequest, UploadTarget, upload_to_target,
+    CheckpointGeneration, CommitSnapshotRequest, HarnessSupportClient, SnapshotFileInfo,
+    SnapshotUploadRequest, UploadTarget, upload_to_target,
 };
 
 /// Default path of the declarations file when neither the env var override nor a task ID
@@ -210,8 +211,9 @@ pub(super) async fn run_declarations_script(
 ///
 /// Reads `$OZ_SNAPSHOT_DECLARATIONS_FILE` for the operator/test override, then delegates to
 /// [`resolve_declarations_path_with_override`] so tests can exercise the pure logic without
-/// racing on the shared env var.
-fn resolve_declarations_path(task_id: Option<&AmbientAgentTaskId>) -> PathBuf {
+/// racing on the shared env var. `pub(super)` so `checkpoint_coordinator` can resolve the same
+/// path used by the declarations writer and by [`run_declarations_script`].
+pub(super) fn resolve_declarations_path(task_id: Option<&AmbientAgentTaskId>) -> PathBuf {
     resolve_declarations_path_with_override(task_id, std::env::var_os(DECLARATIONS_PATH_ENV_VAR))
 }
 
@@ -651,6 +653,87 @@ struct SnapshotOutcome {
     manifest_uploaded: bool,
 }
 
+/// Outcome of one checkpoint attempt, as opposed to [`SnapshotOutcome`] which only tracks
+/// per-entry upload results within a single attempt.
+// The whole checkpoint pipeline below (through `run_checkpoint_pipeline`) has no
+// production caller yet -- the periodic checkpoint coordinator that drives it lands
+// in a follow-up, stacked PR. `#[allow(dead_code)]` is temporary and should be
+// removable once that PR is merged on top of this one.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(super) enum CheckpointResult {
+    /// Every required object (blobs plus manifest) for `generation` uploaded successfully
+    /// and the exact-set commit call succeeded; `generation` is now the server's selected
+    /// checkpoint.
+    Committed { generation: CheckpointGeneration },
+    /// There were no usable declarations to checkpoint (declarations file missing, empty,
+    /// or containing no valid entries). No generation was minted and no network calls
+    /// beyond reading local state were made.
+    Skipped,
+    /// A required upload (a non-cap-skipped blob, or the manifest), the upload-target
+    /// allocation, or the commit call itself failed. `generation` is `None` only when the
+    /// attempt was cut off before a generation was even minted (e.g. an external timeout
+    /// wrapping the whole attempt). Any minted generation's objects (if uploaded) are left
+    /// as uncommitted debris in storage; the server's existing marker (if any) is untouched.
+    Failed {
+        generation: Option<CheckpointGeneration>,
+        reason: String,
+    },
+}
+
+/// Selects which upload-accounting path the shared gather/upload pipeline uses for a given
+/// attempt. See `SnapshotUploadMode` (`crate::server::server_api::harness_support`) for the
+/// server-side semantics.
+enum PipelineMode {
+    /// One-shot end-of-run upload: unprefixed object names, counted against the
+    /// execution's cumulative lifetime attachment quota.
+    Legacy,
+    /// Periodic or finalization checkpoint attempt: the server stores each requested file
+    /// as `checkpoint_<generation>__<filename>` and does not charge the cumulative quota.
+    // Not constructed until the coordinator PR (see the allow(dead_code) note above).
+    #[allow(dead_code)]
+    Checkpoint(CheckpointGeneration),
+}
+
+/// Monotonic disambiguator for [`mint_generation`] so two attempts minted within the same
+/// millisecond (e.g. in tests, or on a very fast retry) never collide.
+#[allow(dead_code)]
+static GENERATION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Mint a new checkpoint generation identifier.
+///
+/// Must be called exactly once per checkpoint *attempt*, and only after that attempt's
+/// payload has been gathered ("frozen") — retrying the same already-gathered payload (e.g.
+/// after a transient upload failure) must reuse the previously minted generation rather than
+/// calling this again; any newly gathered payload always mints a fresh one. Enforcing that
+/// distinction is the caller's responsibility (see the coordinator in
+/// `checkpoint_coordinator.rs`).
+///
+/// Format: `<millis-since-epoch>-<counter>`. This satisfies the server's
+/// `[A-Za-z0-9._-]{1,128}` charset and never contains the reserved `__` separator.
+#[allow(dead_code)]
+pub(super) fn mint_generation() -> CheckpointGeneration {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let counter = GENERATION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    CheckpointGeneration::from_validated(format!("{millis}-{counter}"))
+}
+
+/// Compute the generation-prefixed storage object name for a logical filename (a blob or the
+/// manifest), matching the server's `checkpoint_<generation>__<logical_name>` convention.
+///
+/// Used only when assembling the exact-set [`CommitSnapshotRequest`] after upload — the
+/// *logical* name (produced by [`unique_filename`]) is what flows through gather, manifest
+/// building, and the upload-targets request; the server itself derives the storage name for
+/// each presigned upload target from that logical filename plus the request's `generation`
+/// field, so no client-side renaming is needed before that point.
+#[allow(dead_code)]
+fn storage_name(generation: &CheckpointGeneration, logical: &str) -> String {
+    format!("checkpoint_{}__{logical}", generation.as_str())
+}
+
 // --- Manifest schema ---
 
 #[derive(serde::Serialize)]
@@ -887,6 +970,7 @@ async fn run_pipeline(
 
     upload_gathered_snapshot(
         client,
+        &PipelineMode::Legacy,
         manifest_filename,
         upload_files,
         repos,
@@ -894,6 +978,125 @@ async fn run_pipeline(
         pre_upload_entries,
     )
     .await
+}
+
+/// Run one checkpoint attempt from the declarations file at `path`: read declarations, gather
+/// the payload, mint a generation for it, upload every blob plus the manifest in checkpoint
+/// mode, and commit the exact set that landed. Never panics; all failure modes are reported
+/// via the returned [`CheckpointResult`] (and, for unexpected failures, `report_error!`).
+///
+/// Unlike [`upload_snapshot_from_declarations_file`], a missing/empty/unusable declarations
+/// file is reported as [`CheckpointResult::Skipped`] rather than `None`, since the coordinator
+/// needs to distinguish "nothing to do" from "tried and failed" to drive its state machine.
+#[allow(dead_code)]
+pub(super) async fn run_checkpoint_from_declarations_file(
+    path: &Path,
+    client: Arc<dyn HarnessSupportClient>,
+) -> CheckpointResult {
+    log::info!("Checkpoint attempt starting from {}", path.display());
+    let Some(declarations) = read_and_parse_declarations(path) else {
+        return CheckpointResult::Skipped;
+    };
+    let declarations = drop_files_covered_by_repos(declarations);
+    if declarations.is_empty() {
+        log::info!("Checkpoint declarations empty after de-duplication; skipping attempt");
+        return CheckpointResult::Skipped;
+    }
+    let gathered = gather_snapshot_entries(declarations).await;
+    // The generation is minted here, once the gathered payload (blob contents, manifest
+    // stubs) is frozen for this attempt — see `mint_generation`'s contract.
+    let generation = mint_generation();
+    run_checkpoint_pipeline(client, generation, gathered).await
+}
+
+/// Upload and commit an already-gathered payload under `generation`. Split out from
+/// [`run_checkpoint_from_declarations_file`] so a caller retrying the exact same attempt (as
+/// opposed to gathering fresh) can reuse both the payload and the generation.
+#[allow(dead_code)]
+async fn run_checkpoint_pipeline(
+    client: Arc<dyn HarnessSupportClient>,
+    generation: CheckpointGeneration,
+    gathered: GatheredSnapshot,
+) -> CheckpointResult {
+    let GatheredSnapshot {
+        manifest_filename,
+        upload_files,
+        repos,
+        files,
+        pre_upload_entries,
+    } = gathered;
+
+    let outcome = upload_gathered_snapshot(
+        client.clone(),
+        &PipelineMode::Checkpoint(generation.clone()),
+        manifest_filename.clone(),
+        upload_files,
+        repos,
+        files,
+        pre_upload_entries,
+    )
+    .await;
+    log::info!(
+        "Checkpoint attempt generation={generation} pending commit",
+        generation = generation.as_str()
+    );
+    let Some(outcome) = outcome else {
+        return CheckpointResult::Failed {
+            generation: Some(generation),
+            reason: "failed to allocate upload targets or serialize manifest".to_string(),
+        };
+    };
+    log_snapshot_outcome(&outcome);
+
+    if !outcome.manifest_uploaded {
+        return CheckpointResult::Failed {
+            generation: Some(generation),
+            reason: "manifest failed to upload".to_string(),
+        };
+    }
+    if outcome
+        .entries
+        .iter()
+        .any(|e| e.status == EntryStatus::Failed)
+    {
+        return CheckpointResult::Failed {
+            generation: Some(generation),
+            reason: "one or more required blobs failed to upload".to_string(),
+        };
+    }
+
+    // Exact-set commit: the manifest object plus every blob whose own upload actually
+    // succeeded (cap-skipped, gather-failed, and read-failed entries are never included,
+    // matching the server's exact-set contract).
+    let manifest_object = storage_name(&generation, &manifest_filename);
+    let mut objects: Vec<String> = outcome
+        .entries
+        .iter()
+        .filter(|e| e.status == EntryStatus::Uploaded && e.label != manifest_filename)
+        .map(|e| storage_name(&generation, &e.label))
+        .collect();
+    objects.push(manifest_object.clone());
+
+    let commit_request = CommitSnapshotRequest {
+        generation: generation.as_str().to_string(),
+        manifest_object,
+        objects,
+    };
+    match client.commit_snapshot(&commit_request).await {
+        Ok(response) => {
+            log::info!("Checkpoint committed: generation={}", response.generation);
+            CheckpointResult::Committed { generation }
+        }
+        Err(e) => {
+            let e = e.context("Failed to commit checkpoint snapshot");
+            let reason = format!("{e:#}");
+            report_error!(e);
+            CheckpointResult::Failed {
+                generation: Some(generation),
+                reason,
+            }
+        }
+    }
 }
 
 struct GatheredSnapshot {
@@ -954,6 +1157,7 @@ async fn gather_snapshot_entries(declarations: Vec<DeclarationEntry>) -> Gathere
 
 async fn upload_gathered_snapshot(
     client: Arc<dyn HarnessSupportClient>,
+    mode: &PipelineMode,
     manifest_filename: String,
     mut upload_files: Vec<SnapshotUploadFile>,
     mut repos: Vec<RepoManifestEntry>,
@@ -990,12 +1194,13 @@ async fn upload_gathered_snapshot(
 
     let mut target_map: HashMap<String, UploadTarget> = HashMap::new();
     for chunk in file_infos.chunks(UPLOAD_BATCH_SIZE) {
-        let targets = match client
-            .get_snapshot_upload_targets(&SnapshotUploadRequest {
-                files: chunk.to_vec(),
-            })
-            .await
-        {
+        let request = match mode {
+            PipelineMode::Legacy => SnapshotUploadRequest::legacy(chunk.to_vec()),
+            PipelineMode::Checkpoint(generation) => {
+                SnapshotUploadRequest::checkpoint(generation.clone(), chunk.to_vec())
+            }
+        };
+        let targets = match client.get_snapshot_upload_targets(&request).await {
             Ok(t) => t,
             Err(e) => {
                 // Pipeline-abort: route through report_error! so Sentry captures the structured
