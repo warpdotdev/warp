@@ -423,6 +423,44 @@ pub fn orchestration_aware_conversation_status(
     }
 }
 
+/// Whether chrome (e.g. the Warping indicator) should treat this conversation
+/// as still actively working.
+///
+/// For ordinary (non-parent) conversations this matches
+/// [`ConversationStatus::is_in_progress`] so existing single-agent semantics
+/// are unchanged.
+///
+/// For orchestration parents, aggregation prefers a parent's
+/// `WaitingForEvents` over descendant `InProgress` (so the pill can show
+/// "waiting"). That would otherwise hide Warping during handoff. When the
+/// aggregated status is `WaitingForEvents`, still report active work if any
+/// descendant is actually running (REMOTE-2409).
+pub fn orchestration_aware_indicates_active_work(
+    history: &BlocklistAIHistoryModel,
+    conversation: &AIConversation,
+) -> bool {
+    let status = orchestration_aware_conversation_status(history, conversation);
+    // Preserve single-agent semantics: only InProgress shows Warping.
+    if status.is_in_progress() {
+        return true;
+    }
+    if !status.is_waiting_for_events() {
+        return false;
+    }
+    // Parent WaitingForEvents outranks descendant InProgress in aggregation.
+    // Recover the handoff case: keep Warping only while a child is still
+    // running, not when the whole tree is merely quiescent/waiting.
+    history
+        .child_conversation_ids_of(&conversation.id())
+        .iter()
+        .any(|child_id| {
+            history.conversation(child_id).is_some_and(|child| {
+                let child_status = child.status();
+                child_status.is_in_progress() || child_status.is_transient_error()
+            })
+        })
+}
+
 #[cfg(test)]
 #[path = "orchestration_topology_tests.rs"]
 mod tests;

@@ -458,6 +458,9 @@ pub(super) struct AIBlockStateHandles {
     /// Persistent mouse-state handles per received-message transcript row,
     /// used by the clickable sender avatar.
     pub(super) transcript_avatar_handles: HashMap<MessageId, MouseStateHandle>,
+    /// Persistent mouse-state handles for the labeled "View" control on
+    /// spawned-agent transcript rows (REMOTE-2409).
+    pub(super) transcript_view_handles: HashMap<MessageId, MouseStateHandle>,
 
     references_section_collapsible_handle: MouseStateHandle,
 
@@ -2312,6 +2315,10 @@ impl AIBlock {
                             });
                         self.state_handles
                             .transcript_avatar_handles
+                            .entry(collapsible_id.clone())
+                            .or_default();
+                        self.state_handles
+                            .transcript_view_handles
                             .entry(collapsible_id)
                             .or_default();
                     }

@@ -5,7 +5,8 @@ use pathfinder_color::ColorU;
 use warp_errors::report_error;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, FormattedTextElement,
-    Hoverable, ParentElement, Radius, Shrinkable, Text,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, SingletonEntity};
@@ -13,7 +14,7 @@ use warpui::{AppContext, Element, SingletonEntity};
 use super::WithContentItemSpacing;
 use super::common::render_scrollable_collapsible_content;
 use super::output::{Props, action_icon};
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResultType, MessageId, ReceivedMessageDisplay,
     SendMessageToAgentResult,
@@ -37,6 +38,7 @@ use crate::ai::blocklist::orchestration_topology::{
     OrchestrationParticipantKind, orchestrator_agent_id_for_conversation,
     resolve_orchestration_participant,
 };
+use crate::ai::conversation_status_ui::render_status_element;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -160,6 +162,60 @@ fn transcript_metadata(recipients: &[OrchestrationParticipant], subject: &str) -
     }
 }
 
+/// Whether a child conversation status should show an activity indicator on
+/// the spawned-agent transcript row (REMOTE-2409).
+pub(super) fn transcript_row_shows_activity_indicator(status: &ConversationStatus) -> bool {
+    status.is_in_progress() || status.is_transient_error() || status.is_waiting_for_events()
+}
+
+fn participant_conversation_status(
+    conversation_id: Option<AIConversationId>,
+    app: &AppContext,
+) -> Option<ConversationStatus> {
+    let conversation_id = conversation_id?;
+    BlocklistAIHistoryModel::as_ref(app)
+        .conversation(&conversation_id)
+        .map(|conversation| conversation.status().clone())
+}
+
+/// Labeled "View" control that opens/focuses the child agent pane. Uses a
+/// persistent mouse handle so hover state survives re-renders.
+fn render_view_child_button(
+    conversation_id: AIConversationId,
+    mouse_state: MouseStateHandle,
+    self_terminal_view_id: warpui::EntityId,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let font_family = appearance.ui_font_family();
+    let font_size = appearance.monospace_font_size() - 1.;
+    let label_color = blended_colors::text_main(theme, theme.background());
+
+    Hoverable::new(mouse_state, move |hover_state| {
+        let background = if hover_state.is_hovered() || hover_state.is_clicked() {
+            blended_colors::fg_overlay_2(theme)
+        } else {
+            blended_colors::fg_overlay_1(theme)
+        };
+        Container::new(
+            Text::new("View".to_string(), font_family, font_size)
+                .with_color(label_color)
+                .soft_wrap(false)
+                .finish(),
+        )
+        .with_horizontal_padding(8.)
+        .with_vertical_padding(2.)
+        .with_background(background)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, app, _| {
+        dispatch_focus_or_open_child_agent_pane(conversation_id, self_terminal_view_id, ctx, app);
+    })
+    .finish()
+}
+
 struct TranscriptRowData<'a> {
     participant: &'a OrchestrationParticipant,
     recipients: &'a [OrchestrationParticipant],
@@ -185,16 +241,36 @@ fn render_transcript_row(
     } else {
         props.collapsible_block_states.get(data.message_id)
     };
+    let child_status = participant_conversation_status(data.participant.conversation_id, app);
+    let show_activity = child_status
+        .as_ref()
+        .is_some_and(transcript_row_shows_activity_indicator);
 
+    // Name is display-only (not the expand target). Chevron alone expands the
+    // body; a separate View control opens the child conversation (REMOTE-2409).
     let name = FormattedTextFragment::bold(&data.participant.display_name);
-    let header_row_element: Box<dyn Element> = if let Some(state) = collapsible_state {
-        // Wrap the name + chevron in one clickable element so either toggles
-        // the section. Text is non-selectable + non-interactive so clicks
-        // register and the pointing-hand cursor isn't reset by the text.
-        let header = render_formatted_text_element(vec![name], app)
-            .set_selectable(false)
-            .disable_mouse_interaction()
-            .finish();
+    let name_element = render_formatted_text_element(vec![name], app)
+        .set_selectable(false)
+        .finish();
+
+    let mut header_leading = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_child(Shrinkable::new(1., name_element).finish());
+
+    if show_activity && let Some(status) = child_status.as_ref() {
+        header_leading = header_leading.with_child(
+            Container::new(render_status_element(
+                status,
+                icon_size(app) - 4.,
+                appearance,
+            ))
+            .with_margin_left(6.)
+            .finish(),
+        );
+    }
+
+    if let Some(state) = collapsible_state {
         let text_color = theme.foreground();
         let icon_sz = icon_size(app);
         let is_expanded = matches!(
@@ -208,24 +284,12 @@ fn render_transcript_row(
         };
         let toggle_mouse_state = state.expansion_toggle_mouse_state.clone();
         let message_id_clone = data.message_id.clone();
-
-        let expandable = Hoverable::new(toggle_mouse_state, move |_| {
-            // Make the bold name a Shrinkable child so very long agent names
-            // shrink within the available width instead of pushing the chevron
-            // past the transcript column.
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(Shrinkable::new(1., header).finish())
-                .with_child(
-                    Container::new(
-                        ConstrainedBox::new(chevron_icon.to_warpui_icon(text_color).finish())
-                            .with_width(icon_sz)
-                            .with_height(icon_sz)
-                            .finish(),
-                    )
-                    .with_margin_left(6.)
-                    .finish(),
-                )
+        // Chevron-only expand target so the agent name is not the sole path
+        // into the collapsible body (users need a clear open-conversation path).
+        let chevron = Hoverable::new(toggle_mouse_state, move |_| {
+            ConstrainedBox::new(chevron_icon.to_warpui_icon(text_color).finish())
+                .with_width(icon_sz)
+                .with_height(icon_sz)
                 .finish()
         })
         .with_cursor(Cursor::PointingHand)
@@ -233,26 +297,39 @@ fn render_transcript_row(
             ctx.dispatch_typed_action(AIBlockAction::ToggleCollapsibleBlockExpanded(
                 message_id_clone.clone(),
             ));
-        });
+        })
+        .finish();
+        header_leading =
+            header_leading.with_child(Container::new(chevron).with_margin_left(6.).finish());
+    }
 
-        // Wrap the Hoverable in a Shrinkable inside an outer row so it
-        // receives a bounded width constraint from the parent column. This
-        // lets the inner Shrinkable around the bold name actually shrink
-        // when the name is long, while the Hoverable's click bounds still
-        // size to its content (bold name + chevron) when it fits.
-        Flex::row()
-            .with_child(Shrinkable::new(1., expandable.finish()).finish())
-            .finish()
-    } else {
-        let header = render_formatted_text_element(vec![name], app).finish();
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(Shrinkable::new(1., header).finish())
-            .finish()
-    };
+    let mut header_row = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+        .with_child(Shrinkable::new(1., header_leading.finish()).finish());
+
+    if let (Some(conversation_id), Some(view_mouse_state)) = (
+        data.participant.conversation_id,
+        props
+            .state_handles
+            .transcript_view_handles
+            .get(data.message_id),
+    ) {
+        header_row = header_row.with_child(
+            Container::new(render_view_child_button(
+                conversation_id,
+                view_mouse_state.clone(),
+                props.terminal_view_id,
+                appearance,
+            ))
+            .with_margin_left(8.)
+            .finish(),
+        );
+    }
 
     let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-    content.add_child(header_row_element);
+    content.add_child(header_row.finish());
     if let Some(metadata) = transcript_metadata(data.recipients, data.subject) {
         content.add_child(
             Container::new(
@@ -289,8 +366,8 @@ fn render_transcript_row(
             .transcript_avatar_handles
             .get(data.message_id),
     ) {
-        // Navigate to the child's pane: focus if already open, otherwise
-        // open a new pane.
+        // Keep avatar open as an additive path; labeled View is the discoverable
+        // control (REMOTE-2409).
         let mouse_state = mouse_state.clone();
         let self_terminal_view_id = props.terminal_view_id;
         Hoverable::new(mouse_state, move |_| avatar)

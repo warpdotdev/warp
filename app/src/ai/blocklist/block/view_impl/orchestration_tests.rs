@@ -3,10 +3,10 @@ use warpui::{App, EntityId};
 
 use super::{
     OrchestrationAvatar, OrchestrationParticipant, agent_display_name_from_id,
-    participant_for_agent_id, transcript_metadata,
+    participant_for_agent_id, transcript_metadata, transcript_row_shows_activity_indicator,
 };
 use crate::BlocklistAIHistoryModel;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 #[test]
@@ -297,4 +297,35 @@ fn transcript_metadata_preserves_non_orchestrator_recipients() {
         transcript_metadata(&recipients, "Fix tests"),
         Some("to Agent 1 • Fix tests".to_string())
     );
+}
+
+#[test]
+fn transcript_row_shows_activity_indicator_for_running_statuses() {
+    assert!(transcript_row_shows_activity_indicator(
+        &ConversationStatus::InProgress
+    ));
+    assert!(transcript_row_shows_activity_indicator(
+        &ConversationStatus::TransientError
+    ));
+    assert!(transcript_row_shows_activity_indicator(
+        &ConversationStatus::WaitingForEvents
+    ));
+}
+
+#[test]
+fn transcript_row_hides_activity_indicator_for_terminal_statuses() {
+    assert!(!transcript_row_shows_activity_indicator(
+        &ConversationStatus::Success
+    ));
+    assert!(!transcript_row_shows_activity_indicator(
+        &ConversationStatus::Error
+    ));
+    assert!(!transcript_row_shows_activity_indicator(
+        &ConversationStatus::Cancelled
+    ));
+    assert!(!transcript_row_shows_activity_indicator(
+        &ConversationStatus::Blocked {
+            blocked_action: "awaiting approval".to_string(),
+        }
+    ));
 }

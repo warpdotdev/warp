@@ -332,6 +332,195 @@ fn orchestration_aware_status_uses_direct_status_for_non_parent() {
         });
     });
 }
+
+#[test]
+fn orchestration_aware_indicates_active_work_when_parent_done_and_child_running() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::Success,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let orchestrator = history_model
+                .conversation(&orchestrator_id)
+                .expect("orchestrator conversation exists");
+            assert!(
+                orchestration_aware_indicates_active_work(history_model, orchestrator),
+                "parent should stay active while a child is still in progress"
+            );
+        });
+    });
+}
+
+#[test]
+fn orchestration_aware_indicates_active_work_when_parent_waiting_with_children() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_b,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let orchestrator = history_model
+                .conversation(&orchestrator_id)
+                .expect("orchestrator conversation exists");
+            // Aggregation prefers parent's WaitingForEvents over descendant InProgress.
+            assert_eq!(
+                orchestration_aware_conversation_status(history_model, orchestrator),
+                ConversationStatus::WaitingForEvents,
+            );
+            assert!(
+                orchestration_aware_indicates_active_work(history_model, orchestrator),
+                "waiting parent with running children should still count as active work"
+            );
+        });
+    });
+}
+
+#[test]
+fn orchestration_aware_indicates_active_work_false_when_waiting_but_children_done() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                orchestrator_id,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            for id in [child_a, child_b] {
+                history_model.update_conversation_status(
+                    terminal_view_id,
+                    id,
+                    ConversationStatus::Success,
+                    ctx,
+                );
+            }
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let orchestrator = history_model
+                .conversation(&orchestrator_id)
+                .expect("orchestrator conversation exists");
+            assert_eq!(
+                orchestration_aware_conversation_status(history_model, orchestrator),
+                ConversationStatus::WaitingForEvents,
+            );
+            assert!(
+                !orchestration_aware_indicates_active_work(history_model, orchestrator),
+                "waiting parent with finished children should not force Warping"
+            );
+        });
+    });
+}
+
+#[test]
+fn orchestration_aware_indicates_active_work_false_for_finished_tree() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        history_model.update(&mut app, |history_model, ctx| {
+            for id in [orchestrator_id, child_a, child_b] {
+                history_model.update_conversation_status(
+                    terminal_view_id,
+                    id,
+                    ConversationStatus::Success,
+                    ctx,
+                );
+            }
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let orchestrator = history_model
+                .conversation(&orchestrator_id)
+                .expect("orchestrator conversation exists");
+            assert!(!orchestration_aware_indicates_active_work(
+                history_model,
+                orchestrator
+            ));
+        });
+    });
+}
+
+#[test]
+fn orchestration_aware_indicates_active_work_matches_leaf_in_progress() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            let conversation_id =
+                history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            history_model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            conversation_id
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let conversation = history_model
+                .conversation(&conversation_id)
+                .expect("conversation exists");
+            assert!(orchestration_aware_indicates_active_work(
+                history_model,
+                conversation
+            ));
+        });
+    });
+}
 #[test]
 fn has_local_orchestrated_children_detects_active_local_children() {
     App::test((), |mut app| async move {

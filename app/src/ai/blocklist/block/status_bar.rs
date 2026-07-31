@@ -41,6 +41,7 @@ use crate::ai::blocklist::agent_view::{
     AgentMessageBar, AgentViewController, EphemeralMessageModel, is_in_cloud_context,
 };
 use crate::ai::blocklist::model::AIBlockModelHelper;
+use crate::ai::blocklist::orchestration_topology::orchestration_aware_indicates_active_work;
 use crate::ai::blocklist::summarization_cancel_dialog::{
     self, SummarizationCancelDialog, SummarizationCancelDialogEvent,
 };
@@ -784,9 +785,16 @@ impl BlocklistAIStatusBar {
                 .is_some_and(|metadata| {
                     !metadata.should_hide_block() && metadata.long_running_control_state().is_none()
                 });
+        // Prefer orchestration-aware status so the parent keeps a working
+        // indicator while child agents are still in flight after the
+        // orchestrator's own turn finishes (REMOTE-2409).
+        let conversation_working = orchestration_aware_indicates_active_work(
+            BlocklistAIHistoryModel::as_ref(app),
+            conversation,
+        );
         let should_render_warping = !model.request_type(app).is_passive()
             && !has_expanded_requested_command_with_no_subagent
-            && (conversation.status().is_in_progress()
+            && (conversation_working
                 || (active_block.is_agent_in_control() && !active_block.is_agent_blocked()));
 
         if !should_render_warping {
