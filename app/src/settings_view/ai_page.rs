@@ -2985,10 +2985,15 @@ impl AISettingsPageView {
             }
         }
 
-        // Most subpage widgets render their own subheader-sized titles internally.
-        // Knowledge follows the Account-page convention and renders its title as page chrome,
-        // so filtering its setting widgets never removes the title.
-        let title = (subpage == Some(AISubpage::Knowledge)).then_some("Knowledge");
+        // Multi-section subpages (Warp Agent, Profiles) render their own subheader-sized
+        // section titles inside each widget, so they get no page-level title here.
+        // Single-topic subpages follow the Account-page convention and render their title as
+        // page chrome, so filtering their setting widgets never removes the title.
+        let title = match subpage {
+            Some(AISubpage::Knowledge) => Some("Knowledge"),
+            Some(AISubpage::ThirdPartyCLIAgents) => Some("Third party CLI agents"),
+            None | Some(AISubpage::WarpAgent) | Some(AISubpage::Profiles) => None,
+        };
         PageType::new_uncategorized(widgets, title)
     }
 
@@ -7714,15 +7719,6 @@ impl SettingsWidget for CLIAgentWidget {
         );
 
         Flex::column()
-            .with_child(
-                build_sub_header(
-                    appearance,
-                    "Third party CLI agents",
-                    Some(styles::header_font_color(true, app)),
-                )
-                .with_padding_bottom(HEADER_PADDING)
-                .finish(),
-            )
             .with_child(cli_agent_footer_toggle)
             .with_child(
                 Container::new(description.finish())
