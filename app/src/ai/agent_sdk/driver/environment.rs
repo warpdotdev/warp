@@ -505,24 +505,25 @@ pub(super) async fn clone_repo(
             safe: ("Successfully cloned repository"),
             full: ("Successfully cloned: {repo_name}")
         );
+    }
 
-        // Pin the freshly cloned repo to its ref, if one was requested. The
-        // partial clone above only fetched the default branch, so the ref may
-        // not be present yet; the command fetches it first, then checks it out.
-        if let Some(command) = checkout_command_for(repo, working_dir, shell_type) {
-            let checkout_ref = repo.checkout_ref.as_deref().unwrap_or_default();
-            safe_info!(
-                safe: ("Checking out pinned ref for repository"),
-                full: ("Checking out {checkout_ref} for {repo_name}")
-            );
-            let exit_code = execute_command(command, spawner).await?;
-            checkout_result(&repo_name, checkout_ref, exit_code)?;
+    // Pin after clone or reuse when a ref was requested. A reused directory may
+    // still be on an old default-branch tip, and a fresh partial clone only
+    // fetched the default branch — fetch the ref, then detach to FETCH_HEAD.
+    // When checkout_ref is unset, leave an existing directory untouched.
+    if let Some(command) = checkout_command_for(repo, working_dir, shell_type) {
+        let checkout_ref = repo.checkout_ref.as_deref().unwrap_or_default();
+        safe_info!(
+            safe: ("Checking out pinned ref for repository"),
+            full: ("Checking out {checkout_ref} for {repo_name}")
+        );
+        let exit_code = execute_command(command, spawner).await?;
+        checkout_result(&repo_name, checkout_ref, exit_code)?;
 
-            safe_info!(
-                safe: ("Successfully checked out pinned ref"),
-                full: ("Successfully checked out {checkout_ref} for {repo_name}")
-            );
-        }
+        safe_info!(
+            safe: ("Successfully checked out pinned ref"),
+            full: ("Successfully checked out {checkout_ref} for {repo_name}")
+        );
     }
 
     Ok(())

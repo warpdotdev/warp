@@ -512,6 +512,54 @@ fn parallel_clone_shell_leaves_existing_target_dir_when_no_checkout_ref() {
     );
 }
 
+/// Single-repo `clone_repo()` skips clone when the directory already exists, but
+/// must still run `checkout_command_for` when `checkout_ref` is set so a reused
+/// working tree is pinned rather than left on a stale default-branch tip.
+#[test]
+fn single_repo_checkout_pins_existing_dir_when_checkout_ref_set() {
+    let fixture = build_fixture();
+    // Existing single-repo target on the default branch (the reuse path).
+    let repo_dir = partial_clone(&fixture);
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.base_sha
+    );
+
+    let repo = SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        fixture.repo_name.clone(),
+    )
+    .with_checkout_ref(Some(fixture.pinned_sha.clone()));
+
+    // This is the command single-repo clone_repo runs after the if/else when a
+    // checkout_ref is present — including when the clone itself was skipped.
+    let command =
+        checkout_command_for(&repo, &fixture.working_dir, ShellType::Bash).expect("a ref was set");
+    assert!(
+        run_command(&command).success(),
+        "single-repo reuse path must fetch and pin checkout_ref"
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha,
+        "reused single-repo directory must pin when checkout_ref is set"
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "--abbrev-ref", "HEAD"], &repo_dir),
+        "HEAD",
+        "pin should detach HEAD via FETCH_HEAD"
+    );
+
+    // No checkout_ref still means no pin command (reused dirs stay untouched).
+    let unpinned = SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        fixture.repo_name.clone(),
+    );
+    assert!(checkout_command_for(&unpinned, &fixture.working_dir, ShellType::Bash).is_none());
+}
+
 #[test]
 fn checkout_command_fails_for_unknown_ref() {
     let fixture = build_fixture();
