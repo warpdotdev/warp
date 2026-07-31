@@ -402,6 +402,30 @@ pub struct RunAgentArgs {
     )]
     pub idle_on_complete: Option<humantime::Duration>,
 
+    /// Keep the agent's session open after the conversation ends in a terminal error.
+    ///
+    /// This is the interactive half of post-failure session retention: the agent process — which
+    /// is also the shared-session sharer — stays alive so a human can attach to the failed run's
+    /// session and keep debugging in it. Without this, the process exits the moment the
+    /// conversation errors and the session dies with it, leaving a retained sandbox that nothing
+    /// is serving.
+    ///
+    /// This is an idle window, not a fixed one: any follow-up sent into the session cancels the
+    /// pending exit, and the window restarts when the conversation next goes terminal.
+    ///
+    /// Deliberately separate from `--idle-on-complete`, which covers the success/blocked/cancelled
+    /// lifecycle. Neither flag is a fallback for the other.
+    ///
+    /// You can optionally provide a duration (e.g. `--idle-on-fail 10m`).
+    #[arg(
+        long = "idle-on-fail",
+        value_name = "DURATION",
+        num_args = 0..=1,
+        default_missing_value = "15m",
+        hide = true
+    )]
+    pub idle_on_fail: Option<humantime::Duration>,
+
     #[command(flatten)]
     pub snapshot: SnapshotArgs,
     /// Identifier for the task that spawned this agent, used to report progress.

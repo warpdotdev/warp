@@ -29,7 +29,7 @@ use warp_cli::skill::SkillSpec;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info};
 use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
-use warp_graphql::ai::AgentTaskState;
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::r#async::{FutureExt, TimeoutError, Timer};
@@ -254,16 +254,53 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         }
     }
 
-    /// End the run with `value`, deferring by `idle_on_complete` when set so the
-    /// driver stays alive long enough to accept a follow-up. Use for "graceful"
-    /// terminal statuses (Success / Blocked / Cancelled). Falls back to
-    /// immediate completion when `idle_on_complete` is `None`.
-    fn complete_with_optional_idle(&self, idle_on_complete: Option<Duration>, value: T) {
-        if let Some(idle_timeout) = idle_on_complete {
+    /// End the run with `value`, deferring by `idle_timeout` when set so the driver stays alive
+    /// long enough to accept a follow-up. Callers pass `idle_on_complete` for "graceful" terminal
+    /// statuses (Success / Blocked / Cancelled) and `idle_on_fail` for a terminal error. Falls
+    /// back to immediate completion when the window is `None`.
+    fn complete_with_optional_idle(&self, idle_timeout: Option<Duration>, value: T) {
+        if let Some(idle_timeout) = idle_timeout {
             self.end_run_after(idle_timeout, value);
         } else {
             self.end_run_now(value);
         }
+    }
+}
+
+/// How long the driver should stay alive after the conversation reaches `status`, if at all.
+///
+/// The two windows are deliberately independent, and neither is a fallback for the other,
+/// because they answer different questions:
+/// - `idle_on_complete` (`--idle-on-complete`): how long a healthy run stays available for a
+///   follow-up after it completes, is blocked, or is cancelled.
+/// - `idle_on_fail` (`--idle-on-fail`): how long a *failed* run keeps its shared session alive.
+///   The agent process is the session sharer, so exiting on error tears the session down; a
+///   retained sandbox with no live sharer is not attachable, which is the whole point of
+///   post-failure session retention.
+///
+/// `None` means exit immediately, which is the behavior whenever the corresponding flag is unset.
+/// Both windows are idle-based rather than fixed: a follow-up moves the conversation back to
+/// `InProgress`, which cancels the pending exit.
+fn idle_window_for_terminal_status(
+    status: &SDKConversationOutputStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+) -> Option<Duration> {
+    match status {
+        SDKConversationOutputStatus::Success
+        | SDKConversationOutputStatus::Blocked { .. }
+        | SDKConversationOutputStatus::Cancelled { .. } => idle_on_complete,
+        SDKConversationOutputStatus::Error { .. } => idle_on_fail,
+    }
+}
+
+/// Low-cardinality `outcome=` label for the ambient agent idle lifecycle logs.
+fn terminal_status_log_outcome(status: &SDKConversationOutputStatus) -> &'static str {
+    match status {
+        SDKConversationOutputStatus::Success
+        | SDKConversationOutputStatus::Blocked { .. }
+        | SDKConversationOutputStatus::Cancelled { .. } => "non_error_completion",
+        SDKConversationOutputStatus::Error { .. } => "error",
     }
 }
 
@@ -291,6 +328,10 @@ pub struct AgentDriverOptions {
     pub should_share: bool,
     /// How long to keep the session alive after the agent run completes, if at all.
     pub idle_on_complete: Option<Duration>,
+    /// How long to keep the session alive after the agent run ends in a terminal error, if at
+    /// all. Set by the cloud worker from the environment's post-failure session retention policy
+    /// so the failed run's shared session stays attachable for debugging.
+    pub idle_on_fail: Option<Duration>,
     /// If set, resume an existing conversation instead of starting fresh. The variant
     /// determines which harness-specific path is taken (Oz transcript restore vs.
     /// third-party-harness payload rehydration).
@@ -356,6 +397,11 @@ pub struct AgentDriver {
     // Optional idle timeout after completion. If set, the process will stay alive for follow-ups
     // and exit after this period of inactivity.
     idle_on_complete: Option<Duration>,
+
+    // Optional idle timeout after a terminal error. If set, the process (and with it the shared
+    // session it is sharing) stays alive after the conversation fails, so a human can attach to
+    // the failed run and keep working in its environment.
+    idle_on_fail: Option<Duration>,
 
     // The conversation ID to continue (if provided).
     restored_conversation_id: Option<AIConversationId>,
@@ -640,6 +686,7 @@ impl AgentDriver {
             parent_run_id,
             should_share,
             idle_on_complete,
+            idle_on_fail,
             secrets,
             resume,
             cloud_providers,
@@ -665,9 +712,9 @@ impl AgentDriver {
         };
 
         safe_info!(
-            safe: ("Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}"),
+            safe: ("Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}"),
             full: (
-                "Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, working_dir={}",
+                "Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}, working_dir={}",
                 working_dir.display()
             )
         );
@@ -767,6 +814,7 @@ impl AgentDriver {
             task_id,
             harness: None,
             idle_on_complete,
+            idle_on_fail,
             restored_conversation_id,
             resume_payload,
             cloud_providers,
@@ -812,6 +860,7 @@ impl AgentDriver {
             task_id: None,
             harness: None,
             idle_on_complete: None,
+            idle_on_fail: None,
             restored_conversation_id: None,
             resume_payload: None,
             cloud_providers: Vec::new(),
@@ -2353,7 +2402,7 @@ impl AgentDriver {
             let harness = task.harness.harness();
             let setup_events_for_environment = setup_events.clone();
             let source_repos_for_prepare = source_repos;
-            foreground
+            let prepare_outcome = foreground
                 .spawn(move |me, ctx| {
                     let working_dir = me.working_dir.clone();
                     me.terminal_driver.update(ctx, |_, ctx| {
@@ -2370,7 +2419,13 @@ impl AgentDriver {
                 })
                 .await?
                 .await
-                .map_err(AgentDriverError::from)?;
+                .map_err(AgentDriverError::from);
+            if let Err(error) = prepare_outcome {
+                // A broken environment is the case post-failure retention exists for, so this
+                // failure must not take the session down with it on the way out.
+                Self::linger_after_failure(&foreground, "environment_setup", &error).await;
+                return Err(error);
+            }
 
             if let Some(file_based_discovery_rx) = file_based_discovery_rx {
                 // Await discovery: collect UUIDs of file-based MCP servers that were auto-started
@@ -2551,6 +2606,104 @@ impl AgentDriver {
                     "The {harness} harness is only supported for local child agent launches."
                 ),
             }),
+        }
+    }
+
+    /// Keeps the agent process — and with it the run's shared session — alive for the configured
+    /// `--idle-on-fail` window before a setup failure propagates and tears everything down.
+    ///
+    /// The shared session is established before environment preparation runs, so a run that dies
+    /// during setup still has a live, joinable session. That is precisely the case post-failure
+    /// retention exists for: the environment is broken and a human wants to get into it and look
+    /// around. Without this the process exits immediately, the sharer disconnects, and the viewer
+    /// lands on an ended-conversation tombstone.
+    ///
+    /// The run's terminal state is reported to the server *before* the wait, so the run reads as
+    /// failed-with-a-live-session for the whole window rather than masquerading as in-progress.
+    ///
+    /// The window is idle-based: each viewer input into the session pushes it out again, so a
+    /// session someone is actively debugging in is not torn down underneath them.
+    ///
+    /// A no-op when `--idle-on-fail` was not passed, preserving immediate-exit behavior.
+    async fn linger_after_failure(
+        foreground: &ModelSpawner<Self>,
+        stage: &str,
+        error: &AgentDriverError,
+    ) {
+        let idle_on_fail = match foreground.spawn(|me, _| me.idle_on_fail).await {
+            Ok(idle_on_fail) => idle_on_fail,
+            Err(spawn_error) => {
+                log::warn!(
+                    "Could not read idle-on-fail window after {stage} failure: {spawn_error}"
+                );
+                return;
+            }
+        };
+        let Some(window) = idle_on_fail else {
+            return;
+        };
+
+        Self::report_failure_before_lingering(foreground, stage, error).await;
+
+        // Reuse the run-exit timer so viewer activity can reschedule the deadline through the
+        // same generation-counter mechanism the conversation path uses.
+        let (tx, rx) = oneshot::channel::<()>();
+        let idle_timeout = IdleTimeoutSender::new(tx);
+        idle_timeout.end_run_after(window, ());
+
+        let refresh = foreground.spawn(move |me, ctx| {
+            let terminal_driver = me.terminal_driver.clone();
+            ctx.subscribe_to_model(&terminal_driver, move |_, _, event, _| {
+                if matches!(event, TerminalDriverEvent::SharedSessionViewerInput) {
+                    log::debug!(
+                        "Ambient agent idle lifecycle: event=idle_timeout_refreshed trigger=viewer_input"
+                    );
+                    idle_timeout.end_run_after(window, ());
+                }
+            });
+        });
+        if let Err(error) = refresh.await {
+            log::warn!("Could not subscribe to viewer input for the debug window: {error}");
+        }
+
+        log::info!(
+            "Ambient agent idle lifecycle: event=idle_timeout_scheduled stage={stage} timeout={window:?} outcome=setup_failure"
+        );
+        let _ = rx.await;
+        log::info!(
+            "Ambient agent idle lifecycle: event=idle_window_elapsed stage={stage} outcome=setup_failure"
+        );
+    }
+
+    /// Reports the run's terminal failure state before the debug window starts.
+    ///
+    /// A setup failure never creates a conversation, so `LocalAgentTaskSyncModel` — which derives
+    /// task state from conversation status — never fires for it. Without this the run would sit
+    /// in progress for the whole window and surface as a healthy running run.
+    async fn report_failure_before_lingering(
+        foreground: &ModelSpawner<Self>,
+        stage: &str,
+        error: &AgentDriverError,
+    ) {
+        let message = error.to_string();
+        let resolved = foreground
+            .spawn(|me, ctx| {
+                me.task_id
+                    .map(|task_id| (task_id, ServerApiProvider::as_ref(ctx).get_ai_client()))
+            })
+            .await;
+        let Ok(Some((task_id, ai_client))) = resolved else {
+            return;
+        };
+
+        // Environment setup problems are the user's to fix (a bad setup command, an unreachable
+        // repo), so they are FAILED rather than ERROR.
+        let status = TaskStatusUpdate::with_error_code(message, PlatformErrorCode::InvalidRequest);
+        if let Err(error) = ai_client
+            .update_agent_task(task_id, Some(AgentTaskState::Failed), None, None, Some(status))
+            .await
+        {
+            log::warn!("Failed to report {stage} failure for run {task_id} before lingering: {error:#}");
         }
     }
 
@@ -3369,38 +3522,28 @@ impl AgentDriver {
                             }
                         };
 
-                        match output_status {
-                            SDKConversationOutputStatus::Success
-                            | SDKConversationOutputStatus::Blocked { .. }
-                            | SDKConversationOutputStatus::Cancelled { .. } => {
-                                // Whether to keep the process alive after completion is controlled by
-                                // the `warp agent run --idle-on-complete[=<DURATION>]` flag.
-                                if let Some(idle_timeout) = me.idle_on_complete {
-                                    log::info!(
-                                        "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome=non_error_completion",
-                                        me.task_id
-                                    );
-                                } else {
-                                    log::info!(
-                                        "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome=non_error_completion",
-                                        me.task_id
-                                    );
-                                }
-                                run_exit.complete_with_optional_idle(
-                                    me.idle_on_complete,
-                                    output_status,
-                                );
-                            }
-                            // Errors here are terminal: in-flight recoveries surface as
-                            // TransientError (handled above).
-                            SDKConversationOutputStatus::Error { .. } => {
-                                log::info!(
-                                    "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome=error",
-                                    me.task_id
-                                );
-                                run_exit.end_run_now(output_status);
-                            }
+                        // Errors here are terminal: in-flight recoveries surface as
+                        // TransientError (handled above). Whether the process outlives either
+                        // kind of terminal status is controlled by the `--idle-on-complete` /
+                        // `--idle-on-fail` flags; see `idle_window_for_terminal_status`.
+                        let idle_window = idle_window_for_terminal_status(
+                            &output_status,
+                            me.idle_on_complete,
+                            me.idle_on_fail,
+                        );
+                        let outcome = terminal_status_log_outcome(&output_status);
+                        if let Some(idle_timeout) = idle_window {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                                me.task_id
+                            );
+                        } else {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                                me.task_id
+                            );
                         }
+                        run_exit.complete_with_optional_idle(idle_window, output_status);
                     }
                 }
 
@@ -3714,6 +3857,9 @@ impl AgentDriver {
                     );
                 }
             }
+            // Only meaningful while a post-failure debug window is open, which subscribes to
+            // the terminal driver separately. Nothing to do on the steady-state path.
+            TerminalDriverEvent::SharedSessionViewerInput => {}
         }
     }
 

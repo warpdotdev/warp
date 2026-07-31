@@ -63,35 +63,6 @@ impl AIQueryRouting {
     }
 }
 
-/// The ambient run whose post-failure retention window this submission should push forward, if
-/// any.
-///
-/// A cloud environment can be configured to keep a failed run's environment alive for a bounded
-/// window so a human can keep debugging in it. That window is a sliding idle window: each query
-/// the user sends into the retained session refreshes it. The client therefore fires the
-/// `session-keepalive` endpoint whenever a prompt is actually forwarded to a live remote VM for
-/// an ambient run — the same condition under which the submission router forwards the prompt to
-/// the sharer via the viewer prompt path.
-///
-/// The endpoint is a documented no-op for a run that is not retained, so this deliberately does
-/// not consult the (possibly stale) client-side task state: a run the client still believes is
-/// `InProgress` may already have failed into retention on the server.
-///
-/// Returns `None` for a shared *local* session (no ambient run to retain), a read-only viewer
-/// (its prompt is rejected, so it is not activity), and every non-live routing target.
-pub(crate) fn session_keepalive_run_id(routing: &AIQueryRouting) -> Option<AmbientAgentTaskId> {
-    match routing {
-        AIQueryRouting::LiveRemoteVm {
-            is_executor: true,
-            ambient_agent_task_id,
-        } => *ambient_agent_task_id,
-        AIQueryRouting::LiveRemoteVm { .. }
-        | AIQueryRouting::NewCloudVm { .. }
-        | AIQueryRouting::UnconnectedReadOnly
-        | AIQueryRouting::Local => None,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::terminal::view) enum CloudConversationContinuationError {
     MissingTask,

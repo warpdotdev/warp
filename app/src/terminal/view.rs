@@ -122,7 +122,7 @@ use session_sharing_protocol::sharer::{
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 pub(crate) use shared_session::cloud_conversation_continuation::{
-    AIQueryRouting, resolve_ai_query_routing, session_keepalive_run_id,
+    AIQueryRouting, resolve_ai_query_routing,
 };
 use shared_session::{SharedSessionAdapter, Viewer};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
@@ -1676,6 +1676,13 @@ pub enum Event {
     /// Event propagates terminal inputs up to the workspace,
     /// to be processed on the way back down through the view hierarchy.
     SyncInput(SyncEvent),
+    /// A shared-session viewer sent input into this (sharer-side) session: raw PTY bytes,
+    /// a command execution, or an edit to the shared input buffer.
+    ///
+    /// Emitted so the agent driver can treat a human working in the session as activity and
+    /// refresh a failed run's post-failure debug window. Distinct from sharer-local input,
+    /// which cannot occur for a headless cloud agent.
+    SharedSessionViewerInput,
     /// Event used to propagate a state change for one of the terminal views
     /// inside this pane group.
     TerminalViewStateChanged,

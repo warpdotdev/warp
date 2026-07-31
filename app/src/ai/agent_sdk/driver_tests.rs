@@ -31,12 +31,14 @@ use super::{
     AgentDriver, AgentDriverError, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    build_secret_env_vars,
+    SDKConversationOutputStatus, build_secret_env_vars, idle_window_for_terminal_status,
+    terminal_status_log_outcome,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
-    AIAgentOutputMessage, ArtifactCreatedData, MessageId, UploadArtifactResult,
+    AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
+    UploadArtifactResult,
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -575,6 +577,78 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     // Sender was never consumed by the cancelled timer, so the channel is
     // still open but empty.
     assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+// ── Terminal-status idle window routing ──────────────────────────────────────────
+
+fn error_status() -> SDKConversationOutputStatus {
+    SDKConversationOutputStatus::Error {
+        error: RenderableAIError::InternalWarpError,
+    }
+}
+
+#[test]
+fn terminal_error_defers_by_idle_on_fail() {
+    // The agent process is the shared-session sharer, so a failed run must be able to outlive
+    // its own failure for the session to stay attachable while the sandbox is retained.
+    let window =
+        idle_window_for_terminal_status(&error_status(), None, Some(Duration::from_secs(15 * 60)));
+
+    assert_eq!(window, Some(Duration::from_secs(15 * 60)));
+}
+
+#[test]
+fn terminal_error_exits_immediately_without_idle_on_fail() {
+    let window =
+        idle_window_for_terminal_status(&error_status(), Some(Duration::from_secs(45 * 60)), None);
+
+    assert_eq!(
+        window, None,
+        "--idle-on-complete must not act as a fallback for a terminal error"
+    );
+}
+
+#[test]
+fn non_error_completion_defers_by_idle_on_complete() {
+    // The failure window must not leak into the success/blocked/cancelled lifecycle.
+    let cases = [
+        ("success", SDKConversationOutputStatus::Success),
+        (
+            "blocked",
+            SDKConversationOutputStatus::Blocked {
+                blocked_action: "approve".to_string(),
+            },
+        ),
+        (
+            "cancelled",
+            SDKConversationOutputStatus::Cancelled {
+                reason: CancellationReason::ManuallyCancelled,
+            },
+        ),
+    ];
+
+    for (label, status) in cases {
+        let window = idle_window_for_terminal_status(
+            &status,
+            Some(Duration::from_secs(45 * 60)),
+            Some(Duration::from_secs(15 * 60)),
+        );
+
+        assert_eq!(
+            window,
+            Some(Duration::from_secs(45 * 60)),
+            "unexpected window for {label}"
+        );
+    }
+}
+
+#[test]
+fn terminal_status_log_outcome_labels_are_low_cardinality() {
+    assert_eq!(
+        terminal_status_log_outcome(&SDKConversationOutputStatus::Success),
+        "non_error_completion"
+    );
+    assert_eq!(terminal_status_log_outcome(&error_status()), "error");
 }
 
 #[test]

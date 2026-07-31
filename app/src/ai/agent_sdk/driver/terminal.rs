@@ -122,6 +122,9 @@ pub(crate) enum TerminalDriverEvent {
         session_id: session_sharing_protocol::common::SessionId,
         join_url: String,
     },
+    /// A shared-session viewer sent input into this session. Used by the agent driver to treat
+    /// a human debugging in the session as activity that refreshes a post-failure debug window.
+    SharedSessionViewerInput,
 }
 
 /// Manages the terminal session lifecycle for the agent driver.
@@ -723,6 +726,9 @@ impl TerminalDriver {
                 if let Some(tx) = self.bootstrap_tx.take() {
                     let _ = tx.send(Ok(()));
                 }
+            }
+            crate::terminal::view::Event::SharedSessionViewerInput => {
+                ctx.emit(TerminalDriverEvent::SharedSessionViewerInput);
             }
             crate::terminal::view::Event::PtySpawnFailed { reason } => {
                 // Signal the bootstrap waiter immediately so it doesn't wait
