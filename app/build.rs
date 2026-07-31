@@ -114,6 +114,11 @@ fn main() -> Result<()> {
     }
 
     if target_os == "windows" {
+        // These values change copied assets and embedded version metadata without changing sources.
+        println!("cargo:rerun-if-env-changed=CARGO_FULL_PROFILE");
+        println!("cargo:rerun-if-env-changed=CARGO_BIN_NAME");
+        println!("cargo:rerun-if-env-changed=GIT_RELEASE_TAG");
+        println!("cargo:rerun-if-env-changed=WARP_APP_NAME");
         // Retrieve the Cargo profile name so that we can put a copy of ConPTY in
         // the correct target subdirectory.
         //
@@ -213,12 +218,14 @@ fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
 fn get_build_profile_name() -> String {
     // The profile name is always the 3rd last part of the path (with 1 based indexing).
     // e.g. /code/core/target/cli/build/my-build-info-9f91ba6f99d7a061/out
-    env::var("OUT_DIR")
-        .expect("OUT_DIR must be set")
-        .split(std::path::MAIN_SEPARATOR)
-        .nth_back(3)
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set"));
+    out_dir
+        .ancestors()
+        .nth(3)
+        .and_then(Path::file_name)
         .expect("could not get profile name")
-        .to_string()
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn add_features(target_family: &str, target_os: &str) {
@@ -526,7 +533,9 @@ END
     let target = env::var("TARGET").unwrap();
     if let Some(tool) = cc::windows_registry::find_tool(target.as_str(), "cl.exe") {
         for (key, value) in tool.env() {
-            env::set_var(key, value);
+            unsafe {
+                env::set_var(key, value);
+            }
         }
     }
     embed_resource::compile(resource_file_path, embed_resource::NONE)

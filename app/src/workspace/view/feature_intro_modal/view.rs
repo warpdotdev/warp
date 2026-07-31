@@ -13,7 +13,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
-use crate::settings_view::{custom_model_routers_widget_id, SettingsSection};
+use crate::settings_view::{SettingsSection, custom_model_routers_widget_id};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, PrimaryTheme,

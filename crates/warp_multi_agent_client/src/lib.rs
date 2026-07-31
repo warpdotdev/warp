@@ -4,8 +4,6 @@ use futures::StreamExt as _;
 use prost::Message as _;
 use tracing_futures::Instrument as _;
 use warp_core::channel::ChannelState;
-#[cfg(feature = "agent_mode_evals")]
-use warp_server_client::base_client::EVAL_USER_ID_HEADER;
 use warp_server_client::base_client::{AmbientHeaderPolicy, BaseClient};
 
 #[derive(Debug, thiserror::Error)]
@@ -69,11 +67,6 @@ pub async fn generate_multi_agent_output(
         .map_err(Error::AmbientHeaders)?
     {
         request_builder = request_builder.header(name, value);
-    }
-
-    #[cfg(feature = "agent_mode_evals")]
-    if let Some(eval_user_id) = client.eval_user_id() {
-        request_builder = request_builder.header(EVAL_USER_ID_HEADER, eval_user_id.to_string());
     }
 
     let raw_stream = client.wrap_eventsource_with_iap_detection(request_builder.eventsource());

@@ -6,8 +6,8 @@ use std::time::Duration;
 use cloud_object_models::JsonSerializer;
 use lazy_static::lazy_static;
 use settings::{Setting as _, SyncToCloud};
-use warp_core::execution_mode::AppExecutionMode;
 use warp_core::r#async::debounce;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::settings::ChangeEventReason;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_if_error;
@@ -15,9 +15,10 @@ use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
+use super::PrivacySettings;
+use super::ai::ExecutionProfiles;
 use super::cloud_preferences::{CloudPreferencesSettings, CloudPreferencesSettingsChangedEvent};
 use super::manager::SettingsEvent;
-use super::PrivacySettings;
 use crate::auth::auth_state::AuthState;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -175,6 +176,7 @@ lazy_static! {
         super::privacy::TELEMETRY_ENABLED_DEFAULTS_KEY,
         super::privacy::CRASH_REPORTING_ENABLED_DEFAULTS_KEY,
         super::privacy::CLOUD_CONVERSATION_STORAGE_ENABLED_DEFAULTS_KEY,
+        ExecutionProfiles::storage_key(),
     ];
 }
 
@@ -216,6 +218,11 @@ impl CloudPreferencesSyncer {
             me.retry_failed_settings(ctx);
         }
         me
+    }
+
+    /// Returns whether initial cloud/local preference reconciliation has completed.
+    pub(crate) fn has_completed_initial_load(&self) -> bool {
+        self.has_completed_initial_load
     }
 
     fn new_internal(
@@ -645,10 +652,8 @@ impl CloudPreferencesSyncer {
                 // initial load.
                 keys_to_sync_to_cloud.push(storage_key);
             } else {
-                // This is one of the two legacy settings stored in the user_settings table and
-                // it has not yet been saved to warp drive. In this case we want to wait for
-                // these settings to load from the server, and then sync them to warp drive.
-                // The logic for this is in privacy.rs.
+                // This setting has a dedicated migration path that explicitly
+                // writes it after its legacy source has loaded.
                 log::info!(
                     "Waiting to sync legacy cloud preference with storage key {storage_key} until it is explicitly set"
                 );
@@ -700,7 +705,9 @@ impl CloudPreferencesSyncer {
                 && !settings_manager.sync_regardless_of_users_syncing_setting(storage_key)
             {
                 // Skip syncing if settings sync is disabled and this particular cloud pref is not always synced.
-                log::debug!("Not syncing cloud preference with storage key {storage_key} because settings sync is disabled for it");
+                log::debug!(
+                    "Not syncing cloud preference with storage key {storage_key} because settings sync is disabled for it"
+                );
                 continue;
             }
 
@@ -717,7 +724,9 @@ impl CloudPreferencesSyncer {
                 .unwrap_or(false);
             if !is_current_value_syncable {
                 // Don't sync this preference if the current value is not syncable.
-                log::debug!("Not syncing cloud preference with storage key {storage_key} because the current value is not syncable");
+                log::debug!(
+                    "Not syncing cloud preference with storage key {storage_key} because the current value is not syncable"
+                );
                 continue;
             }
 

@@ -11,19 +11,19 @@ use warpui::{AppContext, SingletonEntity};
 
 use super::config_state::{AuthSecretSelection, OrchestrationConfigState};
 use super::providers::{
+    ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_RUNNER_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
     get_base_model_choices, resolve_default_host_slug, resolve_recent_host_slug,
-    ORCHESTRATION_ENV_NONE_LABEL, ORCHESTRATION_WARP_WORKER_HOST,
 };
+use crate::LLMPreferences;
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
 use crate::ai::local_harness_setup::{
-    local_harness_is_product_enabled, local_harness_setup_state, LocalHarnessSetupState,
+    LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::cloud_object::CloudObjectLookup as _;
-use crate::LLMPreferences;
 
 const DEFAULT_MODEL_LABEL: &str = "Default model";
 /// Label shown in the auth secret picker when no secret is selected
@@ -70,6 +70,13 @@ pub enum OptionBadge {
     Default,
     Recent,
     Connected,
+    /// Constructed by `warp_tui` (the TUI ask-question card). The variant
+    /// lives here so both frontends share a single `OptionBadge` type.
+    /// The lint is suppressed because the construction site is in the
+    /// downstream `warp_tui` crate, which is invisible to clippy when
+    /// linting `warp` in isolation.
+    #[allow(dead_code)]
+    Recommended,
 }
 
 /// Load state of the catalog backing a snapshot.
@@ -237,10 +244,10 @@ fn build_harness_snapshot(
         if selected_id.is_none() {
             if harness_str.eq_ignore_ascii_case(initial_harness) {
                 selected_id = Some(harness_str.clone());
-            } else if let Some(target_display) = &target_display {
-                if &entry.display_name == target_display {
-                    selected_id = Some(harness_str.clone());
-                }
+            } else if let Some(target_display) = &target_display
+                && &entry.display_name == target_display
+            {
+                selected_id = Some(harness_str.clone());
             }
         }
         rows.push(OptionRow {
@@ -287,32 +294,7 @@ pub fn model_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> Opt
     let is_local = !state.execution_mode.is_remote();
     let harness = Harness::parse_orchestration_harness(&state.harness_type);
     match harness {
-        Some(Harness::Oz) | None => {
-            // Oz / unset: Warp LLM catalog. Custom models excluded for
-            // cloud runs (not supported by remote workers).
-            // Order: auto models first, then custom models, then other models.
-            let llm_prefs = LLMPreferences::as_ref(ctx);
-            let (auto_models, rest): (Vec<_>, Vec<_>) =
-                get_base_model_choices(llm_prefs, ctx, is_local)
-                    .partition(|llm| llm.id.as_str().starts_with("auto"));
-            let (custom_models, other_models): (Vec<_>, Vec<_>) = rest
-                .into_iter()
-                .partition(|llm| llm_prefs.custom_llm_info_for_id(&llm.id).is_some());
-            let choices: Vec<ModelChoiceInput> = auto_models
-                .into_iter()
-                .chain(custom_models)
-                .chain(other_models)
-                .map(|llm| ModelChoiceInput {
-                    id: llm.id.to_string(),
-                    label: llm.menu_display_name(),
-                    disabled_reason: llm
-                        .disable_reason
-                        .as_ref()
-                        .map(|reason| reason.tooltip_text().to_string()),
-                })
-                .collect();
-            build_oz_model_snapshot(choices, &state.model_id)
-        }
+        Some(Harness::Oz) | None => oz_model_snapshot(&state.model_id, is_local, ctx),
         Some(Harness::Codex) if is_local => {
             // Local Codex: only "Default model" entry.
             OptionSnapshot::ready(
@@ -336,6 +318,39 @@ pub fn model_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> Opt
             build_non_oz_model_snapshot(models, &state.model_id)
         }
     }
+}
+
+/// Builds the Oz model options available for the requested execution location.
+///
+/// Local execution includes custom models backed by local endpoints. Cloud
+/// execution excludes them because remote workers cannot reach those endpoints.
+pub fn oz_model_snapshot(
+    selected_model_id: &str,
+    is_local: bool,
+    ctx: &AppContext,
+) -> OptionSnapshot {
+    // Oz / unset: Warp LLM catalog. Custom models are excluded for cloud
+    // execution because remote workers cannot use local custom endpoints.
+    let llm_prefs = LLMPreferences::as_ref(ctx);
+    let (auto_models, rest): (Vec<_>, Vec<_>) = get_base_model_choices(llm_prefs, ctx, is_local)
+        .partition(|llm| llm.id.as_str().starts_with("auto"));
+    let (custom_models, other_models): (Vec<_>, Vec<_>) = rest
+        .into_iter()
+        .partition(|llm| llm_prefs.custom_llm_info_for_id(&llm.id).is_some());
+    let choices = auto_models
+        .into_iter()
+        .chain(custom_models)
+        .chain(other_models)
+        .map(|llm| ModelChoiceInput {
+            id: llm.id.to_string(),
+            label: llm.menu_display_name(),
+            disabled_reason: llm
+                .disable_reason
+                .as_ref()
+                .map(|reason| reason.tooltip_text().to_string()),
+        })
+        .collect();
+    build_oz_model_snapshot(choices, selected_model_id)
 }
 
 /// Pure core for the Oz / unset branch of [`model_snapshot`].
@@ -519,16 +534,15 @@ fn build_host_snapshot(
     }
     // `recent_host` already comes from the persisted last selection. Only add
     // its row when the same slug was not emitted from a higher-priority source.
-    if let Some(slug) = recent_host.filter(|s| !s.trim().is_empty()) {
-        if !added_slugs
+    if let Some(slug) = recent_host.filter(|s| !s.trim().is_empty())
+        && !added_slugs
             .iter()
             .any(|known| known.eq_ignore_ascii_case(&slug))
-        {
-            rows.push(OptionRow {
-                badge: Some(OptionBadge::Recent),
-                ..OptionRow::new(slug.clone(), slug)
-            });
-        }
+    {
+        rows.push(OptionRow {
+            badge: Some(OptionBadge::Recent),
+            ..OptionRow::new(slug.clone(), slug)
+        });
     }
     OptionSnapshot {
         rows,
@@ -570,6 +584,42 @@ fn build_environment_snapshot(envs: Vec<(String, String)>, current: &str) -> Opt
         rows.push(OptionRow::new(env_id, env_name));
     }
     OptionSnapshot::ready(rows, selected_id)
+}
+
+// ── Runner ──────────────────────────────────────────────────────────
+
+/// Builds the runner options: a "Use environment default" clear row plus
+/// the supplied runners (already sorted by name). Runners are not cached
+/// client-side like environments, so the caller fetches them via
+/// `FactoryClient::get_runners` and passes them in along with the current
+/// load state; while `loading` is true the snapshot reports
+/// [`OptionSourceStatus::Loading`] so the picker can show a spinner.
+pub fn build_runner_snapshot(
+    runners: Vec<(String, String)>,
+    current: &str,
+    loading: bool,
+) -> OptionSnapshot {
+    let mut rows = vec![OptionRow::new(
+        String::new(),
+        ORCHESTRATION_RUNNER_NONE_LABEL,
+    )];
+    let mut selected_id = current.is_empty().then(String::new);
+    for (runner_id, runner_name) in runners {
+        if runner_id == current {
+            selected_id = Some(runner_id.clone());
+        }
+        rows.push(OptionRow::new(runner_id, runner_name));
+    }
+    OptionSnapshot {
+        rows,
+        selected_id,
+        status: if loading {
+            OptionSourceStatus::Loading
+        } else {
+            OptionSourceStatus::Ready
+        },
+        footer: None,
+    }
 }
 
 #[cfg(test)]

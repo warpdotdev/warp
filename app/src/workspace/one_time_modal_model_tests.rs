@@ -2,8 +2,8 @@ use futures::FutureExt;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    free_ai_removal_modal_decision, AISettings, FeatureIntroId, FreeAiRemovalModalDecision,
-    OneTimeModalModel, FEATURE_INTROS,
+    AISettings, FEATURE_INTROS, FeatureIntroId, FreeAiRemovalModalDecision, OneTimeModalModel,
+    free_ai_removal_modal_decision,
 };
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspaces::workspace::CustomerType;
@@ -17,10 +17,12 @@ fn wait_until_auto_handoff_sleep_modal_closed_tracks_modal_state() {
         terminal.update(&mut app, |_, ctx| {
             OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
                 // Resolves immediately while the modal is closed.
-                assert!(model
-                    .wait_until_auto_handoff_sleep_modal_closed()
-                    .now_or_never()
-                    .is_some());
+                assert!(
+                    model
+                        .wait_until_auto_handoff_sleep_modal_closed()
+                        .now_or_never()
+                        .is_some()
+                );
 
                 // The auto-resume path creates its wait future before the
                 // modal opens (e.g. while offline during sleep); it must

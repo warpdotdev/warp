@@ -4,18 +4,19 @@ use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::ui_helpers::context_window_snap_values;
+use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
-    has_configurable_context_window, should_show_long_context_pricing_warning, AIExecutionProfile,
-    AIExecutionProfileAppExt as _,
+    AIExecutionProfile, AIExecutionProfileAppExt as _, has_configurable_context_window,
+    should_show_long_context_pricing_warning,
 };
 use crate::ai::llms::{
     AvailableLLMs, LLMContextWindow, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
     ModelsByFeature,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -24,7 +25,6 @@ use crate::server::sync_queue::SyncQueue;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LaunchMode;
 fn configurable_model(provider: LLMProvider) -> LLMInfo {
     LLMInfo {
         display_name: "test model".to_string(),
@@ -135,7 +135,9 @@ fn snap_values_for_classic_200k_range_match_legacy_layout() {
     let values = rounded(&context_window_snap_values(1_000, 200_000));
     assert_eq!(
         values,
-        vec![1_000, 25_000, 50_000, 75_000, 100_000, 125_000, 150_000, 175_000, 200_000]
+        vec![
+            1_000, 25_000, 50_000, 75_000, 100_000, 125_000, 150_000, 175_000, 200_000
+        ]
     );
 }
 
@@ -144,7 +146,9 @@ fn snap_values_for_claude_1m_range_pick_100k_steps() {
     let values = rounded(&context_window_snap_values(200_000, 1_000_000));
     assert_eq!(
         values,
-        vec![200_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000]
+        vec![
+            200_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
+        ]
     );
 }
 

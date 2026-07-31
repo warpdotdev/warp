@@ -1,8 +1,8 @@
 #![cfg(feature = "local_fs")]
 use std::collections::HashSet;
 
-use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
 use warpui::App;
 
 use super::*;

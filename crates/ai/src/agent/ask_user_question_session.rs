@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use itertools::Itertools;
 
@@ -63,13 +63,6 @@ struct AskUserQuestionEditingState {
 }
 
 impl AskUserQuestionEditingState {
-    fn new(draft_count: usize) -> Self {
-        Self {
-            current_question_index: 0,
-            drafts: vec![QuestionDraftState::Unanswered; draft_count],
-        }
-    }
-
     fn current_question_index(&self) -> usize {
         self.current_question_index
     }
@@ -124,7 +117,10 @@ pub enum AskUserQuestionAction {
     ToggleOption {
         option_index: usize,
     },
-    OpenOtherInput,
+    /// Enters the inline editor for a free-form answer outside the listed choices.
+    EnterCustomAnswerEditing,
+    /// Leaves custom-answer editing without changing saved text or advancing.
+    ExitCustomAnswerEditing,
     SaveOtherText {
         text: Option<String>,
     },
@@ -142,7 +138,8 @@ pub enum AskUserQuestionAction {
 pub enum AskUserQuestionEffect {
     Noop,
     RefreshCurrent,
-    FocusOtherInput,
+    /// Requests focus for the inline free-form answer editor.
+    FocusCustomAnswerInput,
     ShowQuestion,
     ScheduleAutoAdvance,
     Submit(Vec<AskUserQuestionAnswerItem>),
@@ -155,12 +152,32 @@ pub struct AskUserQuestionSession {
 }
 
 impl AskUserQuestionSession {
-    pub fn new(mut questions: Vec<AskUserQuestionItem>) -> Self {
+    pub fn new(questions: Vec<AskUserQuestionItem>) -> Self {
+        Self::new_with_drafts(questions, HashMap::new())
+    }
+
+    pub fn new_with_drafts(
+        mut questions: Vec<AskUserQuestionItem>,
+        mut drafts_by_question_id: HashMap<String, QuestionDraft>,
+    ) -> Self {
         // Put multi-select questions before single-select so the last question
         // can auto-submit after a single option toggle.
         questions.sort_by_key(|question| !question.is_multiselect());
+        let drafts = questions
+            .iter()
+            .map(|question| {
+                drafts_by_question_id
+                    .remove(&question.question_id)
+                    .filter(|draft| !draft.is_empty())
+                    .map(QuestionDraftState::Answered)
+                    .unwrap_or(QuestionDraftState::Unanswered)
+            })
+            .collect();
         Self {
-            state: AskUserQuestionState::Editing(AskUserQuestionEditingState::new(questions.len())),
+            state: AskUserQuestionState::Editing(AskUserQuestionEditingState {
+                current_question_index: 0,
+                drafts,
+            }),
             questions,
         }
     }
@@ -229,7 +246,8 @@ impl AskUserQuestionSession {
             AskUserQuestionAction::ToggleOption { option_index } => {
                 self.toggle_option(option_index)
             }
-            AskUserQuestionAction::OpenOtherInput => self.open_other_input(),
+            AskUserQuestionAction::EnterCustomAnswerEditing => self.enter_custom_answer_editing(),
+            AskUserQuestionAction::ExitCustomAnswerEditing => self.exit_custom_answer_editing(),
             AskUserQuestionAction::SaveOtherText { text } => self.save_other_text(text),
             AskUserQuestionAction::NavigatePrev => self.navigate_prev(),
             AskUserQuestionAction::NavigateNext => self.navigate_next(),
@@ -296,7 +314,8 @@ impl AskUserQuestionSession {
         }
     }
 
-    fn open_other_input(&mut self) -> AskUserQuestionEffect {
+    /// Activates the inline free-form answer editor for the current question.
+    fn enter_custom_answer_editing(&mut self) -> AskUserQuestionEffect {
         let Some(is_multiselect) = self
             .current()
             .map(|current| current.question.is_multiselect())
@@ -314,7 +333,21 @@ impl AskUserQuestionSession {
             }
             draft.is_other_input_active = true;
         });
-        AskUserQuestionEffect::FocusOtherInput
+        AskUserQuestionEffect::FocusCustomAnswerInput
+    }
+
+    /// Clears only the custom-answer input's active editing state.
+    ///
+    /// Previously saved custom text remains part of the draft, and returning
+    /// to the option list does not trigger questionnaire auto-advance.
+    fn exit_custom_answer_editing(&mut self) -> AskUserQuestionEffect {
+        let Some(editing) = self.editing_state_mut() else {
+            return AskUserQuestionEffect::Noop;
+        };
+        editing.update_current_draft(|draft| {
+            draft.is_other_input_active = false;
+        });
+        AskUserQuestionEffect::RefreshCurrent
     }
 
     fn save_other_text(&mut self, text: Option<String>) -> AskUserQuestionEffect {
@@ -391,7 +424,7 @@ impl AskUserQuestionSession {
         };
 
         if supports_other && highlighted_index == Some(option_count) {
-            return self.open_other_input();
+            return self.enter_custom_answer_editing();
         }
 
         if let Some(option_index) = highlighted_index.filter(|index| *index < option_count) {

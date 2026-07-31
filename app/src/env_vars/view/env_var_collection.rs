@@ -1,4 +1,4 @@
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
@@ -14,8 +14,8 @@ use warpui::platform::Cursor;
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
-    id, AppContext, BlurContext, Element, Entity, FocusContext, ModelAsRef, ModelHandle,
-    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
+    AppContext, BlurContext, Element, Entity, FocusContext, ModelAsRef, ModelHandle,
+    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WindowId, id,
 };
 
 use super::command_dialog::EnvVarCommandDialog;
@@ -46,17 +46,17 @@ use crate::server::cloud_objects::update_manager::{FetchSingleObjectOption, Upda
 use crate::server::ids::{ServerId, SyncId};
 use crate::terminal::model::secrets::SecretLevel;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::ui_components::breadcrumb::{render_breadcrumbs, BreadcrumbState};
+use crate::ui_components::breadcrumb::{BreadcrumbState, render_breadcrumbs};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::ui_components::menu_button::{
-    highlight_icon_button_with_context_menu, icon_button_with_context_menu, MenuDirection,
+    MenuDirection, highlight_icon_button_with_context_menu, icon_button_with_context_menu,
 };
 use crate::util::bindings::CustomAction;
 use crate::view_components::alert::AlertConfig;
 use crate::view_components::{Alert, DismissibleToast, ToastType};
 use crate::workspace::ToastStack;
-use crate::{send_telemetry_from_ctx, Appearance, CloudObjectTypeAndId, TelemetryEvent};
+use crate::{Appearance, CloudObjectTypeAndId, TelemetryEvent, send_telemetry_from_ctx};
 
 // Universal
 pub(super) const CORE_HORIZONATAL_MARGIN: f32 = 24.;

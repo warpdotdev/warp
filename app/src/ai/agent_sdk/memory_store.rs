@@ -1,22 +1,22 @@
 use anyhow::Result;
 use comfy_table::Cell;
 use serde::Serialize;
+use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::memory_store::{
     CreateMemoryArgs, DeleteMemoryArgs, GetStoreArgs, ListMemoriesArgs, ListStoreAgentsArgs,
     ListVersionsArgs, MemoryCommand, MemoryStoreCommand, UpdateMemoryArgs, UpdateStoreArgs,
 };
-use warp_cli::GlobalOptions;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::output::{self, TableFormat};
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
     AIClient, AgentAttachmentItem, CreateMemoryRequest, CreateMemoryResponse, MemoryItem,
     MemorySource, MemoryStoreItem, MemoryVersionItem, UpdateMemoryRequest, UpdateMemoryResponse,
     UpdateMemoryStoreRequest,
 };
-use crate::server::server_api::ServerApiProvider;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 /// Run memory-store related commands.

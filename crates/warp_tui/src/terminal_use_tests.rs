@@ -9,13 +9,13 @@ use warp::tui_export::{
     LongRunningCommandControlState, TaskId, TerminalModel, TranscriptScope, UserTakeOverReason,
 };
 use warpui::EntityIdMap;
-use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
 use warpui_core::App;
+use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
 
 use super::{
-    hide_agent_requested_command_from_top_level, inline_process_owns_input,
-    terminal_use_conversation_to_resume, terminal_use_interrupt_action, tui_input_target,
-    tui_input_target_for_state, TerminalUseInterruptAction, TuiInputTarget,
+    TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
+    inline_process_owns_input, terminal_use_conversation_to_resume, terminal_use_interrupt_action,
+    tui_input_target, tui_input_target_for_state, user_controlled_running_command,
 };
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
@@ -43,7 +43,31 @@ fn ordinary_long_running_command_owns_inline_input() {
     model.simulate_long_running_block("cat", "");
 
     assert!(inline_process_owns_input(&model));
+    assert_eq!(
+        user_controlled_running_command(&model).map(|block| block.id()),
+        Some(model.block_list().active_block().id())
+    );
 }
+
+#[test]
+fn unfinished_background_output_does_not_own_inline_input() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_block("true", "");
+    model.process_bytes("starship: scanning files timed out");
+
+    let background_block = model
+        .block_list()
+        .blocks()
+        .iter()
+        .find(|block| block.is_background())
+        .expect("early output should create a background block");
+    assert!(!background_block.finished());
+    assert!(background_block.is_active_and_long_running());
+    assert!(user_controlled_running_command(&model).is_none());
+    assert!(!inline_process_owns_input(&model));
+    assert_eq!(tui_input_target(&model), TuiInputTarget::AgentEditor);
+}
+
 #[test]
 fn shell_startup_routes_input_by_bootstrap_stage() {
     let mut model = TerminalModel::mock(None, None);
@@ -52,11 +76,44 @@ fn shell_startup_routes_input_by_bootstrap_stage() {
     model.block_list_mut().reinit_shell();
     assert_eq!(tui_input_target(&model), TuiInputTarget::Disabled);
     assert_eq!(
-        tui_input_target_for_state(false, true, false, false),
+        tui_input_target_for_state(false, true, false, false, false, false),
+        TuiInputTarget::Disabled,
+        "silent startup-script execution should keep the bootstrap editor visible",
+    );
+    assert_eq!(
+        tui_input_target_for_state(false, true, true, false, false, false),
         TuiInputTarget::Pty,
+        "visible startup-script output should accept interactive PTY input",
     );
 }
 
+#[test]
+fn submit_policy_blocks_bootstrap_but_allows_ready_prompt() {
+    assert!(
+        !tui_input_target_for_state(false, false, false, false, false, false)
+            .agent_editor_owns_input(),
+        "bootstrap submission must remain disabled"
+    );
+    assert!(
+        tui_input_target_for_state(false, false, false, true, false, false)
+            .agent_editor_owns_input(),
+        "the normal prompt must accept submission"
+    );
+}
+
+#[test]
+fn alternate_screen_routes_input_to_its_current_owner() {
+    assert_eq!(
+        tui_input_target_for_state(true, false, false, true, false, false),
+        TuiInputTarget::Pty,
+        "a user-controlled alt-screen process should receive PTY input",
+    );
+    assert_eq!(
+        tui_input_target_for_state(true, false, false, true, false, true),
+        TuiInputTarget::AgentEditor,
+        "agent control should keep alt-screen keystrokes in the composer",
+    );
+}
 #[test]
 fn agent_command_owns_input_only_after_user_takeover() {
     let mut model = TerminalModel::mock(None, None);

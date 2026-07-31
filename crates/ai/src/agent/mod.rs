@@ -11,4 +11,4 @@ pub use ask_user_question_session::{
     AskUserQuestionSession, QuestionDraft,
 };
 pub use citation::{AIAgentCitation, UnknownCitationTypeError};
-pub use file_locations::{group_file_contexts_for_display, FileLocations};
+pub use file_locations::{FileLocations, group_file_contexts_for_display};

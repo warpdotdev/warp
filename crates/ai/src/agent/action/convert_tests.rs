@@ -13,6 +13,7 @@ fn start_recording(
         summary: String::new(),
         playback_speed_multiplier: 0,
         target,
+        description: String::new(),
     }
 }
 

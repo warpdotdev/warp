@@ -25,8 +25,8 @@
 use std::collections::HashMap;
 
 use warp_core::ui::appearance::Appearance;
-use warpui::platform::WindowStyle;
 use warpui::App;
+use warpui::platform::WindowStyle;
 
 use super::*;
 use crate::persistence::model::{ModelTokenUsage, PRIMARY_AGENT_CATEGORY};

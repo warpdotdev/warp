@@ -37,14 +37,15 @@ pub(super) enum TerminalUseInterruptAction {
 pub(super) enum TuiInputTarget {
     /// No editable destination is ready, such as while Warp injects its
     /// bootstrap script or waits for the first post-bootstrap prompt. The
-    /// session view keeps focus for reserved bindings, but hides the agent
-    /// editor and does not forward ordinary input to the PTY.
+    /// session view renders the editor with a `Starting shell...` indicator,
+    /// but submission is disabled and ordinary input is not forwarded to the
+    /// PTY.
     Disabled,
-    /// The foreground terminal process owns input during shell startup
-    /// scripts, alt-screen applications, or user-controlled long-running
-    /// commands. The agent editor is hidden, the session view is focused, and
-    /// terminal content forwards key, paste, and supported pointer events to
-    /// the PTY.
+    /// The foreground terminal process owns input during visible shell startup
+    /// script interactions, alt-screen applications, or user-controlled
+    /// long-running commands. The agent editor is hidden, the session view is
+    /// focused, and terminal content forwards key, paste, and supported pointer
+    /// events to the PTY.
     Pty,
     /// The shell is at an ordinary prompt and no foreground process owns
     /// input. The agent editor, menus, and footer are rendered, and focus moves
@@ -65,10 +66,15 @@ impl TuiInputTarget {
 fn tui_input_target_for_state(
     alt_screen_active: bool,
     script_execution: bool,
+    startup_script_visible: bool,
     bootstrap_precmd_done: bool,
     inline_process_owns_input: bool,
+    agent_owns_alt_screen_input: bool,
 ) -> TuiInputTarget {
-    if alt_screen_active || script_execution || inline_process_owns_input {
+    if (alt_screen_active && !agent_owns_alt_screen_input)
+        || (script_execution && startup_script_visible)
+        || inline_process_owns_input
+    {
         TuiInputTarget::Pty
     } else if !bootstrap_precmd_done {
         TuiInputTarget::Disabled
@@ -79,11 +85,14 @@ fn tui_input_target_for_state(
 
 pub(super) fn tui_input_target(terminal_model: &TerminalModel) -> TuiInputTarget {
     let block_list = terminal_model.block_list();
+    let active_block = block_list.active_block();
     tui_input_target_for_state(
         terminal_model.is_alt_screen_active(),
         block_list.is_script_execution(),
+        active_block.is_visible(block_list.transcript_scope()),
         block_list.is_bootstrapping_precmd_done(),
         inline_process_owns_input(terminal_model),
+        active_block.is_agent_in_control() || active_block.is_agent_tagged_in(),
     )
 }
 
@@ -118,8 +127,9 @@ pub(super) fn terminal_use_conversation_to_resume(
     .then_some(*metadata.conversation_id())
 }
 
-/// Whether a running inline command, rather than Warp's editor or agent, owns
-/// keyboard input.
+/// Whether a running command block is user-controlled. This block-local
+/// predicate supports command affordances; input and cursor ownership must use
+/// [`user_controlled_running_command`] so only the active block can qualify.
 pub(super) fn user_controls_running_command(block: &Block) -> bool {
     block.is_active_and_long_running()
         && block.is_bootstrapped()
@@ -128,8 +138,15 @@ pub(super) fn user_controls_running_command(block: &Block) -> bool {
         && !block.is_agent_tagged_in()
 }
 
+/// Returns the active running command when it, rather than Warp's editor or
+/// agent, owns inline terminal input.
+pub(super) fn user_controlled_running_command(terminal_model: &TerminalModel) -> Option<&Block> {
+    let active_block = terminal_model.block_list().active_block();
+    user_controls_running_command(active_block).then_some(active_block)
+}
+
 pub(super) fn inline_process_owns_input(terminal_model: &TerminalModel) -> bool {
-    user_controls_running_command(terminal_model.block_list().active_block())
+    user_controlled_running_command(terminal_model).is_some()
 }
 
 #[cfg(test)]

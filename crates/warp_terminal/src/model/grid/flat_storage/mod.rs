@@ -43,9 +43,9 @@ use style::BgAndStyle;
 
 use super::cell::LineLength as _;
 use super::row::Row;
-use super::{cell, CellType};
+use super::{CellType, cell};
 use crate::model::grid::HyperlinkId;
-use crate::model::{ansi, Point};
+use crate::model::{Point, ansi};
 
 const DEFAULT_FG_COLOR: ansi::Color = ansi::Color::Named(ansi::NamedColor::Foreground);
 

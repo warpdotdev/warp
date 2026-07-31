@@ -10,9 +10,9 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::model::block::{AgentInteractionMetadata, Block, SerializedAIMetadata, SerializedBlock};
 use super::shell::ShellType;
+use crate::cloud_object::Space;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::Space;
 use crate::server::ids::{ClientId, HashableId as _, SyncId};
 use crate::terminal::model::session::{Session, SessionId};
 use crate::util::dedupe_from_last;
@@ -21,7 +21,7 @@ use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowId, WorkflowSource, WorkflowType};
 
 mod up_arrow;
-pub(crate) use up_arrow::UpArrowHistoryConfig;
+pub use up_arrow::UpArrowHistoryConfig;
 
 /// Data model for a history command persisted to sqlite, used as an intermediate representation
 /// between the sqlite schema (sqlite::model::Command) and the [`History`] model.
@@ -206,7 +206,7 @@ pub struct History {
     session_id_to_shell_host: HashMap<SessionId, ShellHost>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkedWorkflowData {
     /// The history entry is linked to a `CloudWorkflow` by its ID.
     Id(SyncId),
@@ -936,13 +936,13 @@ impl History {
         };
 
         for entry in session_commands.iter_mut().rev() {
-            if let Some(entry_start_ts) = &entry.start_ts {
-                if entry_start_ts.timestamp_millis() == command_start_ts.timestamp_millis() {
-                    let entry = Arc::make_mut(entry);
-                    entry.exit_code = Some(exit_code);
-                    entry.completed_ts = Some(command_completed_ts);
-                    break;
-                }
+            if let Some(entry_start_ts) = &entry.start_ts
+                && entry_start_ts.timestamp_millis() == command_start_ts.timestamp_millis()
+            {
+                let entry = Arc::make_mut(entry);
+                entry.exit_code = Some(exit_code);
+                entry.completed_ts = Some(command_completed_ts);
+                break;
             }
         }
     }

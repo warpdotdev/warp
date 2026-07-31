@@ -548,7 +548,9 @@ pub enum ContentOffsetToPointError {
 #[derive(Debug, Error)]
 pub enum PointFromContentOffsetError {
     /// The provided offset is before the start of the first row.
-    #[error("Offset {offset} is before the start of the first row (first row starts at {first_row_offset})")]
+    #[error(
+        "Offset {offset} is before the start of the first row (first row starts at {first_row_offset})"
+    )]
     OffsetBeforeFirstRow {
         offset: ByteOffset,
         first_row_offset: ByteOffset,

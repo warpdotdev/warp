@@ -15,10 +15,10 @@ use warpui::platform::Cursor;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
+use crate::Appearance;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::warpify::render::SSH_DOCS_URL;
 use crate::ui_components::icons::Icon;
-use crate::Appearance;
 
 const BANNER_TITLE: &str = "Tmux SSH warpification has been deprecated";
 

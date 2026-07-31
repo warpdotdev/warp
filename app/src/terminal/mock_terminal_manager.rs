@@ -144,8 +144,8 @@ mod testing {
 
     use super::*;
     use crate::server::server_api::ServerApiProvider;
-    use crate::terminal::shell::{ShellName, ShellType};
     use crate::terminal::ShellLaunchState;
+    use crate::terminal::shell::{ShellName, ShellType};
 
     struct TerminalRootView {
         terminal_view: ViewHandle<TerminalView>,

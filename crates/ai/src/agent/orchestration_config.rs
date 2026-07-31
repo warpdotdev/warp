@@ -20,6 +20,8 @@ pub enum OrchestrationExecutionMode {
     Remote {
         environment_id: String,
         worker_host: String,
+        /// Runner UID pre-declared on the config; empty means unset.
+        runner_id: String,
     },
 }
 
@@ -79,16 +81,20 @@ pub fn matches_active_config(request: &RunAgentsRequest, config: &OrchestrationC
             super::action::RunAgentsExecutionMode::Remote {
                 environment_id,
                 worker_host,
+                runner_id,
                 ..
             },
             OrchestrationExecutionMode::Remote {
                 environment_id: cfg_env,
                 worker_host: cfg_host,
+                runner_id: cfg_runner,
             },
         ) => {
             let env_matches = environment_id.is_empty() || environment_id == cfg_env;
             let host_matches = worker_host.is_empty() || worker_host == cfg_host;
-            env_matches && host_matches
+            // Empty runner_id on the call inherits from the config → matches.
+            let runner_matches = runner_id.is_empty() || runner_id == cfg_runner;
+            env_matches && host_matches && runner_matches
         }
         // Variant mismatch (Local vs Remote).
         _ => false,
@@ -107,6 +113,7 @@ impl OrchestrationConfig {
                 OrchestrationExecutionMode::Remote {
                     environment_id: remote.environment_id.clone(),
                     worker_host: remote.worker_host.clone(),
+                    runner_id: remote.runner_id.clone(),
                 }
             }
             Some(api::orchestration_config::ExecutionMode::Local(_)) | None => {
@@ -134,11 +141,12 @@ impl OrchestrationConfig {
             OrchestrationExecutionMode::Remote {
                 environment_id,
                 worker_host,
+                runner_id,
             } => Some(api::orchestration_config::ExecutionMode::Remote(
                 api::orchestration_config::Remote {
                     environment_id: environment_id.clone(),
                     worker_host: worker_host.clone(),
-                    runner_id: Default::default(),
+                    runner_id: runner_id.clone(),
                 },
             )),
         };

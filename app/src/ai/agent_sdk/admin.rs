@@ -8,8 +8,9 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::user::PrincipalType;
-use crate::auth::AuthStateProvider;
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::Workspace;
 
 /// Kick off a device authorization login flow and handle auth events.
 pub fn login(ctx: &mut AppContext) -> Result<()> {
@@ -108,10 +109,66 @@ struct WhoamiOutput {
     display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     email: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    team_uids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    team_names: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    team_uid: Option<String>,
+    workspace_uid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    team_name: Option<String>,
+    workspace_name: Option<String>,
+}
+
+impl WhoamiOutput {
+    fn set_workspace(&mut self, workspace: Option<&Workspace>, user_uid: UserUid) {
+        let Some(workspace) = workspace else {
+            return;
+        };
+        let teams: Vec<_> = workspace
+            .teams
+            .iter()
+            .filter(|team| team.members.iter().any(|member| member.uid == user_uid))
+            .collect();
+
+        self.team_uids = teams.iter().map(|team| team.uid.to_string()).collect();
+        self.team_names = teams.iter().map(|team| team.name.clone()).collect();
+        self.workspace_uid = Some(workspace.uid.into());
+        self.workspace_name = (!workspace.name.is_empty()).then(|| workspace.name.clone());
+    }
+
+    fn pretty(&self, principal_type: PrincipalType) -> String {
+        let mut lines = vec![match principal_type {
+            PrincipalType::User => format!("User ID: {}", self.uid),
+            PrincipalType::ServiceAccount => format!("Service account ID: {}", self.uid),
+        }];
+
+        if let Some(name) = &self.display_name {
+            lines.push(format!("Display Name: {name}"));
+        }
+        if let Some(email) = &self.email {
+            lines.push(format!("Email: {email}"));
+        }
+
+        if let Some(workspace_uid) = &self.workspace_uid {
+            lines.push(format!("Workspace UID: {workspace_uid}"));
+        }
+        if let Some(workspace_name) = &self.workspace_name {
+            lines.push(format!("Workspace Name: {workspace_name}"));
+        }
+        if self.team_uids.len() > 1 {
+            lines.push("Teams:".to_string());
+        }
+
+        for (team_uid, team_name) in self.team_uids.iter().zip(&self.team_names) {
+            let indent = if self.team_uids.len() > 1 { "  " } else { "" };
+            lines.push(format!("{indent}Team ID: {team_uid}"));
+            if !team_name.is_empty() {
+                lines.push(format!("{indent}Team Name: {team_name}"));
+            }
+        }
+
+        lines.join("\n")
+    }
 }
 
 /// Singleton model that provides a `ModelContext` for the `whoami` command's async work.
@@ -128,15 +185,14 @@ pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
     let auth_state = AuthStateProvider::as_ref(ctx).get();
     let principal_type = auth_state.principal_type().unwrap_or_default();
 
-    let uid = auth_state
+    let user_uid = auth_state
         .user_id()
-        .map(|id| {
-            let s = id.as_string();
-            s.strip_prefix("serviceAccount:")
-                .map(String::from)
-                .unwrap_or(s)
-        })
         .ok_or_else(|| anyhow::anyhow!("Could not determine user ID. Are you logged in?"))?;
+    let uid = user_uid.as_string();
+    let uid = uid
+        .strip_prefix("serviceAccount:")
+        .map(String::from)
+        .unwrap_or(uid);
 
     let mut info = WhoamiOutput {
         uid,
@@ -149,8 +205,10 @@ pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
             PrincipalType::User => auth_state.user_email().filter(|e| !e.is_empty()),
             PrincipalType::ServiceAccount => None,
         },
-        team_uid: None,
-        team_name: None,
+        team_uids: vec![],
+        team_names: vec![],
+        workspace_uid: None,
+        workspace_name: None,
     };
 
     // Refresh workspace metadata before reading team info, so we don't print
@@ -164,11 +222,7 @@ pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
                 log::warn!("Failed to refresh team metadata for whoami: {err:#}");
             }
 
-            let current_team = UserWorkspaces::as_ref(ctx).current_team();
-            info.team_uid = current_team.map(|t| t.uid.to_string());
-            info.team_name = current_team
-                .map(|t| t.name.clone())
-                .filter(|n| !n.is_empty());
+            info.set_workspace(UserWorkspaces::as_ref(ctx).current_workspace(), user_uid);
 
             match output_format {
                 OutputFormat::Json => {
@@ -181,24 +235,7 @@ pub fn whoami(ctx: &mut AppContext, output_format: OutputFormat) -> Result<()> {
                     }
                 }
                 OutputFormat::Pretty => {
-                    match principal_type {
-                        PrincipalType::User => println!("User ID: {}", info.uid),
-                        PrincipalType::ServiceAccount => {
-                            println!("Service account ID: {}", info.uid)
-                        }
-                    }
-                    if let Some(name) = &info.display_name {
-                        println!("Display Name: {name}");
-                    }
-                    if let Some(email) = &info.email {
-                        println!("Email: {email}");
-                    }
-                    if let Some(team_uid) = &info.team_uid {
-                        println!("Team ID: {team_uid}");
-                    }
-                    if let Some(team_name) = &info.team_name {
-                        println!("Team Name: {team_name}");
-                    }
+                    println!("{}", info.pretty(principal_type));
                 }
                 OutputFormat::Text => {
                     println!("{}:{}", info.principal_type, info.uid);
@@ -235,3 +272,7 @@ pub fn logout(ctx: &mut AppContext) -> Result<()> {
     ctx.terminate_app(TerminationMode::ForceTerminate, None);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "admin_tests.rs"]
+mod tests;

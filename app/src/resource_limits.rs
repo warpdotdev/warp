@@ -17,8 +17,10 @@ pub fn adjust_resource_limits() {
         let (cur_limit, hard_limit) = match getrlimit(RLIMIT_NOFILE) {
             Ok(val) => val,
             Err(err) => {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to retrieve resource limit for number of files"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to retrieve resource limit for number of files")
+                );
                 return;
             }
         };
@@ -31,8 +33,10 @@ pub fn adjust_resource_limits() {
             match setrlimit(RLIMIT_NOFILE, new_limit, hard_limit) {
                 Ok(_) => log::info!("Increased open file descriptor limit to {new_limit}"),
                 Err(err) => {
-                    report_error!(anyhow::Error::new(err)
-                        .context("Failed to increase open file descriptor limit"))
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Failed to increase open file descriptor limit")
+                    )
                 }
             }
         }

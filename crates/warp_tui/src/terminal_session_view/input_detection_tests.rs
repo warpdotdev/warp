@@ -1,6 +1,6 @@
 use super::{
-    input_detection_decision, parsed_result_is_applicable, should_reset_input_to_agent,
-    InputDetectionDecision,
+    InputDetectionDecision, input_detection_decision, parsed_result_is_applicable,
+    should_reset_input_to_agent,
 };
 
 // These tests exercise only synchronous TUI coordinator decisions; they never invoke the NLD

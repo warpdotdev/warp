@@ -12,8 +12,8 @@
 use std::time::Duration;
 
 use warp::tui_export::{
-    parse_current_commands_and_tokens, tui_completion_context_has_exact_command,
-    tui_completion_session_context, InputType, SlashCommandDataSource as _,
+    InputType, SlashCommandDataSource as _, parse_current_commands_and_tokens,
+    tui_completion_context_has_exact_command, tui_completion_session_context,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
@@ -99,12 +99,25 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.abort_input_detection(ctx);
-        if is_user_edit {
+        let inline_menu_owns_input = active_inline_menu(
+            &self.inline_menus,
+            self.suggestions_mode.as_ref(ctx).mode(),
+            ctx,
+        )
+        .is_some_and(|menu| menu.input_ownership(ctx).inline_menu_owns_input());
+        if inline_menu_owns_input {
+            self.abort_shell_completion(ctx);
+            return;
+        }
+        self.handle_completion_editor_changed(ctx);
+        if is_user_edit
+            && self.suggestions_mode.as_ref(ctx).mode() != TuiInputSuggestionsMode::McpInstall
+        {
             self.schedule_input_detection(ctx);
         }
     }
 
-    fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(super) fn abort_input_detection(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(future) = self.input_detection.future.take() {
             future.abort();
         }

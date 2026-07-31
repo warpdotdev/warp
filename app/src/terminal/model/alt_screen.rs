@@ -278,7 +278,10 @@ impl AltScreen {
         })
     }
 
-    pub fn possible_file_paths_at_point(&self, point: Point) -> impl Iterator<Item = PossiblePath> {
+    pub fn possible_file_paths_at_point(
+        &self,
+        point: Point,
+    ) -> impl Iterator<Item = PossiblePath> + use<> {
         self.grid_handler
             .possible_file_paths_at_point(point)
             .into_iter()
@@ -357,7 +360,7 @@ impl AltScreen {
         });
     }
 
-    fn ansi_handler(&mut self) -> &mut impl ansi::Handler {
+    fn ansi_handler(&mut self) -> &mut (impl ansi::Handler + use<>) {
         self.grid_handler.ansi_handler()
     }
 
@@ -380,7 +383,9 @@ impl AltScreen {
 
 impl ansi::Handler for AltScreen {
     fn set_title(&mut self, _: Option<String>) {
-        report_error!("Handler method AltScreen::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method AltScreen::set_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn set_cursor_style(&mut self, style: Option<CursorStyle>) {
@@ -619,11 +624,15 @@ impl ansi::Handler for AltScreen {
     }
 
     fn push_title(&mut self) {
-        report_error!("Handler method AltScreen::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method AltScreen::push_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn pop_title(&mut self) {
-        report_error!("Handler method AltScreen::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method AltScreen::pop_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn text_area_size_pixels<W: io::Write>(&mut self, writer: &mut W) {

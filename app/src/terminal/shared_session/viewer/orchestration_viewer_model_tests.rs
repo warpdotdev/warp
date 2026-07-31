@@ -15,8 +15,8 @@ use warpui::{App, EntityId, SingletonEntity};
 use super::*;
 use crate::ai::ambient_agents::task::{AgentConfigSnapshot, AmbientAgentTask};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamerEvent;
-use crate::server::server_api::ai::{AIClient, MockAIClient};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, MockAIClient};
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
@@ -130,6 +130,7 @@ fn make_task_with_name(
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: session_id.map(String::from),
         session_link: None,
         creator: None,

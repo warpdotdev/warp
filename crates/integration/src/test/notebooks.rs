@@ -17,7 +17,7 @@ use warp::integration_testing::view_getters::terminal_view;
 use warp::integration_testing::window::{add_and_save_window, close_window, save_active_window_id};
 use warpui_core::integration::TestStep;
 
-use super::{new_builder, Builder};
+use super::{Builder, new_builder};
 
 pub fn test_notebook_pane_tracking() -> Builder {
     new_builder()

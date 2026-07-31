@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_channel::Sender;
+use byte_unit::Byte;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -17,18 +18,15 @@ use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
 use super::{
-    startup_max_attempts, Network, PtyBytesBatchStatus, Stage, StartupFailure, StartupRetryState,
-    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, PTY_READS_BATCH_THRESHOLD,
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
+    Stage, StartupFailure, StartupRetryState, startup_max_attempts,
 };
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
-use crate::editor::ReplicaId;
+use crate::auth::auth_manager::AuthManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::terminal::shared_session::{
-    SharedSessionScrollbackType, SharedSessionSource, MAX_BYTES_SHAREABLE,
-};
 use crate::terminal::TerminalModel;
+use crate::terminal::shared_session::{MAX_BYTES_SHAREABLE, SharedSessionSource};
 use crate::test_util::assert_eventually;
 
 fn is_upstream_message_pty_bytes_read(
@@ -68,16 +66,16 @@ fn test_startup_failure_retryability() {
         .is_retryable()
     );
 
-    assert!(!StartupFailure::ServerRejected(
-        FailedToInitializeSessionReason::ScrollbackTooLarge {}
-    )
-    .is_retryable());
-    assert!(!StartupFailure::ServerRejected(
-        FailedToInitializeSessionReason::NoUserQuotaRemaining {
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::ScrollbackTooLarge {})
+            .is_retryable()
+    );
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::NoUserQuotaRemaining {
             quota_type: QuotaType::SessionsCreated,
-        }
-    )
-    .is_retryable());
+        })
+        .is_retryable()
+    );
     assert!(
         !StartupFailure::ServerRejected(FailedToInitializeSessionReason::UserNotFound)
             .is_retryable()
@@ -169,7 +167,6 @@ fn create_network(
     session_initialized: bool,
 ) -> (ModelHandle<Network>, Sender<OrderedTerminalEventType>) {
     let (ordered_events_tx, ordered_events_rx) = async_channel::unbounded();
-    let scrollback_type = SharedSessionScrollbackType::None;
     let active_prompt = ActivePrompt::default();
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
 
@@ -177,10 +174,9 @@ fn create_network(
         Network::new_for_test(
             terminal_model,
             ordered_events_rx,
-            scrollback_type,
             active_prompt,
             Selection::None,
-            ReplicaId::random(),
+            Byte::from_u64(MAX_BYTES_SHAREABLE as u64),
             ctx,
         )
     });

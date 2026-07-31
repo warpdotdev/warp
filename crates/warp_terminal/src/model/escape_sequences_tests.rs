@@ -2,9 +2,9 @@ use warpui_core::keymap::Keystroke;
 use warpui_core::platform::OperatingSystem;
 
 use super::*;
+use crate::model::TermMode;
 use crate::model::indexing::Point;
 use crate::model::mouse::{MouseAction, MouseButton, MouseState};
-use crate::model::TermMode;
 
 fn validate_keystroke_test_cases<T: ModeProvider>(
     test_cases: &[(Keystroke, Vec<u8>)],
@@ -68,6 +68,14 @@ fn test_shift_backspace_emits_del_sequence() {
 
     let terminal_model_mock = TerminalModelMock::new();
     validate_keystroke_test_cases(test_cases, &terminal_model_mock);
+}
+
+#[test]
+fn tmux_passthrough_wraps_and_doubles_escapes() {
+    assert_eq!(
+        tmux_passthrough("\x1b]52;c;abc\x07"),
+        "\x1bPtmux;\x1b\x1b]52;c;abc\x07\x1b\\"
+    );
 }
 
 #[test]

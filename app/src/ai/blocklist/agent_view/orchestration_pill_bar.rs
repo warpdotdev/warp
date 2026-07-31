@@ -20,16 +20,16 @@ use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Align, AnchorPair, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
-    ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    SavePosition, ScrollbarWidth, Stack, Text, XAxisAnchor, YAxisAnchor,
-    DEFAULT_UI_LINE_HEIGHT_RATIO,
+    CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Element, Empty,
+    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, OffsetType, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition, ScrollbarWidth, Stack,
+    Text, XAxisAnchor, YAxisAnchor,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::{Cursor, LineStyle};
 use warpui::text_layout::{
-    ClipConfig, ClipDirection, ClipStyle, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
+    ClipConfig, ClipDirection, ClipStyle, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextStyle,
 };
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -63,8 +63,8 @@ use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::icon_with_status::{
-    self, render_icon_with_status_with_badge_style, BadgeInnerShape, IconWithStatusVariant,
-    StatusBadgeStyle,
+    self, BadgeInnerShape, IconWithStatusVariant, StatusBadgeStyle,
+    render_icon_with_status_with_badge_style,
 };
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
@@ -131,7 +131,7 @@ pub(crate) fn render_orchestrator_avatar_disc(
 ) -> Box<dyn Element> {
     render_avatar_disc(
         theme.ansi_fg_cyan(),
-        AvatarGlyph::Icon(Icon::Oz),
+        AvatarGlyph::Icon(Icon::Agent),
         size,
         theme,
         appearance,
@@ -633,7 +633,7 @@ impl OrchestrationPillBar {
             conversation_id: orchestrator_id,
             label: orchestrator_label(orchestrator),
             avatar_color: theme.ansi_fg_cyan(),
-            avatar_glyph: AvatarGlyph::Icon(Icon::Oz),
+            avatar_glyph: AvatarGlyph::Icon(Icon::Agent),
             status: Some(aggregated_orchestrator_status(history, orchestrator_id)),
             is_selected: orchestrator_id == active_id,
             kind: PillKind::Orchestrator,
@@ -2281,13 +2281,13 @@ pub fn render_orchestration_breadcrumbs(
         .unwrap_or("Agent");
     let child_label = child_name.to_string();
 
-    // Parent crumb uses the Oz glyph on a neutral disc to match the
+    // Parent crumb uses the Warp logo on a neutral disc to match the
     // orchestrator pill in the pill bar.
     let parent_spec = CrumbSpec {
         conversation_id: parent_id,
         label: parent_label,
         avatar_color: theme.ansi_fg_cyan(),
-        avatar_glyph: AvatarGlyph::Icon(Icon::Oz),
+        avatar_glyph: AvatarGlyph::Icon(Icon::Agent),
         is_active: false,
     };
 

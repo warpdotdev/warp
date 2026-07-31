@@ -791,13 +791,12 @@ impl WorkingDirectoriesModel {
         if let Some(focused_id) = focused_terminal_id {
             let mut repos_to_insert = Vec::new();
             for (dir, terminal_id) in &new_root_to_terminal {
-                if *terminal_id == focused_id {
-                    if let Some(repo_root) =
+                if *terminal_id == focused_id
+                    && let Some(repo_root) =
                         DetectedRepositories::as_ref(ctx).get_root_for_path(dir)
-                    {
-                        repos_to_insert.push((repo_root.clone(), focused_id));
-                        focused_repo = Some(repo_root);
-                    }
+                {
+                    repos_to_insert.push((repo_root.clone(), focused_id));
+                    focused_repo = Some(repo_root);
                 }
             }
             for (repo_key, focused_id) in repos_to_insert {
@@ -945,16 +944,17 @@ impl WorkingDirectoriesModel {
         diff_mode: &DiffMode,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(code_review_view) = self.get_code_review_view(pane_group_id, repo_path) {
-            code_review_view.update(ctx, |code_review_view, ctx| {
+        match self.get_code_review_view(pane_group_id, repo_path) {
+            Some(code_review_view) => code_review_view.update(ctx, |code_review_view, ctx| {
                 code_review_view.set_diff_base(diff_mode.to_owned(), ctx);
                 code_review_view.expand_comment_list(ctx);
-            })
-        } else {
-            report_error!(
-                "WorkingDirectoriesModel did not find CodeReviewView for repo path",
-                extra: { "repo_path" => ?repo_path }
-            );
+            }),
+            _ => {
+                report_error!(
+                    "WorkingDirectoriesModel did not find CodeReviewView for repo path",
+                    extra: { "repo_path" => ?repo_path }
+                );
+            }
         }
 
         if let Some(comment_batch) = self.get_or_create_code_review_comments(repo_path, ctx) {

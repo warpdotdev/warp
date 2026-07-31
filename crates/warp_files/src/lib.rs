@@ -622,10 +622,10 @@ impl FileModel {
 
     /// Ensures all parent directories of the given path exist, creating them if necessary.
     pub async fn ensure_parent_directories(path: &Path) -> Result<(), io::Error> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                async_fs::create_dir_all(parent).await?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            async_fs::create_dir_all(parent).await?;
         }
         Ok(())
     }
@@ -642,44 +642,41 @@ impl FileModel {
             let path = file.path;
             let watcher_type = file.watcher_type;
 
-            if let Some(ref path) = path {
-                if !path_still_used {
-                    match watcher_type {
-                        WatcherType::Individual => {
-                            // Unwatch the parent directory (matching the register
-                            // in open() which watches the parent, not the file).
-                            // Only unregister if no other individually-watched
-                            // files share the same parent directory.
-                            let watch_path = path
-                                .parent()
-                                .map(|p| p.to_path_buf())
-                                .unwrap_or_else(|| path.clone());
-                            let other_files_share_parent =
-                                self.file_state.local_values().any(|f| {
-                                    f.watcher_type == WatcherType::Individual
-                                        && f.path
-                                            .as_deref()
-                                            .and_then(|p| p.parent())
-                                            .map(|p| p == watch_path)
-                                            .unwrap_or(false)
-                                });
-                            if !other_files_share_parent {
-                                self.watcher.update(ctx, |watcher, _ctx| {
-                                    std::mem::drop(watcher.unregister_path(&watch_path));
-                                });
-                            }
+            if let Some(ref path) = path
+                && !path_still_used
+            {
+                match watcher_type {
+                    WatcherType::Individual => {
+                        // Unwatch the parent directory (matching the register
+                        // in open() which watches the parent, not the file).
+                        // Only unregister if no other individually-watched
+                        // files share the same parent directory.
+                        let watch_path = path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| path.clone());
+                        let other_files_share_parent = self.file_state.local_values().any(|f| {
+                            f.watcher_type == WatcherType::Individual
+                                && f.path
+                                    .as_deref()
+                                    .and_then(|p| p.parent())
+                                    .map(|p| p == watch_path)
+                                    .unwrap_or(false)
+                        });
+                        if !other_files_share_parent {
+                            self.watcher.update(ctx, |watcher, _ctx| {
+                                std::mem::drop(watcher.unregister_path(&watch_path));
+                            });
                         }
-                        WatcherType::Repository => {
-                            if let Some((repo_root, unused_repo)) =
-                                self.repo_path_mapping.remove(path)
-                            {
-                                if unused_repo {
-                                    self.unsubscribe_from_repo(&repo_root, ctx);
-                                }
-                            }
-                        }
-                        WatcherType::None => {}
                     }
+                    WatcherType::Repository => {
+                        if let Some((repo_root, unused_repo)) = self.repo_path_mapping.remove(path)
+                            && unused_repo
+                        {
+                            self.unsubscribe_from_repo(&repo_root, ctx);
+                        }
+                    }
+                    WatcherType::None => {}
                 }
             }
         }

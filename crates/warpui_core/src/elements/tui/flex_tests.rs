@@ -4,13 +4,13 @@ use std::rc::Rc;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiFlex;
+use crate::elements::CrossAxisAlignment;
 use crate::elements::tui::test_support::{render_to_lines, with_event_context, with_paint_surface};
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventHandler,
     TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiScreenPosition,
     TuiSize, TuiText,
 };
-use crate::elements::CrossAxisAlignment;
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, EntityId, EntityIdMap};

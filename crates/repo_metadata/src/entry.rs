@@ -3,16 +3,16 @@
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "local_fs")]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_lite::StreamExt;
 use ignore::gitignore::Gitignore;
 #[cfg(feature = "local_fs")]
 use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
-use warp_errors::report_error;
+use warp_errors::{ErrorExt, register_error, report_error};
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};
@@ -36,6 +36,14 @@ pub enum BuildTreeError {
     #[error("Maximum directory depth exceeded")]
     MaxDepthExceeded,
 }
+
+impl ErrorExt for BuildTreeError {
+    fn is_actionable(&self) -> bool {
+        false
+    }
+}
+
+register_error!(BuildTreeError);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IgnoredPathStrategy {
@@ -607,10 +615,10 @@ fn evaluate_entry(
         match options.ignored_path_strategy {
             IgnoredPathStrategy::Exclude => return Err(BuildTreeError::Ignored),
             IgnoredPathStrategy::IncludeOnly(patterns) => {
-                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str()) {
-                    if !patterns.iter().any(|pattern| file_name == pattern) {
-                        return Err(BuildTreeError::Ignored);
-                    }
+                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str())
+                    && !patterns.iter().any(|pattern| file_name == pattern)
+                {
+                    return Err(BuildTreeError::Ignored);
                 }
             }
             IgnoredPathStrategy::IncludeLazy => {

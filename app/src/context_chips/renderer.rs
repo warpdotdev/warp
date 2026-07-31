@@ -14,7 +14,7 @@ use warpui::{Action, Element};
 
 use super::context_chip::ContextChip;
 use super::display_chip::{chip_container, udi_font_size};
-use super::{spacing, ChipAvailability, ChipValue, ContextChipKind};
+use super::{ChipAvailability, ChipValue, ContextChipKind, spacing};
 use crate::appearance::Appearance;
 use crate::ui_components::icons;
 
