@@ -1023,9 +1023,7 @@ impl ShareBlockModal {
                 .finish()
             }
             None => {
-                // The pane group normally prevents this state, but keep the
-                // fallback quiet if a stale close/open event races a render.
-                log::debug!("Tried to render share modal without a model");
+                log::warn!("Tried to render share modal without a model");
                 Empty::new().finish()
             }
         };
