@@ -24,6 +24,7 @@ use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::spawn_tui_driver;
 use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
+use crate::clipboard::copy_to_clipboard;
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
@@ -288,7 +289,7 @@ fn init(
             ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
                 TuiLoginEvent::PhaseChanged => {
                     root_for_login.update(ctx, |root, ctx| {
-                        root.handle_login_phase_changed(ctx);
+                        root.handle_login_phase_changed(ctx, copy_to_clipboard);
                     });
                 }
                 TuiLoginEvent::LoggedIn => {

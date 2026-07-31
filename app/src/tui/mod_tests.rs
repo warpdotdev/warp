@@ -6,8 +6,8 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     TuiAuthBrowserFlow, TuiLoginEvent, TuiLoginModel, TuiLoginPhase, handle_auth_manager_event,
-    handle_browser_launch_result, retry_open_login_url, set_logged_out_phase, set_login_phase,
-    start_tui_device_login, tui_verification_url_with_return, validated_tui_focus_url,
+    set_logged_out_phase, set_login_phase, start_tui_device_login,
+    tui_verification_url_with_return, validated_tui_focus_url,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
@@ -100,7 +100,7 @@ fn rejects_invalid_focus_urls() {
 }
 
 #[test]
-fn explicit_start_device_login_transitions_only_from_welcome() {
+fn explicit_start_device_login_preserves_pending_logout_on_retry() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -130,6 +130,26 @@ fn explicit_start_device_login_transitions_only_from_welcome() {
             assert!(matches!(
                 TuiLoginModel::as_ref(ctx).browser_flow,
                 TuiAuthBrowserFlow::DirectDeviceAuthorization
+            ));
+        });
+
+        app.update(|ctx| {
+            TuiLoginModel::handle(ctx).update(ctx, |model, _| {
+                model.phase = TuiLoginPhase::Failed {
+                    message: "Unable to open logout URL".to_owned(),
+                };
+                model.browser_flow = TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending;
+            });
+        });
+        app.update(start_tui_device_login);
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::AwaitingLogin { browser_url: None }
+            ));
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).browser_flow,
+                TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending
             ));
         });
     });
@@ -173,51 +193,7 @@ fn stores_device_fallback_before_opening_browser() {
 }
 
 #[test]
-fn successful_browser_launch_keeps_auth_pending() {
-    App::test((), |mut app| async move {
-        app.add_singleton_model(|_| {
-            login_model(TuiLoginPhase::AwaitingLogin { browser_url: None })
-        });
-        app.update(|ctx| {
-            handle_browser_launch_result(
-                "https://app.warp.dev/device?user_code=ABCD-EFGH".to_owned(),
-                true,
-                ctx,
-            );
-        });
-
-        app.read(|ctx| {
-            assert!(matches!(
-                TuiLoginModel::as_ref(ctx).phase(),
-                TuiLoginPhase::AwaitingLogin { .. }
-            ));
-        });
-    });
-}
-
-#[test]
-fn failed_browser_launch_retains_exact_url_for_recovery() {
-    App::test((), |mut app| async move {
-        app.add_singleton_model(|_| {
-            login_model(TuiLoginPhase::AwaitingLogin { browser_url: None })
-        });
-        let browser_url =
-            "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli".to_owned();
-
-        app.update(|ctx| handle_browser_launch_result(browser_url.clone(), false, ctx));
-
-        app.read(|ctx| {
-            assert!(matches!(
-                TuiLoginModel::as_ref(ctx).phase(),
-                TuiLoginPhase::BrowserOpenFailed {
-                    browser_url: retained_url,
-                } if retained_url == &browser_url
-            ));
-        });
-    });
-}
-#[test]
-fn retry_uses_retained_url_and_keeps_auth_pending() {
+fn opens_only_the_current_retained_url() {
     App::test((), |mut app| async move {
         let browser_url =
             "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli".to_owned();
@@ -234,8 +210,8 @@ fn retry_uses_retained_url_and_keeps_auth_pending() {
                 browser_opened_for_callback.set(true);
                 url.to_owned()
             });
-            retry_open_login_url("https://example.com/wrong", ctx);
-            retry_open_login_url(&browser_url, ctx);
+            TuiLoginModel::open_login_url("https://example.com/wrong", ctx);
+            TuiLoginModel::open_login_url(&browser_url, ctx);
         });
 
         assert!(browser_opened.get());

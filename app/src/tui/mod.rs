@@ -76,9 +76,57 @@ impl TuiLoginModel {
     pub fn start_device_login(ctx: &mut AppContext) {
         start_tui_device_login(ctx);
     }
-    /// Retries opening the exact URL retained after an automatic launch failure.
-    pub fn retry_open_login_url(browser_url: &str, ctx: &mut AppContext) {
-        retry_open_login_url(browser_url, ctx);
+
+    /// Opens the current device-authorization URL.
+    pub fn open_login_url(browser_url: &str, ctx: &mut AppContext) {
+        let is_current_url = matches!(
+            TuiLoginModel::as_ref(ctx).phase(),
+            TuiLoginPhase::AwaitingLogin {
+                browser_url: Some(current_url),
+            } if current_url == browser_url
+        ) || matches!(
+            TuiLoginModel::as_ref(ctx).phase(),
+            TuiLoginPhase::BrowserOpenFailed {
+                browser_url: current_url,
+            } if current_url == browser_url
+        );
+        if !is_current_url {
+            return;
+        }
+
+        let retrying_after_failure = matches!(
+            TuiLoginModel::as_ref(ctx).phase(),
+            TuiLoginPhase::BrowserOpenFailed { .. }
+        );
+        if !ctx.try_open_url(browser_url) {
+            TuiLoginModel::handle(ctx).update(ctx, |model, _| {
+                if model.browser_flow == TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationOpened {
+                    model.browser_flow = TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending;
+                }
+            });
+            set_login_phase(
+                ctx,
+                TuiLoginPhase::BrowserOpenFailed {
+                    browser_url: browser_url.to_owned(),
+                },
+            );
+            log::warn!("Unable to open the device authorization URL in the default browser");
+            return;
+        }
+
+        TuiLoginModel::handle(ctx).update(ctx, |model, _| {
+            if model.browser_flow == TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending {
+                model.browser_flow = TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationOpened;
+            }
+        });
+        if retrying_after_failure {
+            set_login_phase(
+                ctx,
+                TuiLoginPhase::AwaitingLogin {
+                    browser_url: Some(browser_url.to_owned()),
+                },
+            );
+        }
     }
 
     #[cfg(any(test, feature = "test-util"))]
@@ -181,31 +229,31 @@ fn handle_auth_manager_event(event: &AuthManagerEvent, ctx: &mut AppContext) {
                     browser_url: Some(url_to_open.clone()),
                 },
             );
-            let browser_opened = ctx.try_open_url(&url_to_open);
-            handle_browser_launch_result(url_to_open, browser_opened, ctx);
-            if !browser_opened {
-                log::warn!("Unable to open the device authorization URL in the default browser");
-            }
+            TuiLoginModel::open_login_url(&url_to_open, ctx);
         }
         AuthManagerEvent::AuthComplete => {
             set_login_phase(ctx, TuiLoginPhase::LoggedIn);
             activate_global_mcp_servers(ctx);
         }
         AuthManagerEvent::AuthFailed(err) => {
-            let should_finish_web_logout = TuiLoginModel::handle(ctx).update(ctx, |model, _| {
-                let should_finish_web_logout = matches!(
-                    model.browser_flow,
-                    TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending
-                );
-                model.browser_flow = TuiAuthBrowserFlow::DirectDeviceAuthorization;
-                should_finish_web_logout
-            });
-            if should_finish_web_logout {
+            let should_finish_web_logout = matches!(
+                TuiLoginModel::as_ref(ctx).browser_flow,
+                TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending
+            );
+            let browser_flow = if should_finish_web_logout {
                 let logout_url = auth::web_logout_url();
-                if !ctx.try_open_url(&logout_url) {
+                if ctx.try_open_url(&logout_url) {
+                    TuiAuthBrowserFlow::DirectDeviceAuthorization
+                } else {
                     log::warn!("Unable to open the logout URL in the default browser");
+                    TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending
                 }
-            }
+            } else {
+                TuiAuthBrowserFlow::DirectDeviceAuthorization
+            };
+            TuiLoginModel::handle(ctx).update(ctx, |model, _| {
+                model.browser_flow = browser_flow;
+            });
             set_login_phase(
                 ctx,
                 TuiLoginPhase::Failed {
@@ -221,40 +269,6 @@ fn authorize_device(ctx: &mut AppContext) {
     AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
         auth_manager.authorize_device(ctx);
     });
-}
-
-fn handle_browser_launch_result(browser_url: String, browser_opened: bool, ctx: &mut AppContext) {
-    if !browser_opened {
-        set_login_phase(ctx, TuiLoginPhase::BrowserOpenFailed { browser_url });
-    }
-}
-
-fn retry_open_login_url(browser_url: &str, ctx: &mut AppContext) {
-    let is_current_url = matches!(
-        TuiLoginModel::as_ref(ctx).phase(),
-        TuiLoginPhase::AwaitingLogin {
-            browser_url: Some(current_url),
-        } if current_url == browser_url
-    ) || matches!(
-        TuiLoginModel::as_ref(ctx).phase(),
-        TuiLoginPhase::BrowserOpenFailed {
-            browser_url: current_url,
-        } if current_url == browser_url
-    );
-    if !is_current_url {
-        return;
-    }
-
-    if !ctx.try_open_url(browser_url) {
-        log::warn!("Unable to open the device authorization URL in the default browser");
-        return;
-    }
-    set_login_phase(
-        ctx,
-        TuiLoginPhase::AwaitingLogin {
-            browser_url: Some(browser_url.to_owned()),
-        },
-    );
 }
 
 fn tui_verification_url(verification_url: &str, user_code: &str) -> String {
@@ -320,17 +334,19 @@ fn activate_global_mcp_servers(ctx: &mut AppContext) {
     });
 }
 
-/// Starts a fresh direct device-authorization flow from a signed-out screen.
+/// Starts device authorization from a signed-out screen, preserving any required web logout.
 pub fn start_tui_device_login(ctx: &mut AppContext) {
     let should_authorize = TuiLoginModel::handle(ctx).update(ctx, |model, ctx| {
-        if !matches!(
-            model.phase,
-            TuiLoginPhase::SignedOutWelcome | TuiLoginPhase::Failed { .. }
-        ) {
-            return false;
+        match model.phase {
+            TuiLoginPhase::SignedOutWelcome => {
+                model.browser_flow = TuiAuthBrowserFlow::DirectDeviceAuthorization;
+            }
+            TuiLoginPhase::Failed { .. } => {}
+            TuiLoginPhase::AwaitingLogin { .. }
+            | TuiLoginPhase::BrowserOpenFailed { .. }
+            | TuiLoginPhase::LoggedIn => return false,
         }
         model.phase = TuiLoginPhase::AwaitingLogin { browser_url: None };
-        model.browser_flow = TuiAuthBrowserFlow::DirectDeviceAuthorization;
         ctx.notify();
         ctx.emit(TuiLoginEvent::PhaseChanged);
         true

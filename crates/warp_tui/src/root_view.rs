@@ -32,8 +32,8 @@ pub enum RootTuiAction {
     StartDeviceLogin,
     /// Starts device authorization and copies its exact URL once generated.
     StartDeviceLoginAndCopyUrl,
-    /// Retries the manual browser fallback shown after launch failure.
-    RetryOpenLoginUrl(String),
+    /// Opens the current device-authorization URL.
+    OpenLoginUrl(String),
     /// Copies the manual browser fallback shown while authorization is pending.
     CopyLoginUrl(String),
 }
@@ -89,14 +89,14 @@ impl RootTuiView {
 
     /// Transitions from the authentication gate to the live session container.
     pub(crate) fn show_terminal(&mut self, ctx: &mut ViewContext<Self>) {
-        self.copy_login_url_when_available = false;
+        self.reset_login_copy_state();
         self.state = RootTuiState::Terminal;
         ctx.notify();
     }
 
     /// Returns to the authentication gate after the current user logs out.
     pub(crate) fn show_auth(&mut self, ctx: &mut ViewContext<Self>) {
-        self.copy_login_url_when_available = false;
+        self.reset_login_copy_state();
         self.state = RootTuiState::Auth;
         ctx.focus_self();
         ctx.notify();
@@ -112,11 +112,12 @@ impl RootTuiView {
             .map(|session| session.view().clone())
     }
 
-    pub(crate) fn handle_login_phase_changed(&mut self, ctx: &mut ViewContext<Self>) {
-        self.handle_login_phase_changed_with(ctx, copy_to_clipboard);
+    fn reset_login_copy_state(&mut self) {
+        self.copy_login_url_when_available = false;
+        self.login_copy_hint.clear();
     }
 
-    fn handle_login_phase_changed_with(
+    pub(crate) fn handle_login_phase_changed(
         &mut self,
         ctx: &mut ViewContext<Self>,
         copy: impl FnOnce(&str) -> Result<()>,
@@ -235,7 +236,7 @@ impl TuiView for RootTuiView {
                         let browser_url = browser_url.clone();
                         move |event_ctx, _| {
                             if let Some(browser_url) = browser_url.clone() {
-                                event_ctx.dispatch_typed_action(RootTuiAction::RetryOpenLoginUrl(
+                                event_ctx.dispatch_typed_action(RootTuiAction::OpenLoginUrl(
                                     browser_url,
                                 ));
                             }
@@ -266,7 +267,7 @@ impl TuiView for RootTuiView {
                     {
                         let browser_url = browser_url.clone();
                         move |event_ctx, _| {
-                            event_ctx.dispatch_typed_action(RootTuiAction::RetryOpenLoginUrl(
+                            event_ctx.dispatch_typed_action(RootTuiAction::OpenLoginUrl(
                                 browser_url.clone(),
                             ));
                         }
@@ -321,7 +322,7 @@ impl TypedActionView for RootTuiView {
                     TuiLoginModel::as_ref(ctx).phase(),
                     TuiLoginPhase::SignedOutWelcome | TuiLoginPhase::Failed { .. }
                 ) {
-                    self.copy_login_url_when_available = false;
+                    self.reset_login_copy_state();
                     TuiLoginModel::start_device_login(ctx);
                 }
             }
@@ -330,12 +331,13 @@ impl TypedActionView for RootTuiView {
                     TuiLoginModel::as_ref(ctx).phase(),
                     TuiLoginPhase::SignedOutWelcome | TuiLoginPhase::Failed { .. }
                 ) {
+                    self.reset_login_copy_state();
                     self.copy_login_url_when_available = true;
                     TuiLoginModel::start_device_login(ctx);
                 }
             }
-            RootTuiAction::RetryOpenLoginUrl(url) => {
-                TuiLoginModel::retry_open_login_url(url, ctx);
+            RootTuiAction::OpenLoginUrl(url) => {
+                TuiLoginModel::open_login_url(url, ctx);
             }
             RootTuiAction::CopyLoginUrl(url) => {
                 self.copy_login_url_with(url, ctx, copy_to_clipboard);

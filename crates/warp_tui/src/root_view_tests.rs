@@ -34,6 +34,11 @@ fn start_device_login_action_retries_from_failure() {
         let (_, root) = add_root(&mut app);
 
         root.update(&mut app, |root, ctx| {
+            root.login_copy_hint.show_success(
+                "Login URL copied to clipboard".to_owned(),
+                ctx,
+                |view| &mut view.login_copy_hint,
+            );
             root.handle_action(&RootTuiAction::StartDeviceLogin, ctx);
         });
 
@@ -43,6 +48,7 @@ fn start_device_login_action_retries_from_failure() {
                 TuiLoginPhase::AwaitingLogin { browser_url: None }
             ));
             assert!(!root.as_ref(ctx).copy_login_url_when_available);
+            assert!(root.as_ref(ctx).login_copy_hint.current().is_none());
         });
     });
 }
@@ -57,7 +63,7 @@ fn pending_copy_clears_on_failure_before_url_generation() {
 
         root.update(&mut app, |root, ctx| {
             root.copy_login_url_when_available = true;
-            root.handle_login_phase_changed_with(ctx, |_| -> Result<()> {
+            root.handle_login_phase_changed(ctx, |_| -> Result<()> {
                 panic!("failure has no URL to copy")
             });
         });
@@ -104,7 +110,7 @@ fn pending_copy_consumes_exact_generated_url_once() {
 
         root.update(&mut app, |root, ctx| {
             root.copy_login_url_when_available = true;
-            root.handle_login_phase_changed_with(ctx, move |url| {
+            root.handle_login_phase_changed(ctx, move |url| {
                 copied_for_action.replace(Some(url.to_owned()));
                 Ok(())
             });
@@ -115,7 +121,7 @@ fn pending_copy_consumes_exact_generated_url_once() {
             assert!(!root.as_ref(ctx).copy_login_url_when_available);
         });
         root.update(&mut app, |root, ctx| {
-            root.handle_login_phase_changed_with(ctx, |_| -> Result<()> {
+            root.handle_login_phase_changed(ctx, |_| -> Result<()> {
                 panic!("generated URL must only be copied once")
             });
         });
@@ -131,7 +137,7 @@ fn pending_copy_waits_without_url() {
 
         root.update(&mut app, |root, ctx| {
             root.copy_login_url_when_available = true;
-            root.handle_login_phase_changed_with(ctx, |_| -> Result<()> {
+            root.handle_login_phase_changed(ctx, |_| -> Result<()> {
                 panic!("copy must wait until an exact URL exists")
             });
         });
