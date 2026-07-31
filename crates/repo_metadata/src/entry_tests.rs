@@ -271,6 +271,29 @@ fn should_watch_ignores_symlinks_above_repo_root() {
 
 #[cfg(unix)]
 #[test]
+fn should_watch_allows_symlinked_repo_root() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let real_root = temp_dir.path().join("real-repo");
+    let symlinked_root = temp_dir.path().join("linked-repo");
+    fs::create_dir_all(real_root.join("src")).unwrap();
+    std::os::unix::fs::symlink(&real_root, &symlinked_root).unwrap();
+
+    assert!(super::should_watch_repo_directory(
+        &symlinked_root,
+        &symlinked_root,
+        &[],
+        &[]
+    ));
+    assert!(super::should_watch_repo_directory(
+        &symlinked_root.join("src"),
+        &symlinked_root,
+        &[],
+        &[]
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn should_watch_allows_symlinked_force_included_paths() {
     let temp_dir = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(temp_dir.path()).unwrap();
