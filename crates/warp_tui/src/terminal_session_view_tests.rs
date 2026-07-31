@@ -24,7 +24,8 @@ use warp::tui_export::{
     SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
     TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers, TuiUpArrowHistoryItemKind,
     UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent, export_conversation_markdown,
-    light_theme, register_tui_session_view_test_singletons, slash_commands,
+    forkable_tui_conversation_for_test, light_theme, register_tui_session_view_test_singletons,
+    slash_commands,
 };
 use warp_core::channel::Channel;
 use warp_core::features::FeatureFlag;
@@ -119,6 +120,7 @@ struct FocusTestFixture {
 fn only_conversation_list_restores_emit_restore_telemetry() {
     assert!(!TuiConversationRestoreOrigin::Startup.records_telemetry());
     assert!(TuiConversationRestoreOrigin::ConversationList.records_telemetry());
+    assert!(!TuiConversationRestoreOrigin::Fork.records_telemetry());
 }
 
 #[test]
@@ -1970,6 +1972,160 @@ fn cost_slash_command_rejects_an_empty_conversation_like_the_gui() {
                 Some(COST_EMPTY_CONVERSATION_HINT),
             );
         });
+    });
+}
+
+#[test]
+fn fork_slash_command_is_available_on_both_surfaces() {
+    assert_eq!(slash_commands::FORK.name, "/fork");
+    assert!(slash_commands::FORK.supported_surfaces.supports_gui());
+    assert!(slash_commands::FORK.supported_surfaces.supports_tui());
+}
+
+#[test]
+fn fork_slash_command_rejects_an_empty_conversation() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::FORK, None, ctx);
+        });
+
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.transient_hint.current().map(|(text, _)| text),
+                Some(super::FORK_EMPTY_CONVERSATION_HINT),
+            );
+            assert!(view.input_view.as_ref(ctx).is_empty(ctx));
+        });
+    });
+}
+
+#[test]
+fn fork_slash_command_keeps_a_conversation_without_a_resume_id_selected() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let source_conversation = forkable_tui_conversation_for_test("local-only conversation");
+        let source_conversation_id = source_conversation.id();
+
+        view.update(&mut app, |view, ctx| {
+            view.replace_conversation_surface(
+                source_conversation,
+                TuiConversationRestoreOrigin::ConversationList,
+                TuiConversationRestoreTelemetryTarget::Local,
+                ctx,
+            );
+            view.execute_tui_slash_command(&slash_commands::FORK, None, ctx);
+        });
+
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.conversation_selection
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx),
+                Some(source_conversation_id),
+            );
+            assert_eq!(
+                view.transient_hint.current().map(|(text, _)| text),
+                Some(super::FORK_NO_RESUME_ID_HINT),
+            );
+        });
+    });
+}
+
+#[test]
+fn fork_slash_command_replaces_the_surface_and_renders_original_resume_guidance() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (model_event_sender, _model_event_receiver) = std::sync::mpsc::sync_channel(2);
+        app.update(|ctx| {
+            warp::tui_export::GlobalResourceHandlesProvider::handle(ctx).update(
+                ctx,
+                |provider, _| {
+                    provider.set_model_event_sender_for_test(model_event_sender);
+                },
+            );
+        });
+
+        let source_token = "11111111-1111-1111-1111-111111111111";
+        let source_conversation =
+            forkable_tui_conversation_for_test("Original fork boundary prompt");
+        let source_conversation_id = source_conversation.id();
+        let source_root_task_id = source_conversation.get_root_task_id().clone();
+        view.update(&mut app, |view, ctx| {
+            let source_conversation =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.restore_conversations(
+                        view.terminal_surface_id,
+                        vec![source_conversation],
+                        ctx,
+                    );
+                    history.set_server_conversation_token_for_conversation(
+                        source_conversation_id,
+                        source_token.to_owned(),
+                    );
+                    history
+                        .conversation(&source_conversation_id)
+                        .expect("source conversation should be restored")
+                        .clone()
+                });
+            view.replace_conversation_surface(
+                source_conversation,
+                TuiConversationRestoreOrigin::ConversationList,
+                TuiConversationRestoreTelemetryTarget::Local,
+                ctx,
+            );
+            assert!(
+                view.slash_commands_source
+                    .as_ref(ctx)
+                    .active_commands()
+                    .any(|(_, command)| command.kind == SlashCommandKind::Fork)
+            );
+            view.execute_tui_slash_command(&slash_commands::FORK, None, ctx);
+        });
+
+        let forked_conversation_id = view.read(&app, |view, ctx| {
+            view.conversation_selection
+                .as_ref(ctx)
+                .selected_conversation_id(ctx)
+                .expect("fork should select a replacement conversation")
+        });
+        assert_ne!(forked_conversation_id, source_conversation_id);
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert!(history.conversation(&source_conversation_id).is_some());
+            let forked = history
+                .conversation(&forked_conversation_id)
+                .expect("forked conversation should be restored");
+            assert_ne!(forked.get_root_task_id(), &source_root_task_id);
+            assert_eq!(
+                forked
+                    .forked_from_server_conversation_token()
+                    .map(|token| token.as_str()),
+                Some(source_token),
+            );
+            assert_eq!(forked.exchange_count(), 1);
+            assert_eq!(
+                view.as_ref(ctx)
+                    .transcript
+                    .as_ref(ctx)
+                    .agent_blocks_in_canonical_order()
+                    .len(),
+                1,
+            );
+        });
+
+        let rendered = render_session(&mut app, &view, 100, 40).join("\n");
+        let notice = rendered
+            .find("Forked conversation. To resume the original in another session, run:")
+            .unwrap_or_else(|| panic!("fork should render resume guidance:\n{rendered}"));
+        let resume_id = rendered.find(source_token).unwrap_or_else(|| {
+            panic!("resume guidance should contain the original server token:\n{rendered}")
+        });
+        assert!(notice < resume_id);
     });
 }
 

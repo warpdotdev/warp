@@ -26,21 +26,21 @@ use warp::tui_export::{
     BlocklistOrchestrationTelemetryEvent, CLISubagentController, CLISubagentEvent,
     CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
     CloudConversationData, CommandExecutionSource, ConversationFileExport, ConversationSelection,
-    ConversationSelectionHandle, ExecuteCommandEvent, GetRelevantFilesController, GitHubRepoModel,
-    GitRepoStatusModel, LLMId, LLMPreferences, LLMPreferencesEvent,
-    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData, ModelEvent,
-    ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind, PillBarInteractionEvent,
-    PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent, QueuedQueryEvent,
-    QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
-    SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
-    SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
-    StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TelemetryEvent, TerminalColorList,
-    TerminalColors, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
-    TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker,
-    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
-    WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
+    ConversationSelectionHandle, ExecuteCommandEvent, FORK_PREFIX, ForkConversationError,
+    GetRelevantFilesController, GitHubRepoModel, GitRepoStatusModel, LLMId, LLMPreferences,
+    LLMPreferencesEvent, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData,
+    ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
+    PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
+    QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
+    ServerConversationToken, SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo,
+    SizeUpdate, SkillReference, SlashCommandDataSource as _, SlashCommandKind,
+    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
+    TelemetryEvent, TerminalColorList, TerminalColors, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId,
+    TuiMcpVariableValue, TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind,
+    TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason,
+    WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
     build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
@@ -326,6 +326,10 @@ fn zero_state_ascii_load_failure_hint(failure: ZeroStateAnimationLoadFailure) ->
 const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already running";
 const NEW_CONVERSATION_COMMAND_RUNNING_HINT: &str =
     "cannot start new conversation while terminal command is running";
+const FORK_NO_ACTIVE_CONVERSATION_HINT: &str = "/fork requires an active conversation";
+const FORK_EMPTY_CONVERSATION_HINT: &str = "Nothing to fork — start a conversation first.";
+const FORK_NO_RESUME_ID_HINT: &str = "This conversation cannot be forked until it has a resume ID.";
+const FORK_FAILED_HINT: &str = "Conversation forking failed.";
 const SWITCH_COMMAND_RUNNING_HINT: &str =
     "Cannot switch conversations while a command is in progress.";
 const SWITCH_CONVERSATION_RUNNING_HINT: &str =
@@ -479,6 +483,7 @@ fn render_mcp_menu_footer(
 pub(crate) enum TuiConversationRestoreOrigin {
     Startup,
     ConversationList,
+    Fork,
 }
 
 impl TuiConversationRestoreOrigin {
@@ -487,6 +492,7 @@ impl TuiConversationRestoreOrigin {
             Self::Startup | Self::ConversationList => {
                 AgentViewEntryOrigin::RestoreExistingConversation
             }
+            Self::Fork => AgentViewEntryOrigin::Tui,
         }
     }
 
@@ -3082,14 +3088,16 @@ impl TuiTerminalSessionView {
             TuiConversationRestoreOrigin::Startup => {
                 self.conversation_restore_state = ConversationRestoreState::Failed(message);
             }
-            TuiConversationRestoreOrigin::ConversationList => {
-                warp::send_telemetry_from_ctx!(
-                    TuiConversationRestoreTelemetryEvent {
-                        state: TuiConversationRestoreTelemetryState::Failed,
-                        target,
-                    },
-                    ctx
-                );
+            TuiConversationRestoreOrigin::ConversationList | TuiConversationRestoreOrigin::Fork => {
+                if origin.records_telemetry() {
+                    warp::send_telemetry_from_ctx!(
+                        TuiConversationRestoreTelemetryEvent {
+                            state: TuiConversationRestoreTelemetryState::Failed,
+                            target,
+                        },
+                        ctx
+                    );
+                }
                 self.conversation_restore_state = ConversationRestoreState::Idle;
                 self.show_transient_hint(message, ctx);
                 self.focus_input_if_active(ctx);
@@ -4283,6 +4291,89 @@ impl TuiTerminalSessionView {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
         true
     }
+    fn fork_current_conversation(
+        &mut self,
+        prompt: Option<&String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !self
+            .ai_context_model
+            .as_ref(ctx)
+            .can_start_new_conversation()
+        {
+            self.show_error_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
+            return false;
+        }
+        let Some(source_conversation_id) = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            self.show_error_hint(FORK_NO_ACTIVE_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        };
+        let Some(source_conversation) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&source_conversation_id)
+            .cloned()
+        else {
+            self.show_error_hint(FORK_NO_ACTIVE_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        };
+        if let Err(ForkConversationError::EmptyConversation) =
+            BlocklistAIHistoryModel::validate_fork_source(&source_conversation)
+        {
+            self.show_error_hint(FORK_EMPTY_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        }
+        let Some(source_token) = source_conversation.server_conversation_token().cloned() else {
+            self.show_error_hint(FORK_NO_RESUME_ID_HINT.to_owned(), ctx);
+            return false;
+        };
+
+        let forked_conversation =
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.fork_conversation(&source_conversation, FORK_PREFIX, false, None, ctx)
+            });
+        let forked_conversation = match forked_conversation {
+            Ok(conversation) => conversation,
+            Err(error) => {
+                match error.downcast_ref::<ForkConversationError>() {
+                    Some(ForkConversationError::EmptyConversation) => {
+                        self.show_error_hint(FORK_EMPTY_CONVERSATION_HINT.to_owned(), ctx);
+                    }
+                    None => {
+                        report_error!(error.context("TUI conversation forking failed"));
+                        self.show_error_hint(FORK_FAILED_HINT.to_owned(), ctx);
+                    }
+                }
+                return false;
+            }
+        };
+        self.replace_conversation_surface(
+            forked_conversation,
+            TuiConversationRestoreOrigin::Fork,
+            TuiConversationRestoreTelemetryTarget::Local,
+            ctx,
+        );
+        let resume_command =
+            tui_resume_shell_command(ChannelState::channel(), source_token.as_str());
+        self.transcript.update(ctx, |transcript, ctx| {
+            transcript.append_notice(
+                format!(
+                    "Forked conversation. To resume the original in another session, run: {resume_command}"
+                ),
+                ctx,
+            );
+        });
+        if let Some(prompt) = prompt
+            .map(|argument| argument.trim())
+            .filter(|argument| !argument.is_empty())
+        {
+            self.send_prompt(prompt.to_owned(), ctx);
+        }
+        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        true
+    }
 
     fn execute_tui_slash_command(
         &mut self,
@@ -4311,6 +4402,11 @@ impl TuiTerminalSessionView {
             }
             SlashCommandKind::MoveToCloud => {
                 self.start_handoff(argument, ctx);
+            }
+            SlashCommandKind::Fork => {
+                if self.fork_current_conversation(argument, ctx) {
+                    record_static_slash_command_accepted(command.name, true, ctx);
+                }
             }
             SlashCommandKind::AutoApprove => {
                 self.toggle_auto_approve(true, ctx);
@@ -4547,7 +4643,6 @@ impl TuiTerminalSessionView {
             | SlashCommandKind::RenameTab
             | SlashCommandKind::RenameConversation
             | SlashCommandKind::SetTabColor
-            | SlashCommandKind::Fork
             | SlashCommandKind::OpenCodeReview
             | SlashCommandKind::Index
             | SlashCommandKind::Init
@@ -4941,6 +5036,10 @@ impl TuiTerminalSessionView {
             } => return (conversation_restoring(ctx), false),
             ConversationRestoreState::Loading {
                 origin: TuiConversationRestoreOrigin::ConversationList,
+                ..
+            }
+            | ConversationRestoreState::Loading {
+                origin: TuiConversationRestoreOrigin::Fork,
                 ..
             } => {}
             ConversationRestoreState::Failed(message) => {
