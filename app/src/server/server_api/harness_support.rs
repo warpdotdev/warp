@@ -132,7 +132,8 @@ impl CheckpointGeneration {
     /// Construct from a string the caller has already shaped to [`Self::is_valid`].
     /// `snapshot::mint_generation` is the only production caller and satisfies it by
     /// construction, so the invariant is a debug assertion rather than a fallible return.
-    // Unused until the periodic checkpoint coordinator (a follow-up, stacked PR) lands.
+    // Nothing calls the checkpoint API in this file yet -- the periodic coordinator that does
+    // lands in a follow-up, stacked PR, and takes the `allow(dead_code)`s with it.
     #[allow(dead_code)]
     pub(crate) fn from_validated(value: String) -> Self {
         debug_assert!(
@@ -162,7 +163,6 @@ impl std::fmt::Display for CheckpointGeneration {
 ///
 /// Exact-set: the server persists `objects` verbatim as the commit marker and selection
 /// later returns exactly that set, not everything sharing the generation prefix.
-// Not constructed until the periodic checkpoint coordinator (a follow-up, stacked PR) lands.
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CommitSnapshotRequest {
@@ -347,7 +347,6 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
     /// Only call this once every object in `request.objects` (including
     /// `request.manifest_object`) has uploaded successfully; the server verifies existence
     /// and per-attempt size limits and rejects the whole commit otherwise.
-    // Not called until the periodic checkpoint coordinator (a follow-up, stacked PR) lands.
     #[allow(dead_code)]
     async fn commit_snapshot(
         &self,

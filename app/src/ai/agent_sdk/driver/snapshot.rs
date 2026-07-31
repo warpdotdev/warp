@@ -670,8 +670,7 @@ struct SnapshotOutcome {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(super) enum CheckpointResult {
-    /// Every required object uploaded and the exact-set commit succeeded, so `generation` is
-    /// now the server's selected checkpoint.
+    /// `generation` is now the server's selected checkpoint.
     Committed { generation: CheckpointGeneration },
     /// Nothing to checkpoint: the declarations file was missing, empty, or had no valid
     /// entries. No generation was minted and no network calls were made.
@@ -692,7 +691,6 @@ pub(super) enum CheckpointResult {
 /// [`SnapshotUploadMode`] for the server-side semantics.
 enum PipelineMode {
     Legacy,
-    // Not constructed until the coordinator PR.
     #[allow(dead_code)]
     Checkpoint(CheckpointGeneration),
 }
@@ -701,8 +699,8 @@ enum PipelineMode {
 #[allow(dead_code)]
 static GENERATION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Mint a `<millis-since-epoch>-<counter>` generation identifier, which satisfies
-/// [`CheckpointGeneration`]'s format by construction.
+/// Mint a generation identifier, which satisfies [`CheckpointGeneration`]'s format by
+/// construction.
 ///
 /// Call this exactly once per attempt, after that attempt's payload has been gathered.
 /// Re-uploading an already-gathered payload must reuse its generation; enforcing that is the
@@ -717,12 +715,10 @@ pub(super) fn mint_generation() -> CheckpointGeneration {
     CheckpointGeneration::from_validated(format!("{millis}-{counter}"))
 }
 
-/// Reproduce the server's `checkpoint_<generation>__<logical_name>` storage name for a
-/// logical filename.
+/// Reproduce the server's `checkpoint_<generation>__<logical_name>` storage name.
 ///
-/// Only needed to assemble the exact-set [`CommitSnapshotRequest`]: everything earlier in the
-/// pipeline speaks logical names, and the server derives the storage name for each presigned
-/// target itself.
+/// Only the exact-set [`CommitSnapshotRequest`] needs this; everything earlier in the pipeline
+/// speaks logical names, and the server derives each presigned target's storage name itself.
 #[allow(dead_code)]
 fn storage_name(generation: &CheckpointGeneration, logical: &str) -> String {
     format!("checkpoint_{}__{logical}", generation.as_str())
@@ -1045,9 +1041,8 @@ async fn run_checkpoint_pipeline(
             reason: "manifest failed to upload".to_string(),
         };
     }
-    // Committing while any entry is `NoTarget` would make a silently smaller object set the
-    // selected checkpoint, discarding a previously complete one. Only `Skipped` (the
-    // deliberate per-run cap) is tolerated.
+    // Committing with a `NoTarget` entry would make a silently smaller object set the selected
+    // checkpoint, discarding a previously complete one.
     if outcome
         .entries
         .iter()
@@ -1075,9 +1070,8 @@ async fn run_checkpoint_pipeline(
         manifest_object,
         objects,
     };
-    // Every object is already in storage by this point, so a transient failure here would
-    // throw away the whole attempt. Committing the same generation twice is idempotent
-    // server-side, which makes retrying safe.
+    // Every object is already in storage, so a transient failure here would throw away the
+    // whole attempt. Re-committing the same generation is idempotent server-side.
     let operation = format!("checkpoint commit '{}'", generation.as_str());
     match with_bounded_retry(&operation, || client.commit_snapshot(&commit_request)).await {
         Ok(response) => {
@@ -1385,8 +1379,8 @@ async fn gather_file(
     let path = Path::new(file_path);
     match tokio::fs::read(path).await {
         Ok(content) => {
-            // Sanitize before uniquifying: the basename is agent-controlled and ends up in the
-            // storage name the exact-set commit has to reproduce byte for byte.
+            // Sanitize before uniquifying so the de-duplication suffix cannot break the
+            // invariants; see `sanitize_name_component`.
             let preferred = sanitize_name_component(
                 &path
                     .file_name()
@@ -1724,10 +1718,7 @@ async fn git_output_string(repo_dir: &Path, args: &[&str]) -> Option<String> {
     if value.is_empty() { None } else { Some(value) }
 }
 
-/// Fallback used wherever a name sanitizes down to nothing usable.
 const FALLBACK_SNAPSHOT_FILENAME: &str = "snapshot_artifact";
-
-/// Prepended to names that would otherwise collide with the server's reserved namespace.
 const RESERVED_NAME_ESCAPE: &str = "snapshot-";
 
 /// Longest logical filename we will mint. The server rejects names over 255 bytes; the
@@ -1772,8 +1763,7 @@ fn sanitize_name_component(value: &str, fallback: &str) -> String {
     name
 }
 
-/// Names the server refuses to hand out presigned legacy upload targets for, because they
-/// belong to the checkpoint protocol's own object namespace.
+/// Names owned by the checkpoint protocol, which the server refuses to sign legacy uploads for.
 fn is_reserved_snapshot_name(name: &str) -> bool {
     name.starts_with("checkpoint_") || name == "latest-checkpoint.json"
 }
