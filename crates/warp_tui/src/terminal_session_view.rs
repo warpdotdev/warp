@@ -169,6 +169,8 @@ const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_READ_ONLY_MENU_ROWS: u16 = 10;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
+/// Top and bottom border rows plus one padding row inside each border.
+const BORDERED_INPUT_CHROME_ROWS: u16 = 4;
 const AUTO_APPROVE_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
 const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
@@ -2649,7 +2651,7 @@ impl TuiTerminalSessionView {
         }
         content = content.child(
             TuiConstrainedBox::new(input)
-                .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
+                .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDERED_INPUT_CHROME_ROWS)
                 .finish(),
         );
         let footer = if let Some(footer) = self.api_keys_menu.as_ref(ctx).footer(ctx) {

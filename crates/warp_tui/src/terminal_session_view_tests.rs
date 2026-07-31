@@ -1376,6 +1376,26 @@ fn render_footer_lines(
 ) -> Vec<String> {
     render_footer(app, view, width).to_lines()
 }
+#[test]
+fn input_area_renders_all_six_editor_rows() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("input-0\ninput-1\ninput-2\ninput-3\ninput-4\ninput-5", ctx);
+            });
+        });
+
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        for row in 0..6 {
+            assert!(
+                rendered.contains(&format!("input-{row}")),
+                "input row {row} should be visible:\n{rendered}"
+            );
+        }
+    });
+}
 
 /// Dispatches `event` into the retained session element tree with the session
 /// view as the action origin, returning whether the tree handled it.
