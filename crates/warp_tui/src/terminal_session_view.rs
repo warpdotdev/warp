@@ -162,7 +162,8 @@ mod todo_menu;
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
 use self::state::{
-    TuiTerminalSessionState, TuiTerminalSessionStateModel, TuiTerminalSessionStateResolveError,
+    TuiFirstZeroStateState, TuiTerminalSessionState, TuiTerminalSessionStateModel,
+    TuiTerminalSessionStateResolveError,
 };
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
@@ -1779,15 +1780,22 @@ impl TuiTerminalSessionView {
         let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
         let onboarding_markers =
             handles_first_run_onboarding.then(|| TuiOnboardingMarkers::handle(ctx));
-        let show_first_zero_state = onboarding_markers.as_ref().is_some_and(|markers| {
-            markers.update(ctx, |markers, ctx| {
-                if markers.is_ready() {
-                    markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
-                } else {
-                    true
-                }
-            })
-        });
+        let first_zero_state =
+            onboarding_markers
+                .as_ref()
+                .map_or(TuiFirstZeroStateState::Dismissed, |markers| {
+                    markers.update(ctx, |markers, ctx| {
+                        if markers.is_ready() {
+                            if markers.consume(TuiOnboardingMarker::FirstZeroState, ctx) {
+                                TuiFirstZeroStateState::Visible
+                            } else {
+                                TuiFirstZeroStateState::Dismissed
+                            }
+                        } else {
+                            TuiFirstZeroStateState::Pending
+                        }
+                    })
+                });
         let session_state = ctx.add_model(|_| {
             TuiTerminalSessionStateModel::new(
                 &model,
@@ -1796,7 +1804,7 @@ impl TuiTerminalSessionView {
                 &ai_input_model,
                 &suggestions_mode,
                 &orchestration_tab_bar,
-                show_first_zero_state,
+                first_zero_state,
             )
         });
         if let Some(onboarding_markers) = onboarding_markers {
@@ -1806,7 +1814,7 @@ impl TuiTerminalSessionView {
                 move |_, markers, event, ctx| match event {
                     TuiOnboardingMarkersEvent::Loading => {
                         session_state_for_markers.update(ctx, |state, ctx| {
-                            state.set_show_first_zero_state(true, ctx);
+                            state.set_first_zero_state_pending(ctx);
                         });
                     }
                     TuiOnboardingMarkersEvent::Ready => {
@@ -1814,9 +1822,7 @@ impl TuiTerminalSessionView {
                             markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
                         });
                         session_state_for_markers.update(ctx, |state, ctx| {
-                            if state.show_first_zero_state() {
-                                state.set_show_first_zero_state(keep_showing, ctx);
-                            }
+                            state.resolve_first_zero_state(keep_showing, ctx);
                         });
                     }
                 },
@@ -3725,7 +3731,7 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.session_state.update(ctx, |state, ctx| {
-            state.set_show_first_zero_state(false, ctx);
+            state.dismiss_first_zero_state(ctx);
         });
         // A stale editor frame must not submit into a shell that is still
         // bootstrapping or has handed input to a foreground process.

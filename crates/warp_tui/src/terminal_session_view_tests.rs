@@ -3863,7 +3863,7 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
 }
 
 #[test]
-fn first_zero_state_is_provisional_and_reconciles_without_replacing_the_session() {
+fn first_zero_state_stays_hidden_while_markers_load_and_reconciles_without_replacing_session() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         app.update(|ctx| {
@@ -3875,18 +3875,19 @@ fn first_zero_state_is_provisional_and_reconciles_without_replacing_the_session(
 
         app.read(|ctx| {
             assert!(
-                view.as_ref(ctx)
+                !view
+                    .as_ref(ctx)
                     .session_state
                     .as_ref(ctx)
                     .show_first_zero_state()
             );
         });
         let lines = render_session(&mut app, &view, 100, 24);
-        assert!(lines.iter().any(|line| line.contains("Welcome to Warp")));
+        assert!(lines.iter().any(|line| line.contains("Warp Agent CLI")));
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("What’s different about Warp"))
+                .all(|line| !line.contains("What’s different about Warp"))
         );
         assert!(lines.iter().all(|line| !line.contains("████")));
 
@@ -3913,7 +3914,7 @@ fn first_zero_state_is_provisional_and_reconciles_without_replacing_the_session(
 }
 
 #[test]
-fn dismissed_provisional_zero_state_stays_hidden_but_consumes_ready_marker() {
+fn dismissed_pending_zero_state_stays_hidden_but_consumes_ready_marker() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         app.update(|ctx| {
@@ -3925,7 +3926,7 @@ fn dismissed_provisional_zero_state_stays_hidden_but_consumes_ready_marker() {
 
         view.update(&mut app, |view, ctx| {
             view.session_state.update(ctx, |state, ctx| {
-                state.set_show_first_zero_state(false, ctx);
+                state.dismiss_first_zero_state(ctx);
             });
         });
         app.update(|ctx| {
@@ -3966,7 +3967,7 @@ fn background_session_does_not_receive_first_run_onboarding() {
 
         app.read(|ctx| {
             assert!(
-                onboarding_view
+                !onboarding_view
                     .as_ref(ctx)
                     .session_state
                     .as_ref(ctx)
@@ -4001,11 +4002,18 @@ fn background_session_does_not_receive_first_run_onboarding() {
                     .show_first_zero_state()
             );
         });
+        let lines = render_session(&mut app, &onboarding_view, 100, 24);
+        assert!(lines.iter().any(|line| line.contains("Welcome to Warp")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("What’s different about Warp"))
+        );
     });
 }
 
 #[test]
-fn account_transition_restores_provisional_zero_state_on_existing_session() {
+fn account_transition_hides_first_zero_state_while_markers_reload() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, session_id) = add_first_run_onboarding_test_session(&mut app, &fixture, true);
@@ -4026,7 +4034,8 @@ fn account_transition_restores_provisional_zero_state_on_existing_session() {
         });
         app.read(|ctx| {
             assert!(
-                view.as_ref(ctx)
+                !view
+                    .as_ref(ctx)
                     .session_state
                     .as_ref(ctx)
                     .show_first_zero_state()
