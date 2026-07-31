@@ -52,7 +52,9 @@ mod text_helpers;
 mod viewported_list;
 
 pub use animated::TuiAnimated;
-pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiPaintSurface, TuiStyle};
+pub use buffer::{
+    Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiPaintSurface, TuiStyle, TuiWidget,
+};
 pub use child_view::TuiChildView;
 pub use clipped::TuiClipped;
 pub use collapsible::tui_collapsible;

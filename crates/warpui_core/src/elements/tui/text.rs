@@ -291,7 +291,7 @@ impl TuiElement for TuiText {
         if size.width == 0 || size.height == 0 {
             return;
         }
-        surface.render_widget(self.paragraph(size.width), origin, size);
+        surface.render_widget(origin, size, self.paragraph(size.width));
     }
 
     fn size(&self) -> Option<TuiSize> {
